@@ -132,7 +132,9 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         client
             .delete_deployment()
             .id(&deployment_id)
-            .force(true)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Forget,
+            })
             .send()
             .await
             .into_alien_error()
@@ -157,7 +159,9 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     client
         .delete_deployment()
         .id(&deployment_id)
-        .delete_scope(alien_manager_api::types::DeleteScope::Full)
+        .body(alien_manager_api::types::DeleteDeploymentRequest {
+            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+        })
         .send()
         .await
         .into_alien_error()

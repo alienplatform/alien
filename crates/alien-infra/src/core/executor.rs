@@ -31,8 +31,9 @@ use crate::{
 };
 use alien_core::ClientConfig;
 use alien_core::{
-    alien_event, AlienEvent, Platform, Resource, ResourceHeartbeat, ResourceLifecycle, ResourceRef,
-    ResourceStatus, Stack, StackResourceState, StackState,
+    alien_event, ownership_policy_for_resource_type, AlienEvent, Platform, Resource,
+    ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
+    StackState,
 };
 
 /// Represents the outcome of a planning phase, identifying necessary changes.
@@ -116,6 +117,7 @@ pub struct StackExecutor {
     id_to_node_index: HashMap<String, NodeIndex>,
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
+    runtime_cleanup_filter: bool,
     step_running_resources: bool,
     step_out_of_scope_resources: bool,
     desired_stack: Stack,
@@ -210,6 +212,11 @@ pub struct StackExecutorConfig<'a> {
     /// Lifecycle filter - only resources with matching lifecycle are processed
     lifecycle_filter: Option<Vec<ResourceLifecycle>>,
 
+    /// Process resources participating in runtime cleanup: Live resources and
+    /// Frozen resources that explicitly have runtime cleanup before teardown.
+    #[builder(default = false)]
+    runtime_cleanup_filter: bool,
+
     /// Whether resources that are already Running should execute their Ready handler.
     #[builder(default = true)]
     step_running_resources: bool,
@@ -293,6 +300,7 @@ impl StackExecutor {
         let service_provider = config.service_provider;
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
+        let runtime_cleanup_filter = config.runtime_cleanup_filter;
         let step_running_resources = config.step_running_resources;
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
         let platform = client_config.platform();
@@ -306,7 +314,6 @@ impl StackExecutor {
         // Create a filter set if provided
         let filter_set =
             lifecycle_filter.map(|filters| filters.into_iter().collect::<HashSet<_>>());
-
         // Track filtered out resources to check dependencies later
         let mut filtered_out_ids = HashSet::new();
 
@@ -423,6 +430,7 @@ impl StackExecutor {
             id_to_node_index: id_to_node,
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
+            runtime_cleanup_filter,
             step_running_resources,
             step_out_of_scope_resources,
             desired_stack: stack.clone(),
@@ -469,8 +477,74 @@ impl StackExecutor {
             .build()
     }
 
+    /// Constructs a `StackExecutor` for runtime cleanup before setup teardown.
+    /// This deletes Live resources and Frozen resources whose ownership policy
+    /// declares runtime cleanup before privileged teardown.
+    pub fn for_runtime_cleanup_deletion_with_service_provider(
+        client_config: ClientConfig,
+        deployment_config: &alien_core::DeploymentConfig,
+        service_provider: Arc<dyn PlatformServiceProvider>,
+    ) -> Result<Self> {
+        let platform = client_config.platform();
+        let empty_stack = Stack::new(format!("runtime-cleanup-stack-{:?}", platform)).build();
+
+        Self::builder(&empty_stack, client_config)
+            .deployment_config(deployment_config)
+            .service_provider(service_provider)
+            .step_out_of_scope_resources(false)
+            .runtime_cleanup_filter(true)
+            .build()
+    }
+
     fn is_external_binding_resource(&self, resource_id: &str) -> bool {
         self.deployment_config.external_bindings.has(resource_id)
+    }
+
+    fn resource_lifecycle(
+        &self,
+        resource_id: &str,
+        resource_state: &StackResourceState,
+    ) -> Result<ResourceLifecycle> {
+        resource_state.lifecycle.ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceLifecycleMissing {
+                resource_id: resource_id.to_string(),
+            })
+        })
+    }
+
+    fn resource_matches_runtime_cleanup(
+        &self,
+        resource_id: &str,
+        resource_state: &StackResourceState,
+    ) -> Result<bool> {
+        if self.resource_lifecycle(resource_id, resource_state)? == ResourceLifecycle::Live {
+            return Ok(true);
+        }
+
+        Ok(
+            ownership_policy_for_resource_type(resource_state.config.resource_type().as_ref())
+                .has_runtime_cleanup_before_teardown(),
+        )
+    }
+
+    fn resource_matches_deletion_scope(
+        &self,
+        resource_id: &str,
+        resource_state: &StackResourceState,
+    ) -> Result<bool> {
+        if self.runtime_cleanup_filter {
+            return self.resource_matches_runtime_cleanup(resource_id, resource_state);
+        }
+
+        if let Some(filter_set) = &self.lifecycle_filter {
+            if filter_set.is_empty() {
+                return Ok(true);
+            }
+
+            return Ok(filter_set.contains(&self.resource_lifecycle(resource_id, resource_state)?));
+        }
+
+        Ok(true)
     }
 
     /// Computes the **diff** between the *desired* stack configuration and the
@@ -549,7 +623,7 @@ impl StackExecutor {
         // Pre-check: When using lifecycle filters, build a dependency map to check if resources can be safely deleted
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
 
-        if self.lifecycle_filter.is_some() {
+        if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
             // Build map of resource_id -> list of resources that depend on it
             for (res_id, resource_state) in &state.resources {
                 // Skip resources that are already being deleted or deleted
@@ -579,68 +653,50 @@ impl StackExecutor {
                     if current_resource_state.status == ResourceStatus::Deleting
                         || current_resource_state.status == ResourceStatus::Deleted
                         || current_resource_state.status == ResourceStatus::DeleteFailed
+                        || (self.runtime_cleanup_filter
+                            && current_resource_state.status == ResourceStatus::TeardownRequired)
                     {
                         continue;
                     }
 
-                    // If we have a lifecycle filter and the resource's lifecycle doesn't match, skip deletion
-                    if let Some(ref filter_set) = self.lifecycle_filter {
-                        // If there's a lifecycle filter and it's not empty, only delete resources that match the filter
-                        if !filter_set.is_empty() {
-                            // If we don't have lifecycle information for the resource, skip deletion
-                            // This is a defensive approach - if we can't determine the lifecycle, don't delete
-                            if current_resource_state.lifecycle.is_none() {
+                    if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
+                        if !self
+                            .resource_matches_deletion_scope(resource_id, current_resource_state)?
+                        {
+                            debug!(
+                                "Resource '{}' is outside deletion scope, skipping deletion",
+                                resource_id
+                            );
+                            continue;
+                        }
+
+                        // Now check if this resource has any active dependents
+                        if let Some(dependent_resources) = has_dependents.get(resource_id) {
+                            // Check if any active dependent is outside the same deletion scope.
+                            let mut has_active_dependents_outside_filter = false;
+                            for dep_id in dependent_resources {
+                                let Some(dependent_state) = state.resources.get(dep_id) else {
+                                    continue;
+                                };
+                                if dependent_state.status == ResourceStatus::Deleting
+                                    || dependent_state.status == ResourceStatus::Deleted
+                                    || dependent_state.status == ResourceStatus::TeardownRequired
+                                {
+                                    continue;
+                                }
+
+                                if !self.resource_matches_deletion_scope(dep_id, dependent_state)? {
+                                    has_active_dependents_outside_filter = true;
+                                    break;
+                                }
+                            }
+
+                            if has_active_dependents_outside_filter {
                                 debug!(
-                                    "Resource '{}' has no lifecycle information, skipping deletion",
+                                    "Resource '{}' has active dependents outside deletion scope, skipping deletion",
                                     resource_id
                                 );
                                 continue;
-                            }
-
-                            // Get the resource lifecycle from the state
-                            let resource_lifecycle = current_resource_state
-                                .lifecycle
-                                .unwrap_or(ResourceLifecycle::Live);
-
-                            // Skip deletion if the resource lifecycle doesn't match any in the filter
-                            if !filter_set.contains(&resource_lifecycle) {
-                                debug!(
-                                    "Resource '{}' with lifecycle {:?} not in deletion filter, skipping deletion",
-                                    resource_id, resource_lifecycle
-                                );
-                                continue;
-                            }
-
-                            // Now check if this resource has any active dependents
-                            if let Some(dependent_resources) = has_dependents.get(resource_id) {
-                                // Check if any of the dependent resources are active and have a lifecycle not in our filter
-                                let has_active_dependents_outside_filter =
-                                    dependent_resources.iter().any(|dep_id| {
-                                        if let Some(dependent_state) = state.resources.get(dep_id) {
-                                            // Only consider active dependents (not deleting/deleted)
-                                            if dependent_state.status != ResourceStatus::Deleting
-                                                && dependent_state.status != ResourceStatus::Deleted
-                                            {
-                                                // Check if the dependent has a lifecycle outside our filter
-                                                let dep_lifecycle = dependent_state
-                                                    .lifecycle
-                                                    .unwrap_or(ResourceLifecycle::Live);
-                                                !filter_set.contains(&dep_lifecycle)
-                                            } else {
-                                                false
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    });
-
-                                if has_active_dependents_outside_filter {
-                                    debug!(
-                                        "Resource '{}' has active dependents with lifecycles outside filter, skipping deletion",
-                                        resource_id
-                                    );
-                                    continue;
-                                }
                             }
                         }
                     }
@@ -756,6 +812,39 @@ impl StackExecutor {
                                     "Config changed for '{}' while in status {:?}, ignoring change until stable",
                                     resource_id, current_resource_state.status
                                 );
+                            }
+                        }
+                    } else if matches!(
+                        current_resource_state.status,
+                        ResourceStatus::Running | ResourceStatus::UpdateFailed
+                    ) {
+                        if let Some(resource_controller) =
+                            current_resource_state.get_internal_controller()?
+                        {
+                            let context = ResourceControllerContext {
+                                desired_config: &desired_config.resource,
+                                platform: controller_platform_for_state(
+                                    self.client_config.platform(),
+                                    current_resource_state,
+                                ),
+                                client_config: self.client_config.clone(),
+                                state,
+                                resource_prefix: &state.resource_prefix,
+                                registry: &self.resource_registry,
+                                desired_stack: &self.desired_stack,
+                                service_provider: &self.service_provider,
+                                deployment_config: &self.deployment_config,
+                                heartbeat_collector: HeartbeatCollector::default(),
+                            };
+
+                            if resource_controller.needs_update(&context)? {
+                                debug!(
+                                    "Scheduling UPDATE transition for '{}' due to deployment config drift",
+                                    resource_id
+                                );
+                                plan_result
+                                    .updates
+                                    .insert(resource_id.clone(), desired_config.resource.clone());
                             }
                         }
                     } else {
@@ -1281,11 +1370,11 @@ impl StackExecutor {
             let should_step_out_of_scope_resource =
                 self.should_step_out_of_scope_resource(resource_id, current_resource_view);
 
-            if let Some(filter_set) = &self.lifecycle_filter {
+            if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
                 let resource_in_scope = self.resources.contains_key(resource_id)
-                    || current_resource_view
-                        .lifecycle
-                        .is_some_and(|lifecycle| filter_set.contains(&lifecycle));
+                    || self
+                        .resource_matches_deletion_scope(resource_id, current_resource_view)
+                        .unwrap_or(false);
 
                 if !resource_in_scope && !should_step_out_of_scope_resource {
                     continue;
@@ -1769,7 +1858,12 @@ impl StackExecutor {
             // Skip self and dependents that are fully deleted. A dependent in
             // Deleting is still active because delete handlers often need
             // dependency outputs such as resource group names or bucket names.
-            if dependent_id == resource_id || dependent_state.status == ResourceStatus::Deleted {
+            if dependent_id == resource_id
+                || matches!(
+                    dependent_state.status,
+                    ResourceStatus::Deleted | ResourceStatus::TeardownRequired
+                )
+            {
                 continue;
             }
 
@@ -1889,13 +1983,13 @@ impl StackExecutor {
         }
 
         // Check 2: All resources *existing in the state* but *not* in the target stack must be
-        // synced (deleted) with respect to the current lifecycle filter. A resource is considered
+        // synced (deleted) with respect to the current deletion scope. A resource is considered
         // synced when **one** of the following holds:
-        //   1. It is `Deleted` or `DeleteFailed`.
-        //   2. It matches the lifecycle filter *and* still has active dependents whose lifecycle
-        //      is **outside** the filter. In that case we purposefully keep it `Running` and
+        //   1. It is `Deleted`, `DeleteFailed`, or finished runtime cleanup.
+        //   2. It matches the deletion scope *and* still has active dependents outside the scope.
+        //      In that case we purposefully keep it `Running` and
         //      treat that as terminal for the scope of this executor.
-        //   3. It does **not** match the lifecycle filter (the executor is not responsible for it).
+        //   3. It does **not** match the deletion scope (the executor is not responsible for it).
         let filter_set_opt = &self.lifecycle_filter;
 
         let deleting_resources_are_synced = state.resources.iter().all(|(res_id, view)| {
@@ -1904,13 +1998,12 @@ impl StackExecutor {
                 return true;
             }
 
-            let lifecycle = view.lifecycle.unwrap_or(ResourceLifecycle::Live);
-
-            // Helper to check if this resource still has active dependents **outside** the filter.
+            // Helper to check if this resource still has active dependents outside the deletion scope.
             let has_active_dependents_outside_filter = || {
-                state.resources.iter().any(|(_dep_id, dep_view)| {
+                state.resources.iter().any(|(dep_id, dep_view)| {
                     if dep_view.status == ResourceStatus::Deleting
                         || dep_view.status == ResourceStatus::Deleted
+                        || dep_view.status == ResourceStatus::TeardownRequired
                     {
                         return false; // Not active
                     }
@@ -1921,12 +2014,12 @@ impl StackExecutor {
                         None => return false,
                     };
 
-                    // Check lifecycle condition – we only care about dependents that are **outside** the filter.
-                    let dep_lifecycle = dep_view.lifecycle.unwrap_or(ResourceLifecycle::Live);
-                    if let Some(filter_set) = filter_set_opt {
-                        if filter_set.contains(&dep_lifecycle) {
-                            return false; // Inside filter, ignore for this logic
-                        }
+                    // We only care about dependents outside the current deletion scope.
+                    if self
+                        .resource_matches_deletion_scope(dep_id, dep_view)
+                        .unwrap_or(false)
+                    {
+                        return false;
                     }
 
                     // Does the dependent reference the current resource?
@@ -1937,31 +2030,32 @@ impl StackExecutor {
                 })
             };
 
-            match filter_set_opt {
-                None => {
-                    // No lifecycle filter – we expect the resource to be Deleted/DeleteFailed.
-                    view.status == ResourceStatus::Deleted
-                        || view.status == ResourceStatus::DeleteFailed
-                }
-                Some(filter_set) if filter_set.is_empty() => {
-                    // Empty filter treated same as None.
-                    view.status == ResourceStatus::Deleted
-                        || view.status == ResourceStatus::DeleteFailed
-                }
-                Some(filter_set) => {
-                    if !filter_set.contains(&lifecycle) {
-                        // Resource outside filter – executor not responsible.
-                        !self.should_step_out_of_scope_resource(res_id, view)
-                    } else if view.status == ResourceStatus::Deleted
-                        || view.status == ResourceStatus::DeleteFailed
-                    {
-                        true
-                    } else {
-                        // Matches filter and not deleted – check dependents.
-                        has_active_dependents_outside_filter()
-                    }
-                }
+            if view.status == ResourceStatus::Deleted || view.status == ResourceStatus::DeleteFailed
+            {
+                return true;
             }
+
+            if self.runtime_cleanup_filter
+                && view.status == ResourceStatus::TeardownRequired
+                && self
+                    .resource_matches_runtime_cleanup(res_id, view)
+                    .unwrap_or(false)
+            {
+                return true;
+            }
+
+            if filter_set_opt.is_none() && !self.runtime_cleanup_filter {
+                return false;
+            }
+
+            if !self
+                .resource_matches_deletion_scope(res_id, view)
+                .unwrap_or(false)
+            {
+                return !self.should_step_out_of_scope_resource(res_id, view);
+            }
+
+            has_active_dependents_outside_filter()
         });
 
         desired_resources_are_synced && deleting_resources_are_synced

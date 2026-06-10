@@ -1,16 +1,18 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{DeleteScope, ResourceLifecycle, ResourceStatus, StackState, StackStatus};
+use alien_core::{
+    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackState, StackStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::info;
 
-/// Handle DeletePending → Deleting transition
+/// Handle DeletePending → Deleting transition.
 ///
 /// This step:
-/// 1. Prepares stack for destroy (handles all resource states)
-/// 2. Transitions to Deleting status
+/// 1. Prepares runtime-cleanup resources for destroy.
+/// 2. Transitions to Deleting status.
 pub async fn handle_delete_pending(
     current: DeploymentState,
     _config: DeploymentConfig,
@@ -19,45 +21,31 @@ pub async fn handle_delete_pending(
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeletePending status");
 
-    // Clone current first before moving any fields
     let mut next = current.clone();
-    let delete_scope = delete_scope(&current)?;
-
-    // Stack state is required
     let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for deletion".to_string(),
         })
     })?;
 
-    if delete_scope == DeleteScope::LiveOnly {
-        include_runtime_managed_resources_in_live_delete(&mut stack_state);
-    }
-
-    // Prepare stack for destroy (handles failed resources appropriately)
-    use alien_infra::state_utils::StackStateExt;
-    let prepared = match delete_scope {
-        DeleteScope::Full => stack_state.prepare_for_destroy(),
-        DeleteScope::LiveOnly => {
-            stack_state.prepare_for_destroy_with_lifecycle_filter(&[ResourceLifecycle::Live])
-        }
-    }
-    .context(ErrorData::StackExecutionFailed {
-        message: "Failed to prepare stack for destroy".to_string(),
-    })?;
+    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
+        ErrorData::StackExecutionFailed {
+            message: "Failed to prepare runtime resources for destroy".to_string(),
+        },
+    )?;
 
     info!(
-        "Prepared {} resources for destroy: {:?}",
+        "Prepared {} runtime resources for destroy: {:?}",
         prepared.len(),
         prepared
     );
 
     next.status = DeploymentStatus::Deleting;
     next.stack_state = Some(stack_state);
+    next.error = None;
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
@@ -66,10 +54,8 @@ pub async fn handle_delete_pending(
 
 /// Handle Deleting status.
 ///
-/// This step:
-/// 1. Executes one deletion step
-/// 2. Updates stack state with the result
-/// 3. Transitions to Deleted when the selected delete scope is deleted
+/// This step deletes runtime-cleanup resources. When it finishes, the deployment
+/// either finishes deletion or stops at TeardownRequired for setup-owned resources.
 pub async fn handle_deleting(
     current: DeploymentState,
     config: DeploymentConfig,
@@ -78,97 +64,79 @@ pub async fn handle_deleting(
 ) -> Result<DeploymentStepResult> {
     info!("Handling Deleting status");
 
-    // Clone current first before moving any fields
     let current_cloned = current.clone();
-
-    // Stack state is required
     let stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for deletion".to_string(),
         })
     })?;
 
-    // Note: Stack mutations are applied in lib.rs before dispatching to this handler
-    // For deletion, we work with stack_state.resources which already contains
-    // all deployed resources (including those added by mutations during initial deployment)
-
-    let delete_scope = delete_scope(&current_cloned)?;
-    let lifecycle_filter = match delete_scope {
-        DeleteScope::Full => None,
-        DeleteScope::LiveOnly => Some(vec![ResourceLifecycle::Live]),
-    };
-
-    // Create executor for deletion.
-    let executor = StackExecutor::for_deletion_with_service_provider(
+    let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
         client_config,
         &config,
         service_provider,
-        lifecycle_filter,
     )
     .context(ErrorData::StackExecutionFailed {
-        message: "Failed to create stack executor for deletion".to_string(),
+        message: "Failed to create stack executor for runtime cleanup".to_string(),
     })?;
 
-    // Execute one step
     let step_result =
         executor
             .step(stack_state)
             .await
             .context(ErrorData::StackExecutionFailed {
-                message: "Failed to execute deletion step".to_string(),
+                message: "Failed to execute runtime cleanup step".to_string(),
             })?;
 
-    // Compute status for the selected delete scope.
-    let stack_status = compute_delete_scope_status(&step_result.next_state, delete_scope).context(
+    let stack_status = compute_runtime_cleanup_status(&step_result.next_state).context(
         ErrorData::StackExecutionFailed {
-            message: "Failed to compute stack status".to_string(),
+            message: "Failed to compute runtime cleanup status".to_string(),
         },
     )?;
 
-    // Check if all resources are deleted
     let result = if stack_status == StackStatus::Deleted {
-        info!(delete_scope = ?delete_scope, "Delete scope completed, transitioning to Deleted");
+        let next_status = if has_remaining_setup_resources(&step_result.next_state) {
+            DeploymentStatus::TeardownRequired
+        } else {
+            DeploymentStatus::Deleted
+        };
 
-        // Note: Cross-account access removal happens in the manager after this step
-        // The manager has access to the artifact registry binding
+        info!(
+            next_status = ?next_status,
+            "Runtime cleanup completed"
+        );
 
         let mut next = current_cloned;
-        next.status = DeploymentStatus::Deleted;
+        next.status = next_status;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
-        info!("Deletion failed");
-
-        // Create aggregated error from failed resources
-        let error =
-            crate::helpers::create_aggregated_error_from_stack_state(&step_result.next_state);
+        info!("Runtime cleanup failed");
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::DeleteFailed;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
 
         DeploymentStepResult {
             state: next,
-            error,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
         }
     } else {
-        // Still in progress
         let mut next = current_cloned;
         next.stack_state = Some(step_result.next_state);
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
@@ -178,15 +146,20 @@ pub async fn handle_deleting(
     Ok(result)
 }
 
-/// Handle DeleteFailed status - prepare failed resources for destroy and transition back to Deleting
-///
-/// This step:
-/// 1. Checks if retry_requested flag is set
-/// 2. Calls prepare_for_destroy() on stack state to handle failed resources:
-///    - ProvisionFailed/UpdateFailed resources: transition to delete start
-///    - DeleteFailed resources: retry the delete operation
-/// 3. Transitions back to Deleting status
-/// 4. Sets clear_retry_requested flag to clear the retry marker
+/// Handle TeardownRequired status. This is a synced tombstone state: Live
+/// resources are gone, but setup-owned resources still need a privileged
+/// teardown request.
+pub async fn handle_teardown_required(current: DeploymentState) -> Result<DeploymentStepResult> {
+    info!("Handling TeardownRequired status");
+    Ok(DeploymentStepResult {
+        state: current,
+        suggested_delay_ms: None,
+        update_heartbeat: false,
+        heartbeats: vec![],
+    })
+}
+
+/// Handle DeleteFailed status: retry runtime cleanup when requested.
 pub async fn handle_delete_failed(
     current: DeploymentState,
     _config: DeploymentConfig,
@@ -203,15 +176,11 @@ pub async fn handle_delete_failed(
         info!("No retry requested, staying in DeleteFailed status");
         return Ok(DeploymentStepResult {
             state: current,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
         });
     }
-
-    info!("Preparing stack for destroy");
-    let delete_scope = delete_scope(&current)?;
 
     let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -219,96 +188,105 @@ pub async fn handle_delete_failed(
         })
     })?;
 
-    if delete_scope == DeleteScope::LiveOnly {
-        include_runtime_managed_resources_in_live_delete(&mut stack_state);
-    }
-
-    // Prepare stack for destroy (handles failed resources appropriately)
-    use alien_infra::state_utils::StackStateExt;
-    let prepared = match delete_scope {
-        DeleteScope::Full => stack_state.prepare_for_destroy(),
-        DeleteScope::LiveOnly => {
-            stack_state.prepare_for_destroy_with_lifecycle_filter(&[ResourceLifecycle::Live])
-        }
-    }
-    .context(ErrorData::StackExecutionFailed {
-        message: "Failed to prepare stack for destroy".to_string(),
-    })?;
+    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
+        ErrorData::StackExecutionFailed {
+            message: "Failed to prepare runtime resources for delete retry".to_string(),
+        },
+    )?;
 
     info!(
-        "Prepared {} resources for destroy: {:?}",
+        "Prepared {} runtime resources for delete retry: {:?}",
         prepared.len(),
         prepared
     );
 
-    // Transition back to Deleting
     next.status = DeploymentStatus::Deleting;
     next.stack_state = Some(stack_state);
-    next.retry_requested = false; // Clear retry flag directly
+    next.error = None;
+    next.retry_requested = false;
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
     })
 }
 
-fn delete_scope(state: &DeploymentState) -> Result<DeleteScope> {
-    state
-        .runtime_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.delete_scope)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: "deleteScope is required before deleting a deployment".to_string(),
-            })
-        })
+fn prepare_runtime_resources_for_destroy(
+    stack_state: &mut StackState,
+) -> alien_infra::Result<Vec<String>> {
+    use alien_infra::state_utils::StackStateExt;
+    stack_state.prepare_for_runtime_cleanup_destroy()
 }
 
-fn compute_delete_scope_status(
-    stack_state: &alien_core::StackState,
-    delete_scope: DeleteScope,
-) -> alien_core::Result<StackStatus> {
-    match delete_scope {
-        DeleteScope::Full => stack_state.compute_stack_status(),
-        DeleteScope::LiveOnly => {
-            let statuses: Vec<ResourceStatus> = stack_state
-                .resources
-                .values()
-                .filter(|resource| resource.lifecycle == Some(ResourceLifecycle::Live))
-                .map(|resource| resource.status)
-                .collect();
+fn compute_runtime_cleanup_status(stack_state: &StackState) -> Result<StackStatus> {
+    let mut statuses = Vec::new();
 
-            if statuses.is_empty() {
-                return Ok(StackStatus::Deleted);
+    for resource in stack_state.resources.values() {
+        if !is_runtime_cleanup_resource(resource)? {
+            continue;
+        }
+
+        statuses.push({
+            if resource_lifecycle(resource)? == ResourceLifecycle::Live {
+                resource.status
+            } else if resource.status == ResourceStatus::TeardownRequired {
+                ResourceStatus::Deleted
+            } else {
+                resource.status
             }
-
-            StackState::compute_stack_status_from_resources(&statuses)
-        }
+        });
     }
+
+    if statuses.is_empty() {
+        return Ok(StackStatus::Deleted);
+    }
+
+    StackState::compute_stack_status_from_resources(&statuses).context(
+        ErrorData::StackExecutionFailed {
+            message: "Failed to compute runtime cleanup status".to_string(),
+        },
+    )
 }
 
-fn include_runtime_managed_resources_in_live_delete(stack_state: &mut StackState) {
-    for resource in stack_state.resources.values_mut() {
-        // Setup creates the compute boundary, but runtime controllers create
-        // and delete the actual machine pools. Those runtime-owned resources
-        // must be drained before the setup tool can remove its VPC/subnets.
-        if resource.resource_type == "compute-cluster" {
-            resource.lifecycle = Some(ResourceLifecycle::Live);
-        }
+fn resource_lifecycle(resource: &alien_core::StackResourceState) -> Result<ResourceLifecycle> {
+    resource.lifecycle.ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: format!(
+                "Resource '{}' is missing lifecycle metadata required for deletion",
+                resource.config.id()
+            ),
+        })
+    })
+}
+
+fn is_runtime_cleanup_resource(resource: &alien_core::StackResourceState) -> Result<bool> {
+    if resource_lifecycle(resource)? == ResourceLifecycle::Live {
+        return Ok(true);
     }
+
+    Ok(
+        ownership_policy_for_resource_type(resource.config.resource_type().as_ref())
+            .has_runtime_cleanup_before_teardown(),
+    )
+}
+
+fn has_remaining_setup_resources(stack_state: &StackState) -> bool {
+    stack_state.resources.values().any(|resource| {
+        resource.lifecycle != Some(ResourceLifecycle::Live)
+            && resource.status != ResourceStatus::Deleted
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use alien_core::{
         ComputeCluster, Platform, Resource, ResourceLifecycle, ResourceStatus, StackResourceState,
-        StackState, Storage,
+        StackState, StackStatus, Storage,
     };
 
-    use super::include_runtime_managed_resources_in_live_delete;
+    use super::{compute_runtime_cleanup_status, has_remaining_setup_resources};
 
     fn resource_state(
         resource: Resource,
@@ -333,34 +311,29 @@ mod tests {
     }
 
     #[test]
-    fn live_delete_includes_compute_cluster_but_not_other_frozen_resources() {
+    fn runtime_cleanup_status_includes_frozen_runtime_cleanup_resources() {
         let mut stack_state = StackState::new(Platform::Aws);
         stack_state.resources.insert(
             "compute".to_string(),
             resource_state(
                 Resource::new(ComputeCluster::new("compute".to_string()).build()),
                 ResourceLifecycle::Frozen,
-                ResourceStatus::Running,
+                ResourceStatus::TeardownRequired,
             ),
         );
         stack_state.resources.insert(
-            "storage".to_string(),
+            "live-storage".to_string(),
             resource_state(
                 Resource::new(Storage::new("storage".to_string()).build()),
-                ResourceLifecycle::Frozen,
-                ResourceStatus::Running,
+                ResourceLifecycle::Live,
+                ResourceStatus::Deleted,
             ),
         );
 
-        include_runtime_managed_resources_in_live_delete(&mut stack_state);
-
         assert_eq!(
-            stack_state.resources["compute"].lifecycle,
-            Some(ResourceLifecycle::Live)
+            compute_runtime_cleanup_status(&stack_state).unwrap(),
+            StackStatus::Deleted
         );
-        assert_eq!(
-            stack_state.resources["storage"].lifecycle,
-            Some(ResourceLifecycle::Frozen)
-        );
+        assert!(has_remaining_setup_resources(&stack_state));
     }
 }

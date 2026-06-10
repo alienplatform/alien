@@ -96,6 +96,39 @@ fn test_compute_cluster_management_can_use_tagged_launch_templates() {
     assert!(launch_template_statement
         .action
         .contains(&"ec2:RunInstances".to_string()));
+    assert!(condition_equals(
+        launch_template_statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
+    ));
+
+    let setup_security_group_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .resource
+                .iter()
+                .any(|resource| resource.contains(":security-group/"))
+                && statement.action.contains(&"ec2:RunInstances".to_string())
+        })
+        .expect("compute-cluster management should allow setup compute security group use");
+
+    assert!(condition_equals(
+        setup_security_group_statement,
+        "aws:ResourceTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        setup_security_group_statement,
+        "aws:ResourceTag/managed-by",
+        "setup"
+    ));
+    assert!(condition_equals(
+        setup_security_group_statement,
+        "aws:ResourceTag/resource",
+        "compute"
+    ));
 
     let instance_statement = result
         .statement
@@ -156,6 +189,146 @@ fn test_compute_cluster_management_can_use_tagged_launch_templates() {
             "compute-cluster management should include RunInstances companion resource {expected_resource}"
         );
     }
+}
+
+#[test]
+fn test_compute_cluster_provision_can_create_asg_workers() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/provision").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS policy successfully");
+
+    let runtime_boundary_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement.action.contains(&"ec2:RunInstances".to_string())
+                && statement
+                    .resource
+                    .iter()
+                    .any(|resource| resource.contains(":launch-template/"))
+                && statement
+                    .resource
+                    .iter()
+                    .any(|resource| resource.contains(":security-group/"))
+        })
+        .expect(
+            "compute-cluster provision should allow runtime launch template and security group use",
+        );
+
+    assert!(condition_equals(
+        runtime_boundary_statement,
+        "aws:ResourceTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        runtime_boundary_statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
+    ));
+
+    let instance_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement.action.contains(&"ec2:RunInstances".to_string())
+                && statement
+                    .resource
+                    .iter()
+                    .any(|resource| resource.contains(":instance/"))
+        })
+        .expect("compute-cluster provision should allow runtime worker instance creation");
+
+    assert!(condition_equals(
+        instance_statement,
+        "aws:RequestTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        instance_statement,
+        "aws:RequestTag/managed-by",
+        "runtime"
+    ));
+
+    for expected_resource in [":image/", ":subnet/", ":network-interface/", ":volume/"] {
+        assert!(
+            result.statement.iter().any(|statement| {
+                statement
+                    .resource
+                    .iter()
+                    .any(|resource| resource.contains(expected_resource))
+                    && statement.action.contains(&"ec2:RunInstances".to_string())
+            }),
+            "compute-cluster provision should include RunInstances companion resource {expected_resource}"
+        );
+    }
+
+    let create_tags_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement.action.contains(&"ec2:CreateTags".to_string())
+                && statement
+                    .resource
+                    .iter()
+                    .any(|resource| resource.contains(":instance/"))
+                && condition_equals(statement, "ec2:CreateAction", "RunInstances")
+        })
+        .expect("compute-cluster provision should allow RunInstances tag specifications");
+
+    assert!(condition_equals(
+        create_tags_statement,
+        "aws:RequestTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        create_tags_statement,
+        "aws:RequestTag/managed-by",
+        "runtime"
+    ));
+}
+
+#[test]
+fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
+    let context = create_test_context().with_resource_name("alien-manager");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("Should generate AWS policy successfully");
+
+    let setup_compute_ingress_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"ec2:AuthorizeSecurityGroupIngress".to_string())
+                && statement
+                    .action
+                    .contains(&"ec2:RevokeSecurityGroupIngress".to_string())
+                && condition_equals(statement, "aws:ResourceTag/resource", "compute")
+                && condition_equals(statement, "aws:ResourceTag/managed-by", "setup")
+        })
+        .expect("container provision should manage ingress on setup compute security groups");
+
+    assert_eq!(
+        setup_compute_ingress_statement.resource,
+        vec!["arn:aws:ec2:us-east-1:123456789012:security-group/*"]
+    );
+    assert!(!setup_compute_ingress_statement
+        .action
+        .contains(&"ec2:DeleteSecurityGroup".to_string()));
+    assert!(condition_equals(
+        setup_compute_ingress_statement,
+        "aws:ResourceTag/deployment",
+        "my-stack"
+    ));
 }
 
 #[test]
@@ -291,4 +464,17 @@ fn test_aws_missing_binding_target_error() {
     let error = result.unwrap_err();
     let error_string = error.to_string();
     assert!(error_string.contains("Binding target 'resource' is not supported"));
+}
+
+fn condition_equals(
+    statement: &alien_permissions::generators::AwsIamStatement,
+    key: &str,
+    expected: &str,
+) -> bool {
+    statement
+        .condition
+        .as_ref()
+        .and_then(|condition| condition.get("StringEquals"))
+        .and_then(|values| values.get(key))
+        .is_some_and(|value| value == expected)
 }

@@ -1,6 +1,12 @@
 # SyncReconcileRequestError
 
-Deployment error from step() result. Set when deployment fails, null to clear.
+Canonical error container that provides a structured way to represent errors
+with rich metadata including error codes, human-readable messages, context,
+and chaining capabilities for error propagation.
+
+This struct is designed to be both machine-readable and user-friendly,
+supporting serialization for API responses and detailed error reporting
+in distributed systems.
 
 ## Example Usage
 

@@ -118,27 +118,69 @@ pub async fn run_step_loop(
             "Running deployment step"
         );
 
-        let step_result = step(
+        let step_result = match step(
             state.clone(),
             config.clone(),
             client_config.clone(),
             service_provider.clone(),
         )
-        .await?;
+        .await
+        {
+            Ok(step_result) => step_result,
+            Err(error) => {
+                let deployment_error = error.into_generic();
+                *state = failed_state_for_step_failure(state, deployment_error.clone());
 
-        // Capture step metadata before overwriting state
-        let step_error = step_result.error.as_ref();
+                let mut checkpoint_attempt = 1usize;
+                let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
+                loop {
+                    match transport
+                        .reconcile_step(deployment_id, state, config, false, None, vec![])
+                        .await
+                    {
+                        Ok(reconciled) => {
+                            if let Some(updated_state) = reconciled.state {
+                                *state = updated_state;
+                            }
+                            if let Some(updated_config) = reconciled.config {
+                                *config = updated_config;
+                            }
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                deployment_id = %deployment_id,
+                                attempt = checkpoint_attempt,
+                                retry_after_ms = checkpoint_delay.as_millis() as u64,
+                                error = %e,
+                                "Failed to checkpoint deployment error; retrying before returning failure"
+                            );
+                            tokio::time::sleep(checkpoint_delay).await;
+                            checkpoint_attempt += 1;
+                            checkpoint_delay =
+                                (checkpoint_delay * 2).min(CHECKPOINT_RETRY_MAX_DELAY);
+                        }
+                    }
+                }
+
+                let loop_result =
+                    classify_status(&state.status, policy.operation).unwrap_or(LoopResult {
+                        stop_reason: LoopStopReason::Failed,
+                        outcome: LoopOutcome::Failure,
+                        final_status: state.status,
+                    });
+
+                return Ok(RunnerResult {
+                    loop_result,
+                    steps_executed: step_count,
+                });
+            }
+        };
+
+        // Capture step metadata before overwriting state.
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
         let heartbeats = step_result.heartbeats.clone();
-
-        if let Some(ref err) = step_result.error {
-            warn!(
-                deployment_id = %deployment_id,
-                error = %err,
-                "Deployment step returned error"
-            );
-        }
 
         *state = step_result.state;
 
@@ -155,7 +197,6 @@ pub async fn run_step_loop(
                     deployment_id,
                     state,
                     config,
-                    step_error,
                     update_heartbeat,
                     suggested_delay_ms,
                     heartbeats.clone(),
@@ -240,6 +281,42 @@ fn should_step_retryable_failure(state: &DeploymentState) -> bool {
     state.retry_requested && state.status.is_failed()
 }
 
+fn failed_state_for_step_failure(
+    current: &DeploymentState,
+    error: alien_error::AlienError,
+) -> DeploymentState {
+    let mut next = current.clone();
+    next.status = failed_status_for_deployment_error(current.status);
+    next.error = Some(error);
+    next.retry_requested = false;
+    next
+}
+
+pub fn failed_status_for_deployment_error(status: DeploymentStatus) -> DeploymentStatus {
+    match status {
+        DeploymentStatus::Pending => DeploymentStatus::PreflightsFailed,
+        DeploymentStatus::InitialSetup => DeploymentStatus::InitialSetupFailed,
+        DeploymentStatus::Provisioning => DeploymentStatus::ProvisioningFailed,
+        DeploymentStatus::Running => DeploymentStatus::RefreshFailed,
+        DeploymentStatus::UpdatePending | DeploymentStatus::Updating => {
+            DeploymentStatus::UpdateFailed
+        }
+        DeploymentStatus::DeletePending | DeploymentStatus::Deleting => {
+            DeploymentStatus::DeleteFailed
+        }
+        DeploymentStatus::PreflightsFailed
+        | DeploymentStatus::InitialSetupFailed
+        | DeploymentStatus::ProvisioningFailed
+        | DeploymentStatus::RefreshFailed
+        | DeploymentStatus::UpdateFailed
+        | DeploymentStatus::DeleteFailed
+        | DeploymentStatus::TeardownRequired
+        | DeploymentStatus::TeardownFailed
+        | DeploymentStatus::Error => status,
+        DeploymentStatus::Deleted => DeploymentStatus::Error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,7 +346,6 @@ mod tests {
             _deployment_id: &str,
             state: &DeploymentState,
             _config: &DeploymentConfig,
-            _step_error: Option<&alien_error::AlienError>,
             _update_heartbeat: bool,
             _suggested_delay_ms: Option<u64>,
             _heartbeats: Vec<alien_core::ResourceHeartbeat>,
@@ -338,6 +414,7 @@ mod tests {
                 stack: test_stack(),
             }),
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
@@ -409,6 +486,52 @@ mod tests {
                 DeploymentStatus::InitialSetup
             ],
             "checkpoint retry must persist the same produced state, not run another step"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn checkpoints_pending_step_failure_as_preflights_failed() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.platform = Platform::Aws;
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("runner should checkpoint pending step error and return failed result");
+
+        assert_eq!(result.steps_executed, 1);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Failed);
+        assert_eq!(state.status, DeploymentStatus::PreflightsFailed);
+        assert!(
+            state.error.is_some(),
+            "deployment-level step error should be stored in DeploymentState"
+        );
+        assert_eq!(
+            transport
+                .checkpointed_statuses
+                .lock()
+                .expect("statuses lock poisoned")
+                .as_slice(),
+            &[
+                DeploymentStatus::PreflightsFailed,
+                DeploymentStatus::PreflightsFailed
+            ],
+            "failed pending state must be retried as the same durable checkpoint"
         );
     }
 

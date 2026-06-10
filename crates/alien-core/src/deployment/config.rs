@@ -77,9 +77,9 @@ pub struct DeploymentConfig {
     pub domain_metadata: Option<DomainMetadata>,
     /// OTLP observability configuration for log export (optional).
     ///
-    /// When set, alien-deployment injects OTEL_EXPORTER_OTLP_* env vars into
-    /// container/function configs, and worker-template stamping passes the
-    /// monitoring endpoints to worker images.
+    /// When set, worker runtimes export captured application logs through this
+    /// endpoint. Container orchestrators may use it for their node-level log
+    /// collectors, but app container configs must not receive the auth header.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring: Option<OtlpConfig>,
     /// Manager base URL (e.g., "https://manager.alien.dev").
@@ -112,14 +112,10 @@ pub struct DeploymentConfig {
 
 /// OTLP log export configuration for a deployment.
 ///
-/// When set, all compute workloads (containers and worker VMs) export
-/// their logs to the given endpoint via OTLP/HTTP.
-///
-/// The `logs_auth_header` is stored as plain text in DeploymentConfig because
-/// alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
-/// before vault secrets load. For worker VMs, worker-template stamping passes
-/// the monitoring configuration to the provider controller, which stores the
-/// sensitive header in the cloud vault used by the worker image.
+/// When set, worker runtimes export captured application logs through the
+/// given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
+/// deployment code must sync them to a runtime-only secret and avoid putting
+/// them into user application environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -127,16 +123,7 @@ pub struct OtlpConfig {
     /// Full OTLP logs endpoint URL.
     /// Example: "https://<manager-host>/v1/logs"
     pub logs_endpoint: String,
-    /// Auth header value in "key=value,..." format used for container OTLP env var injection.
-    ///
-    /// `alien-deployment` injects this as the `OTEL_EXPORTER_OTLP_HEADERS` plain env var
-    /// into all containers. It must be plain (not a vault secret) because alien-runtime
-    /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
-    ///
-    /// Worker VMs do NOT use this field directly. The ComputeCluster infra
-    /// controller writes the same value to the cloud vault used by the worker
-    /// image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
-    ///
+    /// Auth header value in "key=value,..." format.
     /// Example: "authorization=Bearer <write-token>"
     pub logs_auth_header: String,
     /// Full OTLP metrics endpoint URL (optional).

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum DeploymentStatus {
     Pending,
+    PreflightsFailed,
     InitialSetup,
     InitialSetupFailed,
     Provisioning,
@@ -20,6 +21,8 @@ pub enum DeploymentStatus {
     DeletePending,
     Deleting,
     DeleteFailed,
+    TeardownRequired,
+    TeardownFailed,
     Deleted,
     Error,
 }
@@ -38,10 +41,13 @@ impl DeploymentStatus {
         matches!(
             self,
             DeploymentStatus::Running
+                | DeploymentStatus::PreflightsFailed
                 | DeploymentStatus::InitialSetupFailed
                 | DeploymentStatus::ProvisioningFailed
                 | DeploymentStatus::UpdateFailed
                 | DeploymentStatus::DeleteFailed
+                | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
                 | DeploymentStatus::RefreshFailed
                 | DeploymentStatus::Deleted
                 | DeploymentStatus::Error
@@ -52,10 +58,12 @@ impl DeploymentStatus {
     pub fn is_failed(&self) -> bool {
         matches!(
             self,
-            DeploymentStatus::InitialSetupFailed
+            DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetupFailed
                 | DeploymentStatus::ProvisioningFailed
                 | DeploymentStatus::UpdateFailed
                 | DeploymentStatus::DeleteFailed
+                | DeploymentStatus::TeardownFailed
                 | DeploymentStatus::RefreshFailed
                 | DeploymentStatus::Error
         )

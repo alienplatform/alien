@@ -1956,9 +1956,12 @@ fn registration_body(
             attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
-                expr::raw("local.deployment_management_config"),
+                expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
             ),
-            attr("stack_settings", expr::raw("local.deployment_settings")),
+            attr(
+                "stack_settings",
+                expr::raw("jsondecode(jsonencode(local.deployment_settings))"),
+            ),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
         if let Some(release_id) = &registration.release_id {
@@ -2173,6 +2176,11 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Base cloud platform for Kubernetes targets.",
         ));
         outputs.push((
+            "kubernetes_namespace",
+            expr::raw("var.kubernetes_namespace"),
+            "Kubernetes namespace for runtime resources.",
+        ));
+        outputs.push((
             "kubernetes_kubeconfig",
             expr::raw("local.kubernetes_kubeconfig"),
             "Kubeconfig for managed Kubernetes clusters created by this module.",
@@ -2182,6 +2190,16 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             expr::raw("local.kubernetes_kube_context"),
             "Kube context for managed Kubernetes clusters created by this module.",
         ));
+        if target == TerraformTarget::Eks {
+            outputs.push((
+                "kubernetes_update_kubeconfig_command",
+                expr::template(
+                    "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+                        .to_string(),
+                ),
+                "AWS CLI command template for configuring kubectl access to the target EKS cluster.",
+            ));
+        }
     }
 
     let blocks: Vec<Structure> = outputs
@@ -2257,6 +2275,10 @@ fn readme_md(
             helm_install,
         ));
     }
+    let kubernetes_operations = target
+        .is_kubernetes()
+        .then(|| readme_kubernetes_operations(target))
+        .unwrap_or_default();
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -2273,12 +2295,14 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
-- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.",
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
+{kubernetes_operations}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,
         required_env = required_env,
-        registration_note = registration_note
+        registration_note = registration_note,
+        kubernetes_operations = kubernetes_operations
     )
 }
 
@@ -2334,7 +2358,7 @@ fn readme_kubernetes_inputs(
         _ => "",
     };
     let helm = if has_registration && helm_install.is_some() {
-        "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart."
+        "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration."
     } else {
         ""
     };
@@ -2346,6 +2370,22 @@ fn readme_kubernetes_inputs(
     format!(
         "Kubernetes settings:\n\n- `kubernetes_cluster_mode`: `create` or `existing`.\n- `kubernetes_namespace`: namespace for runtime resources.{cluster_name}{exposure}{helm}"
     )
+}
+
+fn readme_kubernetes_operations(target: TerraformTarget) -> String {
+    match target {
+        TerraformTarget::Eks => format!(
+            "{}{}",
+            "\n\n## Kubernetes Operations\n\nBefore inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:\n\n```bash\nAWS_PROFILE=<target-profile> aws sts get-caller-identity\nterraform output kubernetes_update_kubeconfig_command\nAWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)\nkubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events\n```\n\nTreat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.",
+            readme_kubernetes_destroy_order(),
+        ),
+        TerraformTarget::Gke | TerraformTarget::Aks => readme_kubernetes_destroy_order().to_string(),
+        _ => String::new(),
+    }
+}
+
+fn readme_kubernetes_destroy_order() -> &'static str {
+    "\n\n## Destroy Order\n\nIf `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.\n\nIf `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install."
 }
 
 #[cfg(test)]
@@ -2394,6 +2434,11 @@ mod tests {
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
+        assert!(registration_body.contains(
+            "management_config = jsondecode(jsonencode(local.deployment_management_config))"
+        ));
+        assert!(registration_body
+            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");

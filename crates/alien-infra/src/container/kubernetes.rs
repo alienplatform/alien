@@ -3,8 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceController,
-    ResourceControllerContext,
+    kubernetes_runtime_pod_labels, reconcile_environment_secret, EnvironmentVariableBuilder,
+    KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -18,8 +18,7 @@ use crate::kubernetes_workload_heartbeat::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
-    ContainerOutputs, ContainerStatus, EnvironmentVariable, EnvironmentVariableType,
-    ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
+    ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -27,13 +26,15 @@ use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use k8s_openapi::ByteString;
+
+#[cfg(test)]
+use crate::core::applicable_secret_environment_variables;
 
 // Cold Kubernetes nodes can spend several minutes pulling application images,
 // especially when the registry endpoint is a remote proxy. Treat that as a
@@ -56,55 +57,6 @@ async fn create_registry_pull_secret(
         deployment_token,
     )
     .await
-}
-
-#[derive(Debug, Clone)]
-struct KubernetesEnvSecretPlan {
-    secret_name: String,
-    checksum: String,
-    keys: Vec<String>,
-}
-
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
-fn applicable_secret_environment_variables<'a>(
-    resource_id: &str,
-    variables: &'a [EnvironmentVariable],
-) -> Vec<&'a EnvironmentVariable> {
-    variables
-        .iter()
-        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
-        .collect()
-}
-
-fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
-    use sha2::{Digest, Sha256};
-
-    let mut vars = secret_vars.to_vec();
-    vars.sort_by(|left, right| left.name.cmp(&right.name));
-
-    let mut hasher = Sha256::new();
-    for var in vars {
-        hasher.update(var.name.as_bytes());
-        hasher.update(b"=");
-        hasher.update(var.value.as_bytes());
-        hasher.update(b"\n");
-    }
-
-    format!("{:x}", hasher.finalize())
 }
 
 fn first_declared_container_port(config: &Container) -> Option<u16> {
@@ -1217,94 +1169,7 @@ impl KubernetesContainerController {
         namespace: &str,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<KubernetesEnvSecretPlan>> {
-        let secret_vars = applicable_secret_environment_variables(
-            &config.id,
-            &ctx.deployment_config.environment_variables.variables,
-        );
-        if secret_vars.is_empty() {
-            return Ok(None);
-        }
-
-        let secret_name = format!("{workload_name}-env");
-        let checksum = secret_checksum(&secret_vars);
-        let keys = secret_vars
-            .iter()
-            .map(|var| var.name.clone())
-            .collect::<Vec<_>>();
-
-        let mut secret = Secret {
-            metadata: ObjectMeta {
-                name: Some(secret_name.clone()),
-                namespace: Some(namespace.to_string()),
-                labels: Some(BTreeMap::from([
-                    ("managed-by".to_string(), "runtime".to_string()),
-                    ("resource-id".to_string(), config.id.clone()),
-                ])),
-                annotations: Some(BTreeMap::from([(
-                    "env-secret-checksum".to_string(),
-                    checksum.clone(),
-                )])),
-                ..Default::default()
-            },
-            type_: Some("Opaque".to_string()),
-            data: Some(
-                secret_vars
-                    .iter()
-                    .map(|var| (var.name.clone(), ByteString(var.value.as_bytes().to_vec())))
-                    .collect(),
-            ),
-            ..Default::default()
-        };
-
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let secrets_client = ctx
-            .service_provider
-            .get_kubernetes_secrets_client(kubernetes_config)
-            .await?;
-
-        match secrets_client.create_secret(namespace, &secret).await {
-            Ok(_) => {}
-            Err(e) => {
-                let err = format!("{e}");
-                if err.contains("AlreadyExists") || err.contains("409") {
-                    let existing = secrets_client
-                        .get_secret(namespace, &secret_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to read existing environment Secret for container '{}'",
-                                config.id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-                    secret.metadata.resource_version = existing.metadata.resource_version;
-                    secrets_client
-                        .update_secret(namespace, &secret_name, &secret)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to update environment Secret for container '{}'",
-                                config.id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-                } else {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create environment Secret for container '{}'",
-                            config.id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            }
-        }
-
-        Ok(Some(KubernetesEnvSecretPlan {
-            secret_name,
-            checksum,
-            keys,
-        }))
+        reconcile_environment_secret("container", &config.id, workload_name, namespace, ctx).await
     }
 
     async fn reconcile_internal_service(

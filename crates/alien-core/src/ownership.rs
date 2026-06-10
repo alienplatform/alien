@@ -6,7 +6,8 @@ pub struct ResourceOwnershipPolicy {
     allow_frozen: bool,
     allow_live: bool,
     emit_in_setup: bool,
-    frozen_management: bool,
+    requires_management_permissions: bool,
+    runtime_cleanup_before_teardown: bool,
 }
 
 impl ResourceOwnershipPolicy {
@@ -15,14 +16,16 @@ impl ResourceOwnershipPolicy {
         allow_frozen: bool,
         allow_live: bool,
         emit_in_setup: bool,
-        frozen_management: bool,
+        requires_management_permissions: bool,
+        runtime_cleanup_before_teardown: bool,
     ) -> Self {
         Self {
             default_lifecycle,
             allow_frozen,
             allow_live,
             emit_in_setup,
-            frozen_management,
+            requires_management_permissions,
+            runtime_cleanup_before_teardown,
         }
     }
 
@@ -49,8 +52,12 @@ impl ResourceOwnershipPolicy {
         self.emit_in_setup && matches!(lifecycle, ResourceLifecycle::Frozen)
     }
 
-    pub const fn frozen_requires_management(self) -> bool {
-        self.frozen_management
+    pub const fn requires_management_permissions(self) -> bool {
+        self.requires_management_permissions
+    }
+
+    pub const fn has_runtime_cleanup_before_teardown(self) -> bool {
+        self.runtime_cleanup_before_teardown
     }
 
     pub fn allowed_lifecycles(self) -> &'static str {
@@ -67,7 +74,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
     match resource_type {
         "function" | "container-cluster" => removed_resource_type(),
         "worker" | "daemon" | "container" => live_only(),
-        "compute-cluster" => frozen_with_management(),
+        "compute-cluster" => frozen_with_runtime_cleanup(),
         "artifact-registry" => frozen_with_management(),
         "build"
         | "network"
@@ -89,23 +96,27 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
 }
 
 const fn frozen_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, false)
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, false, false)
 }
 
 const fn frozen_with_management() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true)
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, false)
+}
+
+const fn frozen_with_runtime_cleanup() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, true)
 }
 
 const fn live_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false)
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false, false)
 }
 
 const fn removed_resource_type() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, false, false, false)
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, false, false, false, false)
 }
 
 const fn user_choice() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false)
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false, false)
 }
 
 #[cfg(test)]
@@ -124,15 +135,25 @@ mod tests {
     }
 
     #[test]
-    fn compute_cluster_is_frozen_with_management() {
-        for resource_type in ["compute-cluster", "artifact-registry"] {
-            let policy = ownership_policy_for_resource_type(resource_type);
-            assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
-            assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
-            assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
-            assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
-            assert!(policy.frozen_requires_management());
-        }
+    fn compute_cluster_is_frozen_with_runtime_cleanup() {
+        let policy = ownership_policy_for_resource_type("compute-cluster");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.requires_management_permissions());
+        assert!(policy.has_runtime_cleanup_before_teardown());
+    }
+
+    #[test]
+    fn artifact_registry_is_frozen_with_management() {
+        let policy = ownership_policy_for_resource_type("artifact-registry");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.requires_management_permissions());
+        assert!(!policy.has_runtime_cleanup_before_teardown());
     }
 
     #[test]
@@ -141,7 +162,8 @@ mod tests {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert!(!policy.allows_lifecycle(ResourceLifecycle::Frozen));
             assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
-            assert!(!policy.frozen_requires_management());
+            assert!(!policy.requires_management_permissions());
+            assert!(!policy.has_runtime_cleanup_before_teardown());
         }
     }
 

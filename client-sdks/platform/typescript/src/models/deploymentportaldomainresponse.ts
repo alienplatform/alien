@@ -6,15 +6,14 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  DeploymentPortalDomain,
-  DeploymentPortalDomain$inboundSchema,
-} from "./deploymentportaldomain.js";
+  DomainEndpoint,
+  DomainEndpoint$inboundSchema,
+} from "./domainendpoint.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import { PackageDomain, PackageDomain$inboundSchema } from "./packagedomain.js";
 
 export type DeploymentPortalDomainResponse = {
-  deploymentPortalDomain: DeploymentPortalDomain | null;
-  packageDomain: PackageDomain | null;
+  deploymentPortalEndpoint: DomainEndpoint | null;
+  packageEndpoint: DomainEndpoint | null;
 };
 
 /** @internal */
@@ -22,8 +21,8 @@ export const DeploymentPortalDomainResponse$inboundSchema: z.ZodType<
   DeploymentPortalDomainResponse,
   unknown
 > = z.object({
-  deploymentPortalDomain: z.nullable(DeploymentPortalDomain$inboundSchema),
-  packageDomain: z.nullable(PackageDomain$inboundSchema),
+  deploymentPortalEndpoint: z.nullable(DomainEndpoint$inboundSchema),
+  packageEndpoint: z.nullable(DomainEndpoint$inboundSchema),
 });
 
 export function deploymentPortalDomainResponseFromJSON(

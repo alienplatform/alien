@@ -12,13 +12,13 @@ let value: DomainWithUsageUsage = {
       id: "<id>",
       projectId: "<id>",
       projectName: "<value>",
-      hostname: "prudent-duffel.net",
+      hostname: "superior-mathematics.name",
     },
   ],
   packageDomains: [
     {
       id: "<id>",
-      hostname: "prickly-role.biz",
+      hostname: "faint-submitter.com",
     },
   ],
   managerBindings: [
@@ -26,7 +26,7 @@ let value: DomainWithUsageUsage = {
       id: "<id>",
       managerId: "<id>",
       managerName: "<value>",
-      hostname: "adolescent-space.name",
+      hostname: "neighboring-vestment.biz",
     },
   ],
 };
@@ -34,9 +34,9 @@ let value: DomainWithUsageUsage = {
 
 ## Fields
 
-| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `deploymentUrlProjects`                                                            | [models.DeploymentUrlProject](../models/deploymenturlproject.md)[]                 | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `portalBindings`                                                                   | [models.PortalBinding](../models/portalbinding.md)[]                               | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `packageDomains`                                                                   | [models.DomainWithUsagePackageDomain](../models/domainwithusagepackagedomain.md)[] | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `managerBindings`                                                                  | [models.ManagerBinding](../models/managerbinding.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `deploymentUrlProjects`                                            | [models.DeploymentUrlProject](../models/deploymenturlproject.md)[] | :heavy_check_mark:                                                 | N/A                                                                |
+| `portalBindings`                                                   | [models.PortalBinding](../models/portalbinding.md)[]               | :heavy_check_mark:                                                 | N/A                                                                |
+| `packageDomains`                                                   | [models.PackageDomain](../models/packagedomain.md)[]               | :heavy_check_mark:                                                 | N/A                                                                |
+| `managerBindings`                                                  | [models.ManagerBinding](../models/managerbinding.md)[]             | :heavy_check_mark:                                                 | N/A                                                                |

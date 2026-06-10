@@ -12,7 +12,7 @@ let value: ListDeploymentsResponse = {
     {
       id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       name: "<value>",
-      status: "running",
+      status: "refresh-failed",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       platform: "test",
       deploymentProtocolVersion: 120212,

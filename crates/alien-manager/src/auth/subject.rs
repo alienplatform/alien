@@ -152,6 +152,7 @@ pub enum Role {
     ProjectDeveloper,
     ProjectViewer,
     DeploymentManager,
+    DeploymentTelemetryWriter,
     DeploymentViewer,
     DeploymentGroupDeployer,
 }

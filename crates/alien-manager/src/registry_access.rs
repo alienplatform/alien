@@ -626,6 +626,7 @@ mod tests {
             current_release: None,
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
                 account_id: "123456789012".to_string(),
                 region: "us-east-2".to_string(),
@@ -651,6 +652,7 @@ mod tests {
             }),
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
                 project_number: "123456789012".to_string(),
                 project_id: "test-project".to_string(),

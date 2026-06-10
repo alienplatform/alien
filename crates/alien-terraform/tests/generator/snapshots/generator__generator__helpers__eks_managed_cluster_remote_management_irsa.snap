@@ -449,18 +449,6 @@ resource "aws_iam_role_policy_attachment" "kubernetes_node" {
   policy_arn = each.value
 }
 
-resource "aws_iam_role" "kubernetes_managed_node" {
-  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  name               = "${local.resource_prefix}-kubernetes-mng-node"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }] })
-}
-
-resource "aws_iam_role_policy_attachment" "kubernetes_managed_node" {
-  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly", "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"]) : toset([])
-  role       = aws_iam_role.kubernetes_managed_node[0].name
-  policy_arn = each.value
-}
-
 resource "aws_eks_cluster" "kubernetes" {
   count                         = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name                          = "${local.resource_prefix}-k8s"
@@ -481,7 +469,8 @@ resource "aws_eks_cluster" "kubernetes" {
   compute_config {
     enabled = true
     node_pools = [
-      "system"
+      "system",
+      "general-purpose"
     ]
     node_role_arn = aws_iam_role.kubernetes_node[0].arn
   }
@@ -510,64 +499,12 @@ resource "aws_eks_addon" "kubernetes_vpc_cni" {
   addon_name   = "vpc-cni"
 }
 
-resource "aws_eks_node_group" "kubernetes" {
-  count           = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  cluster_name    = aws_eks_cluster.kubernetes[0].name
-  node_group_name = "${local.resource_prefix}-kubernetes"
-  node_role_arn   = aws_iam_role.kubernetes_managed_node[0].arn
-  subnet_ids      = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
-  ami_type        = "AL2023_ARM_64_STANDARD"
-  capacity_type   = "ON_DEMAND"
-  disk_size       = 20
-  instance_types = [
-    "t4g.medium"
-  ]
-
-  scaling_config {
-    desired_size = 2
-    max_size     = 3
-    min_size     = 2
-  }
-
-  update_config {
-    max_unavailable = 1
-  }
-
-  depends_on = [
-    aws_eks_addon.kubernetes_vpc_cni,
-    aws_iam_role_policy_attachment.kubernetes_managed_node
-  ]
-}
-
-resource "aws_iam_role" "kubernetes_ebs_csi" {
-  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  name               = "${local.resource_prefix}-kubernetes-ebs-csi"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Federated = local.eks_oidc_provider_arn }, Action = "sts:AssumeRoleWithWebIdentity", Condition = { StringEquals = { "${local.eks_oidc_issuer_host_path}:aud" = "sts.amazonaws.com", "${local.eks_oidc_issuer_host_path}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa" } } }] })
-}
-
-resource "aws_iam_role_policy_attachment" "kubernetes_ebs_csi" {
-  count      = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  role       = aws_iam_role.kubernetes_ebs_csi[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-}
-
-resource "aws_eks_addon" "kubernetes_ebs_csi" {
-  count                    = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  cluster_name             = aws_eks_cluster.kubernetes[0].name
-  addon_name               = "aws-ebs-csi-driver"
-  service_account_role_arn = aws_iam_role.kubernetes_ebs_csi[0].arn
-  depends_on = [
-    aws_eks_node_group.kubernetes,
-    aws_iam_role_policy_attachment.kubernetes_ebs_csi
-  ]
-}
-
 resource "aws_eks_addon" "kubernetes_kube_proxy" {
   count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
   cluster_name = aws_eks_cluster.kubernetes[0].name
   addon_name   = "kube-proxy"
   depends_on = [
-    aws_eks_node_group.kubernetes
+    aws_eks_cluster.kubernetes
   ]
 }
 
@@ -576,7 +513,7 @@ resource "aws_eks_addon" "kubernetes_coredns" {
   cluster_name = aws_eks_cluster.kubernetes[0].name
   addon_name   = "coredns"
   depends_on = [
-    aws_eks_node_group.kubernetes
+    aws_eks_cluster.kubernetes
   ]
 }
 
@@ -673,14 +610,8 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy_attachment.kubernetes_cluster,
     aws_iam_role.kubernetes_node,
     aws_iam_role_policy_attachment.kubernetes_node,
-    aws_iam_role.kubernetes_managed_node,
-    aws_iam_role_policy_attachment.kubernetes_managed_node,
     aws_eks_cluster.kubernetes,
     aws_eks_addon.kubernetes_vpc_cni,
-    aws_eks_node_group.kubernetes,
-    aws_iam_role.kubernetes_ebs_csi,
-    aws_iam_role_policy_attachment.kubernetes_ebs_csi,
-    aws_eks_addon.kubernetes_ebs_csi,
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
     aws_iam_role.management,
@@ -752,6 +683,11 @@ output "deployment_base_platform" {
   description = "Base cloud platform for Kubernetes targets."
 }
 
+output "kubernetes_namespace" {
+  value       = var.kubernetes_namespace
+  description = "Kubernetes namespace for runtime resources."
+}
+
 output "kubernetes_kubeconfig" {
   value       = local.kubernetes_kubeconfig
   description = "Kubeconfig for managed Kubernetes clusters created by this module."
@@ -761,6 +697,11 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "kubernetes_update_kubeconfig_command" {
+  value       = "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+  description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
 }
 
 === README.md ===
@@ -829,3 +770,16 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+
+## Kubernetes Operations
+
+Before inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:
+
+```bash
+AWS_PROFILE=<target-profile> aws sts get-caller-identity
+terraform output kubernetes_update_kubeconfig_command
+AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)
+kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events
+```
+
+Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.

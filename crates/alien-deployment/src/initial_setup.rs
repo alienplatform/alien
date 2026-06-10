@@ -141,6 +141,7 @@ pub async fn handle_initial_setup(
         let mut next = current_cloned;
         next.status = DeploymentStatus::Provisioning;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         // Add a short delay before starting Provisioning to allow AWS IAM inline
@@ -150,7 +151,6 @@ pub async fn handle_initial_setup(
         // and hit AccessDenied on the management role for newly-attached policies.
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: Some(10_000),
             update_heartbeat: false,
             heartbeats: vec![],
@@ -183,17 +183,14 @@ pub async fn handle_initial_setup(
 
         crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
 
-        // Create aggregated error from failed resources
-        let error = crate::helpers::create_aggregated_error_from_stack_state(&next_state);
-
         let mut next = current_cloned;
         next.status = DeploymentStatus::InitialSetupFailed;
         next.stack_state = Some(next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         DeploymentStepResult {
             state: next,
-            error,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -213,7 +210,6 @@ pub async fn handle_initial_setup(
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
@@ -287,7 +283,6 @@ pub async fn handle_initial_setup_failed(
         info!("No retry requested, staying in InitialSetupFailed status");
         return Ok(DeploymentStepResult {
             state: current,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -315,11 +310,11 @@ pub async fn handle_initial_setup_failed(
     // Transition back to InitialSetup to continue deployment
     next.status = DeploymentStatus::InitialSetup;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.retry_requested = false; // Clear retry flag directly
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],

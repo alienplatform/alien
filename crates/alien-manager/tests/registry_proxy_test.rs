@@ -322,6 +322,7 @@ async fn setup() -> TestSetup {
             }),
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
@@ -336,7 +337,6 @@ async fn setup() -> TestSetup {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
-                    error: None,
                     suggested_delay_ms: None,
                 },
             )
@@ -795,6 +795,7 @@ async fn test_proxy_push_then_pull() {
             }),
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
@@ -809,7 +810,6 @@ async fn test_proxy_push_then_pull() {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
-                    error: None,
                     suggested_delay_ms: None,
                 },
             )

@@ -419,57 +419,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
             resource_block(
-                "aws_iam_role",
-                &format!("{label}_managed_node"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr(
-                        "name",
-                        expr::template(format!("${{local.resource_prefix}}-{label}-mng-node")),
-                    ),
-                    attr(
-                        "assume_role_policy",
-                        expr::jsonencode(expr::object([
-                            ("Version", Expression::String("2012-10-17".to_string())),
-                            (
-                                "Statement",
-                                Expression::Array(vec![expr::object([
-                                    ("Effect", Expression::String("Allow".to_string())),
-                                    (
-                                        "Principal",
-                                        expr::object([(
-                                            "Service",
-                                            Expression::String("ec2.amazonaws.com".to_string()),
-                                        )]),
-                                    ),
-                                    ("Action", Expression::String("sts:AssumeRole".to_string())),
-                                ])]),
-                            ),
-                        ])),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role_policy_attachment",
-                &format!("{label}_managed_node"),
-                [
-                    attr(
-                        "for_each",
-                        expr::raw(
-                            "var.kubernetes_cluster_mode == \"create\" ? toset([\"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy\", \"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly\", \"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy\"]) : toset([])",
-                        ),
-                    ),
-                    attr(
-                        "role",
-                        expr::raw(format!("aws_iam_role.{label}_managed_node[0].name")),
-                    ),
-                    attr("policy_arn", expr::raw("each.value")),
-                ],
-            ),
-            resource_block(
                 "aws_eks_cluster",
                 label,
                 [
@@ -504,9 +453,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             attr("enabled", Expression::Bool(true)),
                             attr(
                                 "node_pools",
-                                Expression::Array(vec![Expression::String(
-                                    "system".to_string(),
-                                )]),
+                                Expression::Array(vec![
+                                    Expression::String("system".to_string()),
+                                    Expression::String("general-purpose".to_string()),
+                                ]),
                             ),
                             attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_node[0].arn"))),
                         ],
@@ -543,115 +493,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
             resource_block(
-                "aws_eks_node_group",
-                label,
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
-                    attr("node_group_name", expr::template(format!("${{local.resource_prefix}}-{label}"))),
-                    attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_managed_node[0].arn"))),
-                    attr("subnet_ids", expr::raw(private_subnet_ids_expr(label))),
-                    attr("ami_type", Expression::String("AL2023_ARM_64_STANDARD".to_string())),
-                    attr("capacity_type", Expression::String("ON_DEMAND".to_string())),
-                    attr("disk_size", Expression::Number(hcl::Number::from(20))),
-                    attr(
-                        "instance_types",
-                        Expression::Array(vec![Expression::String("t4g.medium".to_string())]),
-                    ),
-                    nested(block(
-                        "scaling_config",
-                        [
-                            attr("desired_size", Expression::Number(hcl::Number::from(2))),
-                            attr("max_size", Expression::Number(hcl::Number::from(3))),
-                            attr("min_size", Expression::Number(hcl::Number::from(2))),
-                        ],
-                    )),
-                    nested(block(
-                        "update_config",
-                        [attr("max_unavailable", Expression::Number(hcl::Number::from(1)))],
-                    )),
-                    attr(
-                        "depends_on",
-                        expr::raw(format!(
-                            "[aws_eks_addon.{label}_vpc_cni, aws_iam_role_policy_attachment.{label}_managed_node]"
-                        )),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("name", expr::template(format!("${{local.resource_prefix}}-{label}-ebs-csi"))),
-                    attr(
-                        "assume_role_policy",
-                        expr::raw(r#"jsonencode({
-  Version = "2012-10-17"
-  Statement = [{
-    Effect = "Allow"
-    Principal = {
-      Federated = local.eks_oidc_provider_arn
-    }
-    Action = "sts:AssumeRoleWithWebIdentity"
-    Condition = {
-      StringEquals = {
-        "${local.eks_oidc_issuer_host_path}:aud" = "sts.amazonaws.com"
-        "${local.eks_oidc_issuer_host_path}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
-      }
-    }
-  }]
-})"#),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role_policy_attachment",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("role", expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].name"))),
-                    attr(
-                        "policy_arn",
-                        Expression::String(
-                            "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-                                .to_string(),
-                        ),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_eks_addon",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
-                    attr("addon_name", Expression::String("aws-ebs-csi-driver".to_string())),
-                    attr(
-                        "service_account_role_arn",
-                        expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].arn")),
-                    ),
-                    attr(
-                        "depends_on",
-                        expr::raw(format!(
-                            "[aws_eks_node_group.{label}, aws_iam_role_policy_attachment.{label}_ebs_csi]"
-                        )),
-                    ),
-                ],
-            ),
-            resource_block(
                 "aws_eks_addon",
                 &format!("{label}_kube_proxy"),
                 [
@@ -663,7 +504,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     attr("addon_name", Expression::String("kube-proxy".to_string())),
                     attr(
                         "depends_on",
-                        expr::raw(format!("[aws_eks_node_group.{label}]")),
+                        expr::raw(format!("[aws_eks_cluster.{label}]")),
                     ),
                 ],
             ),
@@ -679,7 +520,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     attr("addon_name", Expression::String("coredns".to_string())),
                     attr(
                         "depends_on",
-                        expr::raw(format!("[aws_eks_node_group.{label}]")),
+                        expr::raw(format!("[aws_eks_cluster.{label}]")),
                     ),
                 ],
             ),

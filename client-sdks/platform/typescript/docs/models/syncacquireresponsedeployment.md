@@ -11,7 +11,7 @@ let value: SyncAcquireResponseDeployment = {
   current: {
     platform: "aws",
     protocolVersion: 626709,
-    status: "initial-setup-failed",
+    status: "initial-setup",
   },
   config: {
     environmentVariables: {

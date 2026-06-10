@@ -25,6 +25,38 @@
       },
       {
         "grant": {
+          "actions": ["elasticloadbalancing:ModifyListener"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
         },
         "binding": {
@@ -89,6 +121,8 @@
             "compute.sslCertificates.create",
             "compute.sslCertificates.delete",
             "compute.sslCertificates.get",
+            "compute.targetHttpsProxies.get",
+            "compute.targetHttpsProxies.setSslCertificates",
             "compute.healthChecks.get",
             "compute.globalForwardingRules.get",
             "compute.disks.get"
@@ -111,11 +145,14 @@
           "actions": [
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/applicationGateways/read",
+            "Microsoft.Network/applicationGateways/write",
             "Microsoft.Compute/disks/read"
           ],
           "dataActions": [
             "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read"
+            "Microsoft.KeyVault/vaults/certificates/read",
+            "Microsoft.KeyVault/vaults/certificates/delete"
           ]
         },
         "binding": {

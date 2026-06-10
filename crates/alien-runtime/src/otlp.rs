@@ -1,6 +1,9 @@
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
-use std::{collections::HashMap, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 use tracing::{error, info};
 
 use opentelemetry::KeyValue;
@@ -11,8 +14,9 @@ use opentelemetry_sdk::{
     Resource,
 };
 
-/// Global OTLP logger provider for flushing logs on shutdown
-static OTLP_PROVIDER: OnceLock<Option<SdkLoggerProvider>> = OnceLock::new();
+/// Global OTLP logger provider for flushing logs on shutdown.
+static OTLP_PROVIDER: LazyLock<Mutex<Option<SdkLoggerProvider>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
 
@@ -97,12 +101,35 @@ pub fn init_otlp_logging(
         }
         None => {
             info!("No OTLP configuration found in environment variables, skipping OTLP logging");
-            // Store None in the global provider
-            OTLP_PROVIDER.set(None).ok();
+            *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = None;
             return Ok(None);
         }
     };
 
+    let provider = build_otlp_provider(&config)?;
+    let bridge = OpenTelemetryTracingBridge::new(&provider);
+    store_otlp_provider(provider);
+
+    info!("OTLP logging initialized successfully");
+    Ok(Some(bridge))
+}
+
+/// Initialize the app-log OTLP provider from already-resolved runtime config.
+#[cfg(feature = "otlp")]
+pub fn init_otlp_logging_from_config(config: OtlpConfig) -> Result<()> {
+    info!(
+        endpoint = %config.endpoint,
+        service_name = %config.service_name,
+        service_version = %config.service_version,
+        "Initializing app log OTLP exporter"
+    );
+    let provider = build_otlp_provider(&config)?;
+    store_otlp_provider(provider);
+    Ok(())
+}
+
+#[cfg(feature = "otlp")]
+fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
     // Build OTLP Log exporter over HTTP with protobuf.
     // When endpoint is set programmatically via ExportConfig, the SDK uses it
     // verbatim (no path appended). This matches OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
@@ -145,27 +172,12 @@ pub fn init_otlp_logging(
         .with_log_processor(batch_processor)
         .build();
 
-    // Create tracing bridge
-    let bridge = OpenTelemetryTracingBridge::new(&provider);
+    Ok(provider)
+}
 
-    // Store provider globally for shutdown flushing
-    // In tests, this might fail if already set, which is okay
-    if OTLP_PROVIDER.set(Some(provider)).is_err() {
-        #[cfg(test)]
-        {
-            // In tests, we might reinitialize OTLP multiple times
-            info!("OTLP provider already set (likely in tests), continuing with new provider");
-        }
-        #[cfg(not(test))]
-        {
-            return Err(AlienError::new(ErrorData::Other {
-                message: "Failed to store OTLP provider globally".to_string(),
-            }));
-        }
-    }
-
-    info!("OTLP logging initialized successfully");
-    Ok(Some(bridge))
+#[cfg(feature = "otlp")]
+fn store_otlp_provider(provider: SdkLoggerProvider) {
+    *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = Some(provider);
 }
 
 #[cfg(feature = "otlp")]
@@ -194,8 +206,15 @@ pub fn init_otlp_logging() -> Result<Option<()>> {
     {
         tracing::warn!("OTLP endpoint configured but alien-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
     }
-    OTLP_PROVIDER.set(None).ok();
+    *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = None;
     Ok(None)
+}
+
+/// Initialize OTLP logging when feature is disabled.
+#[cfg(not(feature = "otlp"))]
+pub fn init_otlp_logging_from_config(_config: OtlpConfig) -> Result<()> {
+    tracing::warn!("OTLP configuration provided but alien-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
+    Ok(())
 }
 
 /// Send a log entry via the OpenTelemetry SDK.
@@ -212,11 +231,14 @@ pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
     use std::time::{Duration, UNIX_EPOCH};
 
     // Get the global provider (initialized by init_otlp_logging)
-    let provider = match OTLP_PROVIDER.get() {
-        Some(Some(p)) => p,
-        _ => {
-            // OTLP not configured - silently skip (common in local dev without telemetry)
-            return;
+    let provider = {
+        let guard = OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned");
+        match guard.as_ref() {
+            Some(provider) => provider.clone(),
+            None => {
+                // OTLP not configured - silently skip (common in local dev without telemetry)
+                return;
+            }
         }
     };
 
@@ -258,7 +280,11 @@ pub fn emit_log(_stream: &str, _body: &str, _timestamp_nanos: i64) {
 /// Flush all pending OTLP logs
 /// This should be called before shutdown to ensure all logs are sent
 pub async fn flush_otlp_logs() -> Result<()> {
-    if let Some(Some(provider)) = OTLP_PROVIDER.get() {
+    let provider = OTLP_PROVIDER
+        .lock()
+        .expect("OTLP provider mutex poisoned")
+        .clone();
+    if let Some(provider) = provider {
         info!("Flushing OTLP logs before shutdown...");
 
         // Use force_flush instead of shutdown to avoid permanently shutting down the provider
@@ -298,7 +324,11 @@ pub async fn flush_otlp_logs() -> Result<()> {
 /// Shutdown OTLP logging completely
 /// This should only be called during application shutdown
 pub async fn shutdown_otlp_logs() -> Result<()> {
-    if let Some(Some(provider)) = OTLP_PROVIDER.get() {
+    let provider = OTLP_PROVIDER
+        .lock()
+        .expect("OTLP provider mutex poisoned")
+        .clone();
+    if let Some(provider) = provider {
         info!("Shutting down OTLP logs...");
 
         let shutdown_result = tokio::task::spawn_blocking({

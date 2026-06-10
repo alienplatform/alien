@@ -35,7 +35,7 @@ pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
 
-    #[arg(long, env = "BASE_PLATFORM", value_parser = parse_platform)]
+    #[arg(long, env = "ALIEN_BASE_PLATFORM", value_parser = parse_platform)]
     pub base_platform: Option<Platform>,
 
     #[arg(long, env = "SYNC_URL")]

@@ -73,7 +73,10 @@ impl Authz for OssAuthz {
                 deployment_group_id,
                 ..
             } => deployment_group_id == &deployment.deployment_group_id,
-            Scope::Deployment { deployment_id, .. } => deployment_id == &deployment.id,
+            Scope::Deployment { deployment_id, .. } => {
+                deployment_id == &deployment.id
+                    && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
+            }
         }
     }
 
@@ -152,7 +155,9 @@ impl Authz for OssAuthz {
 
     fn can_sync_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         match &s.scope {
-            Scope::Deployment { deployment_id, .. } => deployment_id == &deployment.id,
+            Scope::Deployment { deployment_id, .. } => {
+                deployment_id == &deployment.id && s.role == Role::DeploymentManager
+            }
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
@@ -171,8 +176,14 @@ impl Authz for OssAuthz {
     fn can_ingest_telemetry_for(&self, s: &Subject, deployment_id: &str) -> bool {
         // Only the deployment itself ingests its own telemetry.
         matches!(
-            &s.scope,
-            Scope::Deployment { deployment_id: scope_id, .. } if scope_id == deployment_id
+            (&s.scope, s.role),
+            (
+                Scope::Deployment {
+                    deployment_id: scope_id,
+                    ..
+                },
+                Role::DeploymentManager | Role::DeploymentTelemetryWriter
+            ) if scope_id == deployment_id
         )
     }
 
@@ -262,6 +273,8 @@ mod tests {
             current_release_id: None,
             desired_release_id: None,
             import_source: None,
+            setup_method: None,
+            setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
             setup_fingerprint_version: None,
@@ -302,5 +315,18 @@ mod tests {
     fn telemetry_ingest_is_self_only() {
         assert!(OssAuthz.can_ingest_telemetry_for(&deployment_token("d1"), "d1"));
         assert!(!OssAuthz.can_ingest_telemetry_for(&admin(), "d1"));
+    }
+
+    #[test]
+    fn telemetry_writer_can_only_ingest_own_telemetry() {
+        let mut s = deployment_token("d1");
+        s.role = Role::DeploymentTelemetryWriter;
+
+        assert!(OssAuthz.can_ingest_telemetry_for(&s, "d1"));
+        assert!(!OssAuthz.can_ingest_telemetry_for(&s, "d2"));
+
+        let dep = deployment("d1", "dg-a");
+        assert!(!OssAuthz.can_sync_deployment(&s, &dep));
+        assert!(!OssAuthz.can_read_deployment(&s, &dep));
     }
 }

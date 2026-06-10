@@ -12,7 +12,7 @@ let value: SyncReconcileRequest = {
     state: {
       platform: "azure",
       protocolVersion: 583290,
-      status: "deleting",
+      status: "delete-failed",
     },
   },
 };

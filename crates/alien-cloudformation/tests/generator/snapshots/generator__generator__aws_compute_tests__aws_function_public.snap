@@ -24,15 +24,12 @@ Metadata:
     - Label:
         default: Operations
       Parameters:
-      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
       CertificateArn:
         default: Certificate ARN
-      DeploymentModel:
-        default: Deployment model
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -83,13 +80,6 @@ Parameters:
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
     AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
-  DeploymentModel:
-    Type: String
-    Description: How runtime updates are delivered after setup.
-    Default: push
-    AllowedValues:
-    - push
-    - pull
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -113,10 +103,6 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  DeploymentModelPush:
-    Fn::Equals:
-    - Ref: DeploymentModel
-    - push
   HasDomainName:
     Fn::Not:
     - Fn::Equals:
@@ -166,18 +152,14 @@ Outputs:
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        Fn::If:
-        - DeploymentModelPush
-        - platform: aws
-          managingRoleArn:
-            Ref: ManagingRoleArn
-        - Ref: AWS::NoValue
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel:
-          Ref: DeploymentModel
+        deploymentModel: push
         updates:
           Ref: UpdatesMode
         telemetry:

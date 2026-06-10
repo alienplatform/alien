@@ -242,7 +242,7 @@ run();
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="delete_deployment" method="delete" path="/v1/deployments/{id}" -->
+<!-- UsageSnippet language="typescript" operationID="delete_deployment" method="post" path="/v1/deployments/{id}/delete" -->
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -254,6 +254,9 @@ const alienManager = new AlienManager({
 async function run() {
   await alienManager.deployments.deleteDeployment({
     id: "<id>",
+    deleteDeploymentRequest: {
+      action: "forget",
+    },
   });
 
 
@@ -280,6 +283,9 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await deploymentsDeleteDeployment(alienManager, {
     id: "<id>",
+    deleteDeploymentRequest: {
+      action: "forget",
+    },
   });
   if (res.ok) {
     const { value: result } = res;

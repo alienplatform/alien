@@ -18,11 +18,12 @@ use rand::Rng;
 use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs;
+use tokio::process::Command;
 use tokio::time::sleep;
 
 use tracing::{info, warn};
@@ -33,6 +34,32 @@ const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ArtifactCacheMetadata {
     cache_key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoMetadataPackage>,
+    resolve: Option<CargoMetadataResolve>,
+    workspace_root: PathBuf,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataPackage {
+    id: String,
+    manifest_path: PathBuf,
+    source: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataResolve {
+    root: Option<String>,
+    nodes: Vec<CargoMetadataNode>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataNode {
+    id: String,
+    dependencies: Vec<String>,
 }
 
 /// Dedupe key for identifying containers that can share the same binary build.
@@ -83,6 +110,7 @@ impl DedupeKey {
     stack: stack.id().to_string(),
 })]
 pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<Stack> {
+    let build_stack_started = Instant::now();
     info!(
         "Starting stack build process for platform: {:?}...",
         settings.platform.runtime_platform()
@@ -90,6 +118,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
+    let preflight_started = Instant::now();
     let preflight_summary = AlienEvent::RunningPreflights {
         stack: stack.id().to_string(),
         platform: settings.platform.runtime_platform().as_str().to_string(),
@@ -112,8 +141,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     info!(
-        "Build-time preflights completed: {} checks passed, {} warnings",
-        preflight_summary.passed_checks, preflight_summary.warning_count
+        "Build-time preflights completed in {:.2}s: {} checks passed, {} warnings",
+        preflight_started.elapsed().as_secs_f64(),
+        preflight_summary.passed_checks,
+        preflight_summary.warning_count
     );
 
     let base_output_dir = PathBuf::from(&settings.output_directory);
@@ -772,7 +803,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         stack_json_path.display()
     );
 
-    info!("Stack build process completed.");
+    info!(
+        "Stack build process completed in {:.2}s.",
+        build_stack_started.elapsed().as_secs_f64()
+    );
     Ok(stack)
 }
 
@@ -946,6 +980,7 @@ pub async fn push_stack(
     platform: Platform,
     push_settings: &PushSettings,
 ) -> Result<Stack> {
+    let push_started = Instant::now();
     info!(
         "Starting image push process to registry: {}",
         push_settings.repository
@@ -1109,7 +1144,8 @@ pub async fn push_stack(
     apply_pushed_images(&mut stack, push_results);
 
     info!(
-        "Image push process completed. Stack updated with {} resource image URL(s).",
+        "Image push process completed in {:.2}s. Stack updated with {} resource image URL(s).",
+        push_started.elapsed().as_secs_f64(),
         resource_count
     );
 
@@ -1129,6 +1165,7 @@ async fn push_resource_images(
     repository: &str,
     push_options: &dockdash::PushOptions,
 ) -> Result<String> {
+    let push_resource_started = Instant::now();
     info!(
         "Pushing images for resource '{}' from {}",
         display_resource_name,
@@ -1238,6 +1275,12 @@ async fn push_resource_images(
         );
     }
 
+    info!(
+        "Pushed resource '{}' in {:.2}s",
+        display_resource_name,
+        push_resource_started.elapsed().as_secs_f64()
+    );
+
     Ok(image_uri)
 }
 
@@ -1306,6 +1349,7 @@ async fn build_resource(
     resource_type: &str,
     related_resources: &[String],
 ) -> Result<String> {
+    let resource_started = Instant::now();
     // Get target list from settings (uses platform defaults if not specified)
     let targets = settings.get_targets();
 
@@ -1329,9 +1373,10 @@ async fn build_resource(
     .await?
     {
         info!(
-            "Reusing cached build artifacts for resource '{}' at {}",
+            "Reusing cached build artifacts for resource '{}' at {} after {:.2}s",
             resource_name,
-            cached_dir.display()
+            cached_dir.display(),
+            resource_started.elapsed().as_secs_f64()
         );
         return Ok(cached_dir.to_string_lossy().into_owned());
     }
@@ -1421,8 +1466,9 @@ async fn build_resource(
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
-        "Completed build for resource '{}'. Images directory: {} (hash: {})",
+        "Completed build for resource '{}' in {:.2}s. Images directory: {} (hash: {})",
         resource_name,
+        resource_started.elapsed().as_secs_f64(),
         final_output_dir.display(),
         short_hash
     );
@@ -1446,10 +1492,13 @@ async fn compute_source_artifact_cache_key(
                 message: "Failed to serialize toolchain config for build cache key".to_string(),
             })?,
     );
-    hasher.update(settings.platform.runtime_platform().as_str().as_bytes());
-    if let Some(base_platform) = settings.platform.base_platform() {
-        hasher.update(base_platform.as_str().as_bytes());
-    }
+    // Source artifact bytes are platform-independent for equivalent target sets.
+    // The actual differences are target triples, debug/release mode, container
+    // packaging, base image, and whether the runtime is packaged into the image.
+    // This lets e.g. GCP and Azure reuse the same linux-x64 artifacts.
+    let needs_runtime_in_image =
+        is_container || settings.platform.runtime_platform() != Platform::Local;
+    hasher.update(needs_runtime_in_image.to_string().as_bytes());
     hasher.update(settings.debug_mode.to_string().as_bytes());
     hasher.update(is_container.to_string().as_bytes());
     if let Some(override_base_image) = &settings.override_base_image {
@@ -1459,9 +1508,153 @@ async fn compute_source_artifact_cache_key(
         hasher.update(target.runtime_platform_id().as_bytes());
     }
 
-    hash_source_directory(Path::new(src), &mut hasher).await?;
+    hash_build_input_source(src, toolchain_config, &mut hasher).await?;
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn hash_build_input_source(
+    src: &str,
+    toolchain_config: &alien_core::ToolchainConfig,
+    hasher: &mut Sha256,
+) -> Result<()> {
+    match toolchain_config {
+        ToolchainConfig::Rust { .. } => hash_rust_build_input_graph(Path::new(src), hasher).await,
+        _ => hash_source_directory(Path::new(src), hasher).await,
+    }
+}
+
+async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
+    let metadata = read_cargo_metadata(src_dir).await?;
+    hasher.update(b"rust-cargo-metadata-v1");
+
+    let lockfile = metadata.workspace_root.join("Cargo.lock");
+    if lockfile.is_file() {
+        hasher.update(b"cargo-lock");
+        let lockfile_bytes = fs::read(&lockfile).await.into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "read file".to_string(),
+                file_path: lockfile.display().to_string(),
+                reason: "Failed to read Cargo.lock for build cache key".to_string(),
+            },
+        )?;
+        hasher.update(lockfile_bytes);
+    }
+
+    let local_package_ids = local_cargo_package_ids(&metadata);
+    let mut local_packages: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|package| local_package_ids.contains(&package.id))
+        .collect();
+    local_packages.sort_by(|left, right| left.id.cmp(&right.id));
+
+    for package in local_packages {
+        hasher.update(b"local-package");
+        hasher.update(package.id.as_bytes());
+        hasher.update(package.manifest_path.to_string_lossy().as_bytes());
+        let package_dir = package.manifest_path.parent().ok_or_else(|| {
+            AlienError::new(ErrorData::BuildConfigInvalid {
+                message: format!(
+                    "Cargo metadata package '{}' has manifest path without parent: {}",
+                    package.id,
+                    package.manifest_path.display()
+                ),
+            })
+        })?;
+        hash_source_directory(package_dir, hasher).await?;
+    }
+
+    Ok(())
+}
+
+async fn read_cargo_metadata(src_dir: &Path) -> Result<CargoMetadata> {
+    let manifest_path = src_dir.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--manifest-path"])
+        .arg(&manifest_path)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: src_dir.display().to_string(),
+            reason: "Failed to execute cargo metadata for build cache key".to_string(),
+            build_output: None,
+        })?;
+
+    if !output.status.success() {
+        let mut build_output = String::new();
+        build_output.push_str(&String::from_utf8_lossy(&output.stdout));
+        build_output.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: src_dir.display().to_string(),
+            reason: "cargo metadata failed while computing build cache key".to_string(),
+            build_output: Some(build_output),
+        }));
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationError {
+            message: "Failed to parse cargo metadata JSON for build cache key".to_string(),
+        })
+}
+
+fn local_cargo_package_ids(metadata: &CargoMetadata) -> HashSet<String> {
+    let packages_by_id: HashMap<_, _> = metadata
+        .packages
+        .iter()
+        .map(|package| (package.id.as_str(), package))
+        .collect();
+
+    let Some(resolve) = &metadata.resolve else {
+        return metadata
+            .packages
+            .iter()
+            .filter(|package| package.source.is_none())
+            .map(|package| package.id.clone())
+            .collect();
+    };
+    let Some(root) = &resolve.root else {
+        return metadata
+            .packages
+            .iter()
+            .filter(|package| package.source.is_none())
+            .map(|package| package.id.clone())
+            .collect();
+    };
+
+    let nodes_by_id: HashMap<_, _> = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut visited = HashSet::new();
+    let mut stack = vec![root.as_str()];
+
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id.to_string()) {
+            continue;
+        }
+
+        let Some(node) = nodes_by_id.get(id) else {
+            continue;
+        };
+
+        for dependency in &node.dependencies {
+            stack.push(dependency);
+        }
+    }
+
+    visited
+        .into_iter()
+        .filter(|id| {
+            packages_by_id
+                .get(id.as_str())
+                .map(|package| package.source.is_none())
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 async fn hash_source_directory(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
@@ -1507,7 +1700,10 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
 
-        if file_name == ".git" || file_name == ".alien" {
+        if matches!(
+            file_name.as_ref(),
+            ".git" | ".alien" | "target" | "node_modules"
+        ) {
             continue;
         }
 
@@ -1540,6 +1736,70 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
 }
 
 async fn find_cached_artifact_dir(
+    build_output_dir: &Path,
+    resource_name: &str,
+    targets: &[BinaryTarget],
+    artifact_cache_key: &str,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) =
+        find_cached_artifact_dir_in(build_output_dir, resource_name, targets, artifact_cache_key)
+            .await?
+    {
+        return Ok(Some(path));
+    }
+
+    let Some(parent_dir) = build_output_dir.parent() else {
+        return Ok(None);
+    };
+
+    let mut platform_entries = fs::read_dir(parent_dir).await.into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read directory".to_string(),
+            file_path: parent_dir.display().to_string(),
+            reason: "Failed to read sibling build directories for artifact cache".to_string(),
+        },
+    )?;
+
+    while let Some(entry) = platform_entries
+        .next_entry()
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "read directory entry".to_string(),
+            file_path: parent_dir.display().to_string(),
+            reason: "Failed to iterate sibling build directories for artifact cache".to_string(),
+        })?
+    {
+        let path = entry.path();
+        if path == build_output_dir {
+            continue;
+        }
+
+        let file_type =
+            entry
+                .file_type()
+                .await
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read metadata".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read sibling artifact cache directory metadata".to_string(),
+                })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        if let Some(cached) =
+            find_cached_artifact_dir_in(&path, resource_name, targets, artifact_cache_key).await?
+        {
+            return Ok(Some(cached));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn find_cached_artifact_dir_in(
     build_output_dir: &Path,
     resource_name: &str,
     targets: &[BinaryTarget],
@@ -2519,6 +2779,152 @@ mod tests {
         // which is exactly why we hash - to detect changes!)
         let tarball_path = path.join("linux-x64.oci.tar");
         assert!(tarball_path.exists(), "Tarball should exist");
+    }
+
+    #[tokio::test]
+    async fn source_artifact_cache_key_is_shared_for_equivalent_cloud_builds() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let gcp = BuildSettings {
+            output_directory: src_dir.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: Some("registry.example.com/base:tag".to_string()),
+            debug_mode: false,
+        };
+        let azure = BuildSettings {
+            platform: PlatformBuildSettings::Azure {},
+            ..gcp.clone()
+        };
+
+        let gcp_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+        let azure_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(gcp_key, azure_key);
+    }
+
+    #[tokio::test]
+    async fn rust_source_artifact_cache_key_includes_local_path_dependencies() {
+        let workspace_dir = tempdir().unwrap();
+        let app_dir = workspace_dir.path().join("app");
+        let dep_dir = workspace_dir.path().join("dep");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::create_dir_all(dep_dir.join("src")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() { dep::value(); }\n").unwrap();
+        std::fs::write(
+            dep_dir.join("Cargo.toml"),
+            "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(dep_dir.join("src/lib.rs"), "pub fn value() -> u32 { 1 }\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let settings = BuildSettings {
+            output_directory: workspace_dir
+                .path()
+                .join("out")
+                .to_string_lossy()
+                .into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let first_key = compute_source_artifact_cache_key(
+            app_dir.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        std::fs::write(dep_dir.join("src/lib.rs"), "pub fn value() -> u32 { 2 }\n").unwrap();
+
+        let second_key = compute_source_artifact_cache_key(
+            app_dir.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(first_key, second_key);
+    }
+
+    #[tokio::test]
+    async fn artifact_cache_lookup_reuses_sibling_platform_directory() {
+        let temp_root = tempdir().unwrap();
+        let build_root = temp_root.path().join("build");
+        let gcp_dir = build_root.join("gcp");
+        let azure_dir = build_root.join("azure");
+        let cached_dir = gcp_dir.join("alien-manager-abcdef12");
+
+        fs::create_dir_all(&cached_dir).await.unwrap();
+        fs::create_dir_all(&azure_dir).await.unwrap();
+        fs::write(cached_dir.join("linux-x64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        write_artifact_cache_metadata(&cached_dir, "cache-key")
+            .await
+            .unwrap();
+
+        let found = find_cached_artifact_dir(
+            &azure_dir,
+            "alien-manager",
+            &[BinaryTarget::LinuxX64],
+            "cache-key",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(found, Some(cached_dir));
     }
 
     #[tokio::test]

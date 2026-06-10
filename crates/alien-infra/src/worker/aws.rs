@@ -3563,6 +3563,7 @@ mod tests {
                     "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
                         .to_string(),
                 ),
+                aliases: Vec::new(),
                 issued_at: Some("2024-01-01T00:00:00Z".to_string()),
             },
         );

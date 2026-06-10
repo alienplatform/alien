@@ -1,7 +1,7 @@
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-/// Errors related to agent deployment operations.
+/// Errors related to deployment operations.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
@@ -80,15 +80,15 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// Invalid agent status for the requested operation.
+    /// Invalid deployment status for the requested operation.
     #[error(
-        code = "INVALID_AGENT_STATUS",
-        message = "Agent status '{current_status}' is not valid for operation '{operation}'",
+        code = "INVALID_DEPLOYMENT_STATUS",
+        message = "Deployment status '{current_status}' is not valid for operation '{operation}'",
         retryable = "false",
         internal = "false"
     )]
-    InvalidAgentStatus {
-        /// Current agent status
+    InvalidDeploymentStatus {
+        /// Current deployment status
         current_status: String,
         /// The operation that was attempted
         operation: String,
@@ -159,15 +159,15 @@ pub enum ErrorData {
         failed_resource_type: String,
     },
 
-    /// Agent deployment failed with one or more resource errors.
+    /// Deployment failed with one or more resource errors.
     #[error(
-        code = "AGENT_DEPLOYMENT_FAILED",
+        code = "DEPLOYMENT_FAILED",
         message = "Deployment failed: {failed_resources} resource error(s), {interrupted_resources} interrupted, {total_resources} total",
         retryable = "false",
         internal = "false",
         http_status_code = 500
     )]
-    AgentDeploymentFailed {
+    DeploymentFailed {
         /// Resources that actually failed (excludes interrupted resources).
         resource_errors: Vec<ResourceError>,
         /// Total number of resources in the deployment.

@@ -21,6 +21,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export const SyncListResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -33,6 +34,8 @@ export const SyncListResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -57,6 +60,21 @@ export const SyncListResponsePlatform = {
  */
 export type SyncListResponsePlatform = ClosedEnum<
   typeof SyncListResponsePlatform
+>;
+
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export const SyncListResponseBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export type SyncListResponseBasePlatform = ClosedEnum<
+  typeof SyncListResponseBasePlatform
 >;
 
 export const SyncListResponsePlatformTest = {
@@ -1415,6 +1433,7 @@ export const SyncListResponseStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -1505,70 +1524,6 @@ export type SyncListResponseStackState = {
    */
   resources: { [k: string]: SyncListResponseStackStateResources };
 };
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const SyncListResponseDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type SyncListResponseDeleteScopeEnum = ClosedEnum<
-  typeof SyncListResponseDeleteScopeEnum
->;
-
-export type SyncListResponseDeleteScopeUnion =
-  | SyncListResponseDeleteScopeEnum
-  | any;
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const SyncListResponsePendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type SyncListResponsePendingDeleteScopeEnum = ClosedEnum<
-  typeof SyncListResponsePendingDeleteScopeEnum
->;
-
-export type SyncListResponsePendingDeleteScopeUnion =
-  | SyncListResponsePendingDeleteScopeEnum
-  | any;
 
 export const SyncListResponseManagementEnum = {
   Auto: "auto",
@@ -2769,7 +2724,6 @@ export type SyncListResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type SyncListResponseRuntimeMetadata = {
-  deleteScope?: SyncListResponseDeleteScopeEnum | any | null | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2777,11 +2731,6 @@ export type SyncListResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | SyncListResponsePendingDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2807,6 +2756,24 @@ export const SyncListResponseImportSource = {
  */
 export type SyncListResponseImportSource = ClosedEnum<
   typeof SyncListResponseImportSource
+>;
+
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export const SyncListResponseSetupMethod = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export type SyncListResponseSetupMethod = ClosedEnum<
+  typeof SyncListResponseSetupMethod
 >;
 
 /**
@@ -3001,6 +2968,14 @@ export type SyncListResponseDeployment = {
    */
   platform: SyncListResponsePlatform;
   /**
+   * Underlying cloud platform for Kubernetes deployments.
+   */
+  basePlatform?: SyncListResponseBasePlatform | null | undefined;
+  /**
+   * Cloud region or location for the deployment.
+   */
+  region?: string | null | undefined;
+  /**
    * DeploymentState protocol version owned by the runtime/manager
    */
   deploymentProtocolVersion: number;
@@ -3048,6 +3023,14 @@ export type SyncListResponseDeployment = {
    * Setup source that imported this deployment
    */
   importSource?: SyncListResponseImportSource | null | undefined;
+  /**
+   * Setup method that created the deployment record and owns setup-time resources.
+   */
+  setupMethod?: SyncListResponseSetupMethod | null | undefined;
+  /**
+   * Setup method metadata needed to guide privileged teardown.
+   */
+  setupMetadata?: { [k: string]: any | null } | null | undefined;
   /**
    * Imported setup target for compatibility checks
    */
@@ -3120,6 +3103,11 @@ export const SyncListResponseStatus$inboundSchema: z.ZodEnum<
 export const SyncListResponsePlatform$inboundSchema: z.ZodEnum<
   typeof SyncListResponsePlatform
 > = z.enum(SyncListResponsePlatform);
+
+/** @internal */
+export const SyncListResponseBasePlatform$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseBasePlatform
+> = z.enum(SyncListResponseBasePlatform);
 
 /** @internal */
 export const SyncListResponsePlatformTest$inboundSchema: z.ZodEnum<
@@ -5208,54 +5196,6 @@ export function syncListResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseDeleteScopeEnum
-> = z.enum(SyncListResponseDeleteScopeEnum);
-
-/** @internal */
-export const SyncListResponseDeleteScopeUnion$inboundSchema: z.ZodType<
-  SyncListResponseDeleteScopeUnion,
-  unknown
-> = z.union([SyncListResponseDeleteScopeEnum$inboundSchema, z.any()]);
-
-export function syncListResponseDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseDeleteScopeUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponsePendingDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncListResponsePendingDeleteScopeEnum
-> = z.enum(SyncListResponsePendingDeleteScopeEnum);
-
-/** @internal */
-export const SyncListResponsePendingDeleteScopeUnion$inboundSchema: z.ZodType<
-  SyncListResponsePendingDeleteScopeUnion,
-  unknown
-> = z.union([SyncListResponsePendingDeleteScopeEnum$inboundSchema, z.any()]);
-
-export function syncListResponsePendingDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponsePendingDeleteScopeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponsePendingDeleteScopeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponsePendingDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const SyncListResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof SyncListResponseManagementEnum
 > = z.enum(SyncListResponseManagementEnum);
@@ -6929,13 +6869,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncListResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([SyncListResponseDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
-    z.union([SyncListResponsePendingDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
@@ -6959,6 +6893,11 @@ export function syncListResponseRuntimeMetadataFromJSON(
 export const SyncListResponseImportSource$inboundSchema: z.ZodEnum<
   typeof SyncListResponseImportSource
 > = z.enum(SyncListResponseImportSource);
+
+/** @internal */
+export const SyncListResponseSetupMethod$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseSetupMethod
+> = z.enum(SyncListResponseSetupMethod);
 
 /** @internal */
 export const SyncListResponseError$inboundSchema: z.ZodType<
@@ -7126,6 +7065,9 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   status: SyncListResponseStatus$inboundSchema,
   projectId: z.string(),
   platform: SyncListResponsePlatform$inboundSchema,
+  basePlatform: z.nullable(SyncListResponseBasePlatform$inboundSchema)
+    .optional(),
+  region: z.nullable(z.string()).optional(),
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
   environmentInfo: z.nullable(
@@ -7148,6 +7090,9 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   importSource: z.nullable(SyncListResponseImportSource$inboundSchema)
+    .optional(),
+  setupMethod: z.nullable(SyncListResponseSetupMethod$inboundSchema).optional(),
+  setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
     .optional(),
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),

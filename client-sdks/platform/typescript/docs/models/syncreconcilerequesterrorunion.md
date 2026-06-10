@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.SyncReconcileRequestErrorState`
+### `models.SyncReconcileRequestError`
 
 ```typescript
-const value: models.SyncReconcileRequestErrorState = {
+const value: models.SyncReconcileRequestError = {
   code: "<value>",
-  internal: false,
+  internal: true,
   message: "<value>",
 };
 ```

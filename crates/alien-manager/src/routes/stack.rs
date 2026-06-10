@@ -323,6 +323,7 @@ pub async fn stack_import(
         current_release_id: None,
         desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
+        setup_metadata: req.setup_metadata.clone(),
         setup_target: req.setup_target.clone(),
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
@@ -494,6 +495,7 @@ fn initial_import_status(prepared_stack: &Stack, stack_state: &StackState) -> St
 fn deployment_status_string(status: DeploymentStatus) -> String {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights-failed",
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -506,6 +508,8 @@ fn deployment_status_string(status: DeploymentStatus) -> String {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::TeardownRequired => "teardown-required",
+        DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }

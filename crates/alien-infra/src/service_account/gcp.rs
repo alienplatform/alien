@@ -566,18 +566,17 @@ impl GcpServiceAccountController {
                 operation: Some("sync_stack_role_bindings".to_string()),
                 resource_id: Some(config.id.clone()),
             })?;
+        ResourcePermissionsHelper::ensure_all_gcp_custom_roles(
+            ctx,
+            &permission_set.id,
+            &grant_plan,
+        )
+        .await?;
+
         let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
         if project_bindings.is_empty() {
             return Ok(());
         }
-
-        let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
-        ResourcePermissionsHelper::ensure_gcp_custom_roles(
-            ctx,
-            &permission_set.id,
-            selected_custom_roles,
-        )
-        .await?;
 
         for binding in project_bindings {
             new_bindings

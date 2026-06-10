@@ -10,6 +10,7 @@ import {
 } from "./networkheartbeatstatus.js";
 
 export type NetworkHeartbeatDataAzureVnet = {
+  applicationGatewaySubnetName?: string | null | undefined;
   cidrBlock?: string | null | undefined;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
@@ -64,6 +65,7 @@ export type NetworkHeartbeatData =
 
 /** @internal */
 export type NetworkHeartbeatDataAzureVnet$Outbound = {
+  applicationGatewaySubnetName?: string | null | undefined;
   cidrBlock?: string | null | undefined;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
@@ -85,6 +87,7 @@ export const NetworkHeartbeatDataAzureVnet$outboundSchema: z.ZodType<
   NetworkHeartbeatDataAzureVnet$Outbound,
   NetworkHeartbeatDataAzureVnet
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   cidrBlock: z.nullable(z.string()).optional(),
   isByoVnet: z.boolean(),
   lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),

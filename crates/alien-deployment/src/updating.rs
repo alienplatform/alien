@@ -68,11 +68,11 @@ pub async fn handle_update_pending(
     // Transition to Updating
     next.status = DeploymentStatus::Updating;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.runtime_metadata = Some(runtime_metadata);
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
@@ -188,6 +188,7 @@ pub async fn handle_updating(
 
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
         // Promote target to current: update successful
         next.current_release = next.target_release.clone();
@@ -195,7 +196,6 @@ pub async fn handle_updating(
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -227,16 +227,13 @@ pub async fn handle_updating(
 
         crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
 
-        // Create aggregated error from failed resources
-        let error = crate::helpers::create_aggregated_error_from_stack_state(&next_state);
-
         next.status = DeploymentStatus::UpdateFailed;
         next.stack_state = Some(next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         DeploymentStepResult {
             state: next,
-            error,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -248,7 +245,6 @@ pub async fn handle_updating(
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
@@ -285,7 +281,6 @@ pub async fn handle_update_failed(
         info!("No retry requested, staying in UpdateFailed status");
         return Ok(DeploymentStepResult {
             state: current,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -313,11 +308,11 @@ pub async fn handle_update_failed(
     // Transition back to UpdatePending to re-run preflights
     next.status = DeploymentStatus::UpdatePending;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.retry_requested = false; // Clear retry flag directly
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],

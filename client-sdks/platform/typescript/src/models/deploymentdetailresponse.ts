@@ -33,6 +33,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export const DeploymentDetailResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -45,6 +46,8 @@ export const DeploymentDetailResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -71,6 +74,21 @@ export const DeploymentDetailResponsePlatform = {
  */
 export type DeploymentDetailResponsePlatform = ClosedEnum<
   typeof DeploymentDetailResponsePlatform
+>;
+
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export const DeploymentDetailResponseBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export type DeploymentDetailResponseBasePlatform = ClosedEnum<
+  typeof DeploymentDetailResponseBasePlatform
 >;
 
 export const DeploymentDetailResponsePlatformTest = {
@@ -1464,6 +1482,7 @@ export const DeploymentDetailResponseStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -1564,70 +1583,6 @@ export type DeploymentDetailResponseStackState = {
    */
   resources: { [k: string]: DeploymentDetailResponseStackStateResources };
 };
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const DeploymentDetailResponseDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type DeploymentDetailResponseDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentDetailResponseDeleteScopeEnum
->;
-
-export type DeploymentDetailResponseDeleteScopeUnion =
-  | DeploymentDetailResponseDeleteScopeEnum
-  | any;
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const DeploymentDetailResponsePendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type DeploymentDetailResponsePendingDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentDetailResponsePendingDeleteScopeEnum
->;
-
-export type DeploymentDetailResponsePendingDeleteScopeUnion =
-  | DeploymentDetailResponsePendingDeleteScopeEnum
-  | any;
 
 export const DeploymentDetailResponseManagementEnum = {
   Auto: "auto",
@@ -2856,11 +2811,6 @@ export type DeploymentDetailResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
-  deleteScope?:
-    | DeploymentDetailResponseDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2868,11 +2818,6 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | DeploymentDetailResponsePendingDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?:
     | DeploymentDetailResponsePreparedStack
     | any
@@ -2902,6 +2847,24 @@ export const DeploymentDetailResponseImportSource = {
  */
 export type DeploymentDetailResponseImportSource = ClosedEnum<
   typeof DeploymentDetailResponseImportSource
+>;
+
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export const DeploymentDetailResponseSetupMethod = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export type DeploymentDetailResponseSetupMethod = ClosedEnum<
+  typeof DeploymentDetailResponseSetupMethod
 >;
 
 /**
@@ -3044,6 +3007,14 @@ export type DeploymentDetailResponse = {
    */
   platform: DeploymentDetailResponsePlatform;
   /**
+   * Underlying cloud platform for Kubernetes deployments.
+   */
+  basePlatform?: DeploymentDetailResponseBasePlatform | null | undefined;
+  /**
+   * Cloud region or location for the deployment.
+   */
+  region?: string | null | undefined;
+  /**
    * DeploymentState protocol version owned by the runtime/manager
    */
   deploymentProtocolVersion: number;
@@ -3091,6 +3062,14 @@ export type DeploymentDetailResponse = {
    * Setup source that imported this deployment
    */
   importSource?: DeploymentDetailResponseImportSource | null | undefined;
+  /**
+   * Setup method that created the deployment record and owns setup-time resources.
+   */
+  setupMethod?: DeploymentDetailResponseSetupMethod | null | undefined;
+  /**
+   * Setup method metadata needed to guide privileged teardown.
+   */
+  setupMetadata?: { [k: string]: any | null } | null | undefined;
   /**
    * Imported setup target for compatibility checks
    */
@@ -3157,6 +3136,11 @@ export const DeploymentDetailResponseStatus$inboundSchema: z.ZodEnum<
 export const DeploymentDetailResponsePlatform$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponsePlatform
 > = z.enum(DeploymentDetailResponsePlatform);
+
+/** @internal */
+export const DeploymentDetailResponseBasePlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseBasePlatform
+> = z.enum(DeploymentDetailResponseBasePlatform);
 
 /** @internal */
 export const DeploymentDetailResponsePlatformTest$inboundSchema: z.ZodEnum<
@@ -5530,61 +5514,6 @@ export function deploymentDetailResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const DeploymentDetailResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseDeleteScopeEnum
-> = z.enum(DeploymentDetailResponseDeleteScopeEnum);
-
-/** @internal */
-export const DeploymentDetailResponseDeleteScopeUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDeleteScopeUnion,
-  unknown
-> = z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]);
-
-export function deploymentDetailResponseDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseDeleteScopeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseDeleteScopeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponsePendingDeleteScopeEnum$inboundSchema:
-  z.ZodEnum<typeof DeploymentDetailResponsePendingDeleteScopeEnum> = z.enum(
-    DeploymentDetailResponsePendingDeleteScopeEnum,
-  );
-
-/** @internal */
-export const DeploymentDetailResponsePendingDeleteScopeUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponsePendingDeleteScopeUnion, unknown> = z.union(
-    [DeploymentDetailResponsePendingDeleteScopeEnum$inboundSchema, z.any()],
-  );
-
-export function deploymentDetailResponsePendingDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponsePendingDeleteScopeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponsePendingDeleteScopeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponsePendingDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const DeploymentDetailResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponseManagementEnum
 > = z.enum(DeploymentDetailResponseManagementEnum);
@@ -7530,16 +7459,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
-    z.union([
-      DeploymentDetailResponsePendingDeleteScopeEnum$inboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponsePreparedStack$inboundSchema),
@@ -7569,6 +7489,11 @@ export function deploymentDetailResponseRuntimeMetadataFromJSON(
 export const DeploymentDetailResponseImportSource$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponseImportSource
 > = z.enum(DeploymentDetailResponseImportSource);
+
+/** @internal */
+export const DeploymentDetailResponseSetupMethod$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseSetupMethod
+> = z.enum(DeploymentDetailResponseSetupMethod);
 
 /** @internal */
 export const DeploymentDetailResponseError$inboundSchema: z.ZodType<
@@ -7656,6 +7581,9 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   status: DeploymentDetailResponseStatus$inboundSchema,
   projectId: z.string(),
   platform: DeploymentDetailResponsePlatform$inboundSchema,
+  basePlatform: z.nullable(DeploymentDetailResponseBasePlatform$inboundSchema)
+    .optional(),
+  region: z.nullable(z.string()).optional(),
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
   environmentInfo: z.nullable(
@@ -7681,6 +7609,10 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   importSource: z.nullable(DeploymentDetailResponseImportSource$inboundSchema)
+    .optional(),
+  setupMethod: z.nullable(DeploymentDetailResponseSetupMethod$inboundSchema)
+    .optional(),
+  setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
     .optional(),
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),

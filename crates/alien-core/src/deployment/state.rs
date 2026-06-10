@@ -7,20 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 
-/// Scope for a delete operation.
-///
-/// Full deletes are setup/admin owned and may remove both Frozen and Live
-/// resources. Live-only deletes are used by setup handoff resources
-/// (Terraform/CloudFormation) so Alien removes only the resources it owns
-/// before setup tears down Frozen resources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub enum DeleteScope {
-    Full,
-    LiveOnly,
-}
-
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -45,17 +31,6 @@ pub struct RuntimeMetadata {
     /// every reconcile tick.
     #[serde(default, skip_serializing_if = "is_false")]
     pub registry_access_granted: bool,
-
-    /// Scope selected by the caller that requested deletion.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delete_scope: Option<DeleteScope>,
-
-    /// Delete scope requested while another actor owns the deployment lock.
-    ///
-    /// The lock owner consumes this on its next reconcile and yields to
-    /// deletion without overwriting the queued delete request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_delete_scope: Option<DeleteScope>,
 }
 
 /// Deployment state
@@ -82,6 +57,11 @@ pub struct DeploymentState {
     /// Infrastructure resource tracking (which resources exist, their status, outputs)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_state: Option<StackState>,
+    /// Deployment-level error for failures not owned by a specific resource.
+    ///
+    /// Resource controller failures belong in `stack_state.resources[*].error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<AlienError>,
     /// Cloud account details (account ID, project number, region)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_info: Option<EnvironmentInfo>,
@@ -109,12 +89,6 @@ pub struct DeploymentState {
 pub struct DeploymentStepResult {
     /// The complete next deployment state
     pub state: DeploymentState,
-
-    /// Error that occurred during this step (if any)
-    /// - `None`: No error, step succeeded
-    /// - `Some(error)`: Step failed or encountered an error
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<AlienError>,
 
     /// Suggested delay before next step (optimization hint)
     /// - `None`: No suggested delay, can poll immediately

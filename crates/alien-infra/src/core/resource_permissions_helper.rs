@@ -3,18 +3,34 @@
 //! This module provides unified functionality for resource controllers to apply
 //! resource-scoped permissions on AWS, GCP, and Azure platforms.
 
+use std::collections::HashSet;
+
 use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
-use alien_core::PermissionSet;
-use alien_core::{KubernetesCluster, RemoteStackManagement};
+use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
 use tracing::{info, warn};
+
+fn gcp_custom_role_matches(
+    existing: &alien_gcp_clients::iam::Role,
+    desired: &alien_gcp_clients::iam::Role,
+) -> bool {
+    let mut existing_permissions = existing.included_permissions.clone();
+    let mut desired_permissions = desired.included_permissions.clone();
+    existing_permissions.sort();
+    desired_permissions.sort();
+
+    existing.title == desired.title
+        && existing.description == desired.description
+        && existing.stage == desired.stage
+        && existing_permissions == desired_permissions
+}
 
 /// Helper for applying resource-scoped permissions across all platforms
 pub struct ResourcePermissionsHelper;
@@ -244,6 +260,30 @@ impl ResourcePermissionsHelper {
         Self::ensure_gcp_custom_roles(ctx, &permission_set.id, custom_roles).await
     }
 
+    /// Setup-only: idempotently create or update all custom roles in a GCP grant plan.
+    pub async fn ensure_all_gcp_custom_roles(
+        ctx: &ResourceControllerContext<'_>,
+        permission_set_id: &str,
+        grant_plan: &GcpGrantPlan,
+    ) -> Result<()> {
+        Self::ensure_gcp_custom_roles(ctx, permission_set_id, grant_plan.custom_roles.clone()).await
+    }
+
+    /// Setup-only: idempotently create or update custom roles referenced by selected bindings.
+    pub async fn ensure_gcp_custom_roles_for_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        permission_set_id: &str,
+        grant_plan: &GcpGrantPlan,
+        bindings: &[GcpIamBinding],
+    ) -> Result<()> {
+        Self::ensure_gcp_custom_roles(
+            ctx,
+            permission_set_id,
+            grant_plan.custom_roles_for_bindings(bindings),
+        )
+        .await
+    }
+
     /// Setup-only: idempotently create or update the selected GCP custom roles.
     ///
     /// Terraform/CloudFormation/CLI setup owns role definitions. Runtime
@@ -253,10 +293,19 @@ impl ResourcePermissionsHelper {
         permission_set_id: &str,
         custom_roles: Vec<GcpCustomRole>,
     ) -> Result<()> {
+        if custom_roles.is_empty() {
+            return Ok(());
+        }
+
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
+        let mut seen_role_names = HashSet::new();
         for custom_role in custom_roles {
+            if !seen_role_names.insert(custom_role.name.clone()) {
+                continue;
+            }
+
             let role_id = custom_role.role_id.clone();
 
             info!(
@@ -285,18 +334,29 @@ impl ResourcePermissionsHelper {
                 .build();
 
             match iam_client.get_role(custom_role.name.clone()).await {
-                Ok(_) => {
-                    iam_client
-                        .patch_role(
-                            custom_role.name.clone(),
-                            updated_role,
-                            Some("includedPermissions,title,description,stage".to_string()),
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to update existing custom role '{}'", role_id),
-                            resource_id: Some(permission_set_id.to_string()),
-                        })?;
+                Ok(existing_role) => {
+                    if gcp_custom_role_matches(&existing_role, &updated_role) {
+                        info!(
+                            role_id = %role_id,
+                            permission_set = %permission_set_id,
+                            "GCP custom role already matches desired permissions"
+                        );
+                    } else {
+                        iam_client
+                            .patch_role(
+                                custom_role.name.clone(),
+                                updated_role,
+                                Some("includedPermissions,title,description,stage".to_string()),
+                            )
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to update existing custom role '{}'",
+                                    role_id
+                                ),
+                                resource_id: Some(permission_set_id.to_string()),
+                            })?;
+                    }
                 }
                 Err(e)
                     if matches!(
@@ -581,9 +641,9 @@ impl ResourcePermissionsHelper {
 
     /// Collect GCP resource-scoped IAM bindings with generator metadata intact.
     ///
-    /// This is a live resource reconciliation path. Custom role definitions are
-    /// setup-owned; this helper only returns bindings to roles that setup has
-    /// already created.
+    /// Custom role definitions are setup-owned. For Frozen resources this helper
+    /// may repair missing setup-owned role definitions during InitialSetup retry;
+    /// Live resources only receive bindings to roles that setup already created.
     pub async fn collect_gcp_resource_scoped_iam_bindings(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -632,6 +692,7 @@ impl ResourcePermissionsHelper {
 
                 Self::process_gcp_profile_permissions(
                     ctx,
+                    resource_id,
                     profile_name,
                     &combined_refs,
                     &generator,
@@ -720,6 +781,7 @@ impl ResourcePermissionsHelper {
     /// Process GCP permissions for a specific profile
     async fn process_gcp_profile_permissions(
         ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
         profile_name: &str,
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &GcpRuntimePermissionsGenerator,
@@ -751,6 +813,14 @@ impl ResourcePermissionsHelper {
                 })?;
             let selected_bindings =
                 grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            Self::ensure_gcp_custom_roles_for_resource_if_frozen(
+                ctx,
+                resource_id,
+                &permission_set.id,
+                &grant_plan,
+                &selected_bindings,
+            )
+            .await?;
 
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
@@ -923,6 +993,14 @@ impl ResourcePermissionsHelper {
                 })?;
             let selected_bindings =
                 grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            Self::ensure_gcp_custom_roles_for_resource_if_frozen(
+                ctx,
+                resource_id,
+                &permission_set.id,
+                &grant_plan,
+                &selected_bindings,
+            )
+            .await?;
 
             let bindings_count = selected_bindings.len();
             for mut binding in selected_bindings {
@@ -1319,9 +1397,9 @@ impl ResourcePermissionsHelper {
     /// (e.g., worker/gcp.rs) to add management SA bindings for pre-computed
     /// permission set references.
     ///
-    /// This is a live resource reconciliation path. Custom role definitions are
-    /// setup-owned; this helper only returns bindings to roles that setup has
-    /// already created.
+    /// Custom role definitions are setup-owned. For Frozen resources this helper
+    /// may repair missing setup-owned role definitions during InitialSetup retry;
+    /// Live resources only receive bindings to roles that setup already created.
     pub async fn collect_gcp_management_bindings_for(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -1382,6 +1460,14 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
             let selected_bindings = grant_plan.bindings_for_target(expected_target);
+            Self::ensure_gcp_custom_roles_for_resource_if_frozen(
+                ctx,
+                resource_id,
+                &permission_set.id,
+                &grant_plan,
+                &selected_bindings,
+            )
+            .await?;
 
             let bindings_count = selected_bindings.len();
             for binding in selected_bindings {
@@ -1404,6 +1490,32 @@ impl ResourcePermissionsHelper {
         }
 
         Ok(())
+    }
+
+    async fn ensure_gcp_custom_roles_for_resource_if_frozen(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        permission_set_id: &str,
+        grant_plan: &GcpGrantPlan,
+        bindings: &[GcpIamBinding],
+    ) -> Result<()> {
+        if !Self::is_frozen_resource(ctx, resource_id) {
+            return Ok(());
+        }
+
+        Self::ensure_gcp_custom_roles_for_bindings(ctx, permission_set_id, grant_plan, bindings)
+            .await
+    }
+
+    fn is_frozen_resource(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+        Self::is_frozen_resource_in_stack(ctx.desired_stack, resource_id)
+    }
+
+    fn is_frozen_resource_in_stack(stack: &alien_core::Stack, resource_id: &str) -> bool {
+        stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
     }
 
     fn push_gcp_binding_for_target(
@@ -1456,7 +1568,71 @@ impl ResourcePermissionsHelper {
 mod tests {
     use super::*;
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+    use alien_core::{Stack, Storage};
     use indexmap::IndexMap;
+
+    #[test]
+    fn gcp_resource_custom_roles_are_selected_for_resource_bindings() {
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let permission_set =
+            alien_permissions::get_permission_set("storage/data-read").expect("permission set");
+        let permission_context = PermissionContext::new()
+            .with_project_name("test-project")
+            .with_region("us-central1")
+            .with_stack_prefix("test")
+            .with_resource_name("test-bucket");
+
+        let grant_plan = generator
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
+            .expect("grant plan");
+
+        let resource_bindings =
+            grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+
+        let resource_custom_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
+        let project_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+
+        assert_eq!(resource_custom_roles.len(), 1);
+        assert!(resource_custom_roles[0]
+            .included_permissions
+            .iter()
+            .any(|permission| permission == "storage.objects.get"));
+        assert_eq!(project_custom_roles.len(), 1);
+        assert_eq!(
+            project_custom_roles[0].included_permissions,
+            vec!["iam.serviceAccounts.signBlob"]
+        );
+    }
+
+    #[test]
+    fn gcp_resource_custom_role_repair_is_frozen_only() {
+        let frozen_stack = Stack::new("test-stack".to_string())
+            .add(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let live_stack = Stack::new("test-stack".to_string())
+            .add(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert!(ResourcePermissionsHelper::is_frozen_resource_in_stack(
+            &frozen_stack,
+            "logs"
+        ));
+        assert!(!ResourcePermissionsHelper::is_frozen_resource_in_stack(
+            &live_stack,
+            "logs"
+        ));
+        assert!(!ResourcePermissionsHelper::is_frozen_resource_in_stack(
+            &frozen_stack,
+            "missing"
+        ));
+    }
 
     #[test]
     fn aws_management_resource_permissions_ignore_wildcard_scope() {

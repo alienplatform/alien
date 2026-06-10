@@ -320,6 +320,10 @@ export type DeploymentInfoModules = {
    * Terraform module target (aws, gcp, azure, eks, gke, aks)
    */
   target: string;
+  /**
+   * Terraform input variables exposed by this module.
+   */
+  variables?: Array<string> | undefined;
 };
 
 /**
@@ -956,6 +960,7 @@ export const DeploymentInfoModules$inboundSchema: z.ZodType<
   size: z.int(),
   source: z.string(),
   target: z.string(),
+  variables: z.array(z.string()).optional(),
 });
 
 export function deploymentInfoModulesFromJSON(

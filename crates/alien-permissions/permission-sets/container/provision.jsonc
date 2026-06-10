@@ -242,6 +242,40 @@
           }
         }
       },
+      // Containers own their ALB security group, but public Horizon-backed
+      // containers also need to add/remove one ingress rule on the setup-owned
+      // ComputeCluster security group so the ALB can reach host ports.
+      {
+        "label": "Manage setup compute security group ingress",
+        "grant": {
+          "actions": [
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "compute",
+                "aws:ResourceTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "compute",
+                "aws:ResourceTag/${managedByTag}": "setup"
+              }
+            }
+          }
+        }
+      },
       {
         // AWS requires Resource: "*" for security group and VPC describe APIs.
         "grant": {
@@ -350,7 +384,8 @@
             "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
-            "compute.globalForwardingRules.get"
+            "compute.globalForwardingRules.get",
+            "compute.zones.list"
           ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
@@ -366,7 +401,12 @@
       // Persistent Disks for stateful containers
       {
         "grant": {
-          "permissions": ["compute.disks.create", "compute.disks.delete", "compute.disks.get"]
+          "permissions": [
+            "compute.disks.create",
+            "compute.disks.delete",
+            "compute.disks.get",
+            "compute.zones.list"
+          ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
         "binding": {

@@ -1410,6 +1410,94 @@ export type SyncReconcileResponseEnvironmentInfoUnion =
   | any;
 
 /**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type SyncReconcileResponseError = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type SyncReconcileResponseErrorUnion = SyncReconcileResponseError | any;
+
+/**
  * Represents the target cloud platform.
  */
 export const SyncReconcileResponseCurrentPlatform = {
@@ -1426,70 +1514,6 @@ export const SyncReconcileResponseCurrentPlatform = {
 export type SyncReconcileResponseCurrentPlatform = ClosedEnum<
   typeof SyncReconcileResponseCurrentPlatform
 >;
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const SyncReconcileResponseDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type SyncReconcileResponseDeleteScopeEnum = ClosedEnum<
-  typeof SyncReconcileResponseDeleteScopeEnum
->;
-
-export type SyncReconcileResponseDeleteScopeUnion =
-  | SyncReconcileResponseDeleteScopeEnum
-  | any;
-
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const SyncReconcileResponsePendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type SyncReconcileResponsePendingDeleteScopeEnum = ClosedEnum<
-  typeof SyncReconcileResponsePendingDeleteScopeEnum
->;
-
-export type SyncReconcileResponsePendingDeleteScopeUnion =
-  | SyncReconcileResponsePendingDeleteScopeEnum
-  | any;
 
 export const SyncReconcileResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -2737,7 +2761,6 @@ export type SyncReconcileResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileResponseRuntimeMetadata = {
-  deleteScope?: SyncReconcileResponseDeleteScopeEnum | any | null | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2745,11 +2768,6 @@ export type SyncReconcileResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | SyncReconcileResponsePendingDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: SyncReconcileResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2846,7 +2864,7 @@ export type SyncReconcileResponseStackStateDependency = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type SyncReconcileResponseError = {
+export type SyncReconcileResponseStackStateError = {
   /**
    * A unique identifier for the type of error.
    *
@@ -2921,7 +2939,9 @@ export type SyncReconcileResponseError = {
   source?: any | null | undefined;
 };
 
-export type SyncReconcileResponseErrorUnion = SyncReconcileResponseError | any;
+export type SyncReconcileResponseStackStateErrorUnion =
+  | SyncReconcileResponseStackStateError
+  | any;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2987,6 +3007,7 @@ export const SyncReconcileResponseStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -3025,7 +3046,7 @@ export type SyncReconcileResponseStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<SyncReconcileResponseStackStateDependency> | undefined;
-  error?: SyncReconcileResponseError | any | null | undefined;
+  error?: SyncReconcileResponseStackStateError | any | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -3091,6 +3112,7 @@ export type SyncReconcileResponseStackStateUnion =
  */
 export const SyncReconcileResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -3103,6 +3125,8 @@ export const SyncReconcileResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -4393,6 +4417,7 @@ export type SyncReconcileResponseCurrent = {
     | any
     | null
     | undefined;
+  error?: SyncReconcileResponseError | any | null | undefined;
   /**
    * Represents the target cloud platform.
    */
@@ -4630,6 +4655,88 @@ export type SyncReconcileResponseComputeBackendUnion =
 /**
  * Certificate status in the certificate lifecycle
  */
+export const SyncReconcileResponseAliasCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncReconcileResponseAliasCertificateStatus = ClosedEnum<
+  typeof SyncReconcileResponseAliasCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncReconcileResponseAliasDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncReconcileResponseAliasDnsStatus = ClosedEnum<
+  typeof SyncReconcileResponseAliasDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncReconcileResponseAlias = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncReconcileResponseAliasCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncReconcileResponseAliasDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
 export const SyncReconcileResponseCertificateStatus = {
   Pending: "pending",
   Issued: "issued",
@@ -4667,10 +4774,15 @@ export type SyncReconcileResponseDnsStatus = ClosedEnum<
  *
  * @remarks
  *
- * Includes decrypted certificate data for issued certificates.
- * Private keys are deployment-scoped secrets (like environment variables).
+ * The direct fields describe the primary generated hostname. `aliases`
+ * contains additional managed hostnames that route directly to the same
+ * resource.
  */
 export type DomainMetadataTargetResources = {
+  /**
+   * Additional managed hostnames for the resource.
+   */
+  aliases?: Array<SyncReconcileResponseAlias> | undefined;
   /**
    * Full PEM certificate chain (only present if status is "issued").
    */
@@ -6793,29 +6905,16 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, all compute workloads (containers and worker VMs) export
- * their logs to the given endpoint via OTLP/HTTP.
- *
- * The `logs_auth_header` is stored as plain text in DeploymentConfig because
- * alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
- * before vault secrets load. For worker VMs, worker-template stamping passes
- * the monitoring configuration to the provider controller, which stores the
- * sensitive header in the cloud vault used by the worker image.
+ * When set, worker runtimes export captured application logs through the
+ * given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
+ * deployment code must sync them to a runtime-only secret and avoid putting
+ * them into user application environment variables.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
-   * Auth header value in "key=value,..." format used for container OTLP env var injection.
+   * Auth header value in "key=value,..." format.
    *
    * @remarks
-   *
-   * `alien-deployment` injects this as the `OTEL_EXPORTER_OTLP_HEADERS` plain env var
-   * into all containers. It must be plain (not a vault secret) because alien-runtime
-   * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
-   *
-   * Worker VMs do NOT use this field directly. The ComputeCluster infra
-   * controller writes the same value to the cloud vault used by the worker
-   * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
-   *
    * Example: "authorization=Bearer <write-token>"
    */
   logsAuthHeader: string;
@@ -11637,60 +11736,50 @@ export function syncReconcileResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseError$inboundSchema: z.ZodType<
+  SyncReconcileResponseError,
+  unknown
+> = z.object({
+  code: z.string(),
+  context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
+  httpStatusCode: z.nullable(z.int()).optional(),
+  internal: z.boolean(),
+  message: z.string(),
+  retryable: z.boolean().default(false),
+  source: z.nullable(z.any()).optional(),
+});
+
+export function syncReconcileResponseErrorFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseError, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseError' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseErrorUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseErrorUnion,
+  unknown
+> = z.union([z.lazy(() => SyncReconcileResponseError$inboundSchema), z.any()]);
+
+export function syncReconcileResponseErrorUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseErrorUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseErrorUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseCurrentPlatform$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseCurrentPlatform
 > = z.enum(SyncReconcileResponseCurrentPlatform);
-
-/** @internal */
-export const SyncReconcileResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseDeleteScopeEnum
-> = z.enum(SyncReconcileResponseDeleteScopeEnum);
-
-/** @internal */
-export const SyncReconcileResponseDeleteScopeUnion$inboundSchema: z.ZodType<
-  SyncReconcileResponseDeleteScopeUnion,
-  unknown
-> = z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]);
-
-export function syncReconcileResponseDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncReconcileResponseDeleteScopeUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponsePendingDeleteScopeEnum> = z.enum(
-    SyncReconcileResponsePendingDeleteScopeEnum,
-  );
-
-/** @internal */
-export const SyncReconcileResponsePendingDeleteScopeUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponsePendingDeleteScopeUnion, unknown> = z.union([
-    SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema,
-    z.any(),
-  ]);
-
-export function syncReconcileResponsePendingDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncReconcileResponsePendingDeleteScopeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponsePendingDeleteScopeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncReconcileResponsePendingDeleteScopeUnion' from JSON`,
-  );
-}
 
 /** @internal */
 export const SyncReconcileResponsePreparedStackManagementEnum$inboundSchema:
@@ -13800,16 +13889,7 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncReconcileResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
-    z.union([
-      SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponsePreparedStack$inboundSchema),
@@ -13939,8 +14019,8 @@ export function syncReconcileResponseStackStateDependencyFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseError$inboundSchema: z.ZodType<
-  SyncReconcileResponseError,
+export const SyncReconcileResponseStackStateError$inboundSchema: z.ZodType<
+  SyncReconcileResponseStackStateError,
   unknown
 > = z.object({
   code: z.string(),
@@ -13953,29 +14033,39 @@ export const SyncReconcileResponseError$inboundSchema: z.ZodType<
   source: z.nullable(z.any()).optional(),
 });
 
-export function syncReconcileResponseErrorFromJSON(
+export function syncReconcileResponseStackStateErrorFromJSON(
   jsonString: string,
-): SafeParseResult<SyncReconcileResponseError, SDKValidationError> {
+): SafeParseResult<SyncReconcileResponseStackStateError, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncReconcileResponseError$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseError' from JSON`,
+    (x) =>
+      SyncReconcileResponseStackStateError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseStackStateError' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncReconcileResponseErrorUnion$inboundSchema: z.ZodType<
-  SyncReconcileResponseErrorUnion,
+export const SyncReconcileResponseStackStateErrorUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseStackStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => SyncReconcileResponseError$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileResponseStackStateError$inboundSchema),
+  z.any(),
+]);
 
-export function syncReconcileResponseErrorUnionFromJSON(
+export function syncReconcileResponseStackStateErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncReconcileResponseErrorUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncReconcileResponseStackStateErrorUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncReconcileResponseErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseErrorUnion' from JSON`,
+    (x) =>
+      SyncReconcileResponseStackStateErrorUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseStackStateErrorUnion' from JSON`,
   );
 }
 
@@ -14117,7 +14207,10 @@ export const SyncReconcileResponseStackStateResources$inboundSchema: z.ZodType<
     z.lazy(() => SyncReconcileResponseStackStateDependency$inboundSchema),
   ).optional(),
   error: z.nullable(
-    z.union([z.lazy(() => SyncReconcileResponseError$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileResponseStackStateError$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
@@ -16360,6 +16453,9 @@ export const SyncReconcileResponseCurrent$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  error: z.nullable(
+    z.union([z.lazy(() => SyncReconcileResponseError$inboundSchema), z.any()]),
+  ).optional(),
   platform: SyncReconcileResponseCurrentPlatform$inboundSchema,
   protocolVersion: z.int(),
   retryRequested: z.boolean().optional(),
@@ -16751,6 +16847,42 @@ export function syncReconcileResponseComputeBackendUnionFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseAliasCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseAliasCertificateStatus> = z.enum(
+    SyncReconcileResponseAliasCertificateStatus,
+  );
+
+/** @internal */
+export const SyncReconcileResponseAliasDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseAliasDnsStatus
+> = z.enum(SyncReconcileResponseAliasDnsStatus);
+
+/** @internal */
+export const SyncReconcileResponseAlias$inboundSchema: z.ZodType<
+  SyncReconcileResponseAlias,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: SyncReconcileResponseAliasCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncReconcileResponseAliasDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileResponseAliasFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseAlias, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseAlias$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseAlias' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseCertificateStatus$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseCertificateStatus
 > = z.enum(SyncReconcileResponseCertificateStatus);
@@ -16765,6 +16897,8 @@ export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   DomainMetadataTargetResources,
   unknown
 > = z.object({
+  aliases: z.array(z.lazy(() => SyncReconcileResponseAlias$inboundSchema))
+    .optional(),
   certificateChain: z.nullable(z.string()).optional(),
   certificateId: z.string(),
   certificateStatus: SyncReconcileResponseCertificateStatus$inboundSchema,

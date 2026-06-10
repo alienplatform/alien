@@ -93,6 +93,7 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
@@ -503,6 +504,14 @@ runtime:
       enabled: true
     egress:
       enabled: true
+  cleanup:
+    onUninstall:
+      enabled: true
+      deletePersistentVolumeClaims: false
+      image:
+        repository: bitnami/kubectl
+        tag: "1.32"
+        pullPolicy: IfNotPresent
 
 heartbeat:
   collection:
@@ -755,7 +764,7 @@ fn append_cluster_bootstrap(
     yaml.push_str("    default:\n");
     yaml.push_str(&format!("      enabled: {}\n", eks_managed));
     yaml.push_str("      name: \"gp3\"\n");
-    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.eks.amazonaws.com\"\n");
     yaml.push_str("      parameters:\n");
     yaml.push_str("        type: \"gp3\"\n");
     yaml.push_str("        fsType: \"ext4\"\n");
@@ -1166,6 +1175,29 @@ fn values_schema_json() -> String {
               "properties": { "enabled": { "type": "boolean" } }
             }
           }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "onUninstall": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "deletePersistentVolumeClaims": { "type": "boolean" },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository": { "type": "string", "minLength": 1 },
+                    "tag": { "type": "string", "minLength": 1 },
+                    "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1512,8 +1544,6 @@ fn role_tpl() -> String {
     r#"{{- $stackSettings := default dict .Values.stackSettings -}}
 {{- $exposure := dig "kubernetes" "exposure" dict $stackSettings -}}
 {{- $exposureMode := dig "mode" "" $exposure -}}
-{{- $route := dig "route" dict $exposure -}}
-{{- $routeApi := dig "routeApi" "" $route -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -1539,15 +1569,15 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- if and (ne $exposureMode "disabled") (eq $routeApi "ingress") }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- end }}
-  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- $route := dig "route" dict $exposure -}}
+  {{- $routeApi := dig "routeApi" "" $route -}}
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
   - apiGroups: ["networking.gke.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -1664,6 +1694,54 @@ data:
     .to_string()
 }
 
+fn cleanup_job_tpl() -> String {
+    r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+{{- if dig "enabled" true $cleanup }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: "{{ dig "image" "repository" "bitnami/kubectl" $cleanup }}:{{ dig "image" "tag" "1.32" $cleanup }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              selector='managed-by=runtime'
+              kubectl -n {{ .Release.Namespace | quote }} delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
+              if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'httproutes'; then
+                kubectl -n {{ .Release.Namespace | quote }} delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+              fi
+              if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'gateways'; then
+                kubectl -n {{ .Release.Namespace | quote }} delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+              fi
+              {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
+              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
+              {{- else }}
+              echo "Preserving runtime PersistentVolumeClaims. Set runtime.cleanup.onUninstall.deletePersistentVolumeClaims=true to delete them."
+              {{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn deployment_tpl() -> String {
     r#"apiVersion: apps/v1
 kind: Deployment
@@ -1729,8 +1807,12 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: BASE_PLATFORM
+            - name: ALIEN_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
+            - name: AWS_REGION
+              value: {{ .Values.basePlatformConfig.aws.region | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
             - name: GCP_PROJECT_ID
@@ -2022,6 +2104,13 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+{{- if eq $provisioner "ebs.csi.eks.amazonaws.com" }}
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: eks.amazonaws.com/compute-type
+        values:
+          - auto
+{{ end }}
 {{ end }}
 {{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
 {{- if dig "enabled" false $eksAlb }}

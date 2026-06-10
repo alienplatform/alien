@@ -12,8 +12,7 @@ use std::time::Duration;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::error::ErrorData;
-use crate::Result;
+use crate::{error::ErrorData, otlp, Result};
 use alien_error::AlienError;
 
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -125,40 +124,10 @@ impl RuntimeConfig {
         // Token may come from vault secrets (loaded after config), not just env vars
         let commands_polling = None;
 
-        // When running from CLI (standalone binary), build LogExporter from environment
-        // Worker controllers (AWS/GCP/Azure/Kubernetes) set OTEL_* env vars
-        let log_exporter = if runtime_otlp_disabled() {
-            LogExporter::None
-        } else if let Some(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
-            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            .ok()
-        {
-            // Parse headers from environment
-            let mut headers = HashMap::new();
-            if let Ok(headers_str) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {
-                for header in headers_str.split(',') {
-                    if let Some((key, value)) = header.split_once('=') {
-                        headers.insert(key.trim().to_lowercase(), value.trim().to_string());
-                    }
-                }
-            }
-
-            let service_name =
-                std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "alien-runtime".to_string());
-
-            LogExporter::Otlp {
-                endpoint,
-                headers,
-                service_name,
-            }
-        } else {
-            // No OTLP config = container mode (orchestrator captures)
-            LogExporter::None
-        };
-
         // Populate env_vars from process environment for standalone binary
         // This allows CommandsPolling::from_env() to read ALIEN_COMMANDS_POLLING_* vars
         let env_vars: HashMap<String, String> = std::env::vars().collect();
+        let log_exporter = LogExporter::from_env_vars(&env_vars);
 
         Ok(Self {
             transport: cli.transport,
@@ -200,8 +169,71 @@ impl RuntimeConfig {
     }
 }
 
-fn runtime_otlp_disabled() -> bool {
-    std::env::var(ENV_ALIEN_RUNTIME_SEND_OTLP)
+impl LogExporter {
+    pub fn from_env_vars(env_vars: &HashMap<String, String>) -> Self {
+        if runtime_otlp_disabled(env_vars) {
+            return LogExporter::None;
+        }
+
+        let Some(endpoint) = env_vars
+            .get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+            .or_else(|| env_vars.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            .cloned()
+        else {
+            return LogExporter::None;
+        };
+
+        let service_name = env_vars
+            .get("OTEL_SERVICE_NAME")
+            .cloned()
+            .unwrap_or_else(|| "alien-runtime".to_string());
+
+        LogExporter::Otlp {
+            endpoint,
+            headers: otlp_headers_from_env_vars(env_vars),
+            service_name,
+        }
+    }
+
+    pub fn with_runtime_secrets(self, runtime_secrets: &HashMap<String, String>) -> Self {
+        match self {
+            LogExporter::Otlp {
+                endpoint,
+                mut headers,
+                service_name,
+            } => {
+                headers.extend(otlp_headers_from_env_vars(runtime_secrets));
+                LogExporter::Otlp {
+                    endpoint,
+                    headers,
+                    service_name,
+                }
+            }
+            LogExporter::None => LogExporter::None,
+        }
+    }
+
+    pub fn to_otlp_config(&self) -> Option<otlp::OtlpConfig> {
+        match self {
+            LogExporter::None => None,
+            LogExporter::Otlp {
+                endpoint,
+                headers,
+                service_name,
+            } => Some(otlp::OtlpConfig {
+                endpoint: endpoint.clone(),
+                headers: headers.clone(),
+                service_name: service_name.clone(),
+                service_version: std::env::var("OTEL_SERVICE_VERSION")
+                    .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
+            }),
+        }
+    }
+}
+
+fn runtime_otlp_disabled(env_vars: &HashMap<String, String>) -> bool {
+    env_vars
+        .get(ENV_ALIEN_RUNTIME_SEND_OTLP)
         .map(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
@@ -209,6 +241,24 @@ fn runtime_otlp_disabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn otlp_headers_from_env_vars(env_vars: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+
+    if let Some(auth_header) = env_vars.get("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION") {
+        headers.insert("authorization".to_string(), auth_header.clone());
+    }
+
+    if let Some(headers_str) = env_vars.get("OTEL_EXPORTER_OTLP_HEADERS") {
+        for header in headers_str.split(',') {
+            if let Some((key, value)) = header.split_once('=') {
+                headers.insert(key.trim().to_lowercase(), value.trim().to_string());
+            }
+        }
+    }
+
+    headers
 }
 
 #[cfg(test)]
@@ -219,6 +269,7 @@ mod tests {
         std::env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
         std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION");
         std::env::remove_var("OTEL_SERVICE_NAME");
         std::env::remove_var(ENV_ALIEN_RUNTIME_SEND_OTLP);
     }

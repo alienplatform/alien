@@ -11,7 +11,6 @@ import {
 
 export type ReconcileRequest = {
   deploymentId: string;
-  error?: any | undefined;
   heartbeats?: Array<ResourceHeartbeat> | undefined;
   session: string;
   state: any;
@@ -22,7 +21,6 @@ export type ReconcileRequest = {
 /** @internal */
 export type ReconcileRequest$Outbound = {
   deploymentId: string;
-  error?: any | undefined;
   heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session: string;
   state: any;
@@ -36,7 +34,6 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   ReconcileRequest
 > = z.object({
   deploymentId: z.string(),
-  error: z.any().optional(),
   heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string(),
   state: z.any(),

@@ -47,7 +47,6 @@ impl DeploymentLoopTransport for AgentTransport {
         _deployment_id: &str,
         state: &DeploymentState,
         _config: &alien_core::DeploymentConfig,
-        _step_error: Option<&AlienError>,
         _update_heartbeat: bool,
         _suggested_delay_ms: Option<u64>,
         _heartbeats: Vec<ResourceHeartbeat>,

@@ -315,6 +315,7 @@ mod tests {
                     certificate_chain: None,
                     private_key: None,
                     issued_at: None,
+                    aliases: Vec::new(),
                 },
             )]),
         }

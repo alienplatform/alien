@@ -19,6 +19,10 @@ export const ImportSourceKind = {
 export type ImportSourceKind = ClosedEnum<typeof ImportSourceKind>;
 
 /** @internal */
-export const ImportSourceKind$outboundSchema: z.ZodEnum<
+export const ImportSourceKind$inboundSchema: z.ZodEnum<
   typeof ImportSourceKind
 > = z.enum(ImportSourceKind);
+/** @internal */
+export const ImportSourceKind$outboundSchema: z.ZodEnum<
+  typeof ImportSourceKind
+> = ImportSourceKind$inboundSchema;

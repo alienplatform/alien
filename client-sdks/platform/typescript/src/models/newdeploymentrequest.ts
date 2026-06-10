@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
 import {
+  DeploymentSetupMethod,
+  DeploymentSetupMethod$outboundSchema,
+} from "./deploymentsetupmethod.js";
+import {
   EnvironmentVariableConfig,
   EnvironmentVariableConfig$Outbound,
   EnvironmentVariableConfig$outboundSchema,
@@ -1230,6 +1234,8 @@ export type NewDeploymentRequest = {
    * Optional physical-name prefix for generated cloud resources. Omit to let the manager generate one.
    */
   resourcePrefix?: string | undefined;
+  setupMethod?: DeploymentSetupMethod | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
 };
 
 /** @internal */
@@ -3589,6 +3595,8 @@ export type NewDeploymentRequest$Outbound = {
   project: string;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
   resourcePrefix?: string | undefined;
+  setupMethod?: string | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
 };
 
 /** @internal */
@@ -3618,6 +3626,8 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
   resourcePrefix: z.string().optional(),
+  setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
+  setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
 });
 
 export function newDeploymentRequestToJSON(

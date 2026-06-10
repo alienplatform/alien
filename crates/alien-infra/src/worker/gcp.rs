@@ -2118,31 +2118,76 @@ impl GcpWorkerController {
             )
             .build();
 
+        match compute_client.insert_ssl_certificate(ssl_certificate).await {
+            Ok(_) => {}
+            Err(e) if is_remote_resource_conflict(&e) => {
+                info!(
+                    worker=%cfg.id,
+                    cert_name=%ssl_cert_name,
+                    "Renewed SSL certificate already exists; treating as imported"
+                );
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: "Failed to import renewed SSL certificate to GCP".to_string(),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        }
+
+        let proxy_name = self.target_https_proxy_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Target HTTPS proxy name missing for certificate renewal".to_string(),
+            })
+        })?;
+        let ssl_cert_url = format!(
+            "projects/{}/global/sslCertificates/{}",
+            gcp_config.project_id, ssl_cert_name
+        );
         compute_client
-            .insert_ssl_certificate(ssl_certificate)
+            .set_target_https_proxy_ssl_certificates(proxy_name.clone(), vec![ssl_cert_url])
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to import renewed SSL certificate to GCP".to_string(),
+                message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
                 resource_id: Some(cfg.id.clone()),
             })?;
 
-        if let Some(proxy_name) = self.target_https_proxy_name.as_ref() {
-            let ssl_cert_url = format!(
-                "projects/{}/global/sslCertificates/{}",
-                gcp_config.project_id, ssl_cert_name
-            );
-            compute_client
-                .set_target_https_proxy_ssl_certificates(proxy_name.clone(), vec![ssl_cert_url])
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to bind renewed SSL certificate to target HTTPS proxy"
-                        .to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                })?;
-        }
+        let previous_ssl_certificate_name = self.ssl_certificate_name.clone();
 
         self.ssl_certificate_name = Some(ssl_cert_name);
         self.certificate_issued_at = resource.issued_at.clone();
+
+        if let Some(previous_ssl_certificate_name) = previous_ssl_certificate_name {
+            if self.ssl_certificate_name.as_deref() != Some(previous_ssl_certificate_name.as_str())
+            {
+                match compute_client
+                    .delete_ssl_certificate(previous_ssl_certificate_name.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            worker=%cfg.id,
+                            cert_name=%previous_ssl_certificate_name,
+                            "Deleted previous SSL certificate after renewal"
+                        );
+                    }
+                    Err(e)
+                        if matches!(
+                            e.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(e) => {
+                        warn!(
+                            worker=%cfg.id,
+                            cert_name=%previous_ssl_certificate_name,
+                            error=%e,
+                            "Failed to delete previous SSL certificate after renewal"
+                        );
+                    }
+                }
+            }
+        }
 
         Ok(HandlerAction::Continue {
             state: UpdateStart,
@@ -4887,6 +4932,7 @@ mod tests {
                         .to_string(),
                 ),
                 issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+                aliases: Vec::new(),
             },
         );
         DomainMetadata {

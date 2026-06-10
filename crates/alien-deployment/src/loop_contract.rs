@@ -61,7 +61,9 @@ pub struct LoopResult {
 ///   reaches Provisioning or Updating, because another actor (the manager)
 ///   takes over from there. Used by alien-deploy-cli's `push_initial_setup`.
 ///
-/// - **`Delete`**: Drive deletion — success is Deleted.
+/// - **`Delete`**: Drive runtime cleanup. Cleanup succeeds at
+///   TeardownRequired when setup-owned resources remain, or Deleted when no
+///   setup teardown is needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopOperation {
     /// Full deploy — success is Running. Provisioning/Updating are NOT
@@ -90,6 +92,13 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
         (DeploymentStatus::Deleted, LoopOperation::Delete) => {
             return Some(LoopResult {
                 stop_reason: LoopStopReason::Deleted,
+                outcome: LoopOutcome::Success,
+                final_status: *status,
+            });
+        }
+        (DeploymentStatus::TeardownRequired, LoopOperation::Delete) => {
+            return Some(LoopResult {
+                stop_reason: LoopStopReason::Synced,
                 outcome: LoopOutcome::Success,
                 final_status: *status,
             });
@@ -134,8 +143,9 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
 mod tests {
     use super::*;
 
-    const ALL_STATUSES: [DeploymentStatus; 15] = [
+    const ALL_STATUSES: [DeploymentStatus; 18] = [
         DeploymentStatus::Pending,
+        DeploymentStatus::PreflightsFailed,
         DeploymentStatus::InitialSetup,
         DeploymentStatus::InitialSetupFailed,
         DeploymentStatus::Provisioning,
@@ -148,6 +158,8 @@ mod tests {
         DeploymentStatus::DeletePending,
         DeploymentStatus::Deleting,
         DeploymentStatus::DeleteFailed,
+        DeploymentStatus::TeardownRequired,
+        DeploymentStatus::TeardownFailed,
         DeploymentStatus::Deleted,
         DeploymentStatus::Error,
     ];
@@ -171,10 +183,12 @@ mod tests {
     #[test]
     fn test_failed_statuses_are_failure() {
         for status in [
+            DeploymentStatus::PreflightsFailed,
             DeploymentStatus::InitialSetupFailed,
             DeploymentStatus::ProvisioningFailed,
             DeploymentStatus::UpdateFailed,
             DeploymentStatus::DeleteFailed,
+            DeploymentStatus::TeardownFailed,
             DeploymentStatus::RefreshFailed,
         ] {
             let result = classify_status(&status, LoopOperation::Deploy).unwrap();
@@ -246,6 +260,10 @@ mod tests {
         // Deploy is used by manager/agent/cli — continues through Provisioning/Updating.
         let expectations: Vec<(DeploymentStatus, Option<(LoopStopReason, LoopOutcome)>)> = vec![
             (DeploymentStatus::Pending, None),
+            (
+                DeploymentStatus::PreflightsFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
             (DeploymentStatus::InitialSetup, None),
             (
                 DeploymentStatus::InitialSetupFailed,
@@ -274,6 +292,11 @@ mod tests {
             (DeploymentStatus::Deleting, None),
             (
                 DeploymentStatus::DeleteFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
+            (DeploymentStatus::TeardownRequired, None),
+            (
+                DeploymentStatus::TeardownFailed,
                 Some((LoopStopReason::Failed, LoopOutcome::Failure)),
             ),
             (DeploymentStatus::Deleted, None),
@@ -310,6 +333,10 @@ mod tests {
     fn delete_operation_expected_results() {
         let expectations: Vec<(DeploymentStatus, Option<(LoopStopReason, LoopOutcome)>)> = vec![
             (DeploymentStatus::Pending, None),
+            (
+                DeploymentStatus::PreflightsFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
             (DeploymentStatus::InitialSetup, None),
             (
                 DeploymentStatus::InitialSetupFailed,
@@ -335,6 +362,14 @@ mod tests {
             (DeploymentStatus::Deleting, None),
             (
                 DeploymentStatus::DeleteFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
+            (
+                DeploymentStatus::TeardownRequired,
+                Some((LoopStopReason::Synced, LoopOutcome::Success)),
+            ),
+            (
+                DeploymentStatus::TeardownFailed,
                 Some((LoopStopReason::Failed, LoopOutcome::Failure)),
             ),
             (
@@ -376,6 +411,10 @@ mod tests {
         // It stops at Provisioning/Updating with Handoff (manager takes over).
         let expectations: Vec<(DeploymentStatus, Option<(LoopStopReason, LoopOutcome)>)> = vec![
             (DeploymentStatus::Pending, None),
+            (
+                DeploymentStatus::PreflightsFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
             (DeploymentStatus::InitialSetup, None),
             (
                 DeploymentStatus::InitialSetupFailed,
@@ -410,6 +449,11 @@ mod tests {
             (DeploymentStatus::Deleting, None),
             (
                 DeploymentStatus::DeleteFailed,
+                Some((LoopStopReason::Failed, LoopOutcome::Failure)),
+            ),
+            (DeploymentStatus::TeardownRequired, None),
+            (
+                DeploymentStatus::TeardownFailed,
                 Some((LoopStopReason::Failed, LoopOutcome::Failure)),
             ),
             (DeploymentStatus::Deleted, None),
@@ -447,6 +491,7 @@ mod tests {
     #[test]
     fn failed_synced_statuses_map_to_failure_not_success() {
         let failed_synced_statuses = [
+            DeploymentStatus::PreflightsFailed,
             DeploymentStatus::InitialSetupFailed,
             DeploymentStatus::ProvisioningFailed,
             DeploymentStatus::UpdateFailed,

@@ -68,6 +68,12 @@ impl GcpServiceConfig for ComputeServiceConfig {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ComputeApi: Send + Sync + Debug {
+    // --- Zone Operations ---
+
+    /// Lists zones in the project.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/zones/list
+    async fn list_zones(&self, filter: Option<String>) -> Result<ZoneList>;
+
     // --- Network Operations ---
 
     /// Gets a VPC network.
@@ -558,6 +564,22 @@ impl ComputeClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ComputeApi for ComputeClient {
+    // --- Zone Operations ---
+
+    async fn list_zones(&self, filter: Option<String>) -> Result<ZoneList> {
+        let path = format!("projects/{}/zones", self.project_id);
+        let query_params = filter.map(|filter| vec![("filter", filter)]);
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                query_params,
+                Option::<()>::None,
+                "zones",
+            )
+            .await
+    }
+
     // --- Network Operations ---
 
     async fn get_network(&self, network_name: String) -> Result<Network> {
@@ -1842,6 +1864,70 @@ pub struct OperationErrorItem {
     /// Human-readable error message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+// =============================================================================================
+// Data Structures - Zone
+// =============================================================================================
+
+/// Represents a Compute Engine zone resource.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/zones
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Zone {
+    /// Unique identifier; defined by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Name of the zone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Optional description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Server-defined URL for the resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// Region URL this zone belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
+    /// Zone status, commonly "UP" for usable zones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+
+    /// Type of resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// List of Compute Engine zones.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneList {
+    /// Unique identifier; defined by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// List of zones.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Zone>,
+
+    /// Server-defined URL for this resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// Token for next page of results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+
+    /// Type of resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 // =============================================================================================

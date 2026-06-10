@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DomainEndpoint,
+  DomainEndpoint$inboundSchema,
+} from "./domainendpoint.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const DomainWithUsageStatus = {
@@ -25,12 +29,12 @@ export type DeploymentUrlProject = {
 
 export type PortalBinding = {
   id: string;
-  projectId: string;
-  projectName: string;
+  projectId: string | null;
+  projectName: string | null;
   hostname: string;
 };
 
-export type DomainWithUsagePackageDomain = {
+export type PackageDomain = {
   id: string;
   hostname: string;
 };
@@ -45,7 +49,7 @@ export type ManagerBinding = {
 export type DomainWithUsageUsage = {
   deploymentUrlProjects: Array<DeploymentUrlProject>;
   portalBindings: Array<PortalBinding>;
-  packageDomains: Array<DomainWithUsagePackageDomain>;
+  packageDomains: Array<PackageDomain>;
   managerBindings: Array<ManagerBinding>;
 };
 
@@ -68,6 +72,7 @@ export type DomainWithUsage = {
   createdAt: Date;
   updatedAt: Date;
   verifiedAt?: Date | null | undefined;
+  endpoints: Array<DomainEndpoint | null>;
   usage: DomainWithUsageUsage;
 };
 
@@ -99,8 +104,8 @@ export function deploymentUrlProjectFromJSON(
 export const PortalBinding$inboundSchema: z.ZodType<PortalBinding, unknown> = z
   .object({
     id: z.string(),
-    projectId: z.string(),
-    projectName: z.string(),
+    projectId: z.nullable(z.string()),
+    projectName: z.nullable(z.string()),
     hostname: z.string(),
   });
 
@@ -115,21 +120,19 @@ export function portalBindingFromJSON(
 }
 
 /** @internal */
-export const DomainWithUsagePackageDomain$inboundSchema: z.ZodType<
-  DomainWithUsagePackageDomain,
-  unknown
-> = z.object({
-  id: z.string(),
-  hostname: z.string(),
-});
+export const PackageDomain$inboundSchema: z.ZodType<PackageDomain, unknown> = z
+  .object({
+    id: z.string(),
+    hostname: z.string(),
+  });
 
-export function domainWithUsagePackageDomainFromJSON(
+export function packageDomainFromJSON(
   jsonString: string,
-): SafeParseResult<DomainWithUsagePackageDomain, SDKValidationError> {
+): SafeParseResult<PackageDomain, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DomainWithUsagePackageDomain$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DomainWithUsagePackageDomain' from JSON`,
+    (x) => PackageDomain$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageDomain' from JSON`,
   );
 }
 
@@ -161,9 +164,7 @@ export const DomainWithUsageUsage$inboundSchema: z.ZodType<
     z.lazy(() => DeploymentUrlProject$inboundSchema),
   ),
   portalBindings: z.array(z.lazy(() => PortalBinding$inboundSchema)),
-  packageDomains: z.array(
-    z.lazy(() => DomainWithUsagePackageDomain$inboundSchema),
-  ),
+  packageDomains: z.array(z.lazy(() => PackageDomain$inboundSchema)),
   managerBindings: z.array(z.lazy(() => ManagerBinding$inboundSchema)),
 });
 
@@ -196,6 +197,7 @@ export const DomainWithUsage$inboundSchema: z.ZodType<
   verifiedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
+  endpoints: z.array(z.nullable(DomainEndpoint$inboundSchema)),
   usage: z.lazy(() => DomainWithUsageUsage$inboundSchema),
 });
 

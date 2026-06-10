@@ -3,6 +3,8 @@ use clap::Parser;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
     let wants_json_output = cli.wants_json_output();
     match run_cli(cli).await {

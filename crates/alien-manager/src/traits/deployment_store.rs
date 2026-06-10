@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeleteScope, DeploymentConfig, DeploymentState, EnvironmentInfo,
+    import::ImportSourceKind, DeploymentConfig, DeploymentState, EnvironmentInfo,
     EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
     StackSettings, StackState,
 };
@@ -39,6 +39,10 @@ pub struct DeploymentRecord {
     /// Setup source that created this deployment, if it was imported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_source: Option<ImportSourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_metadata: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +94,8 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("current_release_id", &self.current_release_id)
             .field("desired_release_id", &self.desired_release_id)
             .field("import_source", &self.import_source)
+            .field("setup_method", &self.setup_method)
+            .field("setup_metadata", &self.setup_metadata)
             .field("setup_target", &self.setup_target)
             .field("setup_fingerprint", &self.setup_fingerprint)
             .field("setup_fingerprint_version", &self.setup_fingerprint_version)
@@ -150,6 +156,7 @@ pub struct CreateImportedDeploymentParams {
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
     pub import_source: Option<ImportSourceKind>,
+    pub setup_metadata: Option<serde_json::Value>,
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
@@ -188,7 +195,17 @@ pub struct DeploymentFilter {
     pub deployment_ids: Option<Vec<String>>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
+    pub setup_method: Option<String>,
+    pub acquire_mode: Option<DeploymentAcquireMode>,
     pub limit: Option<u32>,
+}
+
+/// Ownership mode for deployment acquisition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentAcquireMode {
+    Runtime,
+    SetupRun,
+    SetupTeardown,
 }
 
 /// Result of acquiring deployments for processing.
@@ -204,7 +221,6 @@ pub struct ReconcileData {
     pub session: String,
     pub state: DeploymentState,
     pub update_heartbeat: bool,
-    pub error: Option<serde_json::Value>,
     pub suggested_delay_ms: Option<u64>,
     pub heartbeats: Vec<ResourceHeartbeat>,
 }
@@ -302,7 +318,6 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        delete_scope: DeleteScope,
     ) -> Result<(), AlienError>;
 
     async fn set_retry_requested(

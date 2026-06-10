@@ -22,6 +22,11 @@ import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+ * user). Outbound: caller bearer (passthrough). Returns only releases the
+ * caller may read.
+ */
 export function releasesListReleases(
   client: AlienManagerCore,
   options?: RequestOptions,

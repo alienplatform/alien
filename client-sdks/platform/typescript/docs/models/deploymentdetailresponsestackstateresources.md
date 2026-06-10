@@ -12,7 +12,7 @@ let value: DeploymentDetailResponseStackStateResources = {
     id: "<id>",
     type: "<value>",
   },
-  status: "delete-failed",
+  status: "teardown-required",
   type: "<value>",
 };
 ```

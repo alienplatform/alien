@@ -47,14 +47,12 @@ pub trait DeploymentLoopTransport: Send + Sync {
     /// # Arguments
     /// * `deployment_id` — identifies the deployment being stepped.
     /// * `state` — the state produced by the most recent `step()` call.
-    /// * `step_error` — the error from the step, if any.
     /// * `update_heartbeat` — whether the step wants the heartbeat timestamp updated.
     async fn reconcile_step(
         &self,
         deployment_id: &str,
         state: &DeploymentState,
         config: &DeploymentConfig,
-        step_error: Option<&AlienError>,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,

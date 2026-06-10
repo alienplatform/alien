@@ -141,6 +141,13 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
         certificate: &ManagedEnvironmentCertificate,
     ) -> Result<ManagedEnvironmentCertificateResponse>;
 
+    async fn delete_managed_environment_certificate(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        certificate_name: &str,
+    ) -> Result<OperationResult<()>>;
+
     // -------------------------------------------------------------------------
     // Jobs API
     // -------------------------------------------------------------------------
@@ -184,6 +191,13 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
         component_name: &str,
         dapr_component: &DaprComponent,
     ) -> Result<DaprComponentOperationResult>;
+
+    async fn delete_dapr_component(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        component_name: &str,
+    ) -> Result<OperationResult<()>>;
 
     async fn get_dapr_component(
         &self,
@@ -795,6 +809,41 @@ impl ContainerAppsApi for AzureContainerAppsClient {
             })
     }
 
+    async fn delete_managed_environment_certificate(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        certificate_name: &str,
+    ) -> Result<OperationResult<()>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/certificates/{}",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                environment_name,
+                certificate_name,
+            ),
+            Some(vec![("api-version", "2025-01-01".into())]),
+        );
+
+        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "DeleteManagedEnvironmentCertificate",
+                certificate_name,
+            )
+            .await
+    }
+
     // -------------------------------------------------------------------------
     // Jobs API implementation
     // -------------------------------------------------------------------------
@@ -1052,8 +1101,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}", 
-                     &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                environment_name,
+                component_name
+            ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -1076,6 +1130,41 @@ impl ContainerAppsApi for AzureContainerAppsClient {
             .execute_request_with_long_running_support(
                 signed,
                 "CreateOrUpdateDaprComponent",
+                component_name,
+            )
+            .await
+    }
+
+    async fn delete_dapr_component(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        component_name: &str,
+    ) -> Result<OperationResult<()>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}",
+            &self.token_cache.config().subscription_id,
+            resource_group_name,
+            environment_name,
+            component_name
+        );
+        let url = self
+            .base
+            .build_url(&path, Some(vec![("api-version", "2025-01-01".into())]));
+
+        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "DeleteDaprComponent",
                 component_name,
             )
             .await

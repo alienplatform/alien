@@ -1,7 +1,7 @@
 //! Deployment REST API endpoints.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -10,9 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DeleteScope,
-    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, EnvironmentVariable,
+    Platform, StackSettings, StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -131,12 +130,20 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteQuery {
-    #[serde(default)]
-    pub force: bool,
-    pub delete_scope: Option<DeleteScope>,
+pub enum DeleteDeploymentAction {
+    Cleanup,
+    Detach,
+    Forget,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDeploymentRequest {
+    pub action: DeleteDeploymentAction,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,10 +183,8 @@ pub fn router() -> Router<AppState> {
             "/v1/deployments",
             post(create_deployment).get(list_deployments),
         )
-        .route(
-            "/v1/deployments/{id}",
-            get(get_deployment).delete(delete_deployment),
-        )
+        .route("/v1/deployments/{id}", get(get_deployment))
+        .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
@@ -602,14 +607,13 @@ async fn get_deployment_info(
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
-    delete,
-    path = "/v1/deployments/{id}",
+    post,
+    path = "/v1/deployments/{id}/delete",
     tag = "deployments",
     params(
         ("id" = String, Path, description = "Deployment ID"),
-        ("force" = Option<bool>, Query, description = "Force delete without running cleanup (immediately removes record)"),
-        ("deleteScope" = Option<DeleteScope>, Query, description = "Delete scope: full or liveOnly"),
     ),
+    request_body = DeleteDeploymentRequest,
     responses(
         (status = 202, description = "Deployment deletion enqueued"),
         (status = 401, description = "Unauthorized"),
@@ -621,7 +625,7 @@ async fn delete_deployment(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(query): Query<DeleteQuery>,
+    Json(req): Json<DeleteDeploymentRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -637,35 +641,40 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    if query.force {
-        if let Err(e) = state
-            .deployment_store
-            .delete_deployment(&subject, &id)
-            .await
-        {
-            return e.into_response();
+    let message = match &req.action {
+        DeleteDeploymentAction::Cleanup => {
+            if let Err(e) = state
+                .deployment_store
+                .set_delete_pending(&subject, &id)
+                .await
+            {
+                return e.into_response();
+            }
+            match deployment.status.as_str() {
+                "teardown-required" => "Runtime cleanup complete; setup teardown required",
+                "teardown-failed" => {
+                    "Setup teardown failed; retry setup teardown with setup credentials"
+                }
+                _ => "Deployment deletion accepted",
+            }
         }
-    } else {
-        let Some(delete_scope) = query.delete_scope else {
-            return ErrorData::bad_request(
-                "deleteScope is required. Use deleteScope=liveOnly for setup handoff cleanup or deleteScope=full for setup/admin teardown.",
-            )
-            .into_response();
-        };
-
-        if let Err(e) = state
-            .deployment_store
-            .set_delete_pending(&subject, &id, delete_scope)
-            .await
-        {
-            return e.into_response();
+        DeleteDeploymentAction::Detach | DeleteDeploymentAction::Forget => {
+            if let Err(e) = state
+                .deployment_store
+                .delete_deployment(&subject, &id)
+                .await
+            {
+                return e.into_response();
+            }
+            "Deployment deletion accepted"
         }
-    }
+    };
 
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "message": "Deployment deletion enqueued"
+            "action": req.action,
+            "message": message
         })),
     )
         .into_response()

@@ -14,6 +14,10 @@ import {
   ImportSourceKind,
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
+import {
+  KubernetesBasePlatform,
+  KubernetesBasePlatform$outboundSchema,
+} from "./kubernetesbaseplatform.js";
 
 /**
  * Cloud platform of the imported stack
@@ -30,24 +34,6 @@ export const ImportSourcePlatform = {
  * Cloud platform of the imported stack
  */
 export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
-
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export const ImportSourceBasePlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export type ImportSourceBasePlatform = ClosedEnum<
-  typeof ImportSourceBasePlatform
->;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1142,6 +1128,7 @@ export type ImportSource = {
    * Source label for observability only — does not affect import behavior.
    */
   sourceKind?: ImportSourceKind | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   /**
    * Release that produced the setup artifact. Defaults to latest.
    */
@@ -1153,7 +1140,7 @@ export type ImportSource = {
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
-  basePlatform?: ImportSourceBasePlatform | undefined;
+  basePlatform?: KubernetesBasePlatform | undefined;
   /**
    * Region or location reported by the setup artifact
    */
@@ -1201,11 +1188,6 @@ export type ImportSource = {
 export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
   typeof ImportSourcePlatform
 > = z.enum(ImportSourcePlatform);
-
-/** @internal */
-export const ImportSourceBasePlatform$outboundSchema: z.ZodEnum<
-  typeof ImportSourceBasePlatform
-> = z.enum(ImportSourceBasePlatform);
 
 /** @internal */
 export const ImportSourceDeploymentModel$outboundSchema: z.ZodEnum<
@@ -3360,6 +3342,7 @@ export type ImportSource$Outbound = {
   deploymentName: string;
   resourcePrefix: string;
   sourceKind?: string | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   releaseId?: string | undefined;
   platform: string;
   basePlatform?: string | undefined;
@@ -3388,9 +3371,10 @@ export const ImportSource$outboundSchema: z.ZodType<
   deploymentName: z.string(),
   resourcePrefix: z.string(),
   sourceKind: ImportSourceKind$outboundSchema.optional(),
+  setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   releaseId: z.string().optional(),
   platform: ImportSourcePlatform$outboundSchema,
-  basePlatform: ImportSourceBasePlatform$outboundSchema.optional(),
+  basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   region: z.string(),
   setupTarget: z.string(),
   setupImportFormatVersion: z.int(),

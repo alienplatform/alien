@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{DeleteScope, DeploymentState, DeploymentStatus, Platform, StackSettings};
+use alien_core::{DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -132,7 +132,7 @@ async fn list_by_status() {
     // Instead, use set_redeploy which sets "update-pending"
     store.set_redeploy(&test_subject(), &dep1.id).await.unwrap();
     store
-        .set_delete_pending(&test_subject(), &dep2.id, DeleteScope::Full)
+        .set_delete_pending(&test_subject(), &dep2.id)
         .await
         .unwrap();
 
@@ -234,7 +234,7 @@ async fn update_status() {
 
     // set_delete_pending
     store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::LiveOnly)
+        .set_delete_pending(&test_subject(), &dep.id)
         .await
         .unwrap();
     let fetched = store
@@ -243,15 +243,9 @@ async fn update_status() {
         .unwrap()
         .unwrap();
     assert_eq!(fetched.status, "delete-pending");
-    assert_eq!(
-        fetched.runtime_metadata.unwrap_or_default().delete_scope,
-        Some(DeleteScope::LiveOnly)
-    );
 
     // set_delete_pending again should fail (already delete-pending)
-    let result = store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::Full)
-        .await;
+    let result = store.set_delete_pending(&test_subject(), &dep.id).await;
     assert!(result.is_err());
 
     // Create another deployment for retry and redeploy
@@ -582,6 +576,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
         current_release: None,
         target_release: None,
         stack_state: None,
+        error: None,
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
@@ -596,7 +591,6 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
-                error: None,
                 suggested_delay_ms: None,
             },
         )
@@ -646,6 +640,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
         current_release: None,
         target_release: None,
         stack_state: None,
+        error: None,
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
@@ -660,7 +655,6 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
-                error: None,
                 suggested_delay_ms: None,
             },
         )

@@ -18,6 +18,10 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export type NetworkSettingsByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -161,12 +165,14 @@ export const NetworkSettingsByoVnetAzure$inboundSchema: z.ZodType<
   NetworkSettingsByoVnetAzure,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: z.literal("byo-vnet-azure"),
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -174,6 +180,7 @@ export const NetworkSettingsByoVnetAzure$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type NetworkSettingsByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: "byo-vnet-azure";
@@ -185,12 +192,14 @@ export const NetworkSettingsByoVnetAzure$outboundSchema: z.ZodType<
   NetworkSettingsByoVnetAzure$Outbound,
   NetworkSettingsByoVnetAzure
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.string(),
   publicSubnetName: z.string(),
   type: z.literal("byo-vnet-azure"),
   vnetResourceId: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    applicationGatewaySubnetName: "application_gateway_subnet_name",
     privateSubnetName: "private_subnet_name",
     publicSubnetName: "public_subnet_name",
     vnetResourceId: "vnet_resource_id",

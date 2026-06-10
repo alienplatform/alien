@@ -1,6 +1,9 @@
 mod common;
 
-use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    generators::AwsCloudFormationPermissionsGenerator, get_permission_set, BindingTarget,
+    PermissionContext,
+};
 use common::*;
 use insta::assert_json_snapshot;
 use rstest::rstest;
@@ -121,10 +124,7 @@ fn test_aws_cloudformation_multiple_statements() {
     );
 
     // Second statement should be for ECR
-    assert_eq!(
-        result.statement[1].sid,
-        "WorkerExecuteEcrBatchGetImageAndEcrGetDownloadUrlForLayer"
-    );
+    assert_eq!(result.statement[1].sid, "WorkerExecuteReadEcrImages");
     assert_eq!(
         result.statement[1].action,
         vec![
@@ -154,6 +154,115 @@ fn test_aws_cloudformation_condition_interpolation() {
     assert_eq!(
         string_equals.get("sts:ExternalId").unwrap(),
         &json!("my-external-id")
+    );
+}
+
+#[test]
+fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/management").expect("permission set exists");
+    let context = PermissionContext::new()
+        .with_stack_prefix("")
+        .with_aws_region("${AWS::Region}")
+        .with_aws_account_id("${AWS::AccountId}");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS CloudFormation policy successfully");
+
+    let setup_security_group_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .resource
+                .iter()
+                .any(|resource| resource == &json!({"Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"}))
+                && statement.action.contains(&json!("ec2:RunInstances"))
+        })
+        .expect("compute-cluster management should allow setup compute security group use");
+
+    let string_equals = setup_security_group_statement
+        .condition
+        .as_ref()
+        .and_then(|condition| condition.get("StringEquals"))
+        .expect("setup security group permission should be tag-conditioned");
+
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/deployment"),
+        Some(&json!({"Fn::Sub": "${AWS::StackName}"}))
+    );
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/managed-by"),
+        Some(&json!("setup"))
+    );
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/resource"),
+        Some(&json!("compute"))
+    );
+}
+
+#[test]
+fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security_group_ingress() {
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
+    let context = PermissionContext::new()
+        .with_stack_prefix("")
+        .with_resource_name("alien-manager")
+        .with_aws_region("${AWS::Region}")
+        .with_aws_account_id("${AWS::AccountId}");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("Should generate AWS CloudFormation policy successfully");
+
+    let setup_compute_ingress_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            if !statement
+                .action
+                .contains(&json!("ec2:AuthorizeSecurityGroupIngress"))
+                || !statement
+                    .action
+                    .contains(&json!("ec2:RevokeSecurityGroupIngress"))
+            {
+                return false;
+            }
+
+            statement
+                .condition
+                .as_ref()
+                .and_then(|condition| condition.get("StringEquals"))
+                .is_some_and(|string_equals| {
+                    string_equals.get("aws:ResourceTag/managed-by") == Some(&json!("setup"))
+                        && string_equals.get("aws:ResourceTag/resource") == Some(&json!("compute"))
+                })
+        })
+        .expect("container provision should manage ingress on setup compute security groups");
+
+    assert!(!setup_compute_ingress_statement
+        .action
+        .contains(&json!("ec2:DeleteSecurityGroup")));
+
+    let string_equals = setup_compute_ingress_statement
+        .condition
+        .as_ref()
+        .and_then(|condition| condition.get("StringEquals"))
+        .expect("setup compute security group ingress permission should be tag-conditioned");
+
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/deployment"),
+        Some(&json!({"Fn::Sub": "${AWS::StackName}"}))
+    );
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/managed-by"),
+        Some(&json!("setup"))
+    );
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/resource"),
+        Some(&json!("compute"))
     );
 }
 

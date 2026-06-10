@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +33,12 @@ pub struct BuildOutput {
     pub resource_details: Vec<BuildResourceDetail>,
     pub artifacts: HashMap<String, String>,
     pub build_time_seconds: f64,
+}
+
+#[derive(Clone)]
+struct PlatformBuildPlan {
+    platform: String,
+    settings: BuildSettings,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -113,7 +121,6 @@ pub async fn build_command(args: BuildArgs) -> Result<()> {
 }
 
 pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
-    let start_time = std::time::Instant::now();
     let current_dir = get_current_dir()?;
     let output_dir = args
         .output_dir
@@ -153,7 +160,6 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             message: "Failed to load configuration".to_string(),
         })?;
 
-    let mut outputs = Vec::new();
     let has_kubernetes_platform = args
         .platforms
         .iter()
@@ -161,6 +167,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
     let kubernetes_base_platform =
         parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
 
+    let mut plans = Vec::new();
     for platform_str in &args.platforms {
         let platform_str = platform_str.to_ascii_lowercase();
 
@@ -226,23 +233,26 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             }
         };
 
-        let settings = BuildSettings {
-            output_directory: output_dir.clone(),
-            platform: target_platform,
-            targets: targets.clone(),
-            cache_url: args.cache_url.clone(),
-            override_base_image: args.override_base_image.clone(),
-            debug_mode: false,
-        };
+        plans.push(PlatformBuildPlan {
+            platform: platform_str,
+            settings: BuildSettings {
+                output_directory: output_dir.clone(),
+                platform: target_platform,
+                targets: targets.clone(),
+                cache_url: args.cache_url.clone(),
+                override_base_image: args.override_base_image.clone(),
+                debug_mode: false,
+            },
+        });
+    }
 
-        alien_build::build_stack(stack.clone(), &settings)
-            .await
-            .context(ErrorData::BuildFailed)?;
-
+    let timings = build_platform_groups(stack, plans.clone()).await?;
+    let mut outputs = Vec::new();
+    for plan in &plans {
         let output = load_build_output(
-            &platform_str,
+            &plan.platform,
             &output_dir,
-            start_time.elapsed().as_secs_f64(),
+            *timings.get(&plan.platform).unwrap_or(&0.0),
         )?;
         outputs.push(output);
     }
@@ -253,6 +263,61 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .ok();
 
     Ok(outputs)
+}
+
+async fn build_platform_groups(
+    stack: alien_core::Stack,
+    plans: Vec<PlatformBuildPlan>,
+) -> Result<HashMap<String, f64>> {
+    let groups = group_platform_builds(plans);
+    if groups.len() > 1 {
+        info!(
+            "Building {} independent target group(s) in parallel",
+            groups.len()
+        );
+    }
+
+    let group_futures = groups.into_iter().map(|group| {
+        let stack = stack.clone();
+        async move {
+            let mut timings = Vec::new();
+            for plan in group {
+                let platform_started = Instant::now();
+                alien_build::build_stack(stack.clone(), &plan.settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+                timings.push((plan.platform, platform_started.elapsed().as_secs_f64()));
+            }
+            Ok::<_, AlienError<ErrorData>>(timings)
+        }
+    });
+
+    let grouped_timings = futures::future::try_join_all(group_futures).await?;
+    Ok(grouped_timings.into_iter().flatten().collect())
+}
+
+fn group_platform_builds(plans: Vec<PlatformBuildPlan>) -> Vec<Vec<PlatformBuildPlan>> {
+    let mut groups: Vec<(String, Vec<PlatformBuildPlan>)> = Vec::new();
+
+    for plan in plans {
+        let key = build_target_group_key(&plan.settings);
+        if let Some((_, group)) = groups.iter_mut().find(|(group_key, _)| *group_key == key) {
+            group.push(plan);
+        } else {
+            groups.push((key, vec![plan]));
+        }
+    }
+
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+fn build_target_group_key(settings: &BuildSettings) -> String {
+    settings
+        .get_targets()
+        .iter()
+        .map(|target| target.runtime_platform_id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn parse_kubernetes_base_platform(
@@ -485,5 +550,45 @@ mod tests {
         assert!(output.resources.contains(&"test-storage".to_string()));
         assert!(output.artifacts.contains_key("test-storage"));
         assert!(!output.artifacts.contains_key("test-function"));
+    }
+
+    #[test]
+    fn group_platform_builds_keeps_equivalent_targets_in_order() {
+        let plans = vec![
+            test_plan(
+                "aws",
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+            ),
+            test_plan("gcp", PlatformBuildSettings::Gcp {}),
+            test_plan("azure", PlatformBuildSettings::Azure {}),
+        ];
+
+        let groups = group_platform_builds(plans);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0][0].platform, "aws");
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|plan| plan.platform.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gcp", "azure"]
+        );
+    }
+
+    fn test_plan(platform: &str, platform_settings: PlatformBuildSettings) -> PlatformBuildPlan {
+        PlatformBuildPlan {
+            platform: platform.to_string(),
+            settings: BuildSettings {
+                output_directory: ".alien".to_string(),
+                platform: platform_settings,
+                targets: None,
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            },
+        }
     }
 }

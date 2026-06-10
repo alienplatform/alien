@@ -122,7 +122,7 @@ fn chart_removes_manual_public_ingress_values_and_template() {
 }
 
 #[test]
-fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
+fn chart_role_rbac_allows_every_cleanup_route_resource() {
     let stack = Stack::new("route-rbac".to_string()).build();
     let settings = StackSettings {
         kubernetes: Some(KubernetesSettings {
@@ -156,7 +156,6 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
     assert!(role.contains("alb.networking.azure.io"));
     assert!(role.contains("resources: [\"healthcheckpolicy\"]"));
-    assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
     let rendered = test_utils::helm_template(&chart.files, None);
@@ -183,7 +182,6 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
             assert!(rendered
                 .stdout
                 .contains(r#"resources: ["healthcheckpolicy"]"#));
-            assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered route RBAC")
@@ -235,7 +233,7 @@ fn gcp_base_platform_config_renders_operator_environment() {
     let rendered = test_utils::helm_template(&files, Some(&gcp_values));
     match &rendered.status {
         LinterStatus::Passed => {
-            assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
             assert!(rendered.stdout.contains("value: \"gcp\""));
             assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
             assert!(rendered.stdout.contains("value: \"alien-test-target\""));
@@ -245,6 +243,30 @@ fn gcp_base_platform_config_renders_operator_environment() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("GCP runtime config render")
+        }
+    }
+}
+
+#[test]
+fn aws_base_platform_config_renders_operator_environment() {
+    let stack = Stack::new("aws-runtime-config".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+    let values = files.get("values.yaml").expect("values.yaml");
+    let aws_values = values
+        .replace("basePlatform: null", "basePlatform: aws")
+        .replace("region: \"\"", "region: us-east-1");
+
+    let rendered = test_utils::helm_template(&files, Some(&aws_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("value: \"aws\""));
+            assert!(rendered.stdout.contains("name: AWS_REGION"));
+            assert!(rendered.stdout.contains("value: \"us-east-1\""));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("AWS runtime config render")
         }
     }
 }
@@ -312,6 +334,33 @@ fn cluster_bootstrap_renders_only_when_enabled() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             enabled_rendered.assert_ok("enabled cluster bootstrap render")
+        }
+    }
+}
+
+#[test]
+fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
+    let stack = Stack::new("cleanup-hook".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+
+    let rendered = test_utils::helm_template(&files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("kind: Job"));
+            assert!(rendered.stdout.contains("helm.sh/hook"));
+            assert!(rendered.stdout.contains("pre-delete"));
+            assert!(rendered.stdout.contains("selector='managed-by=runtime'"));
+            assert!(rendered
+                .stdout
+                .contains("delete deployments.apps,statefulsets.apps"));
+            assert!(rendered
+                .stdout
+                .contains("Preserving runtime PersistentVolumeClaims"));
+            assert!(!rendered.stdout.contains("delete persistentvolumeclaims -l"));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("uninstall cleanup hook render")
         }
     }
 }

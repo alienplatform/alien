@@ -696,13 +696,15 @@ pub enum ResourceStatus {
     UpdateFailed,
     Deleting, // Resource is being removed
     DeleteFailed,
-    Deleted,       // Resource has been successfully removed (terminal state)
-    RefreshFailed, // Resource heartbeat/health check failed
+    TeardownRequired, // Runtime-owned parts were removed; setup-owned parts remain
+    Deleted,          // Resource has been successfully removed (terminal state)
+    RefreshFailed,    // Resource heartbeat/health check failed
 }
 
 impl ResourceStatus {
     pub fn is_terminal(&self) -> bool {
         match self {
+            ResourceStatus::TeardownRequired => true,
             ResourceStatus::Deleted => true,
             ResourceStatus::ProvisionFailed => true,
             ResourceStatus::UpdateFailed => true,

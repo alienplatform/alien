@@ -8,7 +8,7 @@
 //! 5. Starts commands polling (if enabled)
 //! 6. Starts the appropriate transport
 
-use std::{process::Stdio, sync::Arc};
+use std::{collections::HashMap, process::Stdio, sync::Arc};
 
 use alien_bindings::{
     grpc::{
@@ -17,9 +17,13 @@ use alien_bindings::{
     },
     BindingsProvider,
 };
-use alien_core::{ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE};
+use alien_core::{
+    ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_RUNTIME_SECRETS,
+    ENV_ALIEN_SECRETS,
+};
 use alien_error::{AlienError, Context};
 use reqwest::Url;
+use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
@@ -32,12 +36,20 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::{RuntimeConfig, TransportType},
     error::{ErrorData, Result},
-    otlp::{flush_otlp_logs, shutdown_otlp_logs},
+    otlp::{flush_otlp_logs, init_otlp_logging_from_config, shutdown_otlp_logs},
     transports::{
         cloudrun::CloudRunTransport, commands_polling::CommandsPolling,
         containerapp::ContainerAppTransport, local::LocalTransport,
     },
 };
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeSecretsConfig {
+    otlp_logs_auth_header: Option<String>,
+    otlp_metrics_auth_header: Option<String>,
+    hash: String,
+}
 
 /// Global state for WaitUntilGrpcServer
 static WAIT_UNTIL_SERVER: OnceCell<Arc<WaitUntilGrpcServer>> = OnceCell::const_new();
@@ -122,15 +134,15 @@ pub async fn run(
     let _ = WAIT_UNTIL_SERVER.set(wait_until_server.clone());
     let _ = CONTROL_SERVER.set(control_server.clone());
 
-    // 2. Load secrets from vault if ALIEN_SECRETS is present
+    // 2. Load user secrets from vault if ALIEN_SECRETS is present
     // Returns HashMap of secrets to pass to subprocess (avoids std::env::set_var races)
     // For embedded runtimes, ALIEN_SECRETS is in config.env_vars (not process env)
     // For standalone runtimes, ALIEN_SECRETS is in process env (std::env)
     let secrets = if let Some(ref provider) = bindings_provider {
-        if let Some(alien_secrets_json) = config.env_vars.get("ALIEN_SECRETS") {
+        if let Some(alien_secrets_json) = config.env_vars.get(ENV_ALIEN_SECRETS) {
             info!("Loading secrets from vault before starting application");
             crate::secrets::load_secrets_from_vault(&**provider, alien_secrets_json).await?
-        } else if let Ok(alien_secrets_json) = std::env::var("ALIEN_SECRETS") {
+        } else if let Ok(alien_secrets_json) = std::env::var(ENV_ALIEN_SECRETS) {
             info!("Loading secrets from vault before starting application (from process env)");
             crate::secrets::load_secrets_from_vault(&**provider, &alien_secrets_json).await?
         } else {
@@ -141,8 +153,22 @@ pub async fn run(
         std::collections::HashMap::new()
     };
 
+    let runtime_secrets = if let Some(ref provider) = bindings_provider {
+        load_runtime_secrets(&config, &**provider).await?
+    } else {
+        HashMap::new()
+    };
+
+    let log_exporter = config
+        .log_exporter
+        .clone()
+        .with_runtime_secrets(&runtime_secrets);
+    if let Some(otlp_config) = log_exporter.to_otlp_config() {
+        init_otlp_logging_from_config(otlp_config)?;
+    }
+
     // 3. Start application subprocess with secrets
-    let mut child = start_application(&config, &secrets).await?;
+    let mut child = start_application(&config, &secrets, log_exporter).await?;
 
     // 4. Wait for app to register HTTP port (if transport needs it)
     let app_http_port = if config.transport != TransportType::Passthrough {
@@ -490,7 +516,8 @@ async fn start_grpc_server(
 /// Secrets are passed explicitly to avoid std::env::set_var() races in embedded runtime mode.
 async fn start_application(
     config: &RuntimeConfig,
-    secrets: &std::collections::HashMap<String, String>,
+    secrets: &HashMap<String, String>,
+    log_exporter: crate::config::LogExporter,
 ) -> Result<Child> {
     if config.command.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationInvalid {
@@ -530,6 +557,9 @@ async fn start_application(
 
     // Set custom environment variables
     for (key, value) in &config.env_vars {
+        if key == ENV_ALIEN_RUNTIME_SECRETS {
+            continue;
+        }
         cmd.env(key, value);
     }
 
@@ -557,9 +587,8 @@ async fn start_application(
     info!(pid = child.id(), "Application started");
 
     // Always capture and stream stdout/stderr
-    let exporter = config.log_exporter.clone();
     if let Some(stdout) = child.stdout.take() {
-        let exporter = exporter.clone();
+        let exporter = log_exporter.clone();
         tokio::spawn(async move {
             stream_output(stdout, true, exporter).await;
         });
@@ -568,6 +597,7 @@ async fn start_application(
     }
 
     if let Some(stderr) = child.stderr.take() {
+        let exporter = log_exporter;
         tokio::spawn(async move {
             stream_output(stderr, false, exporter).await;
         });
@@ -576,6 +606,75 @@ async fn start_application(
     }
 
     Ok(child)
+}
+
+async fn load_runtime_secrets(
+    config: &RuntimeConfig,
+    provider: &dyn alien_bindings::BindingsProviderApi,
+) -> Result<HashMap<String, String>> {
+    let runtime_secrets_json = config
+        .env_vars
+        .get(ENV_ALIEN_RUNTIME_SECRETS)
+        .cloned()
+        .or_else(|| std::env::var(ENV_ALIEN_RUNTIME_SECRETS).ok());
+
+    let Some(runtime_secrets_json) = runtime_secrets_json else {
+        debug!("No ALIEN_RUNTIME_SECRETS found");
+        return Ok(HashMap::new());
+    };
+
+    let runtime_secrets_config: RuntimeSecretsConfig = serde_json::from_str(&runtime_secrets_json)
+        .map_err(|error| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!("Failed to parse ALIEN_RUNTIME_SECRETS: {error}"),
+                field: Some(ENV_ALIEN_RUNTIME_SECRETS.to_string()),
+            })
+        })?;
+
+    let logs_auth_secret = runtime_secrets_config.otlp_logs_auth_header;
+    let metrics_auth_secret = runtime_secrets_config.otlp_metrics_auth_header;
+
+    if logs_auth_secret.is_none() && metrics_auth_secret.is_none() {
+        return Ok(HashMap::new());
+    }
+
+    let vault = provider
+        .load_vault("secrets")
+        .await
+        .context(ErrorData::SecretLoadFailed {
+            secret_name: "vault".to_string(),
+            message: "Failed to load secrets vault for runtime secrets".to_string(),
+        })?;
+
+    let mut runtime_secrets = HashMap::new();
+    if let Some(secret_key) = logs_auth_secret {
+        let value = vault
+            .get_secret(&secret_key)
+            .await
+            .context(ErrorData::SecretLoadFailed {
+                secret_name: secret_key.clone(),
+                message: "Failed to load runtime secret".to_string(),
+            })?;
+        runtime_secrets.insert("OTEL_EXPORTER_OTLP_HEADERS".to_string(), value);
+    }
+    if let Some(secret_key) = metrics_auth_secret {
+        let value = vault
+            .get_secret(&secret_key)
+            .await
+            .context(ErrorData::SecretLoadFailed {
+                secret_name: secret_key.clone(),
+                message: "Failed to load runtime secret".to_string(),
+            })?;
+        runtime_secrets.insert("OTEL_EXPORTER_OTLP_METRICS_HEADERS".to_string(), value);
+    }
+
+    debug!(
+        hash = %runtime_secrets_config.hash,
+        count = runtime_secrets.len(),
+        "Loaded runtime-only secrets"
+    );
+
+    Ok(runtime_secrets)
 }
 
 fn configure_application_bindings_env(cmd: &mut Command, config: &RuntimeConfig) {

@@ -549,7 +549,9 @@ pub async fn prepare_dev_session_deployment(
         client
             .delete_deployment()
             .id(&existing.id)
-            .delete_scope(alien_manager_api::types::DeleteScope::Full)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+            })
             .send()
             .await
             .into_sdk_error()
@@ -861,6 +863,7 @@ pub fn write_dev_status(path: &PathBuf, status: &DevStatus) -> Result<()> {
 fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
     match status {
         "pending" => Ok(DeploymentStatus::Pending),
+        "preflights-failed" => Ok(DeploymentStatus::PreflightsFailed),
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
@@ -873,6 +876,8 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "delete-pending" => Ok(DeploymentStatus::DeletePending),
         "deleting" => Ok(DeploymentStatus::Deleting),
         "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "teardown-required" => Ok(DeploymentStatus::TeardownRequired),
+        "teardown-failed" => Ok(DeploymentStatus::TeardownFailed),
         "deleted" => Ok(DeploymentStatus::Deleted),
         "error" => Ok(DeploymentStatus::Error),
         other => Err(AlienError::new(ErrorData::ValidationError {

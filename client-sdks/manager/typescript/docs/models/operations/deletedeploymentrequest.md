@@ -7,13 +7,15 @@ import { DeleteDeploymentRequest } from "@alienplatform/manager-api/models/opera
 
 let value: DeleteDeploymentRequest = {
   id: "<id>",
+  deleteDeploymentRequest: {
+    action: "cleanup",
+  },
 };
 ```
 
 ## Fields
 
-| Field                                                             | Type                                                              | Required                                                          | Description                                                       |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `id`                                                              | *string*                                                          | :heavy_check_mark:                                                | Deployment ID                                                     |
-| `force`                                                           | *boolean*                                                         | :heavy_minus_sign:                                                | Force delete without running cleanup (immediately removes record) |
-| `deleteScope`                                                     | [models.DeleteScope](../../models/deletescope.md)                 | :heavy_minus_sign:                                                | Delete scope: full or liveOnly                                    |
+| Field                                                                     | Type                                                                      | Required                                                                  | Description                                                               |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `id`                                                                      | *string*                                                                  | :heavy_check_mark:                                                        | Deployment ID                                                             |
+| `deleteDeploymentRequest`                                                 | [models.DeleteDeploymentRequest](../../models/deletedeploymentrequest.md) | :heavy_check_mark:                                                        | N/A                                                                       |

@@ -216,6 +216,7 @@ async fn resolve_deployment_id(
 fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
     match raw.to_ascii_lowercase().as_str() {
         "pending" => Some(DeploymentStatus::Pending),
+        "preflights-failed" => Some(DeploymentStatus::PreflightsFailed),
         "initial-setup" => Some(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Some(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Some(DeploymentStatus::Provisioning),
@@ -228,6 +229,8 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
         "delete-pending" => Some(DeploymentStatus::DeletePending),
         "deleting" => Some(DeploymentStatus::Deleting),
         "delete-failed" => Some(DeploymentStatus::DeleteFailed),
+        "teardown-required" => Some(DeploymentStatus::TeardownRequired),
+        "teardown-failed" => Some(DeploymentStatus::TeardownFailed),
         "deleted" => Some(DeploymentStatus::Deleted),
         "error" => Some(DeploymentStatus::Error),
         _ => None,
@@ -237,6 +240,7 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
 fn deployment_status_str(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights-failed",
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -249,6 +253,8 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::TeardownRequired => "teardown-required",
+        DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }

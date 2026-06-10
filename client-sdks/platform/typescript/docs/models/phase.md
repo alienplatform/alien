@@ -2,8 +2,9 @@
 
 Phase of a deployment at which a failure occurred.
 
-Derived from the source deployment status: `provisioning-failed` →
-`Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+Derived from the source deployment status: `preflights-failed` →
+`Preflights`, `provisioning-failed` → `Provisioning`, `update-failed` →
+`Updating`, `delete-failed` → `Deleting`.
 `refresh-failed` is modelled separately via `DeploymentDegraded`.
 
 ## Example Usage
@@ -11,11 +12,11 @@ Derived from the source deployment status: `provisioning-failed` →
 ```typescript
 import { Phase } from "@alienplatform/platform-api/models";
 
-let value: Phase = "updating";
+let value: Phase = "provisioning";
 ```
 
 ## Values
 
 ```typescript
-"provisioning" | "updating" | "deleting"
+"preflights" | "provisioning" | "updating" | "deleting"
 ```

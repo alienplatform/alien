@@ -6,12 +6,18 @@ Release management
 
 ### Available Operations
 
-* [listReleases](#listreleases)
+* [listReleases](#listreleases) - `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+user). Outbound: caller bearer (passthrough). Returns only releases the
+caller may read.
 * [createRelease](#createrelease)
 * [getLatestRelease](#getlatestrelease)
 * [getRelease](#getrelease)
 
 ## listReleases
+
+`GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+user). Outbound: caller bearer (passthrough). Returns only releases the
+caller may read.
 
 ### Example Usage
 
