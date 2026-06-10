@@ -72,7 +72,8 @@ export interface DeploymentInfo {
 export interface DeploymentInit {
   id: string
   name: string
-  url: string
+  /** Public URL of the app, when the stack has a resource that exposes one. */
+  url?: string
   platform: Platform
   commandsUrl: string
   appPath: string

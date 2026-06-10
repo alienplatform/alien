@@ -11,7 +11,7 @@ use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
@@ -163,10 +163,11 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
-        if resource_type == alien_core::Worker::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, true)?;
-        } else if resource_type == alien_core::Container::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, false)?;
+        if resource_type == alien_core::Worker::RESOURCE_TYPE
+            || resource_type == alien_core::Container::RESOURCE_TYPE
+            || resource_type == alien_core::Daemon::RESOURCE_TYPE
+        {
+            inject_into_compute_resource(resource_name, resource_entry, snapshot)?;
         }
     }
 
@@ -201,7 +202,7 @@ pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
 ) -> Result<()> {
-    info!("Injecting OTLP monitoring env vars into worker runtimes");
+    info!("Injecting OTLP monitoring env vars into worker and daemon runtimes");
 
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
@@ -215,6 +216,21 @@ pub fn inject_monitoring_environment_variables(
                         AlienError::new(ErrorData::InternalError {
                             message: format!(
                                 "Failed to downcast resource '{}' to Worker",
+                                resource_name
+                            ),
+                        })
+                    })?
+                    .environment,
+            )
+        } else if resource_type == alien_core::Daemon::RESOURCE_TYPE {
+            Some(
+                &mut resource_entry
+                    .config
+                    .downcast_mut::<alien_core::Daemon>()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::InternalError {
+                            message: format!(
+                                "Failed to downcast resource '{}' to Daemon",
                                 resource_name
                             ),
                         })
@@ -308,7 +324,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
     attributes
 }
 
-/// Inject environment variables into a Worker or Container compute resource.
+/// Inject environment variables into a compute resource (Worker, Container, or Daemon).
 ///
 /// - Plain variables: inserted directly into resource.environment.
 /// - Secret variables: their keys are collected into ALIEN_SECRETS so
@@ -317,34 +333,34 @@ fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
-    is_worker: bool,
 ) -> Result<()> {
-    // Get the environment map (same interface for Worker and Container)
-    let environment = if is_worker {
-        &mut resource_entry
-            .config
-            .downcast_mut::<alien_core::Worker>()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InternalError {
-                    message: format!("Failed to downcast resource '{}' to Worker", resource_name),
-                })
-            })?
-            .environment
+    if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
+        inject_into_environment(resource_name, "worker", &mut worker.environment, snapshot)
+    } else if let Some(container) = resource_entry.config.downcast_mut::<alien_core::Container>() {
+        inject_into_environment(
+            resource_name,
+            "container",
+            &mut container.environment,
+            snapshot,
+        )
+    } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
+        inject_into_environment(resource_name, "daemon", &mut daemon.environment, snapshot)
     } else {
-        &mut resource_entry
-            .config
-            .downcast_mut::<alien_core::Container>()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InternalError {
-                    message: format!(
-                        "Failed to downcast resource '{}' to Container",
-                        resource_name
-                    ),
-                })
-            })?
-            .environment
-    };
+        Err(AlienError::new(ErrorData::InternalError {
+            message: format!(
+                "Failed to downcast resource '{}' to a compute resource",
+                resource_name
+            ),
+        }))
+    }
+}
 
+fn inject_into_environment(
+    resource_name: &str,
+    resource_type: &str,
+    environment: &mut HashMap<String, String>,
+    snapshot: &EnvironmentVariablesSnapshot,
+) -> Result<()> {
     // Filter variables that apply to this resource
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
@@ -386,7 +402,6 @@ fn inject_into_compute_resource(
 
         environment.insert(ENV_ALIEN_SECRETS.to_string(), alien_secrets_json);
 
-        let resource_type = if is_worker { "worker" } else { "container" };
         debug!(
             "Added ALIEN_SECRETS to {} '{}' with {} secret keys",
             resource_type,

@@ -1,18 +1,26 @@
 pub(crate) mod command_output;
 pub mod dependencies;
 pub mod error;
+pub mod merge;
+pub mod plan;
 pub mod settings;
 pub mod toolchain;
 
 use alien_core::{
-    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Platform, Stack,
-    ToolchainConfig, Worker, WorkerCode,
+    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
+    Stack, ToolchainConfig, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
 use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
+use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
+use oci_client::manifest::{
+    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
+    OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
+};
+use oci_client::Reference;
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use reqwest::Url;
@@ -101,6 +109,15 @@ impl DedupeKey {
             },
         }
     }
+}
+
+/// True when the caller explicitly requested only non-Linux (host-binary) targets, so a
+/// container — which is always a Linux image — has nothing to build here. `None` (the
+/// default, host OS) returns false, so a plain `alien build --platforms local` still builds
+/// containers as a host-Linux image; only an explicit `--targets darwin-arm64` (the macOS /
+/// Windows runner group of a native-runner CI build) skips them.
+fn requested_host_binary_only(targets: Option<&[BinaryTarget]>) -> bool {
+    targets.is_some_and(|ts| !ts.is_empty() && ts.iter().all(|t| t.oci_os() != "linux"))
 }
 
 /// Builds a given `Stack`, processing `WorkerCode::Source` into `WorkerCode::Image`,
@@ -193,32 +210,71 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         }
     }
 
-    // Collect containers that need building or exporting
-    let mut containers_to_build = Vec::new();
-    let mut containers_to_export = Vec::new();
+    let mut daemons_to_build = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
-        if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-            info!("Processing container: {}", container.id);
-            match &container.code {
-                ContainerCode::Source { src, toolchain } => {
-                    info!(
-                        "Container '{}' has source code. Queued for parallel build.",
-                        container.id
-                    );
-                    containers_to_build.push((
+        if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            info!("Processing daemon: {}", daemon.id);
+            match &daemon.code {
+                DaemonCode::Source { src, toolchain } => {
+                    info!("Daemon '{}' has source code. Queued for build.", daemon.id);
+                    daemons_to_build.push((
                         id.clone(),
-                        container.clone(),
+                        daemon.clone(),
                         src.clone(),
                         toolchain.clone(),
                     ));
                 }
-                ContainerCode::Image { image } => {
-                    info!(
-                        "Container '{}' has image reference '{}'. Queued for pull and export.",
-                        container.id, image
-                    );
-                    containers_to_export.push((id.clone(), container.clone(), image.clone()));
+                DaemonCode::Image { .. } => {
+                    info!("Daemon '{}' already has an image. Skipping.", daemon.id);
+                }
+            }
+        }
+    }
+
+    // Collect containers that need building or exporting. On a host-binary-only build
+    // there is nothing to collect — see `requested_host_binary_only`; the containers'
+    // Linux images come from the Linux runner groups and are combined by `alien build merge`.
+    let mut containers_to_build = Vec::new();
+    let mut containers_to_export = Vec::new();
+    let skip_containers = requested_host_binary_only(settings.targets.as_deref());
+
+    if skip_containers {
+        let container_count = stack
+            .resources()
+            .filter(|(_, e)| e.config.downcast_ref::<Container>().is_some())
+            .count();
+        if container_count > 0 {
+            info!(
+                "Skipping {} container(s) for host-binary-only targets {:?}; their Linux images come from the Linux runner groups.",
+                container_count,
+                settings.get_targets()
+            );
+        }
+    } else {
+        for (id, resource_entry) in stack.resources() {
+            if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
+                info!("Processing container: {}", container.id);
+                match &container.code {
+                    ContainerCode::Source { src, toolchain } => {
+                        info!(
+                            "Container '{}' has source code. Queued for parallel build.",
+                            container.id
+                        );
+                        containers_to_build.push((
+                            id.clone(),
+                            container.clone(),
+                            src.clone(),
+                            toolchain.clone(),
+                        ));
+                    }
+                    ContainerCode::Image { image } => {
+                        info!(
+                            "Container '{}' has image reference '{}'. Queued for pull and export.",
+                            container.id, image
+                        );
+                        containers_to_export.push((id.clone(), container.clone(), image.clone()));
+                    }
                 }
             }
         }
@@ -393,6 +449,46 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             "Completed parallel building of {} functions",
             completed_tasks
         );
+    }
+
+    // Build daemons through the same per-resource pipeline as workers. Sequential across
+    // resources: stacks carry few daemons and `build_resource` already parallelizes across
+    // targets, so the worker block's spawn/cancellation scaffolding buys nothing here.
+    if !daemons_to_build.is_empty() {
+        let build_targets = settings.get_targets();
+        info!(
+            "Building {} daemon(s) for {} target(s): {:?}",
+            daemons_to_build.len(),
+            build_targets.len(),
+            build_targets
+        );
+
+        for (resource_id, daemon, src, toolchain) in daemons_to_build {
+            let image_uri = build_resource(
+                &src,
+                &toolchain,
+                &daemon.id,
+                &stack_id,
+                settings,
+                &output_dir,
+                false, // is_container = false: daemons run as native processes on local
+                "daemon",
+                &[],
+            )
+            .await?;
+
+            info!(
+                "Successfully built OCI image for daemon '{}' to: {}",
+                daemon.id, image_uri
+            );
+
+            let mut updated_daemon = daemon;
+            updated_daemon.code = DaemonCode::Image { image: image_uri };
+            if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id)
+            {
+                resource_entry.1.config = alien_core::Resource::new(updated_daemon);
+            }
+        }
     }
 
     // Build all containers in parallel with fail-fast behavior
@@ -945,6 +1041,33 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                     }));
                 }
             }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => {
+                    let path = PathBuf::from(image);
+                    if path.exists() && path.is_dir() {
+                        info!(
+                            "Daemon '{}' has local image directory, queuing for push",
+                            daemon.id
+                        );
+                        add_push_target_resource(
+                            &mut targets,
+                            resource_id.clone(),
+                            daemon.id.clone(),
+                            "daemon",
+                            path,
+                        );
+                    } else {
+                        info!("Daemon '{}' already has remote image: {}", daemon.id, image);
+                    }
+                }
+                DaemonCode::Source { .. } => {
+                    return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: daemon.id.clone(),
+                        reason: "Daemon has source code instead of built image. Run 'alien build' first.".to_string(),
+                    }));
+                }
+            }
         }
     }
 
@@ -962,6 +1085,8 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
                 func.code = WorkerCode::Image { image: image_uri };
             } else if let Some(container) = resource_entry.1.config.downcast_mut::<Container>() {
                 container.code = ContainerCode::Image { image: image_uri };
+            } else if let Some(daemon) = resource_entry.1.config.downcast_mut::<Daemon>() {
+                daemon.code = DaemonCode::Image { image: image_uri };
             }
         }
     }
@@ -1255,25 +1380,111 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Push each OCI tarball (multi-architecture manifest)
-    for oci_file in &oci_files {
-        info!("Pushing {}", oci_file.display());
+    // Container images are linux; darwin/windows tarballs (produced for `local` host
+    // binaries) are not registry container images, so they're excluded from the push.
+    let linux_tarballs = select_linux_tarballs(&oci_files);
 
-        // Load the OCI tarball
-        let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+    // No linux image (unusual) — push whatever tarballs are present.
+    if linux_tarballs.is_empty() {
+        for oci_file in &oci_files {
+            let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+            image
+                .push(&image_uri, &push_opts_with_progress)
+                .await
+                .map_dockdash_err()?;
+        }
+        info!(
+            "Pushed resource '{}' in {:.2}s",
+            display_resource_name,
+            push_resource_started.elapsed().as_secs_f64()
+        );
 
-        // Push to registry with progress callback
+        return Ok(image_uri);
+    }
+
+    // Single arch: push the image straight to the tag — no index needed.
+    if let [(_, only)] = linux_tarballs.as_slice() {
+        info!("Pushing {} to {}", only.display(), image_uri);
+        let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
         image
             .push(&image_uri, &push_opts_with_progress)
             .await
             .map_dockdash_err()?;
-
         info!(
-            "Successfully pushed {} to {}",
-            oci_file.display(),
-            image_uri
+            "Pushed resource '{}' in {:.2}s",
+            display_resource_name,
+            push_resource_started.elapsed().as_secs_f64()
         );
+
+        return Ok(image_uri);
     }
+
+    // Multi-arch: push each image to a per-arch child tag, then publish a manifest list
+    // (OCI image index) at the shared tag — otherwise the last single-arch push wins the tag.
+    let oci_client = OciClient::new(OciClientConfig {
+        protocol: push_options.protocol.clone(),
+        ..Default::default()
+    });
+    let mut entries = Vec::new();
+    for (target, oci_file) in &linux_tarballs {
+        let child_uri = format!("{}-{}", image_uri, target.runtime_platform_id());
+        info!("Pushing {} as {}", oci_file.display(), child_uri);
+        let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+        image
+            .push(&child_uri, &push_opts_with_progress)
+            .await
+            .map_dockdash_err()?;
+
+        // The index entry's digest+size must reflect the manifest the registry stored
+        // (dockdash pushes a converted manifest), so read it back rather than hashing the tarball.
+        let child_ref = Reference::try_from(child_uri.as_str())
+            .into_alien_error()
+            .context(ErrorData::InvalidResourceConfig {
+                resource_id: resource_name.to_string(),
+                reason: format!("Invalid image reference '{child_uri}'"),
+            })?;
+        let (manifest_bytes, digest) = oci_client
+            .pull_manifest_raw(
+                &child_ref,
+                &push_options.auth,
+                &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImagePushFailed {
+                image: child_uri.clone(),
+                reason: "Failed to read back the pushed manifest".to_string(),
+            })?;
+        let media_type = manifest_media_type(&manifest_bytes)
+            .unwrap_or_else(|| OCI_IMAGE_MEDIA_TYPE.to_string());
+        entries.push(image_index_entry(
+            *target,
+            digest,
+            manifest_bytes.len() as i64,
+            media_type,
+        ));
+    }
+
+    let index = assemble_image_index(entries);
+    let index_ref = Reference::try_from(image_uri.as_str())
+        .into_alien_error()
+        .context(ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: format!("Invalid image reference '{image_uri}'"),
+        })?;
+    oci_client
+        .push_manifest_list(&index_ref, &push_options.auth, index)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImagePushFailed {
+            image: image_uri.clone(),
+            reason: "Failed to push the multi-arch manifest list".to_string(),
+        })?;
+    info!(
+        "Pushed multi-arch image {} ({} arches)",
+        image_uri,
+        linux_tarballs.len()
+    );
 
     info!(
         "Pushed resource '{}' in {:.2}s",
@@ -1282,6 +1493,67 @@ async fn push_resource_images(
     );
 
     Ok(image_uri)
+}
+
+/// Pair each linux OCI tarball with its target, sorted for deterministic ordering.
+/// darwin/windows tarballs are excluded — they are host binaries, not container images.
+fn select_linux_tarballs(oci_files: &[PathBuf]) -> Vec<(BinaryTarget, PathBuf)> {
+    let mut out: Vec<(BinaryTarget, PathBuf)> = oci_files
+        .iter()
+        .filter_map(|path| oci_tarball_target(path).map(|target| (target, path.clone())))
+        .filter(|(target, _)| target.oci_os() == "linux")
+        .collect();
+    out.sort_by_key(|(target, _)| target.runtime_platform_id());
+    out
+}
+
+/// `<runtime_platform_id>.oci.tar` → its `BinaryTarget`.
+fn oci_tarball_target(path: &Path) -> Option<BinaryTarget> {
+    let name = path.file_name()?.to_str()?;
+    BinaryTarget::from_runtime_platform_id(name.strip_suffix(".oci.tar")?)
+}
+
+/// One OCI image index entry for a built target.
+fn image_index_entry(
+    target: BinaryTarget,
+    digest: String,
+    size: i64,
+    media_type: String,
+) -> ImageIndexEntry {
+    ImageIndexEntry {
+        media_type,
+        digest,
+        size,
+        platform: Some(OciPlatform {
+            architecture: target.oci_arch().to_string(),
+            os: target.oci_os().to_string(),
+            os_version: None,
+            os_features: None,
+            variant: None,
+            features: None,
+        }),
+        annotations: None,
+    }
+}
+
+/// Wrap per-arch manifest entries in an OCI image index (manifest list).
+fn assemble_image_index(manifests: Vec<ImageIndexEntry>) -> OciImageIndex {
+    OciImageIndex {
+        schema_version: 2,
+        media_type: Some(OCI_IMAGE_INDEX_MEDIA_TYPE.to_string()),
+        manifests,
+        artifact_type: None,
+        annotations: None,
+    }
+}
+
+/// Read the `mediaType` field from a raw manifest, if present.
+fn manifest_media_type(bytes: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()?
+        .get("mediaType")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 fn generate_unique_tag() -> String {
@@ -2386,6 +2658,12 @@ async fn pull_and_export_image(
             ));
         }
 
+        // Flatten the saved archive to a single image manifest before the OCI reader sees it.
+        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+            &output_tarball,
+            arch_str,
+        )?;
+
         info!(
             "Successfully exported {} to {}",
             image,
@@ -2476,12 +2754,40 @@ mod tests {
     use std::process::Command;
     use tempfile::tempdir;
 
+    #[test]
+    fn requested_host_binary_only_gates_container_skip() {
+        use BinaryTarget::*;
+        // None (defaults to host OS) and empty → containers still build.
+        assert!(!requested_host_binary_only(None));
+        assert!(!requested_host_binary_only(Some(&[])));
+        // Explicit non-Linux-only → nothing for a container to build, skip it.
+        assert!(requested_host_binary_only(Some(&[DarwinArm64])));
+        assert!(requested_host_binary_only(Some(&[WindowsX64])));
+        assert!(requested_host_binary_only(Some(&[DarwinArm64, WindowsX64])));
+        // Any Linux target present → containers build for it.
+        assert!(!requested_host_binary_only(Some(&[LinuxArm64])));
+        assert!(!requested_host_binary_only(Some(&[LinuxX64])));
+        assert!(!requested_host_binary_only(Some(&[
+            DarwinArm64,
+            LinuxArm64
+        ])));
+    }
+
     fn docker_available() -> bool {
         Command::new("docker")
             .arg("info")
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    /// True if a real OCI registry answers at `base/v2/` (200 or 401). Used to gate the
+    /// multi-arch push test. Run one with: `docker run -d -p 5050:5000 registry:2`.
+    async fn registry_available(base: &str) -> bool {
+        match reqwest::get(format!("{base}/v2/")).await {
+            Ok(resp) => resp.status().is_success() || resp.status().as_u16() == 401,
+            Err(_) => false,
+        }
     }
 
     fn test_container(name: &str, image: String) -> Container {
@@ -2539,6 +2845,68 @@ mod tests {
 
         assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
+    }
+
+    #[test]
+    fn oci_tarball_target_maps_runtime_platform_ids() {
+        assert_eq!(
+            oci_tarball_target(Path::new("/x/linux-aarch64.oci.tar")),
+            Some(BinaryTarget::LinuxArm64)
+        );
+        assert_eq!(
+            oci_tarball_target(Path::new("linux-x64.oci.tar")),
+            Some(BinaryTarget::LinuxX64)
+        );
+        assert_eq!(oci_tarball_target(Path::new("stack.json")), None);
+        assert_eq!(oci_tarball_target(Path::new("linux-arm64.oci.tar")), None); // CLI spelling, not a tarball name
+    }
+
+    #[test]
+    fn select_linux_tarballs_keeps_only_linux_sorted() {
+        let files = vec![
+            PathBuf::from("/b/windows-x64.oci.tar"),
+            PathBuf::from("/b/linux-x64.oci.tar"),
+            PathBuf::from("/b/darwin-aarch64.oci.tar"),
+            PathBuf::from("/b/linux-aarch64.oci.tar"),
+        ];
+        let selected = select_linux_tarballs(&files);
+        assert_eq!(
+            selected.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec![BinaryTarget::LinuxArm64, BinaryTarget::LinuxX64], // sorted by runtime id: linux-aarch64 < linux-x64
+        );
+    }
+
+    #[test]
+    fn assemble_image_index_sets_oci_index_shape() {
+        let entry = image_index_entry(
+            BinaryTarget::LinuxArm64,
+            "sha256:abc".to_string(),
+            123,
+            OCI_IMAGE_MEDIA_TYPE.to_string(),
+        );
+        let platform = entry.platform.as_ref().unwrap();
+        assert_eq!(platform.architecture, "arm64");
+        assert_eq!(platform.os, "linux");
+
+        let index = assemble_image_index(vec![entry]);
+        assert_eq!(index.schema_version, 2);
+        assert_eq!(
+            index.media_type.as_deref(),
+            Some(OCI_IMAGE_INDEX_MEDIA_TYPE)
+        );
+        assert_eq!(index.manifests.len(), 1);
+        assert_eq!(index.manifests[0].digest, "sha256:abc");
+        assert_eq!(index.manifests[0].size, 123);
+    }
+
+    #[test]
+    fn manifest_media_type_reads_field_or_none() {
+        assert_eq!(
+            manifest_media_type(br#"{"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#),
+            Some("application/vnd.oci.image.manifest.v1+json".to_string())
+        );
+        assert_eq!(manifest_media_type(br#"{"schemaVersion":2}"#), None);
+        assert_eq!(manifest_media_type(b"not json"), None);
     }
 
     #[test]
@@ -2618,6 +2986,74 @@ mod tests {
             images.get("remote").unwrap(),
             "registry.example.com/remote:latest"
         );
+    }
+
+    #[test]
+    fn collect_push_targets_handles_daemons_like_other_compute() {
+        let temp_root = tempdir().unwrap();
+        let agent_dir = temp_root.path().join("agent-image");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let local_daemon = Daemon::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: agent_dir.to_string_lossy().into_owned(),
+            })
+            .build();
+        let remote_daemon = Daemon::new("collector".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/collector:latest".to_string(),
+            })
+            .build();
+
+        let mut stack = Stack::new("daemon-push".to_string())
+            .add(local_daemon, alien_core::ResourceLifecycle::Live)
+            .add(remote_daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let targets = collect_push_targets(&stack).unwrap();
+        assert_eq!(
+            targets.len(),
+            1,
+            "only the local-dir daemon is queued for push"
+        );
+        assert_eq!(targets[0].resource_names, vec!["agent".to_string()]);
+        assert_eq!(targets[0].resource_type, "daemon");
+        assert_eq!(targets[0].local_image_dir, agent_dir);
+
+        let updates = targets[0].push_result_updates("registry.example.com/agent:tag".into());
+        apply_pushed_images(&mut stack, updates);
+        let agent = stack
+            .resources()
+            .find(|(id, _)| *id == "agent")
+            .and_then(|(_, e)| e.config.downcast_ref::<Daemon>().cloned())
+            .expect("agent daemon should exist");
+        assert_eq!(
+            agent.code,
+            DaemonCode::Image {
+                image: "registry.example.com/agent:tag".to_string()
+            }
+        );
+
+        // An unbuilt source daemon fails fast, same as workers and containers.
+        let source_daemon = Daemon::new("raw".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Source {
+                src: ".".to_string(),
+                toolchain: ToolchainConfig::Rust {
+                    binary_name: "raw".to_string(),
+                },
+            })
+            .build();
+        let source_stack = Stack::new("daemon-source".to_string())
+            .add(source_daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        let error = match collect_push_targets(&source_stack) {
+            Err(error) => error,
+            Ok(_) => panic!("source daemon must be rejected"),
+        };
+        assert!(error.to_string().contains("Run 'alien build' first"));
     }
 
     #[tokio::test]
@@ -2975,5 +3411,422 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with(".agent-tmp-"));
+    }
+
+    /// End-to-end: build two arches into one resource dir, push, and assert the pushed tag
+    /// resolves to a real multi-arch manifest list (not a single overwritten arch).
+    /// Gated on docker + a local registry (`docker run -d -p 5050:5000 registry:2`).
+    #[tokio::test]
+    async fn multiarch_push_produces_manifest_list() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping multiarch_push_produces_manifest_list: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping multiarch_push_produces_manifest_list: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let build_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build both linux arches into the same resource dir.
+        for target in [BinaryTarget::LinuxArm64, BinaryTarget::LinuxX64] {
+            let toolchain = DockerToolchain {
+                dockerfile: None,
+                build_args: None,
+                target: None,
+            };
+            let context = ToolchainContext {
+                src_dir: src.path().to_path_buf(),
+                build_dir: build_dir.path().to_path_buf(),
+                cache_store: None,
+                cache_prefix: "test".to_string(),
+                build_target: target,
+                runtime_platform_name: "aws".to_string(),
+                debug_mode: false,
+                is_container: true,
+            };
+            toolchain
+                .build(&context)
+                .await
+                .expect("docker build should succeed");
+        }
+        assert!(build_dir.path().join("linux-aarch64.oci.tar").exists());
+        assert!(build_dir.path().join("linux-x64.oci.tar").exists());
+
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: build_dir.path().to_string_lossy().into_owned(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let stack = Stack::new("multiarch-test".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-multiarch-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+        assert!(
+            image_uri.contains(REGISTRY),
+            "expected a registry URI, got {image_uri}"
+        );
+
+        // The pushed tag must resolve to an image index with both linux arches.
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[
+                    OCI_IMAGE_INDEX_MEDIA_TYPE,
+                    "application/vnd.docker.distribution.manifest.list.v2+json",
+                ],
+            )
+            .await
+            .expect("should pull a manifest list");
+        let index: OciImageIndex =
+            serde_json::from_slice(&bytes).expect("pushed tag should be an image index");
+        let mut platforms: Vec<(String, String)> = index
+            .manifests
+            .iter()
+            .filter_map(|m| {
+                m.platform
+                    .as_ref()
+                    .map(|p| (p.os.clone(), p.architecture.clone()))
+            })
+            .collect();
+        platforms.sort();
+        assert_eq!(
+            platforms,
+            vec![
+                ("linux".to_string(), "amd64".to_string()),
+                ("linux".to_string(), "arm64".to_string()),
+            ],
+            "pushed tag must be a real multi-arch index"
+        );
+    }
+
+    /// End-to-end: build a single arch into a resource dir, push, and assert the pushed tag
+    /// resolves to a plain image manifest (not an index). This is the path every current
+    /// single-platform release (aws/gcp/azure) takes, so the direct branch must stay intact.
+    /// Gated on docker + a local registry (`docker run -d -p 5050:5000 registry:2`).
+    #[tokio::test]
+    async fn singlearch_push_produces_single_manifest() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping singlearch_push_produces_single_manifest: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping singlearch_push_produces_single_manifest: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let build_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build a single linux arch into the resource dir.
+        let toolchain = DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let context = ToolchainContext {
+            src_dir: src.path().to_path_buf(),
+            build_dir: build_dir.path().to_path_buf(),
+            cache_store: None,
+            cache_prefix: "test".to_string(),
+            build_target: BinaryTarget::LinuxArm64,
+            runtime_platform_name: "aws".to_string(),
+            debug_mode: false,
+            is_container: true,
+        };
+        toolchain
+            .build(&context)
+            .await
+            .expect("docker build should succeed");
+        assert!(build_dir.path().join("linux-aarch64.oci.tar").exists());
+
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: build_dir.path().to_string_lossy().into_owned(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let stack = Stack::new("singlearch-test".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-singlearch-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+        assert!(
+            image_uri.contains(REGISTRY),
+            "expected a registry URI, got {image_uri}"
+        );
+
+        // The pushed tag must resolve to a plain image manifest, NOT an index: it has a
+        // `config` descriptor and no `manifests` array.
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            )
+            .await
+            .expect("should pull a manifest");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("pushed tag should be valid JSON");
+        assert!(
+            value.get("config").is_some(),
+            "single-arch push must produce an image manifest with a config descriptor, got: {value}"
+        );
+        assert!(
+            value.get("manifests").is_none(),
+            "single-arch push must not produce a manifest index, got: {value}"
+        );
+    }
+
+    /// End-to-end seam: build two arches into two separate partial outputs (one per native
+    /// runner), run `merge_build_outputs` to combine them, load the merged stack exactly as
+    /// the release path does (deserialize stack.json), then push — asserting the merged dir
+    /// resolves to a real multi-arch index. This exercises the merge→load→push chain as one
+    /// flow, not as independent halves. Gated on docker + a local registry.
+    #[tokio::test]
+    async fn merge_then_push_produces_manifest_list() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping merge_then_push_produces_manifest_list: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping merge_then_push_produces_manifest_list: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let input_root = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build each arch into its own partial: <input>/<partial>/build/aws/<dir>/<tarball>,
+        // with a stack.json whose code.image is that partial's absolute artifact dir — the
+        // exact shape a native-runner `alien build --output-dir` upload produces.
+        for (partial, target, dir_name) in [
+            ("arm", BinaryTarget::LinuxArm64, "web-aaaa1111"),
+            ("x64", BinaryTarget::LinuxX64, "web-bbbb2222"),
+        ] {
+            let platform_dir = input_root.path().join(partial).join("build").join("aws");
+            let artifact_dir = platform_dir.join(dir_name);
+            std::fs::create_dir_all(&artifact_dir).unwrap();
+
+            let toolchain = DockerToolchain {
+                dockerfile: None,
+                build_args: None,
+                target: None,
+            };
+            let context = ToolchainContext {
+                src_dir: src.path().to_path_buf(),
+                build_dir: artifact_dir.clone(),
+                cache_store: None,
+                cache_prefix: "test".to_string(),
+                build_target: target,
+                runtime_platform_name: "aws".to_string(),
+                debug_mode: false,
+                is_container: true,
+            };
+            toolchain
+                .build(&context)
+                .await
+                .expect("docker build should succeed");
+
+            let image = artifact_dir
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let container = Container::new("web".to_string())
+                .code(ContainerCode::Image { image })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions("web".to_string())
+                .build();
+            let stack = Stack::new("merge-push-test".to_string())
+                .add(container, alien_core::ResourceLifecycle::Live)
+                .build();
+            std::fs::write(
+                platform_dir.join("stack.json"),
+                serde_json::to_string_pretty(&stack).unwrap(),
+            )
+            .unwrap();
+        }
+
+        // Merge the two partials into one .alien.
+        let platforms = crate::merge::merge_build_outputs(input_root.path(), out.path())
+            .expect("merge should succeed");
+        assert_eq!(platforms, vec!["aws".to_string()]);
+
+        // Load the merged stack the way the release path does, then push it.
+        let merged_json = std::fs::read_to_string(out.path().join("build/aws/stack.json")).unwrap();
+        let merged_stack: Stack =
+            serde_json::from_str(&merged_json).expect("merged stack.json should deserialize");
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-merge-push-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(merged_stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push of the merged stack should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[
+                    OCI_IMAGE_INDEX_MEDIA_TYPE,
+                    "application/vnd.docker.distribution.manifest.list.v2+json",
+                ],
+            )
+            .await
+            .expect("should pull a manifest list");
+        let index: OciImageIndex = serde_json::from_slice(&bytes)
+            .expect("merged-then-pushed tag should be an image index");
+        let mut platforms: Vec<(String, String)> = index
+            .manifests
+            .iter()
+            .filter_map(|m| {
+                m.platform
+                    .as_ref()
+                    .map(|p| (p.os.clone(), p.architecture.clone()))
+            })
+            .collect();
+        platforms.sort();
+        assert_eq!(
+            platforms,
+            vec![
+                ("linux".to_string(), "amd64".to_string()),
+                ("linux".to_string(), "arm64".to_string()),
+            ],
+            "merged stack must push as a real multi-arch index"
+        );
     }
 }

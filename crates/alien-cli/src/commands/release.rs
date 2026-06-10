@@ -6,7 +6,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Platform, Stack, Worker, WorkerCode,
+    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -38,7 +39,7 @@ use tracing::info;
     alien release --platforms aws
     alien release --platforms aws,gcp
 
-    # Use pre-built images (skip build, still push images)
+    # Skip the build and release the existing build output (still pushes local artifacts)
     alien release --prebuilt
 
     # Output JSON (for scripting/automation)
@@ -78,7 +79,8 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub base_platform: Option<String>,
 
-    /// Use pre-built images. Skips build and still pushes local build artifacts.
+    /// Skip the build and release the existing `.alien` output. Still pushes any local
+    /// artifacts it contains, and reuses images that are already remote URIs.
     #[arg(long)]
     pub prebuilt: bool,
 
@@ -397,7 +399,8 @@ async fn release_task_core(
         // Load built stack
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
 
-        // Push images if needed (test platform skips pushing).
+        // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
+        // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
         // Local platform pushes to a cloud registry — the alien-agent pulls from it.
         let pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
@@ -1185,6 +1188,21 @@ fn rebase_prebuilt_stack_image_paths(
                     return Err(prebuilt_source_error("Container", &container.id));
                 }
             }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => {
+                    if let Some(rebased) = rebase_prebuilt_image_path(
+                        "daemon", &daemon.id, image, output_dir, platform,
+                    )? {
+                        let mut updated = daemon.clone();
+                        updated.code = DaemonCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
+                }
+                DaemonCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Daemon", &daemon.id));
+                }
+            }
         }
     }
     Ok(())
@@ -1365,6 +1383,21 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
                     }
                 }
             }
+        } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
+            if let DaemonCode::Image { ref image } = daemon.code {
+                if let Some(key) = cache_key_from_path(image) {
+                    if let Some(cached_uri) = cache.get(&key) {
+                        info!(
+                            "Push cache hit for daemon '{}': {} → {}",
+                            daemon.id, key, cached_uri
+                        );
+                        daemon.code = DaemonCode::Image {
+                            image: cached_uri.clone(),
+                        };
+                        hits += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -1392,6 +1425,11 @@ fn collect_push_cache_entries(
                     return Some((id.clone(), image.clone()));
                 }
             }
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                if let DaemonCode::Image { ref image } = daemon.code {
+                    return Some((id.clone(), image.clone()));
+                }
+            }
             None
         })
         .collect();
@@ -1405,6 +1443,12 @@ fn collect_push_cache_entries(
             }
         } else if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
+                Some(image.clone())
+            } else {
+                None
+            }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            if let DaemonCode::Image { ref image } = daemon.code {
                 Some(image.clone())
             } else {
                 None
@@ -1433,6 +1477,62 @@ fn collect_push_cache_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::ResourceLifecycle;
+
+    fn daemon_with_image(image: &str) -> Daemon {
+        Daemon::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: image.to_string(),
+            })
+            .build()
+    }
+
+    #[test]
+    fn push_cache_applies_and_collects_for_daemons() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("agent-a1b2c3d4");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+
+        // apply: a cached URI for the artifact dir's key replaces the daemon's local path.
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "agent-a1b2c3d4".to_string(),
+            "registry.example.com/agent:tag".to_string(),
+        )]);
+        let hits = apply_push_cache(&mut stack, &cache);
+        assert_eq!(hits, 1, "daemon local path should hit the cache");
+        let daemon = stack
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Daemon>().cloned())
+            .expect("daemon should exist");
+        assert_eq!(
+            daemon.code,
+            DaemonCode::Image {
+                image: "registry.example.com/agent:tag".to_string()
+            }
+        );
+
+        // collect: pushed daemon URI lands in the cache keyed by the original dir name.
+        let pre_push = Stack::new("cache-test".to_string())
+            .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let pushed = Stack::new("cache-test".to_string())
+            .add(
+                daemon_with_image("registry.example.com/agent:pushed"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut collected = HashMap::new();
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        assert_eq!(
+            collected.get("agent-a1b2c3d4").map(String::as_str),
+            Some("registry.example.com/agent:pushed")
+        );
+    }
 
     #[test]
     fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_releases() {

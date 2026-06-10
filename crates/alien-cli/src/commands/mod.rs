@@ -23,7 +23,7 @@ pub mod platform;
 #[cfg(feature = "platform")]
 pub mod manager;
 
-pub use build::{build_command, BuildArgs};
+pub use build::{build_command, BuildArgs, BuildSubcommand};
 pub use commands::{commands_task, commands_task_dev, CommandsArgs};
 pub use deploy::{deploy_task, DeployArgs};
 pub use deployments::{deployments_task, DeploymentsArgs};
