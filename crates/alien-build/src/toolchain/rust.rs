@@ -449,15 +449,45 @@ impl Toolchain for RustToolchain {
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
-        // Workers on local platform use embedded runtime in agent (no runtime in image)
+        // Local native resources use embedded runtime in the agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
         let needs_runtime_in_image =
             context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Worker on local platform - runtime is embedded in operator
-            // Just package the application binary
+            // Local native resource - runtime is embedded in the agent
+            // Package the application binary, and any extra assets the project
+            // wants shipped alongside it. Convention: anything in a top-level
+            // `vendor/` directory next to Cargo.toml gets copied into the
+            // image under `/app/vendor/`. This is how a daemon can ship
+            // helper binaries or data files it needs at runtime without
+            // baking them into the Rust binary itself.
             let runtime_command = vec![format!("./{}", binary_filename)];
+
+            let mut layers = vec![super::LayerSpec {
+                files: vec![super::FileSpec {
+                    host_path: binary_path.clone(),
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755), // Executable
+                }],
+                description: "Application binary".to_string(),
+            }];
+
+            let vendor_dir = context.src_dir.join("vendor");
+            if vendor_dir.is_dir() {
+                info!(
+                    "Including vendor directory in image: {}",
+                    vendor_dir.display()
+                );
+                layers.push(super::LayerSpec {
+                    files: vec![super::FileSpec {
+                        host_path: vendor_dir,
+                        container_path: "./vendor".to_string(),
+                        mode: None,
+                    }],
+                    description: "Vendor assets".to_string(),
+                });
+            }
 
             info!(
                 "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
@@ -467,16 +497,7 @@ impl Toolchain for RustToolchain {
             );
 
             return Ok(ToolchainOutput {
-                build_strategy: super::ImageBuildStrategy::FromScratch {
-                    layers: vec![super::LayerSpec {
-                        files: vec![super::FileSpec {
-                            host_path: binary_path.clone(),
-                            container_path: format!("./{}", binary_filename),
-                            mode: Some(0o755), // Executable
-                        }],
-                        description: "Application binary".to_string(),
-                    }],
-                },
+                build_strategy: super::ImageBuildStrategy::FromScratch { layers },
                 runtime_command,
             });
         }
