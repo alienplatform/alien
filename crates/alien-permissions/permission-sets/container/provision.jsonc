@@ -384,7 +384,8 @@
             "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
-            "compute.globalForwardingRules.get"
+            "compute.globalForwardingRules.get",
+            "compute.zones.list"
           ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
@@ -400,7 +401,12 @@
       // Persistent Disks for stateful containers
       {
         "grant": {
-          "permissions": ["compute.disks.create", "compute.disks.delete", "compute.disks.get"]
+          "permissions": [
+            "compute.disks.create",
+            "compute.disks.delete",
+            "compute.disks.get",
+            "compute.zones.list"
+          ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
         "binding": {

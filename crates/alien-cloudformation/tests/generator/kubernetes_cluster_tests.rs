@@ -3,7 +3,7 @@
 use super::helpers::render_built_ins_target;
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    DeploymentModel, KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
     KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
     KubernetesSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
@@ -69,7 +69,7 @@ fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {
 }
 
 #[test]
-fn eks_target_remote_management_uses_manager_service_account_irsa_for_pull() {
+fn eks_target_remote_management_uses_management_role_trust() {
     let stack = Stack::new("kubernetes".to_string())
         .add(
             KubernetesCluster::new("kubernetes".to_string())
@@ -85,25 +85,21 @@ fn eks_target_remote_management_uses_manager_service_account_irsa_for_pull() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let settings = StackSettings {
-        deployment_model: DeploymentModel::Pull,
-        ..StackSettings::default()
-    };
-
     let yaml = render_built_ins_target(
         &stack,
-        settings,
+        StackSettings::default(),
         RegistrationMode::OutputsFallback,
         CloudFormationTarget::Eks,
         "kubernetes",
-        "eks remote management irsa",
+        "eks remote management",
     );
 
     assert!(yaml.contains("DeploymentManagementConfig:"));
     assert!(yaml.contains("Value: 'null'") || yaml.contains("Value: null"));
     assert!(yaml.contains("ManagementRole:"));
-    assert!(yaml.contains("sts:AssumeRoleWithWebIdentity"));
-    assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-manager-sa"));
+    assert!(yaml.contains("sts:AssumeRole"));
+    assert!(yaml.contains("AllowManagingRole"));
+    assert!(!yaml.contains("sts:AssumeRoleWithWebIdentity"));
 }
 
 #[test]

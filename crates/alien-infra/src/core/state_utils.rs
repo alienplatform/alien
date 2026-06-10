@@ -233,7 +233,7 @@ pub trait StackStateExt {
     fn retry_failed(&mut self) -> Result<Vec<String>>;
 
     /// Prepares the stack for destroy operations by handling failed resources appropriately.
-    /// - For ProvisionFailed/UpdateFailed resources: transitions them to delete start
+    /// - For ProvisionFailed/UpdateFailed/RefreshFailed resources: transitions them to delete start
     /// - For DeleteFailed resources: retries the delete operation
     /// Returns the IDs of resources that were successfully prepared.
     fn prepare_for_destroy(&mut self) -> Result<Vec<String>>;
@@ -379,8 +379,10 @@ fn prepare_for_destroy_matching(
         }
 
         match resource_state.status {
-            ResourceStatus::ProvisionFailed | ResourceStatus::UpdateFailed => {
-                // For provision/update failures during destroy, transition to delete start
+            ResourceStatus::ProvisionFailed
+            | ResourceStatus::UpdateFailed
+            | ResourceStatus::RefreshFailed => {
+                // For non-delete failures during destroy, transition to delete start.
                 match resource_state.get_internal_controller() {
                     Ok(Some(mut controller)) => {
                         tracing::info!(
@@ -493,9 +495,8 @@ fn prepare_for_destroy_matching(
                         return Err(AlienError::new(
                             ErrorData::ResourceStateSerializationFailed {
                                 resource_id: resource_id.clone(),
-                                message:
-                                    "Missing controller state for teardown-required resource"
-                                        .to_string(),
+                                message: "Missing controller state for teardown-required resource"
+                                    .to_string(),
                             },
                         ));
                     }
@@ -619,6 +620,55 @@ mod tests {
         // Resource should now be in DeleteStart state
         let updated_resource = stack_state.resources.get("test-function").unwrap();
         assert_eq!(updated_resource.status, ResourceStatus::Deleting);
+
+        let controller = updated_resource
+            .get_internal_controller_typed::<TestWorkerController>()
+            .unwrap();
+        assert_eq!(controller.state, TestWorkerState::DeleteStart);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_for_destroy_refresh_failed() {
+        let mut stack_state = StackState::new(Platform::Test);
+
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        let mut failed_controller = TestWorkerController::default();
+        failed_controller.state = TestWorkerState::Ready;
+
+        let mut resource_state = StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(function_config),
+            None,
+            Vec::new(),
+        );
+        resource_state.status = ResourceStatus::RefreshFailed;
+        resource_state.error = Some(AlienError::new(GenericError {
+            message: "heartbeat failed".to_string(),
+        }));
+        resource_state.retry_attempt = 10;
+        resource_state
+            .set_internal_controller(Some(Box::new(failed_controller)))
+            .unwrap();
+
+        stack_state
+            .resources
+            .insert("test-function".to_string(), resource_state);
+
+        let prepared = stack_state.prepare_for_destroy().unwrap();
+
+        assert_eq!(prepared, vec!["test-function"]);
+
+        let updated_resource = stack_state.resources.get("test-function").unwrap();
+        assert_eq!(updated_resource.status, ResourceStatus::Deleting);
+        assert_eq!(updated_resource.retry_attempt, 0);
+        assert!(updated_resource.error.is_none());
+        assert!(updated_resource.last_failed_state.is_none());
 
         let controller = updated_resource
             .get_internal_controller_typed::<TestWorkerController>()

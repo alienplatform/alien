@@ -6905,29 +6905,16 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, all compute workloads (containers and worker VMs) export
- * their logs to the given endpoint via OTLP/HTTP.
- *
- * The `logs_auth_header` is stored as plain text in DeploymentConfig because
- * alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
- * before vault secrets load. For worker VMs, worker-template stamping passes
- * the monitoring configuration to the provider controller, which stores the
- * sensitive header in the cloud vault used by the worker image.
+ * When set, worker runtimes export captured application logs through the
+ * given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
+ * deployment code must sync them to a runtime-only secret and avoid putting
+ * them into user application environment variables.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
-   * Auth header value in "key=value,..." format used for container OTLP env var injection.
+   * Auth header value in "key=value,..." format.
    *
    * @remarks
-   *
-   * `alien-deployment` injects this as the `OTEL_EXPORTER_OTLP_HEADERS` plain env var
-   * into all containers. It must be plain (not a vault secret) because alien-runtime
-   * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
-   *
-   * Worker VMs do NOT use this field directly. The ComputeCluster infra
-   * controller writes the same value to the cloud vault used by the worker
-   * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
-   *
    * Example: "authorization=Bearer <write-token>"
    */
   logsAuthHeader: string;

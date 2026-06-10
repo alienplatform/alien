@@ -7,7 +7,7 @@
 //! 4. Reconciles the result (via `DeploymentStore::reconcile`)
 //! 5. Releases the lock (via `DeploymentStore::release`)
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -39,10 +39,10 @@ use crate::transports::ManagerTransport;
 const MAX_STEPS_PER_TICK: usize = 100;
 /// Maximum number of deployments to process concurrently per tick.
 const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
+/// Maximum acquire/process batches before yielding back to the interval sleep.
+const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
-const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
-
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         message
@@ -169,9 +169,6 @@ impl DeploymentLoop {
 
     /// One iteration of the deployment loop.
     async fn tick(&self) {
-        let session = uuid::Uuid::new_v4().to_string();
-
-        // Acquire deployments that need work.
         let filter = DeploymentFilter {
             statuses: Some(manager_candidate_statuses()),
             platforms: if self.config.targets.is_empty() {
@@ -186,25 +183,43 @@ impl DeploymentLoop {
         // empty `bearer_token` — the documented signal to embedders that
         // no caller passthrough is available.
         let caller = Subject::system();
-        match self
-            .deployment_store
-            .acquire(&caller, &session, &filter, 10)
-            .await
-        {
-            Ok(acquired) => {
-                if !acquired.is_empty() {
-                    debug!(count = acquired.len(), session = %session, "Acquired deployments");
+
+        for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
+            let session = uuid::Uuid::new_v4().to_string();
+
+            match self
+                .deployment_store
+                .acquire(&caller, &session, &filter, 10)
+                .await
+            {
+                Ok(acquired) => {
+                    if acquired.is_empty() {
+                        break;
+                    }
+
+                    debug!(
+                        count = acquired.len(),
+                        session = %session,
+                        batch_index,
+                        "Acquired deployments"
+                    );
+                    stream::iter(acquired)
+                        .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
+                            self.process_deployment(item.deployment, &session).await;
+                        })
+                        .await;
                 }
-                stream::iter(acquired)
-                    .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                        self.process_deployment(item.deployment, &session).await;
-                    })
-                    .await;
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to acquire deployments");
+                Err(e) => {
+                    error!(error = %e, "Failed to acquire deployments");
+                    break;
+                }
             }
         }
+
+        debug!(
+            max_batches = MAX_ACQUIRE_BATCHES_PER_TICK,
+            "Deployment loop tick yielded"
+        );
     }
 
     /// Process a single deployment: step until stable, reconcile, release.
@@ -393,6 +408,7 @@ impl DeploymentLoop {
         let environment_variables = self
             .build_environment_variables(&deployment_id, &deployment)
             .await?;
+        let monitoring = self.build_monitoring_config(&deployment);
 
         // 5. Build deployment config.
         // Management config resolution:
@@ -438,6 +454,9 @@ impl DeploymentLoop {
             if config.base_platform.is_none() {
                 config.base_platform = deployment.base_platform;
             }
+            if config.monitoring.is_none() {
+                config.monitoring = monitoring;
+            }
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -462,7 +481,7 @@ impl DeploymentLoop {
                 base_platform: deployment.base_platform,
                 public_urls: None,
                 domain_metadata: None,
-                monitoring: None,
+                monitoring,
                 manager_url: Some(self.config.base_url()),
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
@@ -588,7 +607,6 @@ impl DeploymentLoop {
     ///
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
-    /// - OTLP configuration (if telemetry endpoint is set)
     /// - Commands polling configuration
     async fn build_environment_variables(
         &self,
@@ -605,33 +623,7 @@ impl DeploymentLoop {
             target_resources: None,
         });
 
-        // 2. OTLP telemetry configuration — if an OTLP endpoint is configured
-        // or local log ingest is enabled on this manager instance.
-        let base_url = self.config.base_url();
-
-        let otlp_enabled =
-            self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest();
-
-        if otlp_enabled {
-            vars.push(EnvironmentVariable {
-                name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
-                value: format!("{}/v1/logs", base_url),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-            // Use the deployment's auth token (not deployment_id) so the
-            // telemetry endpoints accept the request via require_auth.
-            if let Some(ref token) = deployment.deployment_token {
-                vars.push(EnvironmentVariable {
-                    name: "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
-                    value: format!("authorization=Bearer {}", token),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                });
-            }
-        }
-
-        // 3. Commands configuration — only inject polling for K8s/Local.
+        // 2. Commands configuration — only inject polling for K8s/Local.
         // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
         // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
         // regardless of deployment model. K8s/Local run as containers that must poll.
@@ -671,28 +663,6 @@ impl DeploymentLoop {
             vars.extend(user_vars.iter().cloned());
         }
 
-        if otlp_enabled {
-            let mut existing_resource_attributes = None;
-            vars.retain(|var| {
-                if var.name == OTEL_RESOURCE_ATTRIBUTES {
-                    existing_resource_attributes = Some(var.value.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            vars.push(EnvironmentVariable {
-                name: OTEL_RESOURCE_ATTRIBUTES.to_string(),
-                value: deployment_otel_resource_attributes(
-                    existing_resource_attributes.as_deref(),
-                    deployment_id,
-                    deployment,
-                ),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-        }
-
         // Build deterministic hash from variable contents so the infra executor
         // only sees a change when the actual values change.
         use sha2::{Digest, Sha256};
@@ -711,47 +681,23 @@ impl DeploymentLoop {
             created_at: chrono::Utc::now().to_rfc3339(),
         })
     }
-}
 
-fn deployment_otel_resource_attributes(
-    existing: Option<&str>,
-    deployment_id: &str,
-    deployment: &DeploymentRecord,
-) -> String {
-    let mut attributes = parse_otel_resource_attributes(existing);
-    attributes.insert(
-        "alien.workspace_id".to_string(),
-        deployment.workspace_id.clone(),
-    );
-    attributes.insert(
-        "alien.project_id".to_string(),
-        deployment.project_id.clone(),
-    );
-    attributes.insert(
-        "alien.deployment_group_id".to_string(),
-        deployment.deployment_group_id.clone(),
-    );
-    attributes.insert("alien.deployment_id".to_string(), deployment_id.to_string());
+    fn build_monitoring_config(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Option<alien_core::OtlpConfig> {
+        let otlp_enabled =
+            self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest();
+        let token = deployment.deployment_token.as_ref()?;
 
-    attributes
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, String> {
-    let mut attributes = BTreeMap::new();
-
-    if let Some(existing) = existing {
-        for attribute in existing.split(',') {
-            if let Some((key, value)) = attribute.split_once('=') {
-                attributes.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
+        otlp_enabled.then(|| alien_core::OtlpConfig {
+            logs_endpoint: format!("{}/v1/logs", self.config.base_url()),
+            logs_auth_header: format!("authorization=Bearer {}", token),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::new(),
+        })
     }
-
-    attributes
 }
 
 fn should_wait_for_credential_handoff(

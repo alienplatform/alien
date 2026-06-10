@@ -134,12 +134,11 @@ pub async fn run_setup_teardown_after_handoff(
             })
         })?;
         let stack_state_before_step = current_stack_state.clone();
-        let step_result = match executor
-            .step(current_stack_state)
-            .await
-            .context(ErrorData::StackExecutionFailed {
+        let step_result = match executor.step(current_stack_state).await.context(
+            ErrorData::StackExecutionFailed {
                 message: "Failed to execute setup teardown step".to_string(),
-            }) {
+            },
+        ) {
             Ok(step_result) => step_result,
             Err(error) => {
                 state.stack_state = Some(stack_state_before_step);

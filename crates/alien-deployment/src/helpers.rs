@@ -5,15 +5,21 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
     EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
     LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, Stack, StackState,
-    TestEnvironmentInfo, ENV_ALIEN_SECRETS,
+    TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
+const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
+const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -167,22 +173,35 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
     Ok(())
 }
 
-/// Inject OTLP monitoring environment variables into all compute resources.
+/// Configuration for runtime-owned secrets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlienRuntimeSecretsConfig {
+    /// Vault key that contains `OTEL_EXPORTER_OTLP_HEADERS`.
+    otlp_logs_auth_header: Option<String>,
+    /// Vault key that contains `OTEL_EXPORTER_OTLP_METRICS_HEADERS`.
+    otlp_metrics_auth_header: Option<String>,
+    /// Hash of runtime secret values.
+    hash: String,
+}
+
+/// Inject OTLP monitoring environment variables into worker runtimes.
 ///
 /// When `DeploymentConfig.monitoring` is set, this injects:
 /// - `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` — the OTLP logs endpoint URL
-/// - `OTEL_EXPORTER_OTLP_HEADERS`       — auth header in "key=value" format
 /// - `OTEL_SERVICE_NAME`                — defaults to the resource name so
 ///   each resource within the stack appears as a distinct `service.name` in
 ///   logs (drives the dashboard's "Resource" column). Skipped if the user
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
 /// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
 ///   such as `alien.deployment_id`, merged with any user-provided value.
+/// - `ALIEN_RUNTIME_SECRETS`          — points alien-runtime at runtime-owned
+///   vault secrets. These are not forwarded to the child application process.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
 ) -> Result<()> {
-    info!("Injecting OTLP monitoring env vars into compute resources");
+    info!("Injecting OTLP monitoring env vars into worker runtimes");
 
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
@@ -202,33 +221,14 @@ pub fn inject_monitoring_environment_variables(
                     })?
                     .environment,
             )
-        } else if resource_type == alien_core::Container::RESOURCE_TYPE {
-            Some(
-                &mut resource_entry
-                    .config
-                    .downcast_mut::<alien_core::Container>()
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::InternalError {
-                            message: format!(
-                                "Failed to downcast resource '{}' to Container",
-                                resource_name
-                            ),
-                        })
-                    })?
-                    .environment,
-            )
         } else {
             None
         };
 
         if let Some(env) = environment {
             env.insert(
-                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
+                OTEL_EXPORTER_OTLP_LOGS_ENDPOINT.to_string(),
                 monitoring.logs_endpoint.clone(),
-            );
-            env.insert(
-                "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
-                monitoring.logs_auth_header.clone(),
             );
             if !monitoring.resource_attributes.is_empty() {
                 let merged =
@@ -245,24 +245,33 @@ pub fn inject_monitoring_environment_variables(
             // We only set the env var if the user hasn't already pinned
             // OTEL_SERVICE_NAME themselves (e.g. via the platform's user
             // env vars), so explicit overrides keep winning.
-            env.entry("OTEL_SERVICE_NAME".to_string())
+            env.entry(OTEL_SERVICE_NAME.to_string())
                 .or_insert_with(|| resource_name.clone());
             if let Some(metrics_endpoint) = &monitoring.metrics_endpoint {
                 env.insert(
-                    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT".to_string(),
+                    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.to_string(),
                     metrics_endpoint.clone(),
                 );
-                // Use the metrics-specific auth header if present, otherwise reuse the logs one.
-                let metrics_headers = monitoring
-                    .metrics_auth_header
-                    .as_ref()
-                    .unwrap_or(&monitoring.logs_auth_header);
-                env.insert(
-                    "OTEL_EXPORTER_OTLP_METRICS_HEADERS".to_string(),
-                    metrics_headers.clone(),
-                );
             }
-            debug!("Injected OTLP monitoring vars into '{}'", resource_name);
+            let runtime_secrets = AlienRuntimeSecretsConfig {
+                otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
+                otlp_metrics_auth_header: monitoring
+                    .metrics_endpoint
+                    .as_ref()
+                    .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
+                hash: runtime_monitoring_secrets_hash(monitoring),
+            };
+            let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
+            })?;
+            env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
+
+            debug!(
+                "Injected runtime OTLP monitoring vars into '{}'",
+                resource_name
+            );
         }
     }
 
@@ -423,14 +432,12 @@ pub async fn sync_secrets_to_vault(
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
     let snapshot = &config.environment_variables;
+    let sync_hash = secrets_sync_hash(config);
 
     // Check if we've already synced this exact snapshot
     if let Some(last_synced_hash) = &runtime_metadata.last_synced_env_vars_hash {
-        if last_synced_hash == &snapshot.hash {
-            debug!(
-                "Secrets already synced for hash {}, skipping",
-                snapshot.hash
-            );
+        if last_synced_hash == &sync_hash {
+            debug!("Secrets already synced for hash {}, skipping", sync_hash);
             return Ok(false);
         }
     }
@@ -443,17 +450,17 @@ pub async fn sync_secrets_to_vault(
         .collect();
 
     // Skip if no secrets to sync
-    if secret_vars.is_empty() {
+    if secret_vars.is_empty() && config.monitoring.is_none() {
         debug!("No secrets to sync to vault");
         // Still update the hash to mark as synced
-        runtime_metadata.last_synced_env_vars_hash = Some(snapshot.hash.clone());
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
         return Ok(false);
     }
 
     info!(
-        "Syncing {} secrets to vault (hash: {})",
+        "Syncing {} user secrets to vault (hash: {})",
         secret_vars.len(),
-        snapshot.hash
+        sync_hash
     );
 
     // Create provider using deployment credentials
@@ -484,11 +491,65 @@ pub async fn sync_secrets_to_vault(
         debug!("Synced secret '{}' to vault", env_var.name);
     }
 
+    if let Some(monitoring) = &config.monitoring {
+        vault
+            .set_secret(
+                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
+                &monitoring.logs_auth_header,
+            )
+            .await
+            .context(ErrorData::SecretSyncFailed {
+                vault_name: "secrets".to_string(),
+                reason: "Failed to set runtime OTLP logs auth header".to_string(),
+            })?;
+
+        if monitoring.metrics_endpoint.is_some() {
+            let metrics_header = monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header);
+            vault
+                .set_secret(RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET, metrics_header)
+                .await
+                .context(ErrorData::SecretSyncFailed {
+                    vault_name: "secrets".to_string(),
+                    reason: "Failed to set runtime OTLP metrics auth header".to_string(),
+                })?;
+        }
+        debug!("Synced runtime OTLP auth secrets to vault");
+    }
+
     // Update metadata to mark this snapshot as synced
-    runtime_metadata.last_synced_env_vars_hash = Some(snapshot.hash.clone());
+    runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
 
     info!("Successfully synced all secrets to vault");
     Ok(true)
+}
+
+fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(monitoring.logs_auth_header.as_bytes());
+    if monitoring.metrics_endpoint.is_some() {
+        hasher.update(b"\0metrics\0");
+        hasher.update(
+            monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header)
+                .as_bytes(),
+        );
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn secrets_sync_hash(config: &DeploymentConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config.environment_variables.hash.as_bytes());
+    if let Some(monitoring) = &config.monitoring {
+        hasher.update(b"\0runtime-monitoring\0");
+        hasher.update(runtime_monitoring_secrets_hash(monitoring).as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Interrupts all non-terminal, non-failed resources when a deployment failure is detected.

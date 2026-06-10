@@ -28,15 +28,12 @@ Metadata:
     - Label:
         default: Operations
       Parameters:
-      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
       AvailabilityZones:
         default: Availability zones
-      DeploymentModel:
-        default: Deployment model
       HeartbeatsMode:
         default: Heartbeats
       ManagingAccountId:
@@ -110,13 +107,6 @@ Parameters:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing security group IDs.
     Default: ''
-  DeploymentModel:
-    Type: String
-    Description: How runtime updates are delivered after setup.
-    Default: push
-    AllowedValues:
-    - push
-    - pull
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -140,10 +130,6 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  DeploymentModelPush:
-    Fn::Equals:
-    - Ref: DeploymentModel
-    - push
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -582,18 +568,14 @@ Outputs:
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        Fn::If:
-        - DeploymentModelPush
-        - platform: aws
-          managingRoleArn:
-            Ref: ManagingRoleArn
-        - Ref: AWS::NoValue
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel:
-          Ref: DeploymentModel
+        deploymentModel: push
         updates:
           Ref: UpdatesMode
         telemetry:

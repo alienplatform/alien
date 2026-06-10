@@ -283,7 +283,7 @@ fn has_remaining_setup_resources(stack_state: &StackState) -> bool {
 mod tests {
     use alien_core::{
         ComputeCluster, Platform, Resource, ResourceLifecycle, ResourceStatus, StackResourceState,
-        StackState, Storage,
+        StackState, StackStatus, Storage,
     };
 
     use super::{compute_runtime_cleanup_status, has_remaining_setup_resources};

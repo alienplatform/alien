@@ -425,6 +425,20 @@ pub enum ErrorData {
         /// The cluster ID involved, if applicable
         cluster_id: Option<String>,
     },
+
+    /// Managed container API rejected a request that retrying will not fix.
+    #[error(
+        code = "HORIZON_API_REQUEST_REJECTED",
+        message = "Managed container API rejected the request: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    HorizonApiRequestRejected {
+        /// Human-readable description of the rejection
+        message: String,
+        /// The cluster ID involved, if applicable
+        cluster_id: Option<String>,
+    },
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;

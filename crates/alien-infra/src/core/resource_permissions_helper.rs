@@ -17,6 +17,21 @@ use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
 use tracing::{info, warn};
 
+fn gcp_custom_role_matches(
+    existing: &alien_gcp_clients::iam::Role,
+    desired: &alien_gcp_clients::iam::Role,
+) -> bool {
+    let mut existing_permissions = existing.included_permissions.clone();
+    let mut desired_permissions = desired.included_permissions.clone();
+    existing_permissions.sort();
+    desired_permissions.sort();
+
+    existing.title == desired.title
+        && existing.description == desired.description
+        && existing.stage == desired.stage
+        && existing_permissions == desired_permissions
+}
+
 /// Helper for applying resource-scoped permissions across all platforms
 pub struct ResourcePermissionsHelper;
 
@@ -319,18 +334,29 @@ impl ResourcePermissionsHelper {
                 .build();
 
             match iam_client.get_role(custom_role.name.clone()).await {
-                Ok(_) => {
-                    iam_client
-                        .patch_role(
-                            custom_role.name.clone(),
-                            updated_role,
-                            Some("includedPermissions,title,description,stage".to_string()),
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to update existing custom role '{}'", role_id),
-                            resource_id: Some(permission_set_id.to_string()),
-                        })?;
+                Ok(existing_role) => {
+                    if gcp_custom_role_matches(&existing_role, &updated_role) {
+                        info!(
+                            role_id = %role_id,
+                            permission_set = %permission_set_id,
+                            "GCP custom role already matches desired permissions"
+                        );
+                    } else {
+                        iam_client
+                            .patch_role(
+                                custom_role.name.clone(),
+                                updated_role,
+                                Some("includedPermissions,title,description,stage".to_string()),
+                            )
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to update existing custom role '{}'",
+                                    role_id
+                                ),
+                                resource_id: Some(permission_set_id.to_string()),
+                            })?;
+                    }
                 }
                 Err(e)
                     if matches!(

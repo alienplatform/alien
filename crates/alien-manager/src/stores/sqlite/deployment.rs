@@ -908,9 +908,8 @@ impl DeploymentStore for SqliteDeploymentStore {
                     query
                         .and_where(Expr::col(Deployments::Status).is_in(status_strs))
                         .cond_where(
-                            work_eligibility.add(
-                                Expr::col(Deployments::Status).is_in(setup_teardown_statuses),
-                            ),
+                            work_eligibility
+                                .add(Expr::col(Deployments::Status).is_in(setup_teardown_statuses)),
                         );
                 } else {
                     query.cond_where(work_eligibility);

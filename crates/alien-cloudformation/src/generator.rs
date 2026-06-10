@@ -32,7 +32,6 @@ const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 const PARAM_DOMAIN_NAME: &str = "DomainName";
 const PARAM_HOSTED_ZONE_ID: &str = "HostedZoneId";
 const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
-const PARAM_DEPLOYMENT_MODEL: &str = "DeploymentModel";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
 const PARAM_TELEMETRY_MODE: &str = "TelemetryMode";
 const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
@@ -45,7 +44,6 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
-const CONDITION_DEPLOYMENT_MODEL_PUSH: &str = "DeploymentModelPush";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
@@ -216,6 +214,8 @@ pub fn generate_cloudformation_template(
     validate_stack_settings(&options.stack_settings)?;
 
     let mut stack_settings = options.stack_settings.clone();
+    // CloudFormation packages always register push deployments.
+    stack_settings.deployment_model = DeploymentModel::Push;
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
         stack_settings.network = Some(NetworkSettings::Create {
             cidr: None,
@@ -253,7 +253,6 @@ pub fn generate_cloudformation_template(
         &mut template,
         stack,
         &stack_settings,
-        options.target,
         supports_custom_domain,
     );
     add_console_interface_metadata(&mut template, &stack_settings, supports_custom_domain);
@@ -700,16 +699,6 @@ fn add_standard_parameters(
     }
 
     template.parameters.insert(
-        PARAM_DEPLOYMENT_MODEL.to_string(),
-        string_parameter(
-            "How runtime updates are delivered after setup.",
-            Some(deployment_model(settings.deployment_model).to_string()),
-            Some(vec![CfExpression::from("push"), CfExpression::from("pull")]),
-            false,
-        ),
-    );
-
-    template.parameters.insert(
         PARAM_UPDATES_MODE.to_string(),
         string_parameter(
             "How updates are applied after setup registration.",
@@ -864,16 +853,8 @@ fn add_standard_conditions(
     template: &mut CfTemplate,
     stack: &Stack,
     settings: &StackSettings,
-    target: CloudFormationTarget,
     supports_custom_domain: bool,
 ) {
-    if !target.is_kubernetes() {
-        template.conditions.insert(
-            CONDITION_DEPLOYMENT_MODEL_PUSH.to_string(),
-            equals_ref(PARAM_DEPLOYMENT_MODEL, "push"),
-        );
-    }
-
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -978,7 +959,6 @@ fn add_console_interface_metadata(
     parameter_groups.push(json!({
         "Label": { "default": "Operations" },
         "Parameters": [
-            PARAM_DEPLOYMENT_MODEL,
             PARAM_UPDATES_MODE,
             PARAM_TELEMETRY_MODE,
             PARAM_HEARTBEATS_MODE
@@ -1023,11 +1003,6 @@ fn add_console_interface_metadata(
             "Certificate ARN",
         );
     }
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_DEPLOYMENT_MODEL,
-        "Deployment model",
-    );
     insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
     insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
     insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
@@ -1328,10 +1303,7 @@ fn stack_settings_expression(
     supports_custom_domain: bool,
 ) -> CfExpression {
     let mut values = vec![
-        (
-            "deploymentModel",
-            CfExpression::ref_(PARAM_DEPLOYMENT_MODEL),
-        ),
+        ("deploymentModel", CfExpression::from("push")),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
@@ -1590,17 +1562,13 @@ fn management_config_expression(target: CloudFormationTarget) -> CfExpression {
         return CfExpression::Null;
     }
 
-    CfExpression::if_(
-        CONDITION_DEPLOYMENT_MODEL_PUSH,
-        CfExpression::object([
-            ("platform", CfExpression::from("aws")),
-            (
-                "managingRoleArn",
-                CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-            ),
-        ]),
-        CfExpression::no_value(),
-    )
+    CfExpression::object([
+        ("platform", CfExpression::from("aws")),
+        (
+            "managingRoleArn",
+            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+        ),
+    ])
 }
 
 fn string_parameter(
@@ -1668,13 +1636,6 @@ fn output(description: &str, value: CfExpression) -> CfOutput {
         description: Some(description.to_string()),
         value,
         export: None,
-    }
-}
-
-fn deployment_model(model: DeploymentModel) -> &'static str {
-    match model {
-        DeploymentModel::Push => "push",
-        DeploymentModel::Pull => "pull",
     }
 }
 

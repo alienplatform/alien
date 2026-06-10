@@ -16,8 +16,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, DeploymentModel, ErrorData, KubernetesCluster, PermissionProfile,
-    PermissionSetReference, RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -36,23 +36,10 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             "RoleName".to_string(),
             CfExpression::sub("${AWS::StackName}-management"),
         );
-        if let Some(irsa) = eks_pull_irsa_context(ctx) {
-            role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                irsa_trust_policy(
-                    &irsa.oidc_provider_id,
-                    &irsa.cluster_id,
-                    &irsa.namespace,
-                    &irsa.service_account_name,
-                ),
-            );
-            role.depends_on.push(irsa.oidc_provider_id);
-        } else {
-            role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                remote_management_trust_policy(),
-            );
-        }
+        role.properties.insert(
+            "AssumeRolePolicyDocument".to_string(),
+            remote_management_trust_policy(),
+        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         let policy_documents = remote_management_policy_documents(ctx)?;
@@ -108,79 +95,6 @@ fn remote_management_trust_policy() -> CfExpression {
             ])]),
         ),
     ])
-}
-
-struct EksPullIrsaContext {
-    oidc_provider_id: String,
-    cluster_id: String,
-    namespace: String,
-    service_account_name: String,
-}
-
-fn eks_pull_irsa_context(ctx: &EmitContext<'_>) -> Option<EksPullIrsaContext> {
-    if ctx.stack_settings.deployment_model != DeploymentModel::Pull {
-        return None;
-    }
-
-    ctx.stack.resources().find_map(|(resource_id, entry)| {
-        let cluster = entry.config.downcast_ref::<KubernetesCluster>()?;
-        let prefix = ctx.name_for(resource_id)?;
-        Some(EksPullIrsaContext {
-            oidc_provider_id: format!("{prefix}OidcProvider"),
-            cluster_id: format!("{prefix}Cluster"),
-            namespace: cluster.namespace.clone(),
-            service_account_name: "${AWS::StackName}-manager-sa".to_string(),
-        })
-    })
-}
-
-fn irsa_trust_policy(
-    oidc_provider_id: &str,
-    cluster_id: &str,
-    namespace: &str,
-    service_account_name: &str,
-) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Sub",
-        CfExpression::list([
-            CfExpression::from(format!(
-                r#"{{
-  "Version": "2012-10-17",
-  "Statement": [{{
-    "Effect": "Allow",
-    "Principal": {{"Federated": "${{OidcProviderArn}}"}},
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {{
-      "StringEquals": {{
-        "${{OidcIssuerHostPath}}:aud": "sts.amazonaws.com",
-        "${{OidcIssuerHostPath}}:sub": "system:serviceaccount:{namespace}:{service_account_name}"
-      }}
-    }}
-  }}]
-}}"#
-            )),
-            CfExpression::object([
-                ("OidcProviderArn", CfExpression::ref_(oidc_provider_id)),
-                ("OidcIssuerHostPath", oidc_issuer_host_path(cluster_id)),
-            ]),
-        ]),
-    )])
-}
-
-fn oidc_issuer_host_path(cluster_id: &str) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Select",
-        CfExpression::list([
-            CfExpression::from(1u8),
-            CfExpression::object([(
-                "Fn::Split",
-                CfExpression::list([
-                    CfExpression::from("https://"),
-                    CfExpression::get_att(cluster_id, "OpenIdConnectIssuerUrl"),
-                ]),
-            )]),
-        ]),
-    )])
 }
 
 fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
