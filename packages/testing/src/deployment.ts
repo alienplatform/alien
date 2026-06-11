@@ -19,7 +19,8 @@ const execFileAsync = promisify(execFile)
 export class Deployment {
   readonly id: string
   readonly name: string
-  readonly url: string
+  /** Public URL of the app. Undefined for stacks with no URL-exposing resource (e.g. daemon-only). */
+  readonly url: string | undefined
   readonly platform: Platform
 
   /** Whether the deployment has been destroyed */

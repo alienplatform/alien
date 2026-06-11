@@ -8,7 +8,7 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, ComputeCluster, Container, DeploymentConfig, EnvironmentVariable,
+    ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig, EnvironmentVariable,
     ExposeProtocol, Platform, Stack, StackState, Worker,
 };
 
@@ -178,6 +178,7 @@ fn environment_variable_target_resource_ids(stack: &Stack) -> Vec<&str> {
         .filter_map(|(id, entry)| {
             if entry.config.downcast_ref::<Worker>().is_some()
                 || entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<Daemon>().is_some()
             {
                 Some(id.as_str())
             } else {

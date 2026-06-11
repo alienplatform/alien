@@ -3,11 +3,12 @@ use crate::error::{ErrorData, Result};
 use crate::get_current_dir;
 use crate::output::print_json;
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line};
+use alien_build::plan::{plan_runner_groups, stack_targets_native_host_binaries};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::events::AlienEvent;
 use alien_core::{BinaryTarget, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,14 +46,22 @@ struct PlatformBuildPlan {
 #[command(
     about = "Build the Alien application locally",
     long_about = "Build the Alien application locally, creating OCI tarballs without pushing to a registry. Use `alien release` to push images and create a release.",
+    args_conflicts_with_subcommands = true,
     after_help = "EXAMPLES:
     alien build --platform aws
     alien build --platforms aws,gcp
     alien build --platform aws --targets linux-arm64
     alien build --config ../my-app/alien.ts --output-dir ./build --platform aws
-    alien build --platform aws --json"
+    alien build --platform aws --json
+    alien build plan --json
+    alien build merge --input ./build-artifacts --output .alien"
 )]
 pub struct BuildArgs {
+    /// Subcommand: `plan` (compute native-runner groups) or `merge` (combine partial outputs).
+    /// When omitted, runs a normal build.
+    #[command(subcommand)]
+    pub command: Option<BuildSubcommand>,
+
     /// Path to alien.ts/js/json file or directory containing it
     #[arg(short = 'c', long)]
     pub config: Option<String>,
@@ -96,7 +105,52 @@ pub struct BuildArgs {
     pub json: bool,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum BuildSubcommand {
+    /// Compute the native-runner build groups for the stack's supported platforms
+    #[command(after_help = "EXAMPLES:
+    alien build plan
+    alien build plan --json")]
+    Plan(BuildPlanArgs),
+    /// Merge partial build outputs (one per native runner) into one `.alien` directory
+    #[command(after_help = "EXAMPLES:
+    alien build merge --input ./build-artifacts --output .alien")]
+    Merge(BuildMergeArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct BuildPlanArgs {
+    /// Path to alien.ts/js/json file or directory containing it
+    #[arg(short = 'c', long)]
+    pub config: Option<String>,
+
+    /// Emit structured JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct BuildMergeArgs {
+    /// Directory of downloaded partial outputs (each subdir holds `build/<platform>/`)
+    #[arg(long)]
+    pub input: String,
+
+    /// Output directory for the merged `.alien` build
+    #[arg(long)]
+    pub output: String,
+
+    /// Emit structured JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
 pub async fn build_command(args: BuildArgs) -> Result<()> {
+    match &args.command {
+        Some(BuildSubcommand::Plan(plan_args)) => return plan_command(plan_args).await,
+        Some(BuildSubcommand::Merge(merge_args)) => return merge_command(merge_args),
+        None => {}
+    }
+
     if args.platforms.is_empty() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "platforms".to_string(),
@@ -116,6 +170,72 @@ pub async fn build_command(args: BuildArgs) -> Result<()> {
         for output in &outputs {
             print_build_summary(output);
         }
+    }
+    Ok(())
+}
+
+/// `alien build plan` — derive the native-runner groups from the stack's supported platforms.
+async fn plan_command(args: &BuildPlanArgs) -> Result<()> {
+    let current_dir = get_current_dir()?;
+    let config_path = args
+        .config
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_dir.clone());
+
+    let stack = load_configuration(config_path)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load configuration".to_string(),
+        })?;
+
+    // None means the stack supports every deployable platform.
+    let supported: Vec<Platform> = match stack.supported_platforms() {
+        Some(platforms) => platforms.to_vec(),
+        None => Platform::DEPLOYABLE.to_vec(),
+    };
+    let groups = plan_runner_groups(&supported, stack_targets_native_host_binaries(&stack));
+
+    if args.json {
+        print_json(&groups)?;
+    } else {
+        println!(
+            "{}",
+            contextual_heading(
+                "Build plan",
+                stack.id(),
+                &[("groups", &groups.len().to_string())]
+            )
+        );
+        for group in &groups {
+            println!(
+                "  {} {} ({})",
+                accent(&group.name),
+                dim_label(&group.runner),
+                group.platforms.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `alien build merge` — combine partial native-runner outputs into one `.alien` directory.
+fn merge_command(args: &BuildMergeArgs) -> Result<()> {
+    let input = PathBuf::from(&args.input);
+    let output = PathBuf::from(&args.output);
+    let platforms =
+        alien_build::merge::merge_build_outputs(&input, &output).context(ErrorData::BuildFailed)?;
+
+    if args.json {
+        print_json(&serde_json::json!({
+            "success": true,
+            "output": args.output,
+            "platforms": platforms,
+        }))?;
+    } else {
+        println!("{}", success_line("Merge complete."));
+        println!("{} {}", dim_label("Output"), accent(&args.output));
+        println!("{} {}", dim_label("Platforms"), platforms.join(", "));
     }
     Ok(())
 }

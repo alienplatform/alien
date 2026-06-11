@@ -1358,10 +1358,7 @@ impl LocalWorkerManager {
                     }));
                 }
 
-                // For now, just use the first tarball
-                // TODO: In the future, we could detect the current platform and select the matching tarball
-                // (e.g., darwin-aarch64.oci.tar vs linux-x86_64.oci.tar)
-                let selected_tarball = &tarball_files[0];
+                let selected_tarball = select_host_tarball(&tarball_files)?;
 
                 debug!(
                     worker_id = %worker_id,
@@ -1568,4 +1565,102 @@ fn allocate_port_with_preference(saved_port: Option<u16>, resource_id: &str) -> 
     }
 
     Ok(port)
+}
+
+/// Pick the tarball to extract from an artifact directory. A native process can only exec
+/// the host's binary, so when the directory holds several per-target tarballs the host's
+/// must be chosen — another OS's binary would fail at spawn with an opaque exec error.
+/// A single tarball is a single-target build output and is used as-is.
+fn select_host_tarball(tarball_files: &[PathBuf]) -> Result<&PathBuf> {
+    if tarball_files.len() == 1 {
+        return Ok(&tarball_files[0]);
+    }
+    let host = alien_core::BinaryTarget::current_os();
+    let host_tarball = format!("{}.oci.tar", host.runtime_platform_id());
+    tarball_files
+        .iter()
+        .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(host_tarball.as_str()))
+        .ok_or_else(|| {
+            let available: Vec<String> = tarball_files
+                .iter()
+                .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+                .map(str::to_string)
+                .collect();
+            AlienError::new(ErrorData::Other {
+                message: format!(
+                    "No tarball for host target '{}' in artifact directory (found: {}). \
+                     Rebuild with this host among the targets.",
+                    host.runtime_platform_id(),
+                    available.join(", "),
+                ),
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|name| PathBuf::from(format!("/artifacts/{name}")))
+            .collect()
+    }
+
+    #[test]
+    fn single_tarball_is_used_as_is_regardless_of_target() {
+        let files = paths(&["linux-x64.oci.tar"]);
+        let selected = select_host_tarball(&files).expect("single tarball should be selected");
+        assert_eq!(selected, &files[0]);
+    }
+
+    #[test]
+    fn multiple_tarballs_select_the_host_target() {
+        let host = alien_core::BinaryTarget::current_os();
+        let host_name = format!("{}.oci.tar", host.runtime_platform_id());
+        let files = paths(&[
+            "darwin-aarch64.oci.tar",
+            "linux-aarch64.oci.tar",
+            "linux-x64.oci.tar",
+            "windows-x64.oci.tar",
+        ]);
+        let selected = select_host_tarball(&files).expect("host tarball should be present");
+        assert_eq!(
+            selected.file_name().and_then(|name| name.to_str()),
+            Some(host_name.as_str())
+        );
+    }
+
+    #[test]
+    fn multiple_tarballs_without_host_target_fail_fast() {
+        // Exclude the host's own tarball so no entry matches, on any host OS.
+        let host = alien_core::BinaryTarget::current_os();
+        let all = [
+            "darwin-aarch64.oci.tar",
+            "linux-aarch64.oci.tar",
+            "linux-x64.oci.tar",
+            "windows-x64.oci.tar",
+        ];
+        let host_name = format!("{}.oci.tar", host.runtime_platform_id());
+        let without_host: Vec<&str> = all
+            .iter()
+            .copied()
+            .filter(|name| *name != host_name)
+            .collect();
+        let files = paths(&without_host);
+
+        let error = match select_host_tarball(&files) {
+            Err(error) => error,
+            Ok(path) => panic!("expected failure, selected {}", path.display()),
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains(host.runtime_platform_id()),
+            "error names the host target: {message}"
+        );
+        for name in &without_host {
+            assert!(message.contains(name), "error lists {name}: {message}");
+        }
+    }
 }

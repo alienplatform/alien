@@ -27,9 +27,9 @@ use crate::commands::{
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
     prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
-    vault_task, whoami_task, write_dev_status, BuildArgs, CliEnvVar, CommandsArgs, DeployArgs,
-    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs,
-    RenderArgs, WhoamiArgs,
+    vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
+    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -82,7 +82,11 @@ pub struct Cli {
 impl Cli {
     pub fn wants_json_output(&self) -> bool {
         match &self.command {
-            Some(Commands::Build(args)) => args.json,
+            Some(Commands::Build(args)) => match &args.command {
+                Some(BuildSubcommand::Plan(plan)) => plan.json,
+                Some(BuildSubcommand::Merge(merge)) => merge.json,
+                None => args.json,
+            },
             Some(Commands::Release(args)) => args.json,
             Some(Commands::Render(args)) => args.json,
             Some(Commands::Onboard(args)) => args.json,

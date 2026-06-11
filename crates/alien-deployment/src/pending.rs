@@ -78,6 +78,7 @@ pub async fn handle_pending(
         crate::helpers::inject_monitoring_environment_variables(
             &mut mutated_stack_with_env,
             monitoring,
+            current.platform,
         )?;
     }
 
