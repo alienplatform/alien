@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@alienplatform/sdk": "^1.0.0",
-    "@alienplatform/core": "link:../../../../packages/core",
+    "@alienplatform/core": "^1.7.0",
     "hono": "^4.0.0",
     "zod": "^3.24.1"
   },
