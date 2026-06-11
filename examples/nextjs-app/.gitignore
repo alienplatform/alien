@@ -1,0 +1,14 @@
+# Node
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
+# Next.js
+.next/
+next-env.d.ts
+
+# Alien
+.alien/
+
+# OS
+.DS_Store

@@ -1,0 +1,3 @@
+name = "nextjs-app"
+description = "Deploy a Next.js app as a single container in the customer's cloud."
+language = "TypeScript"

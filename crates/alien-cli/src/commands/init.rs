@@ -58,6 +58,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "webhook-api-ts",
         "Receive webhooks and expose an API inside the customer's cloud.",
     ),
+    (
+        "nextjs-app",
+        "Deploy a Next.js app as a single container in the customer's cloud.",
+    ),
 ];
 
 fn fallback_templates() -> Vec<TemplateInfo> {

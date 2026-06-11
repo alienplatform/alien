@@ -10,6 +10,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [data-connector-ts](./data-connector-ts) | Query private databases behind the customer's firewall. | TypeScript |
 | [event-pipeline-ts](./event-pipeline-ts) | Process events from queues, storage changes, and cron schedules. | TypeScript |
 | [webhook-api-ts](./webhook-api-ts) | Receive webhooks and expose an API inside the customer's cloud. | TypeScript |
+| [nextjs-app](./nextjs-app) | Deploy a Next.js app as a single container in the customer's cloud. | TypeScript |
 
 ## Getting started
 
