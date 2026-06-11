@@ -2,7 +2,7 @@ use crate::auth::{load_workspace, save_workspace};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::InteractionMode;
-use crate::output::{can_prompt, print_json, prompt_select};
+use crate::output::{print_json, prompt_select};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 use alien_error::{AlienError, Context};
 use alien_platform_api::SdkResultExt;
@@ -167,9 +167,11 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
         return Ok(workspaces[0].clone());
     }
 
-    InteractionMode::new(json_mode, can_prompt()).require_prompt(
-        "Workspace selection requires a real terminal. Pass `--workspace <name>` or run `alien workspaces set <name>` first.",
-    )?;
+    if InteractionMode::current(json_mode).is_machine() {
+        return Err(AlienError::new(ErrorData::WorkspaceSelectionRequired {
+            workspaces,
+        }));
+    }
 
     prompt_select("Select a workspace:", &workspaces)
 }

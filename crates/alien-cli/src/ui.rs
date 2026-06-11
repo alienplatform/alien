@@ -1536,7 +1536,7 @@ fn build_resource_noun(
 }
 
 #[cfg(test)]
-mod tests {
+mod command_event_tests {
     use super::*;
 
     fn empty_command_state() -> CommandEventState {
