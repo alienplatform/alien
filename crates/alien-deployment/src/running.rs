@@ -54,7 +54,11 @@ pub async fn handle_running(
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
-        crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
+        crate::helpers::inject_monitoring_environment_variables(
+            &mut target_stack,
+            monitoring,
+            current.platform,
+        )?;
     }
 
     // TODO: Add mechanism to limit executor to only perform read-only health checks

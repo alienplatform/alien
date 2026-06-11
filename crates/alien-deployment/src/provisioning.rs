@@ -68,7 +68,11 @@ pub async fn handle_provisioning(
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
-        crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
+        crate::helpers::inject_monitoring_environment_variables(
+            &mut target_stack,
+            monitoring,
+            current.platform,
+        )?;
     }
 
     // Sync secrets to vault before deploying workload resources.

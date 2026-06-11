@@ -17,6 +17,8 @@ use tracing::{debug, info};
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
 const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
+const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
@@ -186,7 +188,23 @@ struct AlienRuntimeSecretsConfig {
     hash: String,
 }
 
-/// Inject OTLP monitoring environment variables into worker runtimes.
+/// Whether containers and daemons get OTLP env vars on this platform.
+///
+/// On managed cloud platforms, containers and daemons run inside the hosted
+/// container runtime, which already ships their telemetry — only workers need
+/// the vars there. Self-hosted platforms have no such runtime, so every
+/// compute resource gets them. Exhaustive so a new platform must pick a side.
+fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
+    match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure => false,
+        Platform::Kubernetes | Platform::Local | Platform::Test => true,
+    }
+}
+
+/// Inject OTLP monitoring environment variables into compute resources.
+///
+/// Workers are injected on every platform; containers and daemons only where
+/// `otlp_injection_covers_containers_and_daemons` says so.
 ///
 /// When `DeploymentConfig.monitoring` is set, this injects:
 /// - `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` — the OTLP logs endpoint URL
@@ -196,16 +214,30 @@ struct AlienRuntimeSecretsConfig {
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
 /// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
 ///   such as `alien.deployment_id`, merged with any user-provided value.
-/// - `ALIEN_RUNTIME_SECRETS`          — points alien-runtime at runtime-owned
-///   vault secrets. These are not forwarded to the child application process.
+/// - `ALIEN_RUNTIME_SECRETS`          — workers and daemons only; points
+///   alien-runtime at runtime-owned vault secrets. These are not forwarded to
+///   the child application process.
+/// - `OTEL_EXPORTER_OTLP_HEADERS` (and `..._METRICS_HEADERS`) — containers
+///   only; a container has no alien-runtime wrapper to resolve the vault
+///   pointer, so its auth header goes in as the standard plain OTEL env var.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
+    platform: Platform,
 ) -> Result<()> {
-    info!("Injecting OTLP monitoring env vars into worker and daemon runtimes");
+    let covers_containers_and_daemons = otlp_injection_covers_containers_and_daemons(platform);
+    info!(
+        "Injecting OTLP monitoring env vars into {} runtimes",
+        if covers_containers_and_daemons {
+            "worker, container, and daemon"
+        } else {
+            "worker"
+        }
+    );
 
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
+        let is_container = resource_type == alien_core::Container::RESOURCE_TYPE;
 
         let environment = if resource_type == alien_core::Worker::RESOURCE_TYPE {
             Some(
@@ -222,7 +254,9 @@ pub fn inject_monitoring_environment_variables(
                     })?
                     .environment,
             )
-        } else if resource_type == alien_core::Daemon::RESOURCE_TYPE {
+        } else if covers_containers_and_daemons
+            && resource_type == alien_core::Daemon::RESOURCE_TYPE
+        {
             Some(
                 &mut resource_entry
                     .config
@@ -231,6 +265,21 @@ pub fn inject_monitoring_environment_variables(
                         AlienError::new(ErrorData::InternalError {
                             message: format!(
                                 "Failed to downcast resource '{}' to Daemon",
+                                resource_name
+                            ),
+                        })
+                    })?
+                    .environment,
+            )
+        } else if covers_containers_and_daemons && is_container {
+            Some(
+                &mut resource_entry
+                    .config
+                    .downcast_mut::<alien_core::Container>()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::InternalError {
+                            message: format!(
+                                "Failed to downcast resource '{}' to Container",
                                 resource_name
                             ),
                         })
@@ -269,20 +318,37 @@ pub fn inject_monitoring_environment_variables(
                     metrics_endpoint.clone(),
                 );
             }
-            let runtime_secrets = AlienRuntimeSecretsConfig {
-                otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
-                otlp_metrics_auth_header: monitoring
-                    .metrics_endpoint
-                    .as_ref()
-                    .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
-                hash: runtime_monitoring_secrets_hash(monitoring),
-            };
-            let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
-                .into_alien_error()
-                .context(ErrorData::InternalError {
-                message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
-            })?;
-            env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
+            if is_container {
+                env.insert(
+                    OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+                    monitoring.logs_auth_header.clone(),
+                );
+                if monitoring.metrics_endpoint.is_some() {
+                    let metrics_header = monitoring
+                        .metrics_auth_header
+                        .as_ref()
+                        .unwrap_or(&monitoring.logs_auth_header);
+                    env.insert(
+                        OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
+                        metrics_header.clone(),
+                    );
+                }
+            } else {
+                let runtime_secrets = AlienRuntimeSecretsConfig {
+                    otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
+                    otlp_metrics_auth_header: monitoring
+                        .metrics_endpoint
+                        .as_ref()
+                        .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
+                    hash: runtime_monitoring_secrets_hash(monitoring),
+                };
+                let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
+                    .into_alien_error()
+                    .context(ErrorData::InternalError {
+                        message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
+                    })?;
+                env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
+            }
 
             debug!(
                 "Injected runtime OTLP monitoring vars into '{}'",
@@ -336,7 +402,10 @@ fn inject_into_compute_resource(
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(resource_name, "worker", &mut worker.environment, snapshot)
-    } else if let Some(container) = resource_entry.config.downcast_mut::<alien_core::Container>() {
+    } else if let Some(container) = resource_entry
+        .config
+        .downcast_mut::<alien_core::Container>()
+    {
         inject_into_environment(
             resource_name,
             "container",
@@ -1005,7 +1074,7 @@ mod tests {
             ]),
         };
 
-        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -1046,7 +1115,7 @@ mod tests {
             )]),
         };
 
-        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -1060,5 +1129,163 @@ mod tests {
             func.environment.get(OTEL_RESOURCE_ATTRIBUTES).unwrap(),
             "alien.deployment_id=dep_test,custom=value"
         );
+    }
+
+    fn make_compute_stack() -> Stack {
+        let mut stack = make_single_function_stack("worker");
+
+        let container = alien_core::Container::new("web".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        stack.resources.insert(
+            "web".to_string(),
+            ResourceEntry {
+                config: Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let daemon = alien_core::Daemon::new("agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        stack.resources.insert(
+            "agent".to_string(),
+            ResourceEntry {
+                config: Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        stack
+    }
+
+    fn make_monitoring_with_metrics() -> OtlpConfig {
+        OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer logs-token".to_string(),
+            metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::new(),
+        }
+    }
+
+    fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {
+        let entry = &stack.resources.get(id).expect("resource exists").config;
+        if let Some(worker) = entry.downcast_ref::<Worker>() {
+            &worker.environment
+        } else if let Some(container) = entry.downcast_ref::<alien_core::Container>() {
+            &container.environment
+        } else if let Some(daemon) = entry.downcast_ref::<alien_core::Daemon>() {
+            &daemon.environment
+        } else {
+            panic!("resource '{id}' is not a compute resource");
+        }
+    }
+
+    #[test]
+    fn monitoring_cloud_platforms_inject_worker_only() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut stack = make_compute_stack();
+            let monitoring = make_monitoring_with_metrics();
+
+            inject_monitoring_environment_variables(&mut stack, &monitoring, platform).unwrap();
+
+            let worker_env = resource_env(&stack, "worker");
+            assert_eq!(
+                worker_env.get(OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).unwrap(),
+                "https://manager.test/v1/logs",
+                "{platform:?}: worker gets the logs endpoint"
+            );
+            assert!(
+                worker_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                "{platform:?}: worker gets the runtime-secrets pointer"
+            );
+
+            for id in ["web", "agent"] {
+                let env = resource_env(&stack, id);
+                assert!(
+                    env.is_empty(),
+                    "{platform:?}: '{id}' must get no OTLP vars (got {:?})",
+                    env.keys().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn monitoring_self_hosted_platforms_inject_all_compute() {
+        for platform in [Platform::Kubernetes, Platform::Local, Platform::Test] {
+            let mut stack = make_compute_stack();
+            let monitoring = make_monitoring_with_metrics();
+
+            inject_monitoring_environment_variables(&mut stack, &monitoring, platform).unwrap();
+
+            for id in ["worker", "web", "agent"] {
+                let env = resource_env(&stack, id);
+                assert_eq!(
+                    env.get(OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).unwrap(),
+                    "https://manager.test/v1/logs",
+                    "{platform:?}: '{id}' gets the logs endpoint"
+                );
+                assert_eq!(
+                    env.get(OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).unwrap(),
+                    "https://manager.test/v1/metrics",
+                    "{platform:?}: '{id}' gets the metrics endpoint"
+                );
+                assert_eq!(
+                    env.get(OTEL_SERVICE_NAME).unwrap(),
+                    id,
+                    "{platform:?}: '{id}' gets its name as service name"
+                );
+            }
+
+            for id in ["worker", "agent"] {
+                let env = resource_env(&stack, id);
+                assert!(
+                    env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                    "{platform:?}: '{id}' gets the runtime-secrets pointer"
+                );
+                assert!(
+                    !env.contains_key(OTEL_EXPORTER_OTLP_HEADERS),
+                    "{platform:?}: '{id}' must not carry a plain auth header"
+                );
+            }
+
+            let container_env = resource_env(&stack, "web");
+            assert_eq!(
+                container_env.get(OTEL_EXPORTER_OTLP_HEADERS).unwrap(),
+                "authorization=Bearer logs-token",
+                "{platform:?}: container gets the plain logs auth header"
+            );
+            assert_eq!(
+                container_env
+                    .get(OTEL_EXPORTER_OTLP_METRICS_HEADERS)
+                    .unwrap(),
+                "authorization=Bearer logs-token",
+                "{platform:?}: container metrics header falls back to the logs header"
+            );
+            assert!(
+                !container_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                "{platform:?}: container must not get the runtime-secrets pointer"
+            );
+        }
     }
 }
