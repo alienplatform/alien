@@ -32,9 +32,12 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
         ReleasesCmd::Ls { project } => {
             // Releases are a core feature, so they go through the manager, not
             // the platform API directly.
-            let manager =
-                crate::commands::deployments::resolve_manager_client(&ctx, project.as_deref())
-                    .await?;
+            let manager = crate::commands::deployments::resolve_manager_client(
+                &ctx,
+                project.as_deref(),
+                true,
+            )
+            .await?;
             list_releases_task(&manager).await
         }
     }

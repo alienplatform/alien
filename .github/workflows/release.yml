@@ -211,7 +211,7 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Publish npm packages
         env:
@@ -245,6 +245,7 @@ jobs:
         working-directory: client-sdks/platform/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           npm install
           npm run build
