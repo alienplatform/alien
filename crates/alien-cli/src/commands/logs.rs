@@ -23,6 +23,7 @@ use crate::ui::supports_ansi;
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
 const SEEN_KEYS_LIMIT: usize = 20_000;
+const DEFAULT_LOG_SEARCH_FIELDS: &[&str] = &["body.message"];
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -669,6 +670,12 @@ async fn fetch_logs(
             end_time,
             max_hits: Some(limit),
             sort_by: Some("-timestamp_nanos".to_string()),
+            search_fields: Some(
+                DEFAULT_LOG_SEARCH_FIELDS
+                    .iter()
+                    .map(|field| field.to_string())
+                    .collect(),
+            ),
             ..Default::default()
         })
         .await
