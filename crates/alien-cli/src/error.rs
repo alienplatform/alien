@@ -177,6 +177,20 @@ pub enum ErrorData {
         field: String,
     },
 
+    /// No usable login session and no terminal to start an interactive one.
+    #[error(
+        code = "LOGIN_REQUIRED",
+        message = "Not logged in to the Alien platform: {reason}",
+        hint = "Run `alien login` from a terminal, or set the ALIEN_API_KEY environment variable.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    LoginRequired {
+        /// Why no usable session exists
+        reason: String,
+    },
+
     /// Several workspaces exist but one can't be chosen without a terminal.
     #[error(
         code = "WORKSPACE_SELECTION_REQUIRED",
