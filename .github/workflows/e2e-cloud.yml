@@ -192,7 +192,7 @@ jobs:
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "build_base_image=true" >> $GITHUB_OUTPUT
             echo "build_agent_image=true" >> $GITHUB_OUTPUT
-            echo "skip_cleanup=false" >> $GITHUB_OUTPUT
+            echo "skip_cleanup=true" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
             echo "network_mode=none" >> $GITHUB_OUTPUT
             exit 0
@@ -1314,7 +1314,10 @@ jobs:
 
   cleanup:
     needs: [compute-matrix, setup, push-test, cloudformation-test, terraform-test, local-test]
-    if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
+    if: |
+      always() &&
+      needs.compute-matrix.outputs.skip_cleanup != 'true' &&
+      needs.setup.result == 'success'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
