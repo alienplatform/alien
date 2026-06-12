@@ -404,7 +404,7 @@ async fn release_task_core(
         // Local platform pushes to a cloud registry — the alien-agent pulls from it.
         let pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
-                rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir, platform_str)?;
+                rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
 
             // Load push cache — maps content-hashed dir names to previously pushed URIs
@@ -1147,18 +1147,15 @@ fn parse_kubernetes_base_platform(
 /// `alien build` writes local artifact directories into stack.json. CI may build
 /// those artifacts in one checkout and copy `.alien/build` into another image,
 /// so a prebuilt release must resolve stale `.alien/build/{platform}/{artifact}`
-/// paths before pushing.
-fn rebase_prebuilt_stack_image_paths(
-    stack: &mut Stack,
-    output_dir: &Path,
-    platform: &str,
-) -> Result<()> {
+/// paths before pushing. The artifact path may point at a different platform
+/// than the release currently being pushed when platforms share a built image.
+fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => {
                     if let Some(rebased) =
-                        rebase_prebuilt_image_path("worker", &func.id, image, output_dir, platform)?
+                        rebase_prebuilt_image_path("worker", &func.id, image, output_dir)?
                     {
                         let mut updated = func.clone();
                         updated.code = WorkerCode::Image { image: rebased };
@@ -1172,13 +1169,9 @@ fn rebase_prebuilt_stack_image_paths(
         } else if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
             match &container.code {
                 ContainerCode::Image { image } => {
-                    if let Some(rebased) = rebase_prebuilt_image_path(
-                        "container",
-                        &container.id,
-                        image,
-                        output_dir,
-                        platform,
-                    )? {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("container", &container.id, image, output_dir)?
+                    {
                         let mut updated = container.clone();
                         updated.code = ContainerCode::Image { image: rebased };
                         resource_entry.config = alien_core::Resource::new(updated);
@@ -1191,9 +1184,9 @@ fn rebase_prebuilt_stack_image_paths(
         } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
             match &daemon.code {
                 DaemonCode::Image { image } => {
-                    if let Some(rebased) = rebase_prebuilt_image_path(
-                        "daemon", &daemon.id, image, output_dir, platform,
-                    )? {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("daemon", &daemon.id, image, output_dir)?
+                    {
                         let mut updated = daemon.clone();
                         updated.code = DaemonCode::Image { image: rebased };
                         resource_entry.config = alien_core::Resource::new(updated);
@@ -1213,15 +1206,18 @@ fn rebase_prebuilt_image_path(
     resource_id: &str,
     image: &str,
     output_dir: &Path,
-    platform: &str,
 ) -> Result<Option<String>> {
     let image_path = PathBuf::from(image);
     if image_path.exists() {
         return Ok(None);
     }
 
-    if let Some(artifact_dir) = artifact_dir_from_build_path(&image_path, platform) {
-        let rebased_path = output_dir.join("build").join(platform).join(&artifact_dir);
+    if let Some((artifact_platform, artifact_dir)) = artifact_location_from_build_path(&image_path)
+    {
+        let rebased_path = output_dir
+            .join("build")
+            .join(&artifact_platform)
+            .join(&artifact_dir);
         if rebased_path.exists() && rebased_path.is_dir() {
             info!(
                 "Rebased prebuilt {} '{}' image artifact from '{}' to '{}'",
@@ -1260,15 +1256,15 @@ fn rebase_prebuilt_image_path(
     Ok(None)
 }
 
-fn artifact_dir_from_build_path(path: &Path, platform: &str) -> Option<String> {
+fn artifact_location_from_build_path(path: &Path) -> Option<(String, String)> {
     let components = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
         .collect::<Vec<_>>();
 
     components.windows(4).find_map(|window| {
-        if window[0] == ".alien" && window[1] == "build" && window[2] == platform {
-            Some(window[3].to_string())
+        if window[0] == ".alien" && window[1] == "build" {
+            Some((window[2].to_string(), window[3].to_string()))
         } else {
             None
         }
@@ -1597,8 +1593,7 @@ mod tests {
         let artifact_dir = output_dir.join("build").join("gcp").join("writer-12345678");
         std::fs::create_dir_all(&artifact_dir).unwrap();
 
-        let original_image =
-            "/home/runner/work/platform/platform/alien/examples/byoc-database/.alien/build/gcp/writer-12345678";
+        let original_image = "/tmp/original-checkout/.alien/build/gcp/writer-12345678";
         let mut stack = Stack::new("demo".to_string())
             .add(
                 test_container("writer", original_image.to_string()),
@@ -1606,7 +1601,32 @@ mod tests {
             )
             .build();
 
-        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir, "gcp").unwrap();
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(
+            container_image(container),
+            artifact_dir.to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_rewrites_cross_platform_artifact_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let artifact_dir = output_dir.join("build").join("aws").join("web-12345678");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+
+        let original_image = "/tmp/original-checkout/.alien/build/aws/web-12345678";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("web", original_image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
 
         let (_, entry) = stack.resources().next().unwrap();
         let container = entry.config.downcast_ref::<Container>().unwrap();
@@ -1628,7 +1648,7 @@ mod tests {
             )
             .build();
 
-        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir, "gcp").unwrap();
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
 
         let (_, entry) = stack.resources().next().unwrap();
         let container = entry.config.downcast_ref::<Container>().unwrap();

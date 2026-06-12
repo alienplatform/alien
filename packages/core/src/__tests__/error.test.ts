@@ -584,7 +584,7 @@ describe("External API Sanitization", async () => {
 
     expect(external.code).toBe("AUTH_FAILED")
     expect((external.source as AlienErrorOptions)?.code).toBe("DATABASE_CONNECTION_FAILED")
-    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)).toEqual({
+    expect((external.source as AlienErrorOptions)?.source as AlienErrorOptions).toEqual({
       code: "GENERIC_ERROR",
       message: "Internal server error",
       retryable: false,

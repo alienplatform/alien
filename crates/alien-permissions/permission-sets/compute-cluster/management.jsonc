@@ -65,9 +65,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -76,9 +74,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -98,9 +94,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -110,9 +104,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

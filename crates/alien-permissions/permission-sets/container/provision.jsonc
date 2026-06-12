@@ -248,10 +248,7 @@
       {
         "label": "Manage setup compute security group ingress",
         "grant": {
-          "actions": [
-            "ec2:AuthorizeSecurityGroupIngress",
-            "ec2:RevokeSecurityGroupIngress"
-          ]
+          "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"]
         },
         "binding": {
           "stack": {
