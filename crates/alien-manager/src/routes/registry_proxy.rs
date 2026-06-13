@@ -26,8 +26,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
 use serde::Serialize;
+use sha2::Sha256;
 use tracing::{debug, warn};
+use url::Url;
 
 use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
@@ -37,6 +41,16 @@ use alien_core::Platform;
 
 use super::AppState;
 use crate::auth::{Scope, Subject};
+
+type HmacSha256 = Hmac<Sha256>;
+
+const UPLOAD_SESSION_VERSION: &str = "1";
+const UPLOAD_SESSION_TTL_SECONDS: i64 = 3600;
+const UPLOAD_SESSION_VERSION_PARAM: &str = "_alien_v";
+const UPLOAD_SESSION_REPO_PARAM: &str = "_alien_repo";
+const UPLOAD_SESSION_EXPIRES_PARAM: &str = "_alien_exp";
+const UPLOAD_SESSION_SIGNATURE_PARAM: &str = "_alien_sig";
+const UPLOAD_SESSION_SIGNING_CONTEXT: &[u8] = b"registry-upload-session-signing";
 
 // ---------------------------------------------------------------------------
 // Registry routing table
@@ -397,7 +411,15 @@ async fn proxy_push(
 
     let qs = query_string(&query);
     let oci_path = format!("{}{}", path.trim_start_matches('/'), qs);
-    forward_to_upstream(&state, &method, &oci_path, &headers, Some(body)).await
+    forward_to_upstream(
+        &state,
+        &method,
+        &oci_path,
+        &headers,
+        Some(body),
+        Some(&repo_name),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -422,18 +444,33 @@ async fn proxy_upload_session(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
-    // Upload-session URLs are signed by the upstream registry on a previous
-    // push request; treat the path itself as the repo identifier for authz.
-    let repo_name = original_uri.path().to_string();
+    let repo_name = match verify_upload_session_auth(
+        &state.config.response_signing_key,
+        original_uri.path(),
+        &query,
+    ) {
+        Ok(repo_name) => repo_name,
+        Err(e) => return e,
+    };
+
     if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
         return e;
     }
 
     // Forward the full path (including /artifacts-uploads/) to upstream.
-    let qs = query_string(&query);
+    let upstream_query = strip_upload_session_auth_params(&query);
+    let qs = query_string(&upstream_query);
     let raw_path = original_uri.path();
     let full_path = format!("{}{}", raw_path, qs);
-    forward_to_upstream_raw(&state, &method, &full_path, &headers, Some(body)).await
+    forward_to_upstream_raw(
+        &state,
+        &method,
+        &full_path,
+        &headers,
+        Some(body),
+        Some(&repo_name),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +495,7 @@ async fn proxy_pull(
         return e;
     }
 
-    forward_to_upstream(&state, &method, oci_path_str, &headers, None).await
+    forward_to_upstream(&state, &method, oci_path_str, &headers, None, None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +510,7 @@ async fn forward_to_upstream(
     oci_path: &str,
     original_headers: &HeaderMap,
     body: Option<Body>,
+    upload_session_repo: Option<&str>,
 ) -> Response {
     let repo_name = extract_repo_name(oci_path);
 
@@ -548,6 +586,7 @@ async fn forward_to_upstream(
         &creds,
         original_headers,
         body,
+        upload_session_repo,
     )
     .await
 }
@@ -559,6 +598,7 @@ async fn forward_to_upstream_raw(
     raw_path: &str,
     original_headers: &HeaderMap,
     body: Option<Body>,
+    upload_session_repo: Option<&str>,
 ) -> Response {
     // GAR upload session paths have the format:
     // /artifacts-uploads/namespaces/{project}/repositories/{repo}/uploads/{id}
@@ -630,6 +670,7 @@ async fn forward_to_upstream_raw(
         &creds,
         original_headers,
         body,
+        upload_session_repo,
     )
     .await
 }
@@ -644,6 +685,7 @@ async fn forward_request(
     creds: &ArtifactRegistryCredentials,
     original_headers: &HeaderMap,
     body: Option<Body>,
+    upload_session_repo: Option<&str>,
 ) -> Response {
     debug!(%method, %upstream_url, "Forwarding to upstream");
 
@@ -714,7 +756,14 @@ async fn forward_request(
                 if location.starts_with('/') {
                     // Relative URL (e.g., GAR's /artifacts-uploads/...).
                     // Rewrite to go through the proxy so credentials are injected.
-                    let proxied = format!("{}{}", proxy_host, location);
+                    let proxied = match rewrite_location_with_upload_session_auth(
+                        &format!("{}{}", proxy_host, location),
+                        upload_session_repo,
+                        &state.config.response_signing_key,
+                    ) {
+                        Ok(url) => url,
+                        Err(e) => return e,
+                    };
                     if let Ok(v) = proxied.parse() {
                         response.headers_mut().insert(key, v);
                         continue;
@@ -722,6 +771,14 @@ async fn forward_request(
                 } else if location.contains(upstream_host) {
                     // Absolute upstream URL — rewrite host to proxy.
                     let rewritten = location.replace(upstream_host, proxy_host);
+                    let rewritten = match rewrite_location_with_upload_session_auth(
+                        &rewritten,
+                        upload_session_repo,
+                        &state.config.response_signing_key,
+                    ) {
+                        Ok(url) => url,
+                        Err(e) => return e,
+                    };
                     if let Ok(v) = rewritten.parse() {
                         response.headers_mut().insert(key, v);
                         continue;
@@ -739,6 +796,165 @@ async fn forward_request(
     }
 
     response
+}
+
+// ---------------------------------------------------------------------------
+// GAR upload session auth
+// ---------------------------------------------------------------------------
+
+fn rewrite_location_with_upload_session_auth(
+    location: &str,
+    upload_session_repo: Option<&str>,
+    signing_key: &[u8],
+) -> Result<String, Response> {
+    let mut url = match Url::parse(location) {
+        Ok(url) => url,
+        Err(_) => return Ok(location.to_string()),
+    };
+
+    if !url.path().starts_with("/artifacts-uploads/") {
+        return Ok(location.to_string());
+    }
+
+    let repo_name = upload_session_repo.ok_or_else(|| {
+        oci_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Registry upload session authorization context is missing",
+        )
+    })?;
+
+    if signing_key.is_empty() {
+        return Err(oci_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Registry upload session signing key is not configured",
+        ));
+    }
+
+    let expires_at = chrono::Utc::now().timestamp() + UPLOAD_SESSION_TTL_SECONDS;
+    let signature = sign_upload_session(signing_key, url.path(), repo_name, expires_at);
+
+    url.query_pairs_mut()
+        .append_pair(UPLOAD_SESSION_VERSION_PARAM, UPLOAD_SESSION_VERSION)
+        .append_pair(UPLOAD_SESSION_REPO_PARAM, repo_name)
+        .append_pair(UPLOAD_SESSION_EXPIRES_PARAM, &expires_at.to_string())
+        .append_pair(UPLOAD_SESSION_SIGNATURE_PARAM, &signature);
+
+    Ok(url.to_string())
+}
+
+fn verify_upload_session_auth(
+    signing_key: &[u8],
+    upload_path: &str,
+    query: &HashMap<String, String>,
+) -> Result<String, Response> {
+    if signing_key.is_empty() {
+        return Err(oci_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Registry upload session signing key is not configured",
+        ));
+    }
+
+    let Some(version) = query.get(UPLOAD_SESSION_VERSION_PARAM) else {
+        return Err(invalid_upload_session_auth());
+    };
+    if version != UPLOAD_SESSION_VERSION {
+        return Err(invalid_upload_session_auth());
+    }
+
+    let repo_name = query
+        .get(UPLOAD_SESSION_REPO_PARAM)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(invalid_upload_session_auth)?;
+    let expires_at = query
+        .get(UPLOAD_SESSION_EXPIRES_PARAM)
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(invalid_upload_session_auth)?;
+    let signature = query
+        .get(UPLOAD_SESSION_SIGNATURE_PARAM)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(invalid_upload_session_auth)?;
+
+    if expires_at < chrono::Utc::now().timestamp() {
+        return Err(invalid_upload_session_auth());
+    }
+
+    if !verify_upload_session_signature(signing_key, upload_path, repo_name, expires_at, signature)
+    {
+        return Err(invalid_upload_session_auth());
+    }
+
+    Ok(repo_name.clone())
+}
+
+fn invalid_upload_session_auth() -> Response {
+    oci_error(
+        StatusCode::FORBIDDEN,
+        "DENIED",
+        "Invalid registry upload session authorization.",
+    )
+}
+
+fn strip_upload_session_auth_params(query: &HashMap<String, String>) -> HashMap<String, String> {
+    query
+        .iter()
+        .filter(|(key, _)| !is_upload_session_auth_param(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn is_upload_session_auth_param(key: &str) -> bool {
+    matches!(
+        key,
+        UPLOAD_SESSION_VERSION_PARAM
+            | UPLOAD_SESSION_REPO_PARAM
+            | UPLOAD_SESSION_EXPIRES_PARAM
+            | UPLOAD_SESSION_SIGNATURE_PARAM
+    )
+}
+
+fn sign_upload_session(
+    signing_key: &[u8],
+    upload_path: &str,
+    repo_name: &str,
+    expires_at: i64,
+) -> String {
+    let upload_signing_key = derive_upload_session_signing_key(signing_key);
+    let mut mac = HmacSha256::new_from_slice(&upload_signing_key).expect("HMAC accepts any key");
+    mac.update(upload_session_payload(upload_path, repo_name, expires_at).as_bytes());
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+fn verify_upload_session_signature(
+    signing_key: &[u8],
+    upload_path: &str,
+    repo_name: &str,
+    expires_at: i64,
+    signature: &str,
+) -> bool {
+    let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
+        return false;
+    };
+
+    let upload_signing_key = derive_upload_session_signing_key(signing_key);
+    let mut mac = HmacSha256::new_from_slice(&upload_signing_key).expect("HMAC accepts any key");
+    mac.update(upload_session_payload(upload_path, repo_name, expires_at).as_bytes());
+    mac.verify_slice(&signature).is_ok()
+}
+
+fn derive_upload_session_signing_key(signing_key: &[u8]) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(signing_key).expect("HMAC accepts any key");
+    mac.update(UPLOAD_SESSION_SIGNING_CONTEXT);
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn upload_session_payload(upload_path: &str, repo_name: &str, expires_at: i64) -> String {
+    format!(
+        "{}\n{}\n{}\n{}",
+        UPLOAD_SESSION_VERSION, upload_path, repo_name, expires_at
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,6 +1543,129 @@ mod tests {
         assert_eq!(
             project_id_after_prefix("unknown/path/prj_xxx", "alien-artifacts"),
             None
+        );
+    }
+
+    #[test]
+    fn gar_upload_session_location_gets_signed_repo_context() {
+        let signing_key = b"test-registry-upload-session-key";
+        let repo_name = "cloud-project/artifacts/prj_123";
+        let location = "https://manager.example.com/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/session-1?digest=sha256:abc";
+
+        let rewritten =
+            rewrite_location_with_upload_session_auth(location, Some(repo_name), signing_key)
+                .expect("GAR upload session location should be signed");
+        let url = Url::parse(&rewritten).expect("rewritten location should be a URL");
+        let query = url
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(query.get("digest").map(String::as_str), Some("sha256:abc"));
+        assert_eq!(
+            query.get(UPLOAD_SESSION_REPO_PARAM).map(String::as_str),
+            Some(repo_name)
+        );
+        assert!(verify_upload_session_auth(signing_key, url.path(), &query).is_ok());
+
+        let upstream_query = strip_upload_session_auth_params(&query);
+        assert_eq!(upstream_query.len(), 1);
+        assert_eq!(
+            upstream_query.get("digest").map(String::as_str),
+            Some("sha256:abc")
+        );
+    }
+
+    #[test]
+    fn gar_upload_session_auth_rejects_tampering() {
+        let signing_key = b"test-registry-upload-session-key";
+        let path =
+            "/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/session-1";
+        let repo_name = "cloud-project/artifacts/prj_123";
+        let expires_at = chrono::Utc::now().timestamp() + UPLOAD_SESSION_TTL_SECONDS;
+        let signature = sign_upload_session(signing_key, path, repo_name, expires_at);
+
+        let mut query = HashMap::from([
+            (
+                UPLOAD_SESSION_VERSION_PARAM.to_string(),
+                UPLOAD_SESSION_VERSION.to_string(),
+            ),
+            (UPLOAD_SESSION_REPO_PARAM.to_string(), repo_name.to_string()),
+            (
+                UPLOAD_SESSION_EXPIRES_PARAM.to_string(),
+                expires_at.to_string(),
+            ),
+            (UPLOAD_SESSION_SIGNATURE_PARAM.to_string(), signature),
+        ]);
+
+        assert!(verify_upload_session_auth(signing_key, path, &query).is_ok());
+
+        query.insert(
+            UPLOAD_SESSION_REPO_PARAM.to_string(),
+            "cloud-project/artifacts/prj_other".to_string(),
+        );
+        assert!(verify_upload_session_auth(signing_key, path, &query).is_err());
+
+        query.insert(UPLOAD_SESSION_REPO_PARAM.to_string(), repo_name.to_string());
+        assert!(verify_upload_session_auth(
+            signing_key,
+            "/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/other-session",
+            &query,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn gar_upload_session_auth_rejects_expired_token() {
+        let signing_key = b"test-registry-upload-session-key";
+        let path =
+            "/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/session-1";
+        let repo_name = "cloud-project/artifacts/prj_123";
+        let expires_at = chrono::Utc::now().timestamp() - 1;
+        let signature = sign_upload_session(signing_key, path, repo_name, expires_at);
+        let query = HashMap::from([
+            (
+                UPLOAD_SESSION_VERSION_PARAM.to_string(),
+                UPLOAD_SESSION_VERSION.to_string(),
+            ),
+            (UPLOAD_SESSION_REPO_PARAM.to_string(), repo_name.to_string()),
+            (
+                UPLOAD_SESSION_EXPIRES_PARAM.to_string(),
+                expires_at.to_string(),
+            ),
+            (UPLOAD_SESSION_SIGNATURE_PARAM.to_string(), signature),
+        ]);
+
+        assert!(verify_upload_session_auth(signing_key, path, &query).is_err());
+    }
+
+    #[test]
+    fn non_gar_location_is_not_signed() {
+        let location = "https://manager.example.com/v2/repo/blobs/uploads/session-1";
+
+        assert_eq!(
+            rewrite_location_with_upload_session_auth(
+                location,
+                Some("cloud-project/artifacts/prj_123"),
+                b"test-key",
+            )
+            .expect("non-GAR location should be unchanged"),
+            location
+        );
+    }
+
+    #[test]
+    fn raw_gar_upload_session_path_does_not_identify_project_repo() {
+        assert_eq!(
+            project_id_after_prefix(
+                "/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/session-1",
+                "cloud-project/artifacts",
+            ),
+            None
+        );
+        assert_eq!(
+            project_id_after_prefix("cloud-project/artifacts/prj_123", "cloud-project/artifacts",),
+            Some("prj_123")
         );
     }
 }
