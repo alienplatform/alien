@@ -463,6 +463,9 @@ mod oauth_flow {
         Ok(Some((client, access_token)))
     }
 
+    /// The provider issues JWTs with `exp`, so an unreadable token means a corrupted
+    /// store that a refresh repairs. Nothing reacts to a 401 here, so erring toward a
+    /// refresh is safer than sending a token we couldn't read.
     fn token_expired(jwt: &str, leeway_secs: i64) -> bool {
         let parts: Vec<&str> = jwt.split('.').collect();
         if parts.len() != 3 {
