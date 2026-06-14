@@ -547,6 +547,12 @@ mod oauth_flow {
         }
     }
 
+    /// CSRF check: reject the OAuth callback unless `state` is present and matches.
+    /// Absence is a rejection, not a skip — this guards independently of PKCE.
+    fn state_is_valid(params: &HashMap<String, String>, expected: &str) -> bool {
+        params.get("state").is_some_and(|s| s == expected)
+    }
+
     async fn login_pkce(
         base: &str,
         no_browser: bool,
@@ -581,10 +587,8 @@ mod oauth_flow {
                     let success_redirect = success_redirect.clone();
                     let expected_state = expected_state.clone();
                     async move {
-                        if let Some(returned_state) = params.get("state") {
-                            if returned_state != &expected_state {
-                                return "Invalid state parameter".into_response();
-                            }
+                        if !state_is_valid(&params, &expected_state) {
+                            return "Invalid state parameter".into_response();
                         }
                         if let Some(code) = params.get("code").cloned() {
                             if let Some(sender) = state.lock().unwrap().take() {
@@ -664,10 +668,8 @@ mod oauth_flow {
                     let state = state.clone();
                     let expected_state = expected_state.clone();
                     async move {
-                        if let Some(returned_state) = params.get("state") {
-                            if returned_state != &expected_state {
-                                return "Invalid state parameter".into_response();
-                            }
+                        if !state_is_valid(&params, &expected_state) {
+                            return "Invalid state parameter".into_response();
                         }
                         if let Some(code) = params.get("code").cloned() {
                             if let Some(sender) = state.lock().unwrap().take() {
@@ -970,6 +972,26 @@ mod oauth_flow {
                 &format!("{}.{}.sig", header, payload_without_exp),
                 30
             ));
+        }
+
+        #[test]
+        fn callback_state_must_be_present_and_match() {
+            let expected = "expected-csrf-state";
+
+            // A callback carrying no `state` is the CSRF attack case — it must
+            // not pass, even though `code` alone looks like a valid response.
+            assert!(!state_is_valid(&HashMap::new(), expected));
+            let mut code_only = HashMap::new();
+            code_only.insert("code".to_string(), "the-auth-code".to_string());
+            assert!(!state_is_valid(&code_only, expected));
+
+            let mut mismatched = HashMap::new();
+            mismatched.insert("state".to_string(), "attacker-value".to_string());
+            assert!(!state_is_valid(&mismatched, expected));
+
+            let mut matching = HashMap::new();
+            matching.insert("state".to_string(), expected.to_string());
+            assert!(state_is_valid(&matching, expected));
         }
     }
 }
