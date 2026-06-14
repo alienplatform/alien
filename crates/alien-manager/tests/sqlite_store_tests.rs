@@ -408,6 +408,58 @@ async fn acquire_does_not_pick_failed_status_without_retry_request() {
 }
 
 #[tokio::test]
+async fn acquire_only_picks_running_when_explicitly_requested() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'running' WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let default_acquired = store
+        .acquire(
+            &test_subject(),
+            "default-session",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert!(
+        default_acquired.is_empty(),
+        "normal deployment loop acquire must not pick stable running deployments"
+    );
+
+    let heartbeat_acquired = store
+        .acquire(
+            &test_subject(),
+            "heartbeat-session",
+            &DeploymentFilter {
+                statuses: Some(vec!["running".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(heartbeat_acquired.len(), 1);
+    assert_eq!(heartbeat_acquired[0].deployment.id, dep.id);
+    assert_eq!(
+        heartbeat_acquired[0].deployment.locked_by.as_deref(),
+        Some("heartbeat-session")
+    );
+}
+
+#[tokio::test]
 async fn acquire_picks_failed_status_with_retry_request_once() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());

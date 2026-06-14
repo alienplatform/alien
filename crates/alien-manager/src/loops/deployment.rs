@@ -37,12 +37,35 @@ use crate::transports::ManagerTransport;
 
 /// Maximum number of step() calls per deployment per tick.
 const MAX_STEPS_PER_TICK: usize = 100;
+const MAX_STEPS_PER_HEARTBEAT: usize = 1;
 /// Maximum number of deployments to process concurrently per tick.
-const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
+pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+
+#[derive(Debug, Clone, Copy)]
+struct ProcessOptions {
+    max_steps: usize,
+    require_heartbeats_enabled: bool,
+}
+
+impl ProcessOptions {
+    fn deployment_tick() -> Self {
+        Self {
+            max_steps: MAX_STEPS_PER_TICK,
+            require_heartbeats_enabled: false,
+        }
+    }
+
+    fn heartbeat_tick() -> Self {
+        Self {
+            max_steps: MAX_STEPS_PER_HEARTBEAT,
+            require_heartbeats_enabled: true,
+        }
+    }
+}
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         message
@@ -205,7 +228,12 @@ impl DeploymentLoop {
                     );
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                            self.process_deployment(item.deployment, &session).await;
+                            self.process_deployment(
+                                item.deployment,
+                                &session,
+                                ProcessOptions::deployment_tick(),
+                            )
+                            .await;
                         })
                         .await;
                 }
@@ -222,12 +250,28 @@ impl DeploymentLoop {
         );
     }
 
+    pub(crate) async fn process_heartbeat_deployment(
+        &self,
+        deployment: DeploymentRecord,
+        session: &str,
+    ) {
+        self.process_deployment(deployment, session, ProcessOptions::heartbeat_tick())
+            .await;
+    }
+
     /// Process a single deployment: step until stable, reconcile, release.
-    async fn process_deployment(&self, deployment: DeploymentRecord, session: &str) {
+    async fn process_deployment(
+        &self,
+        deployment: DeploymentRecord,
+        session: &str,
+        options: ProcessOptions,
+    ) {
         let deployment_id = deployment.id.clone();
 
         // Always release the lock when we are done, even on error.
-        let result = self.process_deployment_inner(deployment, session).await;
+        let result = self
+            .process_deployment_inner(deployment, session, options)
+            .await;
 
         if let Err(e) = &result {
             error!(
@@ -256,18 +300,17 @@ impl DeploymentLoop {
         &self,
         deployment: DeploymentRecord,
         session: &str,
+        options: ProcessOptions,
     ) -> Result<(), AlienError> {
         let deployment_id = deployment.id.clone();
+        let stack_settings = deployment
+            .stack_settings
+            .as_ref()
+            .expect("stored deployment carries stack_settings");
 
         // Pull-mode deployments are entirely driven by the alien-agent running in the
         // target environment. The manager must not attempt to provision or deploy them.
-        if deployment
-            .stack_settings
-            .as_ref()
-            .expect("stored deployment carries stack_settings")
-            .deployment_model
-            == alien_core::DeploymentModel::Pull
-        {
+        if stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
             debug!(
                 deployment_id = %deployment_id,
                 "Skipping pull-mode deployment — handled by alien-agent"
@@ -276,6 +319,14 @@ impl DeploymentLoop {
         }
 
         let status = parse_status(&deployment.status);
+
+        if options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled() {
+            debug!(
+                deployment_id = %deployment_id,
+                "Skipping heartbeat because heartbeats are disabled for this deployment"
+            );
+            return Ok(());
+        }
 
         // 1. Get the release for this deployment.
         let target_release_id = deployment
@@ -525,7 +576,7 @@ impl DeploymentLoop {
         };
 
         let policy = RunnerPolicy {
-            max_steps: MAX_STEPS_PER_TICK,
+            max_steps: options.max_steps,
             operation,
             delay_threshold: Some(Duration::from_millis(SUGGESTED_DELAY_THRESHOLD_MS)),
         };
@@ -538,17 +589,31 @@ impl DeploymentLoop {
         );
 
         let mut config = config;
-        let runner_result = alien_deployment::runner::run_step_loop(
-            &mut state,
-            &mut config,
-            &client_config,
-            &deployment_id,
-            &policy,
-            &transport,
-            Some(service_provider),
-            None,
-        )
-        .await;
+        let runner_result = if options.require_heartbeats_enabled {
+            alien_deployment::runner::run_running_refresh_step_loop(
+                &mut state,
+                &mut config,
+                &client_config,
+                &deployment_id,
+                &policy,
+                &transport,
+                Some(service_provider),
+                None,
+            )
+            .await
+        } else {
+            alien_deployment::runner::run_step_loop(
+                &mut state,
+                &mut config,
+                &client_config,
+                &deployment_id,
+                &policy,
+                &transport,
+                Some(service_provider),
+                None,
+            )
+            .await
+        };
 
         match &runner_result {
             Ok(RunnerResult {
