@@ -553,6 +553,19 @@ mod oauth_flow {
         params.get("state").is_some_and(|s| s == expected)
     }
 
+    /// Escape the redirect URL for the single-quoted JS string in the inline
+    /// `<script>` — a raw `'`, `\`, or `</script>` (via `<`) would break out, and
+    /// a raw line terminator (`\n`, `\r`, U+2028, U+2029) is illegal in a JS string.
+    fn escape_js_single_quoted(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('<', "\\x3C")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    }
+
     async fn login_pkce(
         base: &str,
         no_browser: bool,
@@ -597,7 +610,7 @@ mod oauth_flow {
                             match success_redirect {
                                 Some(url) => Html(format!(
                                     "<script>window.location.href = '{}';</script>",
-                                    url
+                                    escape_js_single_quoted(&url)
                                 ))
                                 .into_response(),
                                 None => {
@@ -678,7 +691,7 @@ mod oauth_flow {
                             if let Some(ref url) = success_url {
                                 Html(format!(
                                     "<script>window.location.href = '{}';</script>",
-                                    url
+                                    escape_js_single_quoted(url)
                                 ))
                                 .into_response()
                             } else {
@@ -992,6 +1005,22 @@ mod oauth_flow {
             let mut matching = HashMap::new();
             matching.insert("state".to_string(), expected.to_string());
             assert!(state_is_valid(&matching, expected));
+        }
+
+        #[test]
+        fn redirect_url_is_escaped_for_the_inline_script() {
+            // A plain URL is passed through untouched.
+            assert_eq!(
+                escape_js_single_quoted("https://app.example.com/done"),
+                "https://app.example.com/done"
+            );
+            // A crafted value can't close the JS string literal or the <script> element.
+            let escaped = escape_js_single_quoted("x'</script>");
+            assert_eq!(escaped, "x\\'\\x3C/script>");
+            assert!(!escaped.contains('<'));
+
+            // Line terminators are escaped — a raw one is illegal in a JS string.
+            assert_eq!(escape_js_single_quoted("a\u{2028}b"), "a\\u2028b");
         }
     }
 }
