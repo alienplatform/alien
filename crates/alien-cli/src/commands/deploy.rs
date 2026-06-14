@@ -241,8 +241,14 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         })
                         .transpose()?;
 
+                    // AWS managed deployments require push model; pull is for K8s/manager-side.
+                    let deployment_model = if args.platform == "aws" {
+                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
+                    } else {
+                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
+                    };
                     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        deployment_model: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull),
+                        deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
                         } else {
@@ -453,6 +459,49 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
 
+    // Standalone path: the deployment record carries a `desiredReleaseId` and
+    // the platform-mode CLI normally relies on the manager to inject the
+    // target_release. The standalone manager doesn't do that injection on
+    // get_deployment, so fetch the release directly here and populate
+    // `target_release` ourselves — otherwise pending::handle_pending fails
+    // immediately with "Target release required for deployment".
+    if current.target_release.is_none() {
+        if let Some(release_id) = deployment.desired_release_id.as_ref() {
+            let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
+            if let Ok(resp) = manager_ctx
+                .http_client
+                .get(&url)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", tracked_deployment.api_key),
+                )
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(release_json) = resp.json::<serde_json::Value>().await {
+                        let stack_for_platform = release_json
+                            .get("stack")
+                            .and_then(|s| s.get(args.platform.as_str()))
+                            .cloned();
+                        if let Some(stack_json) = stack_for_platform {
+                            if let Ok(stack) =
+                                serde_json::from_value::<alien_core::Stack>(stack_json)
+                            {
+                                current.target_release = Some(alien_core::ReleaseInfo {
+                                    release_id: release_id.clone(),
+                                    version: None,
+                                    description: None,
+                                    stack,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Running deploy on a failed deployment is an implicit retry request
     if current.status.is_failed() {
         info!(
@@ -489,6 +538,39 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     .context(ErrorData::ConfigurationError {
         message: "Failed to construct deployment config".to_string(),
     })?;
+
+    // Standalone mode: the deployment record in the standalone manager has
+    // no `compute_backend` set, but cloud daemons run via Horizon. Synthesize
+    // one here from the BYO env vars set on the manager side so the
+    // preflight check "Cloud container deployments require a managed
+    // container backend" passes and the daemon's `horizon()` resolver gets a
+    // valid HorizonConfig (in addition to the env-var fallback).
+    if config.compute_backend.is_none() {
+        if let (Ok(url), Ok(cluster_id), Ok(token)) = (
+            std::env::var("ALIEN_BYO_HORIZON_URL"),
+            std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID"),
+            std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN"),
+        ) {
+            let mut clusters: std::collections::HashMap<String, alien_core::HorizonClusterConfig> =
+                std::collections::HashMap::new();
+            // ComputeClusterMutation auto-creates a cluster with the
+            // daemon's `.cluster(...)` id; use that id as the key.
+            clusters.insert(
+                cluster_id.clone(),
+                alien_core::HorizonClusterConfig {
+                    cluster_id,
+                    management_token: token,
+                },
+            );
+            config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
+                alien_core::HorizonConfig {
+                    url,
+                    horizon_machine_image: None,
+                    clusters,
+                },
+            ));
+        }
+    }
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());

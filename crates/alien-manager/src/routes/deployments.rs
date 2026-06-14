@@ -57,6 +57,16 @@ pub struct DeploymentResponse {
     pub platform: Platform,
     pub status: String,
     pub deployment_group_id: String,
+    /// Required by the platform-SDK Deployment schema. Hard-coded to
+    /// alien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI
+    /// accepts the response.
+    pub deployment_protocol_version: u32,
+    /// Required by the platform-SDK Deployment schema. Standalone is
+    /// single-tenant; reuse the same synthetic project id used in the
+    /// deployment-groups route.
+    pub project_id: String,
+    /// Required by the platform-SDK Deployment schema.
+    pub workspace_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_settings: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,6 +212,9 @@ fn record_to_response(
         platform: r.platform.clone(),
         status: r.status.clone(),
         deployment_group_id: r.deployment_group_id.clone(),
+        deployment_protocol_version: r.deployment_protocol_version,
+        project_id: "prj_standalone000000000000000000".to_string(),
+        workspace_id: "ws_standalone00000000000000".to_string(),
         stack_settings: r
             .stack_settings
             .as_ref()
@@ -223,7 +236,13 @@ fn record_to_response(
         import_source: r.import_source,
         retry_requested: r.retry_requested,
         created_at: r.created_at.to_rfc3339(),
-        updated_at: r.updated_at.map(|u| u.to_rfc3339()),
+        // Platform SDK requires `updatedAt`. Fall back to created_at when
+        // no update has happened yet.
+        updated_at: Some(
+            r.updated_at
+                .map(|u| u.to_rfc3339())
+                .unwrap_or_else(|| r.created_at.to_rfc3339()),
+        ),
         error: r.error.clone(),
         deployment_group,
     }

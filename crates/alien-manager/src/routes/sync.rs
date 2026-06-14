@@ -317,6 +317,24 @@ async fn reconcile(
     )
     .await;
 
+    // 1a. Inject target_release from the deployment record's
+    //     desired_release_id. The CLI's deploy command initializes state with
+    //     `target_release: None` and depends on the manager to populate it on
+    //     reconcile — without this, handlers like `pending::handle_pending`
+    //     fail with "Target release required for deployment" on the first
+    //     step.
+    if final_state.target_release.is_none() {
+        if let Some(ref release_id) = deployment.desired_release_id {
+            let system = crate::auth::Subject::system();
+            if let Ok(Some(rel)) = state.release_store.get_release(&system, release_id).await {
+                let release_stack_platform = release_stack_platform(deployment.platform);
+                if let Some(info) = release_info_from_record(&rel, release_stack_platform) {
+                    final_state.target_release = Some(info);
+                }
+            }
+        }
+    }
+
     // 2. Persist the step result (including any registry access changes).
     let _result = match state
         .deployment_store

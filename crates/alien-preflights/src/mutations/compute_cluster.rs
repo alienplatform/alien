@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, ComputeCluster, Container, DeploymentConfig, MachineProfile, Network, Platform,
-    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
+    CapacityGroup, ComputeCluster, Container, Daemon, DeploymentConfig, MachineProfile, Network,
+    Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -44,7 +44,12 @@ impl StackMutation for ComputeClusterMutation {
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "container");
-        if !has_containers {
+        // Also fire for daemons that reference a cluster — daemon.cluster()
+        // is required for AWS/GCP/Azure deployments, so if a daemon names a
+        // cluster, we need to make sure it exists in the stack.
+        let daemon_cluster_ids = referenced_daemon_clusters(stack);
+        let has_daemon_cluster_ref = !daemon_cluster_ids.is_empty();
+        if !has_containers && !has_daemon_cluster_ref {
             return false;
         }
 
@@ -112,7 +117,12 @@ impl StackMutation for ComputeClusterMutation {
 impl ComputeClusterMutation {
     async fn create_cluster(&self, mut stack: Stack, stack_state: &StackState) -> Result<Stack> {
         info!("Auto-generating ComputeCluster for containers in stack");
-        let cluster_id = "compute".to_string();
+        // If a daemon explicitly references a cluster, use its name so the
+        // .cluster("X") reference resolves. Otherwise default to "compute".
+        let cluster_id = referenced_daemon_clusters(&stack)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "compute".to_string());
 
         // Collect all containers that will target this auto-generated cluster
         // (containers without an explicit cluster assignment)
@@ -302,6 +312,22 @@ impl ComputeClusterMutation {
         info!(cluster_id = %cluster_id, new_groups = new_group_ids.len(), "Added capacity groups");
         Ok(stack)
     }
+}
+
+/// Collect cluster names referenced by daemons in the stack via `.cluster(...)`.
+/// Returns an empty Vec if no daemons reference any cluster.
+fn referenced_daemon_clusters(stack: &Stack) -> Vec<String> {
+    let mut clusters: Vec<String> = Vec::new();
+    for entry in stack.resources.values() {
+        if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            if let Some(ref c) = daemon.cluster {
+                if !clusters.contains(c) {
+                    clusters.push(c.clone());
+                }
+            }
+        }
+    }
+    clusters
 }
 
 /// Determine which capacity group a container needs based on its hardware requirements.
