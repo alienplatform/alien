@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_query::{Expr, Order, Query, SqliteQueryBuilder};
+use sea_query::{Cond, Expr, Order, Query, SqliteQueryBuilder};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -30,8 +30,76 @@ pub struct SqliteDeploymentStore {
 }
 
 impl SqliteDeploymentStore {
+    const WORK_STATUSES: [&'static str; 7] = [
+        "pending",
+        "initial-setup",
+        "provisioning",
+        "updating",
+        "deleting",
+        "update-pending",
+        "delete-pending",
+    ];
+    const FAILED_STATUSES: [&'static str; 6] = [
+        "preflights-failed",
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ];
+    const SETUP_TEARDOWN_STATUSES: [&'static str; 2] = ["teardown-required", "teardown-failed"];
+    const RUNNING_STATUS: &'static str = "running";
+
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
         Self { db }
+    }
+
+    fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
+        let retryable_failed = Cond::all()
+            .add(Expr::col(Deployments::Status).is_in(Self::FAILED_STATUSES))
+            .add(Expr::col(Deployments::RetryRequested).eq(1));
+
+        if let Some(statuses) = statuses {
+            let requested_active: Vec<&str> = statuses
+                .iter()
+                .map(String::as_str)
+                .filter(|status| {
+                    Self::WORK_STATUSES.contains(status)
+                        || Self::SETUP_TEARDOWN_STATUSES.contains(status)
+                        || *status == Self::RUNNING_STATUS
+                })
+                .collect();
+            let requested_failed: Vec<&str> = statuses
+                .iter()
+                .map(String::as_str)
+                .filter(|status| Self::FAILED_STATUSES.contains(status))
+                .collect();
+
+            let mut condition = Cond::any();
+            let mut has_status = false;
+            if !requested_active.is_empty() {
+                has_status = true;
+                condition = condition.add(Expr::col(Deployments::Status).is_in(requested_active));
+            }
+            if !requested_failed.is_empty() {
+                has_status = true;
+                condition = condition.add(
+                    Cond::all()
+                        .add(Expr::col(Deployments::Status).is_in(requested_failed))
+                        .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                );
+            }
+
+            if has_status {
+                condition
+            } else {
+                Cond::all().add(Expr::cust("1 = 0"))
+            }
+        } else {
+            Cond::any()
+                .add(Expr::col(Deployments::Status).is_in(Self::WORK_STATUSES))
+                .add(retryable_failed)
+        }
     }
 
     fn stale_lock_condition_sql() -> String {
@@ -781,28 +849,6 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<Vec<AcquiredDeployment>, AlienError> {
         let now = Utc::now();
 
-        // Work statuses that need active deployment work
-        let work_statuses = [
-            "pending",
-            "initial-setup",
-            "provisioning",
-            "updating",
-            "deleting",
-            "update-pending",
-            "delete-pending",
-        ];
-
-        // Failed statuses that can be retried when retry_requested is true
-        let failed_statuses = [
-            "preflights-failed",
-            "initial-setup-failed",
-            "provisioning-failed",
-            "refresh-failed",
-            "update-failed",
-            "delete-failed",
-        ];
-        let setup_teardown_statuses = ["teardown-required", "teardown-failed"];
-
         // Stale lock threshold: 5 minutes. If a manager crashed mid-processing,
         // the lock will self-heal after this period.
         let stale_lock_condition = Self::stale_lock_condition_sql();
@@ -818,25 +864,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .columns(Self::DEPLOYMENT_COLUMNS)
                 .from(Deployments::Table);
 
-            let work_eligibility = sea_query::Cond::any()
-                .add(Expr::col(Deployments::Status).is_in(work_statuses))
-                .add(
-                    sea_query::Cond::all()
-                        .add(Expr::col(Deployments::Status).is_in(failed_statuses))
-                        .add(Expr::col(Deployments::RetryRequested).eq(1)),
-                );
-
-            if let Some(statuses) = explicit_status_filter {
-                let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
-                query
-                    .and_where(Expr::col(Deployments::Status).is_in(status_strs))
-                    .cond_where(
-                        work_eligibility
-                            .add(Expr::col(Deployments::Status).is_in(setup_teardown_statuses)),
-                    );
-            } else {
-                query.cond_where(work_eligibility);
-            }
+            query.cond_where(Self::acquire_status_condition(explicit_status_filter));
 
             query
                 // Unlocked OR stale-locked (locked_at older than 5 minutes)
@@ -895,25 +923,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .value(Deployments::RetryRequested, 0i64)
                     .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()));
 
-                let work_eligibility = sea_query::Cond::any()
-                    .add(Expr::col(Deployments::Status).is_in(work_statuses))
-                    .add(
-                        sea_query::Cond::all()
-                            .add(Expr::col(Deployments::Status).is_in(failed_statuses))
-                            .add(Expr::col(Deployments::RetryRequested).eq(1)),
-                    );
-
-                if let Some(statuses) = explicit_status_filter {
-                    let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
-                    query
-                        .and_where(Expr::col(Deployments::Status).is_in(status_strs))
-                        .cond_where(
-                            work_eligibility
-                                .add(Expr::col(Deployments::Status).is_in(setup_teardown_statuses)),
-                        );
-                } else {
-                    query.cond_where(work_eligibility);
-                }
+                query.cond_where(Self::acquire_status_condition(explicit_status_filter));
 
                 query
                     .cond_where(

@@ -91,14 +91,74 @@ pub async fn run_step_loop(
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     on_progress: Option<&ProgressCallback>,
 ) -> Result<RunnerResult> {
+    run_step_loop_inner(
+        state,
+        config,
+        client_config,
+        deployment_id,
+        policy,
+        transport,
+        service_provider,
+        on_progress,
+        false,
+    )
+    .await
+}
+
+/// Run one refresh step for a deployment whose initial status is already Running.
+///
+/// Normal deployment loops treat Running as already synced and stop before
+/// calling [`crate::step()`]. Heartbeat loops use this entry point to execute the
+/// Running refresh path exactly once, then checkpoint emitted resource
+/// heartbeats through the provided transport.
+pub async fn run_running_refresh_step_loop(
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &dyn DeploymentLoopTransport,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    on_progress: Option<&ProgressCallback>,
+) -> Result<RunnerResult> {
+    run_step_loop_inner(
+        state,
+        config,
+        client_config,
+        deployment_id,
+        policy,
+        transport,
+        service_provider,
+        on_progress,
+        true,
+    )
+    .await
+}
+
+async fn run_step_loop_inner(
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &dyn DeploymentLoopTransport,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    on_progress: Option<&ProgressCallback>,
+    allow_initial_running_step: bool,
+) -> Result<RunnerResult> {
     for step_count in 1..=policy.max_steps {
         // Pre-step terminal check
         if !should_step_retryable_failure(state) {
+            let should_run_initial_running_refresh = allow_initial_running_step
+                && step_count == 1
+                && state.status == DeploymentStatus::Running;
             if let Some(result) = classify_status(&state.status, policy.operation) {
-                return Ok(RunnerResult {
-                    loop_result: result,
-                    steps_executed: step_count - 1,
-                });
+                if !should_run_initial_running_refresh {
+                    return Ok(RunnerResult {
+                        loop_result: result,
+                        steps_executed: step_count - 1,
+                    });
+                }
             }
         }
 
@@ -607,5 +667,46 @@ mod tests {
         assert_eq!(result.steps_executed, 0);
         assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
         assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn initial_running_runs_one_step_when_policy_allows_running_start() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.status = DeploymentStatus::Running;
+        state.stack_state = Some(StackState::new(Platform::Test));
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_running_refresh_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("runner should run one heartbeat step for an initially running deployment");
+
+        assert_eq!(result.steps_executed, 1);
+        assert_eq!(state.status, DeploymentStatus::RefreshFailed);
+        assert_eq!(
+            transport
+                .checkpointed_statuses
+                .lock()
+                .expect("statuses lock poisoned")
+                .as_slice(),
+            &[
+                DeploymentStatus::RefreshFailed,
+                DeploymentStatus::RefreshFailed
+            ],
+        );
     }
 }

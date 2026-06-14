@@ -122,7 +122,7 @@ pub async fn handle_running(
 
         Ok(DeploymentStepResult {
             state: next,
-            suggested_delay_ms: None,
+            suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: true, // Update heartbeat timestamp for Running status
             heartbeats,
         })
