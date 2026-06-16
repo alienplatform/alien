@@ -931,6 +931,15 @@ Resources:
           Action: iam:GetRole
           Resource:
             Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+        - Sid: ManageOwnInlinePolicies
+          Effect: Allow
+          Action:
+          - iam:PutRolePolicy
+          - iam:GetRolePolicy
+          - iam:DeleteRolePolicy
+          - iam:ListRolePolicies
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
       Roles:
       - Ref: ManagementRole
     DependsOn:

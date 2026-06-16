@@ -177,7 +177,7 @@ resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachmen
 resource "aws_iam_role_policy" "management_self_read" {
   name   = "deployment-management-self-read"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = aws_iam_role.management.arn }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = aws_iam_role.management.arn }, { Sid = "ManageOwnInlinePolicies", Effect = "Allow", Action = ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies"], Resource = aws_iam_role.management.arn }] })
 }
 
 === registration.tf ===

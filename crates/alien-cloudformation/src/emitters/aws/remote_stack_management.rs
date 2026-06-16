@@ -189,6 +189,32 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
+    // Resource-scoped management permissions are re-applied at runtime via
+    // PutRolePolicy when a deployment adds or removes resources after setup.
+    // The role must therefore be able to mutate its own inline policies.
+    // Scoped to the role's own ARN — the role can grant itself arbitrary
+    // permissions, but it's already the highest-privilege identity in the
+    // stack so this isn't a meaningful widening.
+    statements.push(CfExpression::object([
+        ("Sid", CfExpression::from("ManageOwnInlinePolicies")),
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Action",
+            CfExpression::list([
+                CfExpression::from("iam:PutRolePolicy"),
+                CfExpression::from("iam:GetRolePolicy"),
+                CfExpression::from("iam:DeleteRolePolicy"),
+                CfExpression::from("iam:ListRolePolicies"),
+            ]),
+        ),
+        (
+            "Resource",
+            CfExpression::sub(
+                "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management",
+            ),
+        ),
+    ]));
+
     chunk_policy_statements(uniquify_iam_statement_sids(statements))
 }
 

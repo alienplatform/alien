@@ -115,11 +115,18 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             statements,
         )?;
 
-        // The management role always needs to read its own role —
-        // `iam:GetRole` is what the manager calls to verify the role
-        // still exists at heartbeat time. Lives outside alien-permissions
-        // because it's a self-reference the controller can't model
-        // through a permission set without weird circular naming.
+        // The management role manages its own role policies at runtime:
+        // - `iam:GetRole` is what the manager calls to verify the role still
+        //   exists at heartbeat time.
+        // - `iam:PutRolePolicy` / `iam:GetRolePolicy` / `iam:DeleteRolePolicy`
+        //   / `iam:ListRolePolicies` let the runtime add or remove
+        //   resource-scoped management policies when a deployment evolves
+        //   (resources added or removed after the initial setup).
+        // Lives outside alien-permissions because it's a self-reference the
+        // controller can't model through a permission set without weird
+        // circular naming. Scoped to the role's own ARN — the role can grant
+        // itself arbitrary permissions, but it's already the highest-privilege
+        // identity in the stack so this isn't a meaningful widening.
         fragment.resource_blocks.push(resource_block(
             "aws_iam_role_policy",
             &format!("{label}_self_read"),
@@ -129,7 +136,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                     Expression::String("deployment-management-self-read".to_string()),
                 ),
                 attr("role", expr::traversal(["aws_iam_role", label, "id"])),
-                attr("policy", self_read_policy(label)),
+                attr("policy", self_manage_policy(label)),
             ],
         ));
 
@@ -171,20 +178,40 @@ fn trust_policy() -> Expression {
     ]))
 }
 
-fn self_read_policy(label: &str) -> Expression {
+fn self_manage_policy(label: &str) -> Expression {
+    let role_arn = || expr::traversal(["aws_iam_role", label, "arn"]);
     jsonencode(expr::object([
         ("Version", Expression::String("2012-10-17".to_string())),
         (
             "Statement",
-            Expression::Array(vec![expr::object([
-                (
-                    "Sid",
-                    Expression::String("ReadOwnManagementRole".to_string()),
-                ),
-                ("Effect", Expression::String("Allow".to_string())),
-                ("Action", Expression::String("iam:GetRole".to_string())),
-                ("Resource", expr::traversal(["aws_iam_role", label, "arn"])),
-            ])]),
+            Expression::Array(vec![
+                expr::object([
+                    (
+                        "Sid",
+                        Expression::String("ReadOwnManagementRole".to_string()),
+                    ),
+                    ("Effect", Expression::String("Allow".to_string())),
+                    ("Action", Expression::String("iam:GetRole".to_string())),
+                    ("Resource", role_arn()),
+                ]),
+                expr::object([
+                    (
+                        "Sid",
+                        Expression::String("ManageOwnInlinePolicies".to_string()),
+                    ),
+                    ("Effect", Expression::String("Allow".to_string())),
+                    (
+                        "Action",
+                        Expression::Array(vec![
+                            Expression::String("iam:PutRolePolicy".to_string()),
+                            Expression::String("iam:GetRolePolicy".to_string()),
+                            Expression::String("iam:DeleteRolePolicy".to_string()),
+                            Expression::String("iam:ListRolePolicies".to_string()),
+                        ]),
+                    ),
+                    ("Resource", role_arn()),
+                ]),
+            ]),
         ),
     ]))
 }
