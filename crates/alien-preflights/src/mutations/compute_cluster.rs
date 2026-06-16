@@ -134,11 +134,26 @@ impl ComputeClusterMutation {
             .collect();
 
         // Build capacity groups, categorized by hardware needs for cloud platforms.
-        let capacity_groups = build_categorized_capacity_groups(&containers, stack_state.platform)?;
+        let mut capacity_groups = build_categorized_capacity_groups(&containers, stack_state.platform)?;
+
+        // Propagate `nested_virtualization` from any daemon in this cluster
+        // up to every capacity group. (At least one daemon needing nested
+        // virt is enough to constrain the whole pool — daemons share hosts.)
+        let needs_nested_virt = stack
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<Daemon>())
+            .any(|d| d.cluster.as_deref() == Some(cluster_id.as_str()) && d.nested_virtualization);
+        if needs_nested_virt {
+            for group in &mut capacity_groups {
+                group.nested_virtualization = Some(true);
+            }
+        }
 
         info!(
             platform = %stack_state.platform,
             groups = capacity_groups.len(),
+            nested_virtualization = needs_nested_virt,
             "Creating ComputeCluster with {} capacity group(s)",
             capacity_groups.len()
         );
@@ -386,6 +401,7 @@ fn build_categorized_capacity_groups(
             }),
             min_size: 1,
             max_size: 1,
+            nested_virtualization: None,
         }]),
         Platform::Kubernetes | Platform::Test => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),
@@ -398,6 +414,7 @@ fn build_categorized_capacity_groups(
             }),
             min_size: 0,
             max_size: 0,
+            nested_virtualization: None,
         }]),
     }
 }
@@ -418,6 +435,7 @@ fn build_capacity_group_for_id(
             max_memory_per_container: 2 * 1024 * 1024 * 1024,
             max_ephemeral_storage_bytes: 0,
             gpu: None,
+            nested_virt: false,
         }
     } else {
         aggregate_workload_requirements(containers)?
@@ -447,6 +465,7 @@ fn build_capacity_group_for_id(
         profile: Some(selection.profile),
         min_size: selection.min_machines,
         max_size: selection.max_machines,
+        nested_virtualization: None,
     })
 }
 
@@ -548,6 +567,7 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
         max_memory_per_container,
         max_ephemeral_storage_bytes: max_ephemeral,
         gpu: gpu_requirement,
+        nested_virt: false,
     })
 }
 

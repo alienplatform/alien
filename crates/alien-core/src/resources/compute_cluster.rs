@@ -71,6 +71,13 @@ pub struct CapacityGroup {
     pub min_size: u32,
     /// Maximum number of machines (must be ≤ 10)
     pub max_size: u32,
+    /// Require instance types that expose nested virtualization (VT-x/EPT)
+    /// to guest VMs — needed by workloads that boot VMs inside containers
+    /// (e.g. bear-agent's QEMU sandboxes).
+    /// When true, the controller's instance-type selector is constrained
+    /// to a vetted nested-virt-capable allowlist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_virtualization: Option<bool>,
 }
 
 /// ComputeCluster resource for running long-running container workloads.

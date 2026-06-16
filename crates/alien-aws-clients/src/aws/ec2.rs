@@ -1771,6 +1771,8 @@ impl Ec2Api for Ec2Client {
             }
         }
 
+        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
+
         if let Some(tag_specs) = &data.tag_specifications {
             Self::add_tag_specifications_with_prefix(
                 &mut form_data,
@@ -1864,6 +1866,7 @@ impl Ec2Api for Ec2Client {
                 );
             }
         }
+        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
         if let Some(tag_specs) = &data.tag_specifications {
             Self::add_tag_specifications_with_prefix(
                 &mut form_data,
@@ -1950,6 +1953,27 @@ impl Ec2Api for Ec2Client {
 }
 
 impl Ec2Client {
+    /// Append `LaunchTemplateData.CpuOptions.*` form fields.
+    ///
+    /// Currently only emits `NestedVirtualization` when set. AWS validates
+    /// support at launch time and rejects unsupported instance types with a
+    /// clear error (nested virt is only available on 8th-gen Intel: c8i/m8i/r8i
+    /// and their flex variants), so no client-side allowlist is needed.
+    fn add_cpu_options(
+        form_data: &mut HashMap<String, String>,
+        cpu_options: Option<&LaunchTemplateCpuOptions>,
+    ) {
+        let Some(cpu_options) = cpu_options else {
+            return;
+        };
+        if let Some(nested) = &cpu_options.nested_virtualization {
+            form_data.insert(
+                "LaunchTemplateData.CpuOptions.NestedVirtualization".to_string(),
+                nested.clone(),
+            );
+        }
+    }
+
     /// Add IP permissions to form data for security group operations.
     fn add_ip_permissions(form_data: &mut HashMap<String, String>, permissions: &[IpPermission]) {
         for (i, perm) in permissions.iter().enumerate() {
@@ -3341,6 +3365,9 @@ pub struct RequestLaunchTemplateData {
     /// Metadata options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_options: Option<LaunchTemplateInstanceMetadataOptions>,
+    /// CPU options (currently only `NestedVirtualization`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_options: Option<LaunchTemplateCpuOptions>,
     /// Tags to apply to resources created from the launch template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
@@ -3405,6 +3432,22 @@ pub struct LaunchTemplateInstanceMetadataOptions {
     pub http_put_response_hop_limit: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_metadata_tags: Option<String>,
+}
+
+/// CPU options for launch template.
+///
+/// AWS only accepts `nested_virtualization = "enabled"` on 8th-generation
+/// Intel instance types (c8i, m8i, r8i, and their flex variants). Other
+/// instance types will reject the launch with a clear error — we let AWS
+/// be the authority on supported types rather than maintaining our own
+/// allowlist.
+///
+/// See: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_LaunchTemplateCpuOptionsRequest.html
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct LaunchTemplateCpuOptions {
+    /// "enabled" or "disabled". Omit to leave at AWS default ("disabled").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_virtualization: Option<String>,
 }
 
 /// Response from creating a launch template.

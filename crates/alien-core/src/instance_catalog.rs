@@ -1013,6 +1013,10 @@ pub struct WorkloadRequirements {
     pub max_ephemeral_storage_bytes: u64,
     /// GPU requirement (if any container needs GPU)
     pub gpu: Option<GpuSpec>,
+    /// If true, only instance types that expose nested virtualization (VT-x/EPT)
+    /// to guest VMs are eligible. Required by workloads that run QEMU/KVM
+    /// inside a container (e.g. bear-agent's sandboxes).
+    pub nested_virt: bool,
 }
 
 /// Result of instance type selection.

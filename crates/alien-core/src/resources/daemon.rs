@@ -57,6 +57,15 @@ pub struct Daemon {
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
+    /// When true, the auto-generated ComputeCluster for this daemon is
+    /// constrained to instance types that expose nested virtualization
+    /// (VT-x/EPT) to guest VMs. Required by workloads that boot QEMU/KVM
+    /// inside the container (e.g. bear-agent's sandboxes).
+    /// Defaults to false; ignored on platforms whose backends don't pick
+    /// instance types (Kubernetes, Local).
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nested_virtualization: bool,
 }
 
 impl Daemon {
