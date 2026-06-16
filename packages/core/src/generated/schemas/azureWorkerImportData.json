@@ -1,1 +1,24 @@
-{"type":"object","description":"Azure Worker ImportData — a Container App backed by the stack's\nContainer Apps Environment.","required":["subscriptionId","resourceGroup","containerAppName"],"properties":{"containerAppName":{"type":"string","description":"Container App name."},"fqdn":{"type":["string","null"],"description":"Public FQDN when ingress is enabled."},"resourceGroup":{"type":"string","description":"Resource group hosting the Container App."},"subscriptionId":{"type":"string","description":"Subscription ID hosting the Container App."}},"x-readme-ref-name":"AzureWorkerImportData"}
+{
+  "type": "object",
+  "description": "Azure Worker ImportData — a Container App backed by the stack's\nContainer Apps Environment.",
+  "required": ["subscriptionId", "resourceGroup", "containerAppName"],
+  "properties": {
+    "containerAppName": {
+      "type": "string",
+      "description": "Container App name."
+    },
+    "fqdn": {
+      "type": ["string", "null"],
+      "description": "Public FQDN when ingress is enabled."
+    },
+    "resourceGroup": {
+      "type": "string",
+      "description": "Resource group hosting the Container App."
+    },
+    "subscriptionId": {
+      "type": "string",
+      "description": "Subscription ID hosting the Container App."
+    }
+  },
+  "x-readme-ref-name": "AzureWorkerImportData"
+}

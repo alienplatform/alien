@@ -1,1 +1,12 @@
-{"type":"object","required":["groupId","providerId","currentMachines","desiredMachines"],"properties":{"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"location":{"type":["string","null"]},"providerId":{"type":"string"}},"x-readme-ref-name":"ProviderFleetStatus"}
+{
+  "type": "object",
+  "required": ["groupId", "providerId", "currentMachines", "desiredMachines"],
+  "properties": {
+    "currentMachines": { "type": "integer", "format": "int32", "minimum": 0 },
+    "desiredMachines": { "type": "integer", "format": "int32", "minimum": 0 },
+    "groupId": { "type": "string" },
+    "location": { "type": ["string", "null"] },
+    "providerId": { "type": "string" }
+  },
+  "x-readme-ref-name": "ProviderFleetStatus"
+}

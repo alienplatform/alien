@@ -155,6 +155,27 @@ export class Daemon {
   }
 
   /**
+   * Requires the underlying machine to expose nested virtualization (VT-x/EPT)
+   * to guest VMs. Set this for daemons that boot QEMU/KVM or cloud-hypervisor
+   * inside the container (e.g. bear-agent's sandboxes).
+   *
+   * On AWS, the provisioned ComputeCluster constrains its capacity groups to
+   * 8th-generation Intel instance types (`c8i`, `m8i`, `r8i`, and their flex
+   * variants) and sets `CpuOptions.NestedVirtualization=enabled` on the
+   * launch template. Other instance types are rejected by AWS at launch.
+   *
+   * Ignored on Kubernetes and Local platforms (no machine selection there).
+   * Default: false.
+   *
+   * @param enabled Whether the daemon's host must support nested virtualization.
+   * @returns The Daemon builder instance.
+   */
+  public nestedVirtualization(enabled: boolean): this {
+    this._config.nestedVirtualization = enabled
+    return this
+  }
+
+  /**
    * Builds and validates the daemon configuration.
    * @returns An immutable Resource representing the configured daemon.
    * @throws Error if the daemon configuration is invalid.

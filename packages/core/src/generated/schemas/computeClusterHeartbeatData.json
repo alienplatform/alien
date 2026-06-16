@@ -1,1 +1,1035 @@
-{"oneOf":[{"allOf":[{"type":"object","required":["status","nodes","name","capacityGroups","providerFleets"],"properties":{"backendClusterId":{"type":["string","null"]},"capacityGroups":{"type":"array","items":{"type":"object","required":["groupId","currentMachines","desiredMachines"],"properties":{"capacityBlocker":{"oneOf":[{"type":"null"},{"type":"object","required":["category","message","observedAt"],"properties":{"category":{"type":"string","enum":["quota","capacity","allocation","other"],"x-readme-ref-name":"ComputeCapacityBlockerCategory"},"message":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"providerCode":{"type":["string","null"]},"providerReference":{"type":["string","null"]}},"x-readme-ref-name":"ComputeCapacityBlocker"}]},"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"instanceType":{"type":["string","null"]},"maxMachines":{"type":["integer","null"],"format":"int32","minimum":0},"minMachines":{"type":["integer","null"],"format":"int32","minimum":0},"recommendation":{"oneOf":[{"type":"null"},{"type":"object","required":["desiredMachines"],"properties":{"desiredMachines":{"type":"integer","format":"int32","minimum":0},"reason":{"type":["string","null"]},"unschedulableReplicas":{"type":["integer","null"],"format":"int32","minimum":0},"utilization":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]}},"x-readme-ref-name":"ComputeCapacityRecommendation"}]}},"x-readme-ref-name":"ComputeCapacityGroupStatus"}},"cpu":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"memory":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"name":{"type":"string"},"nodes":{"type":"object","properties":{"current":{"type":["integer","null"],"format":"int32","minimum":0},"desired":{"type":["integer","null"],"format":"int32","minimum":0},"ready":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"ObservedCounts"},"providerFleets":{"type":"array","items":{"type":"object","required":["groupId","providerId","currentMachines","desiredMachines"],"properties":{"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"location":{"type":["string","null"]},"providerId":{"type":"string"}},"x-readme-ref-name":"ProviderFleetStatus"}},"region":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"ComputeClusterHeartbeatStatus"}},"x-readme-ref-name":"AwsComputeClusterHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["aws"]}}}]},{"allOf":[{"type":"object","required":["status","nodes","name","capacityGroups","providerFleets"],"properties":{"backendClusterId":{"type":["string","null"]},"capacityGroups":{"type":"array","items":{"type":"object","required":["groupId","currentMachines","desiredMachines"],"properties":{"capacityBlocker":{"oneOf":[{"type":"null"},{"type":"object","required":["category","message","observedAt"],"properties":{"category":{"type":"string","enum":["quota","capacity","allocation","other"],"x-readme-ref-name":"ComputeCapacityBlockerCategory"},"message":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"providerCode":{"type":["string","null"]},"providerReference":{"type":["string","null"]}},"x-readme-ref-name":"ComputeCapacityBlocker"}]},"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"instanceType":{"type":["string","null"]},"maxMachines":{"type":["integer","null"],"format":"int32","minimum":0},"minMachines":{"type":["integer","null"],"format":"int32","minimum":0},"recommendation":{"oneOf":[{"type":"null"},{"type":"object","required":["desiredMachines"],"properties":{"desiredMachines":{"type":"integer","format":"int32","minimum":0},"reason":{"type":["string","null"]},"unschedulableReplicas":{"type":["integer","null"],"format":"int32","minimum":0},"utilization":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]}},"x-readme-ref-name":"ComputeCapacityRecommendation"}]}},"x-readme-ref-name":"ComputeCapacityGroupStatus"}},"cpu":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"memory":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"name":{"type":"string"},"nodes":{"type":"object","properties":{"current":{"type":["integer","null"],"format":"int32","minimum":0},"desired":{"type":["integer","null"],"format":"int32","minimum":0},"ready":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"ObservedCounts"},"providerFleets":{"type":"array","items":{"type":"object","required":["groupId","providerId","currentMachines","desiredMachines"],"properties":{"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"location":{"type":["string","null"]},"providerId":{"type":"string"}},"x-readme-ref-name":"ProviderFleetStatus"}},"region":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"ComputeClusterHeartbeatStatus"}},"x-readme-ref-name":"GcpComputeClusterHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["gcp"]}}}]},{"allOf":[{"type":"object","required":["status","nodes","name","capacityGroups","providerFleets"],"properties":{"backendClusterId":{"type":["string","null"]},"capacityGroups":{"type":"array","items":{"type":"object","required":["groupId","currentMachines","desiredMachines"],"properties":{"capacityBlocker":{"oneOf":[{"type":"null"},{"type":"object","required":["category","message","observedAt"],"properties":{"category":{"type":"string","enum":["quota","capacity","allocation","other"],"x-readme-ref-name":"ComputeCapacityBlockerCategory"},"message":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"providerCode":{"type":["string","null"]},"providerReference":{"type":["string","null"]}},"x-readme-ref-name":"ComputeCapacityBlocker"}]},"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"instanceType":{"type":["string","null"]},"maxMachines":{"type":["integer","null"],"format":"int32","minimum":0},"minMachines":{"type":["integer","null"],"format":"int32","minimum":0},"recommendation":{"oneOf":[{"type":"null"},{"type":"object","required":["desiredMachines"],"properties":{"desiredMachines":{"type":"integer","format":"int32","minimum":0},"reason":{"type":["string","null"]},"unschedulableReplicas":{"type":["integer","null"],"format":"int32","minimum":0},"utilization":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]}},"x-readme-ref-name":"ComputeCapacityRecommendation"}]}},"x-readme-ref-name":"ComputeCapacityGroupStatus"}},"cpu":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"memory":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"name":{"type":"string"},"nodes":{"type":"object","properties":{"current":{"type":["integer","null"],"format":"int32","minimum":0},"desired":{"type":["integer","null"],"format":"int32","minimum":0},"ready":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"ObservedCounts"},"providerFleets":{"type":"array","items":{"type":"object","required":["groupId","providerId","currentMachines","desiredMachines"],"properties":{"currentMachines":{"type":"integer","format":"int32","minimum":0},"desiredMachines":{"type":"integer","format":"int32","minimum":0},"groupId":{"type":"string"},"location":{"type":["string","null"]},"providerId":{"type":"string"}},"x-readme-ref-name":"ProviderFleetStatus"}},"region":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"ComputeClusterHeartbeatStatus"}},"x-readme-ref-name":"AzureComputeClusterHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["azure"]}}}]},{"allOf":[{"type":"object","required":["status","nodes","name","dockerAvailable","networkAvailable"],"properties":{"dockerApiVersion":{"type":["string","null"]},"dockerArch":{"type":["string","null"]},"dockerAvailable":{"type":"boolean"},"dockerOs":{"type":["string","null"]},"dockerVersion":{"type":["string","null"]},"hostIdentifier":{"type":["string","null"]},"name":{"type":"string"},"networkAvailable":{"type":"boolean"},"networkName":{"type":["string","null"]},"nodes":{"type":"object","properties":{"current":{"type":["integer","null"],"format":"int32","minimum":0},"desired":{"type":["integer","null"],"format":"int32","minimum":0},"ready":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"ObservedCounts"},"runningContainers":{"type":["integer","null"],"format":"int32","minimum":0},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"ComputeClusterHeartbeatStatus"},"trackedContainers":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"LocalComputeClusterHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["local"]}}}]}],"x-readme-ref-name":"ComputeClusterHeartbeatData"}
+{
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "nodes",
+            "name",
+            "capacityGroups",
+            "providerFleets"
+          ],
+          "properties": {
+            "backendClusterId": { "type": ["string", "null"] },
+            "capacityGroups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["groupId", "currentMachines", "desiredMachines"],
+                "properties": {
+                  "capacityBlocker": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["category", "message", "observedAt"],
+                        "properties": {
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "quota",
+                              "capacity",
+                              "allocation",
+                              "other"
+                            ],
+                            "x-readme-ref-name": "ComputeCapacityBlockerCategory"
+                          },
+                          "message": { "type": "string" },
+                          "observedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "providerCode": { "type": ["string", "null"] },
+                          "providerReference": { "type": ["string", "null"] }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityBlocker"
+                      }
+                    ]
+                  },
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "instanceType": { "type": ["string", "null"] },
+                  "maxMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "minMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "recommendation": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["desiredMachines"],
+                        "properties": {
+                          "desiredMachines": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "reason": { "type": ["string", "null"] },
+                          "unschedulableReplicas": {
+                            "type": ["integer", "null"],
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "utilization": {
+                            "oneOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "required": ["value", "unit"],
+                                "properties": {
+                                  "unit": {
+                                    "type": "string",
+                                    "enum": [
+                                      "count",
+                                      "percent",
+                                      "bytes",
+                                      "cores",
+                                      "milliseconds",
+                                      "requests-per-second"
+                                    ],
+                                    "x-readme-ref-name": "MetricUnit"
+                                  },
+                                  "value": {
+                                    "type": "number",
+                                    "format": "double"
+                                  }
+                                },
+                                "x-readme-ref-name": "MetricSample"
+                              }
+                            ]
+                          }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityRecommendation"
+                      }
+                    ]
+                  }
+                },
+                "x-readme-ref-name": "ComputeCapacityGroupStatus"
+              }
+            },
+            "cpu": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "memory": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "name": { "type": "string" },
+            "nodes": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "desired": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "x-readme-ref-name": "ObservedCounts"
+            },
+            "providerFleets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "groupId",
+                  "providerId",
+                  "currentMachines",
+                  "desiredMachines"
+                ],
+                "properties": {
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "location": { "type": ["string", "null"] },
+                  "providerId": { "type": "string" }
+                },
+                "x-readme-ref-name": "ProviderFleetStatus"
+              }
+            },
+            "region": { "type": ["string", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "ComputeClusterHeartbeatStatus"
+            }
+          },
+          "x-readme-ref-name": "AwsComputeClusterHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["aws"] } }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "nodes",
+            "name",
+            "capacityGroups",
+            "providerFleets"
+          ],
+          "properties": {
+            "backendClusterId": { "type": ["string", "null"] },
+            "capacityGroups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["groupId", "currentMachines", "desiredMachines"],
+                "properties": {
+                  "capacityBlocker": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["category", "message", "observedAt"],
+                        "properties": {
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "quota",
+                              "capacity",
+                              "allocation",
+                              "other"
+                            ],
+                            "x-readme-ref-name": "ComputeCapacityBlockerCategory"
+                          },
+                          "message": { "type": "string" },
+                          "observedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "providerCode": { "type": ["string", "null"] },
+                          "providerReference": { "type": ["string", "null"] }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityBlocker"
+                      }
+                    ]
+                  },
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "instanceType": { "type": ["string", "null"] },
+                  "maxMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "minMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "recommendation": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["desiredMachines"],
+                        "properties": {
+                          "desiredMachines": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "reason": { "type": ["string", "null"] },
+                          "unschedulableReplicas": {
+                            "type": ["integer", "null"],
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "utilization": {
+                            "oneOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "required": ["value", "unit"],
+                                "properties": {
+                                  "unit": {
+                                    "type": "string",
+                                    "enum": [
+                                      "count",
+                                      "percent",
+                                      "bytes",
+                                      "cores",
+                                      "milliseconds",
+                                      "requests-per-second"
+                                    ],
+                                    "x-readme-ref-name": "MetricUnit"
+                                  },
+                                  "value": {
+                                    "type": "number",
+                                    "format": "double"
+                                  }
+                                },
+                                "x-readme-ref-name": "MetricSample"
+                              }
+                            ]
+                          }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityRecommendation"
+                      }
+                    ]
+                  }
+                },
+                "x-readme-ref-name": "ComputeCapacityGroupStatus"
+              }
+            },
+            "cpu": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "memory": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "name": { "type": "string" },
+            "nodes": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "desired": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "x-readme-ref-name": "ObservedCounts"
+            },
+            "providerFleets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "groupId",
+                  "providerId",
+                  "currentMachines",
+                  "desiredMachines"
+                ],
+                "properties": {
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "location": { "type": ["string", "null"] },
+                  "providerId": { "type": "string" }
+                },
+                "x-readme-ref-name": "ProviderFleetStatus"
+              }
+            },
+            "region": { "type": ["string", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "ComputeClusterHeartbeatStatus"
+            }
+          },
+          "x-readme-ref-name": "GcpComputeClusterHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["gcp"] } }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "nodes",
+            "name",
+            "capacityGroups",
+            "providerFleets"
+          ],
+          "properties": {
+            "backendClusterId": { "type": ["string", "null"] },
+            "capacityGroups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["groupId", "currentMachines", "desiredMachines"],
+                "properties": {
+                  "capacityBlocker": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["category", "message", "observedAt"],
+                        "properties": {
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "quota",
+                              "capacity",
+                              "allocation",
+                              "other"
+                            ],
+                            "x-readme-ref-name": "ComputeCapacityBlockerCategory"
+                          },
+                          "message": { "type": "string" },
+                          "observedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "providerCode": { "type": ["string", "null"] },
+                          "providerReference": { "type": ["string", "null"] }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityBlocker"
+                      }
+                    ]
+                  },
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "instanceType": { "type": ["string", "null"] },
+                  "maxMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "minMachines": {
+                    "type": ["integer", "null"],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "recommendation": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["desiredMachines"],
+                        "properties": {
+                          "desiredMachines": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "reason": { "type": ["string", "null"] },
+                          "unschedulableReplicas": {
+                            "type": ["integer", "null"],
+                            "format": "int32",
+                            "minimum": 0
+                          },
+                          "utilization": {
+                            "oneOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "required": ["value", "unit"],
+                                "properties": {
+                                  "unit": {
+                                    "type": "string",
+                                    "enum": [
+                                      "count",
+                                      "percent",
+                                      "bytes",
+                                      "cores",
+                                      "milliseconds",
+                                      "requests-per-second"
+                                    ],
+                                    "x-readme-ref-name": "MetricUnit"
+                                  },
+                                  "value": {
+                                    "type": "number",
+                                    "format": "double"
+                                  }
+                                },
+                                "x-readme-ref-name": "MetricSample"
+                              }
+                            ]
+                          }
+                        },
+                        "x-readme-ref-name": "ComputeCapacityRecommendation"
+                      }
+                    ]
+                  }
+                },
+                "x-readme-ref-name": "ComputeCapacityGroupStatus"
+              }
+            },
+            "cpu": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "memory": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "unit"],
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "percent",
+                        "bytes",
+                        "cores",
+                        "milliseconds",
+                        "requests-per-second"
+                      ],
+                      "x-readme-ref-name": "MetricUnit"
+                    },
+                    "value": { "type": "number", "format": "double" }
+                  },
+                  "x-readme-ref-name": "MetricSample"
+                }
+              ]
+            },
+            "name": { "type": "string" },
+            "nodes": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "desired": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "x-readme-ref-name": "ObservedCounts"
+            },
+            "providerFleets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "groupId",
+                  "providerId",
+                  "currentMachines",
+                  "desiredMachines"
+                ],
+                "properties": {
+                  "currentMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "desiredMachines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "groupId": { "type": "string" },
+                  "location": { "type": ["string", "null"] },
+                  "providerId": { "type": "string" }
+                },
+                "x-readme-ref-name": "ProviderFleetStatus"
+              }
+            },
+            "region": { "type": ["string", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "ComputeClusterHeartbeatStatus"
+            }
+          },
+          "x-readme-ref-name": "AzureComputeClusterHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["azure"] } }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "nodes",
+            "name",
+            "dockerAvailable",
+            "networkAvailable"
+          ],
+          "properties": {
+            "dockerApiVersion": { "type": ["string", "null"] },
+            "dockerArch": { "type": ["string", "null"] },
+            "dockerAvailable": { "type": "boolean" },
+            "dockerOs": { "type": ["string", "null"] },
+            "dockerVersion": { "type": ["string", "null"] },
+            "hostIdentifier": { "type": ["string", "null"] },
+            "name": { "type": "string" },
+            "networkAvailable": { "type": "boolean" },
+            "networkName": { "type": ["string", "null"] },
+            "nodes": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "desired": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "x-readme-ref-name": "ObservedCounts"
+            },
+            "runningContainers": {
+              "type": ["integer", "null"],
+              "format": "int32",
+              "minimum": 0
+            },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "ComputeClusterHeartbeatStatus"
+            },
+            "trackedContainers": {
+              "type": ["integer", "null"],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "x-readme-ref-name": "LocalComputeClusterHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["local"] } }
+        }
+      ]
+    }
+  ],
+  "x-readme-ref-name": "ComputeClusterHeartbeatData"
+}

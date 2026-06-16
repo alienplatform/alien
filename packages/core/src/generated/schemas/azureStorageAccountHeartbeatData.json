@@ -1,1 +1,128 @@
-{"type":"object","required":["status","name","primaryEndpoints","secondaryEndpoints"],"properties":{"allowBlobPublicAccess":{"type":["boolean","null"]},"allowSharedKeyAccess":{"type":["boolean","null"]},"encryptionKeySource":{"type":["string","null"]},"kind":{"type":["string","null"]},"location":{"type":["string","null"]},"minimumTlsVersion":{"type":["string","null"]},"name":{"type":"string"},"networkBypass":{"type":["string","null"]},"networkDefaultAction":{"type":["string","null"]},"networkIpRuleCount":{"type":["integer","null"],"format":"int32","minimum":0},"networkResourceAccessRuleCount":{"type":["integer","null"],"format":"int32","minimum":0},"networkVirtualNetworkRuleCount":{"type":["integer","null"],"format":"int32","minimum":0},"primaryEndpoints":{"type":"object","properties":{"blob":{"type":["string","null"]},"dfs":{"type":["string","null"]},"file":{"type":["string","null"]},"queue":{"type":["string","null"]},"table":{"type":["string","null"]},"web":{"type":["string","null"]}},"x-readme-ref-name":"AzureStorageAccountEndpoints"},"provisioningState":{"type":["string","null"]},"publicNetworkAccess":{"type":["string","null"]},"requireInfrastructureEncryption":{"type":["boolean","null"]},"resourceGroup":{"type":["string","null"]},"resourceId":{"type":["string","null"]},"secondaryEndpoints":{"type":"object","properties":{"blob":{"type":["string","null"]},"dfs":{"type":["string","null"]},"file":{"type":["string","null"]},"queue":{"type":["string","null"]},"table":{"type":["string","null"]},"web":{"type":["string","null"]}},"x-readme-ref-name":"AzureStorageAccountEndpoints"},"skuName":{"type":["string","null"]},"skuTier":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"StorageHeartbeatStatus"},"supportsHttpsTrafficOnly":{"type":["boolean","null"]}},"x-readme-ref-name":"AzureStorageAccountHeartbeatData"}
+{
+  "type": "object",
+  "required": ["status", "name", "primaryEndpoints", "secondaryEndpoints"],
+  "properties": {
+    "allowBlobPublicAccess": { "type": ["boolean", "null"] },
+    "allowSharedKeyAccess": { "type": ["boolean", "null"] },
+    "encryptionKeySource": { "type": ["string", "null"] },
+    "kind": { "type": ["string", "null"] },
+    "location": { "type": ["string", "null"] },
+    "minimumTlsVersion": { "type": ["string", "null"] },
+    "name": { "type": "string" },
+    "networkBypass": { "type": ["string", "null"] },
+    "networkDefaultAction": { "type": ["string", "null"] },
+    "networkIpRuleCount": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "networkResourceAccessRuleCount": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "networkVirtualNetworkRuleCount": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "primaryEndpoints": {
+      "type": "object",
+      "properties": {
+        "blob": { "type": ["string", "null"] },
+        "dfs": { "type": ["string", "null"] },
+        "file": { "type": ["string", "null"] },
+        "queue": { "type": ["string", "null"] },
+        "table": { "type": ["string", "null"] },
+        "web": { "type": ["string", "null"] }
+      },
+      "x-readme-ref-name": "AzureStorageAccountEndpoints"
+    },
+    "provisioningState": { "type": ["string", "null"] },
+    "publicNetworkAccess": { "type": ["string", "null"] },
+    "requireInfrastructureEncryption": { "type": ["boolean", "null"] },
+    "resourceGroup": { "type": ["string", "null"] },
+    "resourceId": { "type": ["string", "null"] },
+    "secondaryEndpoints": {
+      "type": "object",
+      "properties": {
+        "blob": { "type": ["string", "null"] },
+        "dfs": { "type": ["string", "null"] },
+        "file": { "type": ["string", "null"] },
+        "queue": { "type": ["string", "null"] },
+        "table": { "type": ["string", "null"] },
+        "web": { "type": ["string", "null"] }
+      },
+      "x-readme-ref-name": "AzureStorageAccountEndpoints"
+    },
+    "skuName": { "type": ["string", "null"] },
+    "skuTier": { "type": ["string", "null"] },
+    "status": {
+      "type": "object",
+      "required": [
+        "health",
+        "lifecycle",
+        "stale",
+        "partial",
+        "collectionIssues"
+      ],
+      "properties": {
+        "collectionIssues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "reason", "severity", "message"],
+            "properties": {
+              "message": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "forbidden",
+                  "not-installed",
+                  "api-unavailable",
+                  "collection-failed",
+                  "timed-out"
+                ],
+                "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"],
+                "x-readme-ref-name": "HeartbeatIssueSeverity"
+              },
+              "source": { "type": "string" }
+            },
+            "x-readme-ref-name": "HeartbeatCollectionIssue"
+          }
+        },
+        "health": {
+          "type": "string",
+          "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+          "x-readme-ref-name": "ObservedHealth"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "creating",
+            "updating",
+            "running",
+            "scaling",
+            "stopping",
+            "stopped",
+            "deleting",
+            "deleted",
+            "failed"
+          ],
+          "x-readme-ref-name": "ProviderLifecycleState"
+        },
+        "message": { "type": ["string", "null"] },
+        "partial": { "type": "boolean" },
+        "stale": { "type": "boolean" }
+      },
+      "x-readme-ref-name": "StorageHeartbeatStatus"
+    },
+    "supportsHttpsTrafficOnly": { "type": ["boolean", "null"] }
+  },
+  "x-readme-ref-name": "AzureStorageAccountHeartbeatData"
+}

@@ -1,1 +1,9 @@
-{"type":"object","required":["daemonName","running"],"properties":{"daemonName":{"type":"string"},"running":{"type":"boolean"}},"x-readme-ref-name":"DaemonOutputs"}
+{
+  "type": "object",
+  "required": ["daemonName", "running"],
+  "properties": {
+    "daemonName": { "type": "string" },
+    "running": { "type": "boolean" }
+  },
+  "x-readme-ref-name": "DaemonOutputs"
+}

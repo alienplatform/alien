@@ -1,1 +1,137 @@
-{"type":"object","required":["status","topicName","topicLabels","subscriptionLabels","messageStorageAllowedPersistenceRegions","subscriptionPushAttributes"],"properties":{"endpoint":{"type":["string","null"]},"kmsKeyName":{"type":["string","null"]},"messageStorageAllowedPersistenceRegions":{"type":"array","items":{"type":"string"}},"messageStorageEnforceInTransit":{"type":["boolean","null"]},"projectId":{"type":["string","null"]},"schemaEncoding":{"type":["string","null"]},"schemaFirstRevisionId":{"type":["string","null"]},"schemaLastRevisionId":{"type":["string","null"]},"schemaName":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"QueueHeartbeatStatus"},"subscriptionAckDeadlineSeconds":{"type":["integer","null"],"format":"int32","minimum":0},"subscriptionDeadLetterMaxDeliveryAttempts":{"type":["integer","null"],"format":"int32","minimum":0},"subscriptionDeadLetterTopic":{"type":["string","null"]},"subscriptionDetached":{"type":["boolean","null"]},"subscriptionEnableMessageOrdering":{"type":["boolean","null"]},"subscriptionFilter":{"type":["string","null"]},"subscriptionFullName":{"type":["string","null"]},"subscriptionLabels":{"type":"object","additionalProperties":{"type":"string"},"propertyNames":{"type":"string"}},"subscriptionMessageRetentionDuration":{"type":["string","null"]},"subscriptionName":{"type":["string","null"]},"subscriptionPushAttributes":{"type":"object","additionalProperties":{"type":"string"},"propertyNames":{"type":"string"}},"subscriptionPushConfigPresent":{"type":["boolean","null"]},"subscriptionPushEndpoint":{"type":["string","null"]},"subscriptionPushNoWrapperWriteMetadata":{"type":["boolean","null"]},"subscriptionPushOidcAudience":{"type":["string","null"]},"subscriptionPushOidcServiceAccountEmail":{"type":["string","null"]},"subscriptionPushPubsubWrapperWriteMetadata":{"type":["boolean","null"]},"subscriptionRetainAckedMessages":{"type":["boolean","null"]},"subscriptionState":{"type":["string","null"]},"topicFullName":{"type":["string","null"]},"topicLabels":{"type":"object","additionalProperties":{"type":"string"},"propertyNames":{"type":"string"}},"topicMessageRetentionDuration":{"type":["string","null"]},"topicName":{"type":"string"},"topicState":{"type":["string","null"]}},"x-readme-ref-name":"GcpPubSubQueueHeartbeatData"}
+{
+  "type": "object",
+  "required": [
+    "status",
+    "topicName",
+    "topicLabels",
+    "subscriptionLabels",
+    "messageStorageAllowedPersistenceRegions",
+    "subscriptionPushAttributes"
+  ],
+  "properties": {
+    "endpoint": { "type": ["string", "null"] },
+    "kmsKeyName": { "type": ["string", "null"] },
+    "messageStorageAllowedPersistenceRegions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "messageStorageEnforceInTransit": { "type": ["boolean", "null"] },
+    "projectId": { "type": ["string", "null"] },
+    "schemaEncoding": { "type": ["string", "null"] },
+    "schemaFirstRevisionId": { "type": ["string", "null"] },
+    "schemaLastRevisionId": { "type": ["string", "null"] },
+    "schemaName": { "type": ["string", "null"] },
+    "status": {
+      "type": "object",
+      "required": [
+        "health",
+        "lifecycle",
+        "stale",
+        "partial",
+        "collectionIssues"
+      ],
+      "properties": {
+        "collectionIssues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "reason", "severity", "message"],
+            "properties": {
+              "message": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "forbidden",
+                  "not-installed",
+                  "api-unavailable",
+                  "collection-failed",
+                  "timed-out"
+                ],
+                "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"],
+                "x-readme-ref-name": "HeartbeatIssueSeverity"
+              },
+              "source": { "type": "string" }
+            },
+            "x-readme-ref-name": "HeartbeatCollectionIssue"
+          }
+        },
+        "health": {
+          "type": "string",
+          "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+          "x-readme-ref-name": "ObservedHealth"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "creating",
+            "updating",
+            "running",
+            "scaling",
+            "stopping",
+            "stopped",
+            "deleting",
+            "deleted",
+            "failed"
+          ],
+          "x-readme-ref-name": "ProviderLifecycleState"
+        },
+        "message": { "type": ["string", "null"] },
+        "partial": { "type": "boolean" },
+        "stale": { "type": "boolean" }
+      },
+      "x-readme-ref-name": "QueueHeartbeatStatus"
+    },
+    "subscriptionAckDeadlineSeconds": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "subscriptionDeadLetterMaxDeliveryAttempts": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "subscriptionDeadLetterTopic": { "type": ["string", "null"] },
+    "subscriptionDetached": { "type": ["boolean", "null"] },
+    "subscriptionEnableMessageOrdering": { "type": ["boolean", "null"] },
+    "subscriptionFilter": { "type": ["string", "null"] },
+    "subscriptionFullName": { "type": ["string", "null"] },
+    "subscriptionLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "type": "string" }
+    },
+    "subscriptionMessageRetentionDuration": { "type": ["string", "null"] },
+    "subscriptionName": { "type": ["string", "null"] },
+    "subscriptionPushAttributes": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "type": "string" }
+    },
+    "subscriptionPushConfigPresent": { "type": ["boolean", "null"] },
+    "subscriptionPushEndpoint": { "type": ["string", "null"] },
+    "subscriptionPushNoWrapperWriteMetadata": { "type": ["boolean", "null"] },
+    "subscriptionPushOidcAudience": { "type": ["string", "null"] },
+    "subscriptionPushOidcServiceAccountEmail": { "type": ["string", "null"] },
+    "subscriptionPushPubsubWrapperWriteMetadata": {
+      "type": ["boolean", "null"]
+    },
+    "subscriptionRetainAckedMessages": { "type": ["boolean", "null"] },
+    "subscriptionState": { "type": ["string", "null"] },
+    "topicFullName": { "type": ["string", "null"] },
+    "topicLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "type": "string" }
+    },
+    "topicMessageRetentionDuration": { "type": ["string", "null"] },
+    "topicName": { "type": "string" },
+    "topicState": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "GcpPubSubQueueHeartbeatData"
+}

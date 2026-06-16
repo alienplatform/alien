@@ -1,1 +1,5 @@
-{"type":"string","enum":["container","process","daemon"],"x-readme-ref-name":"LocalRuntimeUnitKind"}
+{
+  "type": "string",
+  "enum": ["container", "process", "daemon"],
+  "x-readme-ref-name": "LocalRuntimeUnitKind"
+}

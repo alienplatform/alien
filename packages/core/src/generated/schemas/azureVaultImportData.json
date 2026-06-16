@@ -1,1 +1,21 @@
-{"type":"object","description":"Azure Vault ImportData — a Key Vault namespace.","required":["subscriptionId","resourceGroup","vaultName","vaultUri"],"properties":{"resourceGroup":{"type":"string","description":"Resource group containing the Key Vault."},"subscriptionId":{"type":"string","description":"Subscription ID containing the Key Vault."},"vaultName":{"type":"string","description":"Key Vault name."},"vaultUri":{"type":"string","description":"Vault DNS-style URI (`https://<name>.vault.azure.net/`)."}},"x-readme-ref-name":"AzureVaultImportData"}
+{
+  "type": "object",
+  "description": "Azure Vault ImportData — a Key Vault namespace.",
+  "required": ["subscriptionId", "resourceGroup", "vaultName", "vaultUri"],
+  "properties": {
+    "resourceGroup": {
+      "type": "string",
+      "description": "Resource group containing the Key Vault."
+    },
+    "subscriptionId": {
+      "type": "string",
+      "description": "Subscription ID containing the Key Vault."
+    },
+    "vaultName": { "type": "string", "description": "Key Vault name." },
+    "vaultUri": {
+      "type": "string",
+      "description": "Vault DNS-style URI (`https://<name>.vault.azure.net/`)."
+    }
+  },
+  "x-readme-ref-name": "AzureVaultImportData"
+}

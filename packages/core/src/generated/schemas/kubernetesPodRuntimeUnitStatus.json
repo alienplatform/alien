@@ -1,1 +1,80 @@
-{"type":"object","required":["name","ready","restartCount","ownerReferences"],"properties":{"cpu":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"memory":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]},"name":{"type":"string"},"nodeName":{"type":["string","null"]},"ownerReferences":{"type":"array","items":{"type":"object","required":["kind","name","uid","controller"],"properties":{"controller":{"type":"boolean"},"kind":{"type":"string"},"name":{"type":"string"},"uid":{"type":"string"}},"x-readme-ref-name":"KubernetesOwnerReference"}},"phase":{"type":["string","null"]},"podIp":{"type":["string","null"]},"ready":{"type":"boolean"},"restartCount":{"type":"integer","format":"int32","minimum":0},"terminatedReason":{"type":["string","null"]},"uid":{"type":["string","null"]},"waitingReason":{"type":["string","null"]}},"x-readme-ref-name":"KubernetesPodRuntimeUnitStatus"}
+{
+  "type": "object",
+  "required": ["name", "ready", "restartCount", "ownerReferences"],
+  "properties": {
+    "cpu": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["value", "unit"],
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "count",
+                "percent",
+                "bytes",
+                "cores",
+                "milliseconds",
+                "requests-per-second"
+              ],
+              "x-readme-ref-name": "MetricUnit"
+            },
+            "value": { "type": "number", "format": "double" }
+          },
+          "x-readme-ref-name": "MetricSample"
+        }
+      ]
+    },
+    "memory": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["value", "unit"],
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "count",
+                "percent",
+                "bytes",
+                "cores",
+                "milliseconds",
+                "requests-per-second"
+              ],
+              "x-readme-ref-name": "MetricUnit"
+            },
+            "value": { "type": "number", "format": "double" }
+          },
+          "x-readme-ref-name": "MetricSample"
+        }
+      ]
+    },
+    "name": { "type": "string" },
+    "nodeName": { "type": ["string", "null"] },
+    "ownerReferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "uid", "controller"],
+        "properties": {
+          "controller": { "type": "boolean" },
+          "kind": { "type": "string" },
+          "name": { "type": "string" },
+          "uid": { "type": "string" }
+        },
+        "x-readme-ref-name": "KubernetesOwnerReference"
+      }
+    },
+    "phase": { "type": ["string", "null"] },
+    "podIp": { "type": ["string", "null"] },
+    "ready": { "type": "boolean" },
+    "restartCount": { "type": "integer", "format": "int32", "minimum": 0 },
+    "terminatedReason": { "type": ["string", "null"] },
+    "uid": { "type": ["string", "null"] },
+    "waitingReason": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "KubernetesPodRuntimeUnitStatus"
+}

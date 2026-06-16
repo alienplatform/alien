@@ -1,1 +1,20 @@
-{"type":"object","required":["tlsSecretRef"],"properties":{"tlsSecretRef":{"description":"Existing TLS Secret containing `tls.crt` and `tls.key`.","type":"object","required":["secretName"],"properties":{"namespace":{"type":["string","null"],"description":"Secret namespace. Defaults to the release namespace when omitted."},"secretName":{"type":"string","description":"Secret name."}},"x-readme-ref-name":"KubernetesTlsSecretRef"}},"x-readme-ref-name":"KubernetesCustomCertificateConfig"}
+{
+  "type": "object",
+  "required": ["tlsSecretRef"],
+  "properties": {
+    "tlsSecretRef": {
+      "description": "Existing TLS Secret containing `tls.crt` and `tls.key`.",
+      "type": "object",
+      "required": ["secretName"],
+      "properties": {
+        "namespace": {
+          "type": ["string", "null"],
+          "description": "Secret namespace. Defaults to the release namespace when omitted."
+        },
+        "secretName": { "type": "string", "description": "Secret name." }
+      },
+      "x-readme-ref-name": "KubernetesTlsSecretRef"
+    }
+  },
+  "x-readme-ref-name": "KubernetesCustomCertificateConfig"
+}

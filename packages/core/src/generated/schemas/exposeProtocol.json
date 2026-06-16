@@ -1,1 +1,6 @@
-{"type":"string","description":"Protocol for exposed ports.","enum":["http","tcp"],"x-readme-ref-name":"ExposeProtocol"}
+{
+  "type": "string",
+  "description": "Protocol for exposed ports.",
+  "enum": ["http", "tcp"],
+  "x-readme-ref-name": "ExposeProtocol"
+}

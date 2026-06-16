@@ -1,1 +1,16 @@
-{"type":"object","description":"Information about a deployed resource","required":["url"],"properties":{"resourceType":{"type":["string","null"],"description":"Resource type (\"worker\" | \"container\")"},"url":{"type":"string","description":"Resource URL (e.g., http://localhost:8080)"}},"x-readme-ref-name":"DevResourceInfo"}
+{
+  "type": "object",
+  "description": "Information about a deployed resource",
+  "required": ["url"],
+  "properties": {
+    "resourceType": {
+      "type": ["string", "null"],
+      "description": "Resource type (\"worker\" | \"container\")"
+    },
+    "url": {
+      "type": "string",
+      "description": "Resource URL (e.g., http://localhost:8080)"
+    }
+  },
+  "x-readme-ref-name": "DevResourceInfo"
+}

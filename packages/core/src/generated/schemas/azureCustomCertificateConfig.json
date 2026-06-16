@@ -1,1 +1,9 @@
-{"type":"object","required":["keyVaultCertificateId"],"properties":{"keyVaultCertificateId":{"type":"string"},"keyVaultResourceId":{"type":["string","null"]}},"x-readme-ref-name":"AzureCustomCertificateConfig"}
+{
+  "type": "object",
+  "required": ["keyVaultCertificateId"],
+  "properties": {
+    "keyVaultCertificateId": { "type": "string" },
+    "keyVaultResourceId": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "AzureCustomCertificateConfig"
+}

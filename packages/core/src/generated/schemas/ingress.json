@@ -1,1 +1,6 @@
-{"type":"string","description":"Controls network accessibility of the worker.","enum":["public","private"],"x-readme-ref-name":"Ingress"}
+{
+  "type": "string",
+  "description": "Controls network accessibility of the worker.",
+  "enum": ["public", "private"],
+  "x-readme-ref-name": "Ingress"
+}

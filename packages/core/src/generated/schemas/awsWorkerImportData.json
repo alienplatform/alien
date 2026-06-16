@@ -1,1 +1,60 @@
-{"type":"object","description":"AWS Worker ImportData.","required":["functionName","functionArn","eventSourceMappings","eventbridgeRuleNames","s3PermissionStatementIds","eventbridgePermissionStatementIds"],"properties":{"apiId":{"type":["string","null"],"description":"API Gateway HTTP API ID, when public ingress is enabled."},"eventSourceMappings":{"type":"array","items":{"type":"string"},"description":"Queue event-source mapping UUIDs."},"eventbridgePermissionStatementIds":{"type":"array","items":{"type":"string"},"description":"Lambda permission statement IDs granted for EventBridge schedule triggers."},"eventbridgeRuleNames":{"type":"array","items":{"type":"string"},"description":"EventBridge rule names for schedule triggers."},"functionArn":{"type":"string","description":"Lambda function ARN."},"functionName":{"type":"string","description":"Lambda function name."},"integrationId":{"type":["string","null"],"description":"API Gateway integration ID, when public ingress is enabled."},"routeId":{"type":["string","null"],"description":"API Gateway route ID, when public ingress is enabled."},"s3PermissionStatementIds":{"type":"array","items":{"type":"string"},"description":"Lambda permission statement IDs granted for S3 storage triggers."},"stageName":{"type":["string","null"],"description":"API Gateway stage name, when public ingress is enabled."},"url":{"type":["string","null"],"description":"Public HTTPS URL, when public ingress is enabled."}},"x-readme-ref-name":"AwsWorkerImportData"}
+{
+  "type": "object",
+  "description": "AWS Worker ImportData.",
+  "required": [
+    "functionName",
+    "functionArn",
+    "eventSourceMappings",
+    "eventbridgeRuleNames",
+    "s3PermissionStatementIds",
+    "eventbridgePermissionStatementIds"
+  ],
+  "properties": {
+    "apiId": {
+      "type": ["string", "null"],
+      "description": "API Gateway HTTP API ID, when public ingress is enabled."
+    },
+    "eventSourceMappings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Queue event-source mapping UUIDs."
+    },
+    "eventbridgePermissionStatementIds": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Lambda permission statement IDs granted for EventBridge schedule triggers."
+    },
+    "eventbridgeRuleNames": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "EventBridge rule names for schedule triggers."
+    },
+    "functionArn": { "type": "string", "description": "Lambda function ARN." },
+    "functionName": {
+      "type": "string",
+      "description": "Lambda function name."
+    },
+    "integrationId": {
+      "type": ["string", "null"],
+      "description": "API Gateway integration ID, when public ingress is enabled."
+    },
+    "routeId": {
+      "type": ["string", "null"],
+      "description": "API Gateway route ID, when public ingress is enabled."
+    },
+    "s3PermissionStatementIds": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Lambda permission statement IDs granted for S3 storage triggers."
+    },
+    "stageName": {
+      "type": ["string", "null"],
+      "description": "API Gateway stage name, when public ingress is enabled."
+    },
+    "url": {
+      "type": ["string", "null"],
+      "description": "Public HTTPS URL, when public ingress is enabled."
+    }
+  },
+  "x-readme-ref-name": "AwsWorkerImportData"
+}
