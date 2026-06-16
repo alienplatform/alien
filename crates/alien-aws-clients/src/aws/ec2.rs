@@ -3571,3 +3571,46 @@ impl GetConsoleOutputResponse {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Setting `nested_virtualization=Some("enabled")` emits the AWS
+    /// form-encoded key `LaunchTemplateData.CpuOptions.NestedVirtualization`
+    /// with value `enabled`. Locks in the exact wire-format string AWS
+    /// rejects/accepts on the LT create endpoint.
+    #[test]
+    fn add_cpu_options_emits_nested_virtualization_key() {
+        let mut form_data = HashMap::new();
+        let cpu_options = LaunchTemplateCpuOptions::builder()
+            .nested_virtualization("enabled".to_string())
+            .build();
+        Ec2Client::add_cpu_options(&mut form_data, Some(&cpu_options));
+        assert_eq!(
+            form_data.get("LaunchTemplateData.CpuOptions.NestedVirtualization"),
+            Some(&"enabled".to_string())
+        );
+        assert_eq!(form_data.len(), 1);
+    }
+
+    /// `None` cpu_options → nothing is appended. Guards against accidentally
+    /// sending an empty `CpuOptions` block on non-privileged daemon deploys.
+    #[test]
+    fn add_cpu_options_with_none_emits_nothing() {
+        let mut form_data = HashMap::new();
+        Ec2Client::add_cpu_options(&mut form_data, None);
+        assert!(form_data.is_empty());
+    }
+
+    /// `Some(CpuOptions { nested_virtualization: None })` → nothing appended.
+    /// Future fields on CpuOptions could be set independently; the encoder
+    /// should not emit a key for an unset NestedVirtualization specifically.
+    #[test]
+    fn add_cpu_options_with_unset_nested_field_emits_nothing() {
+        let mut form_data = HashMap::new();
+        let cpu_options = LaunchTemplateCpuOptions::builder().build();
+        Ec2Client::add_cpu_options(&mut form_data, Some(&cpu_options));
+        assert!(form_data.is_empty());
+    }
+}

@@ -207,6 +207,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 3,
+                nested_virtualization: None,
             })
             .build();
 

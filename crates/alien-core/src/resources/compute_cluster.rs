@@ -312,6 +312,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 
@@ -330,6 +331,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 3,
+                nested_virtualization: None,
             })
             .capacity_group(CapacityGroup {
                 group_id: "gpu".to_string(),
@@ -345,6 +347,7 @@ mod tests {
                 }),
                 min_size: 0,
                 max_size: 2,
+                nested_virtualization: None,
             })
             .build();
 
@@ -369,6 +372,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 
@@ -384,6 +388,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 
@@ -394,6 +399,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 
@@ -410,6 +416,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 
@@ -420,6 +427,7 @@ mod tests {
                 profile: None,
                 min_size: 2,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
 
@@ -437,6 +445,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                nested_virtualization: None,
             })
             .build();
 

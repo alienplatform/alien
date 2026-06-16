@@ -714,6 +714,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
 
@@ -1225,6 +1226,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
         resources.insert(
@@ -1426,6 +1428,185 @@ mod tests {
                 c.cluster,
                 Some("compute".to_string()),
                 "container {id} should reference compute cluster"
+            );
+        }
+    }
+
+    /// Daemon with `nested_virtualization = true` propagates the flag to every
+    /// CapacityGroup auto-generated for the cluster it targets. The flag is
+    /// what `AwsComputeClusterController::launch_template_cpu_options` later
+    /// keys off to set `CpuOptions.NestedVirtualization=enabled` on the LT.
+    #[tokio::test]
+    async fn test_daemon_nested_virtualization_propagates_to_capacity_groups() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("api".to_string())
+            .build();
+
+        let daemon = Daemon::new("bear-agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "bear-agent:latest".to_string(),
+            })
+            .cluster("compute".to_string())
+            .permissions("loader".to_string())
+            .nested_virtualization(true)
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "bear-agent".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let mutation = ComputeClusterMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = result
+            .resources
+            .get("compute")
+            .unwrap()
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+
+        assert!(
+            !cluster.capacity_groups.is_empty(),
+            "expected at least one capacity group"
+        );
+        for group in &cluster.capacity_groups {
+            assert_eq!(
+                group.nested_virtualization,
+                Some(true),
+                "group '{}' should inherit nested_virtualization from the daemon",
+                group.group_id
+            );
+        }
+    }
+
+    /// Negative case: daemon with default `nested_virtualization = false`
+    /// leaves CapacityGroups unconstrained (`None`). Prevents accidentally
+    /// upgrading the cluster's instance-type allowlist when no daemon asked.
+    #[tokio::test]
+    async fn test_daemon_default_nested_virtualization_leaves_groups_unconstrained() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("api".to_string())
+            .build();
+
+        let daemon = Daemon::new("collector".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "collector:latest".to_string(),
+            })
+            .cluster("compute".to_string())
+            .permissions("default".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "collector".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let mutation = ComputeClusterMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = result
+            .resources
+            .get("compute")
+            .unwrap()
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+
+        for group in &cluster.capacity_groups {
+            assert_eq!(
+                group.nested_virtualization, None,
+                "group '{}' should not be constrained when no daemon opts in",
+                group.group_id
             );
         }
     }

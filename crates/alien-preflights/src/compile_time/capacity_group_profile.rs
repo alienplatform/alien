@@ -115,6 +115,7 @@ mod tests {
                 }),
                 min_size: 1,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
 
@@ -138,6 +139,7 @@ mod tests {
                 }),
                 min_size: 1,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
 
@@ -157,6 +159,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 10,
+                nested_virtualization: None,
             })
             .build();
 
@@ -176,6 +179,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 1,
+                nested_virtualization: None,
             })
             .build();
 

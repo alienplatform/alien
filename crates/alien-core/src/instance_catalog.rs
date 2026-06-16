@@ -1413,6 +1413,7 @@ mod tests {
             max_memory_per_container: 1 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
@@ -1431,6 +1432,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
@@ -1449,6 +1451,7 @@ mod tests {
             max_memory_per_container: 2 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
@@ -1466,6 +1469,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 500 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
@@ -1486,6 +1490,7 @@ mod tests {
                 gpu_type: "nvidia-a100".to_string(),
                 count: 1,
             }),
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
@@ -1504,6 +1509,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let sel = select_instance_type(platform, &req);
@@ -1523,6 +1529,7 @@ mod tests {
             max_memory_per_container: 2 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         assert!(sel.min_machines >= 1);
@@ -1542,6 +1549,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Gcp, &req).unwrap();
         let spec = find_instance_type(Platform::Gcp, sel.instance_type).unwrap();
@@ -1570,6 +1578,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 20 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Gcp, &req).unwrap();
         // Should pick n2-standard-8 (8 vCPU, 32 GiB) — NOT c3-standard-44
@@ -1588,6 +1597,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         assert!(!sel.profile.cpu.is_empty());
@@ -1609,6 +1619,7 @@ mod tests {
                 gpu_type: "amd-mi300".to_string(),
                 count: 1,
             }),
+            nested_virt: false,
         };
         let result = select_instance_type(Platform::Aws, &req);
         assert!(result.is_err());
