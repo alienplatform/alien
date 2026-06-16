@@ -457,19 +457,22 @@ async fn validate_linked_project(
 pub async fn get_project_by_name(
     http: &AuthHttp,
     workspace: &str,
+    workspace_query: Option<&str>,
     project_name: &str,
 ) -> Result<ProjectLink> {
     let client = http.sdk_client();
-    let workspace_param = types::ListProjectsWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: format!("Invalid workspace name format: '{workspace}'"),
-        })?;
+    let mut request = client.list_projects();
+    if let Some(workspace_query) = workspace_query {
+        let workspace_param = types::ListProjectsWorkspace::try_from(workspace_query)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace name format: '{workspace_query}'"),
+            })?;
+        request = request.workspace(&workspace_param);
+    }
 
-    let response = client
-        .list_projects()
-        .workspace(&workspace_param)
+    let response = request
         .send()
         .await
         .into_sdk_error()

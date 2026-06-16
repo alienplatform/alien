@@ -71,7 +71,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
     let mut git_repository_warning = None;
 
     let link = if let Some(project_name) = ctx.project_override() {
-        get_project_by_name(&http, &workspace_name, project_name).await?
+        get_project_by_name(&http, &workspace_name, Some(&workspace_name), project_name).await?
     } else if let Some(name) = args.name.as_deref() {
         let selection = crate::project_link::create_new_project(
             http.sdk_client(),

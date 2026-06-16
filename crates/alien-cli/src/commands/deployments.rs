@@ -610,7 +610,8 @@ async fn create_deployment_task(
         )
     } else {
         let http = ctx.auth_http().await?;
-        crate::project_link::get_project_by_name(&http, workspace, project_name).await?
+        crate::project_link::get_project_by_name(&http, workspace, Some(workspace), project_name)
+            .await?
     };
 
     let platform = match platform_str {

@@ -14,7 +14,11 @@
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_manager_api::Client as ServerSdkClient;
+#[cfg(feature = "platform")]
+use alien_platform_api::types::Subject;
 use alien_platform_api::Client as SdkClient;
+#[cfg(feature = "platform")]
+use alien_platform_api::SdkResultExt as _;
 use tokio::time::Duration;
 use tracing::{info, warn};
 
@@ -48,6 +52,12 @@ pub struct ManagerContext {
     /// the user's identity — user OAuth tokens don't carry that themselves.
     /// `None` in single-tenant modes (dev, standalone).
     pub workspace: Option<String>,
+}
+
+#[cfg(feature = "platform")]
+pub struct PlatformWorkspaceContext {
+    pub name: String,
+    pub query: Option<String>,
 }
 
 /// Execution mode determines which API the command targets and carries all global flags.
@@ -239,6 +249,95 @@ impl ExecutionMode {
         self.resolve_workspace_with_bootstrap(true).await
     }
 
+    /// Resolve the optional workspace query/header for platform API requests.
+    ///
+    /// User credentials need an explicit workspace because roles are per-workspace.
+    /// API keys are already scoped, so a saved OAuth default workspace must not be
+    /// inherited; only an explicit `--workspace` should be forwarded for mismatch
+    /// checking.
+    #[cfg(feature = "platform")]
+    pub async fn resolve_workspace_query_with_bootstrap(
+        &self,
+        allow_prompt: bool,
+    ) -> Result<Option<String>> {
+        match self {
+            Self::Platform {
+                api_key: Some(_),
+                workspace,
+                ..
+            } => Ok(workspace.clone()),
+            Self::Platform { .. } => self
+                .resolve_workspace_with_bootstrap(allow_prompt)
+                .await
+                .map(Some),
+            Self::Dev { .. } => Ok(Some("local-dev".to_string())),
+            Self::Standalone { .. } => Ok(Some("default".to_string())),
+        }
+    }
+
+    #[cfg(feature = "platform")]
+    pub async fn resolve_platform_workspace_context(
+        &self,
+        allow_prompt: bool,
+    ) -> Result<PlatformWorkspaceContext> {
+        match self {
+            Self::Platform {
+                api_key: Some(_),
+                workspace: Some(workspace),
+                ..
+            } => Ok(PlatformWorkspaceContext {
+                name: workspace.clone(),
+                query: Some(workspace.clone()),
+            }),
+            Self::Platform {
+                api_key: Some(_), ..
+            } => {
+                let http = self.auth_http().await?;
+                let subject = http
+                    .sdk_client()
+                    .whoami()
+                    .send()
+                    .await
+                    .into_sdk_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: "Failed to resolve API key workspace".to_string(),
+                        url: None,
+                    })?
+                    .into_inner();
+
+                let workspace_name = match subject {
+                    Subject::ServiceAccountSubject(subject) => subject.workspace_name,
+                    Subject::UserSubject(_) => None,
+                }
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: "API key subject is missing workspace name".to_string(),
+                    })
+                })?;
+
+                Ok(PlatformWorkspaceContext {
+                    name: workspace_name,
+                    query: None,
+                })
+            }
+            Self::Platform { .. } => {
+                let workspace = self.resolve_workspace_with_bootstrap(allow_prompt).await?;
+                Ok(PlatformWorkspaceContext {
+                    name: workspace.clone(),
+                    query: Some(workspace),
+                })
+            }
+            Self::Dev { .. } => Ok(PlatformWorkspaceContext {
+                name: "local-dev".to_string(),
+                query: Some("local-dev".to_string()),
+            }),
+            Self::Standalone { .. } => Ok(PlatformWorkspaceContext {
+                name: "default".to_string(),
+                query: Some("default".to_string()),
+            }),
+        }
+    }
+
     /// Get global project override (if any).
     pub fn project_override(&self) -> Option<&str> {
         match self {
@@ -372,16 +471,19 @@ impl ExecutionMode {
             #[cfg(feature = "platform")]
             Self::Platform { .. } => {
                 let http = self.auth_http().await?;
-                let workspace = self.resolve_workspace_with_bootstrap(true).await?;
+                let workspace = self.resolve_platform_workspace_context(true).await?;
 
-                // Call GET /v1/resolve?platform=X&project=Y&workspace=Z
-                let resolve_url = format!(
-                    "{}/v1/resolve?platform={}&project={}&workspace={}",
-                    http.base_url,
-                    urlencoding::encode(platform),
-                    urlencoding::encode(project),
-                    urlencoding::encode(&workspace),
-                );
+                // Call GET /v1/resolve?platform=X&project=Y[&workspace=Z].
+                // API keys are already workspace-scoped, so workspace is omitted
+                // unless the caller explicitly supplied one.
+                let mut query = vec![
+                    format!("platform={}", urlencoding::encode(platform)),
+                    format!("project={}", urlencoding::encode(project)),
+                ];
+                if let Some(workspace) = &workspace.query {
+                    query.push(format!("workspace={}", urlencoding::encode(workspace)));
+                }
+                let resolve_url = format!("{}/v1/resolve?{}", http.base_url, query.join("&"));
 
                 // Retry logic: manager might be starting up (503)
                 let max_duration = std::time::Duration::from_secs(60);
@@ -461,10 +563,13 @@ impl ExecutionMode {
                 // Manager-bound client; workspace lives in default headers.
                 let auth_token = http.bearer_token.clone();
                 let manager_http_client = match &auth_token {
-                    Some(token) => crate::auth::client_with_auth_and_workspace(
-                        &format!("Bearer {}", token),
-                        &workspace,
-                    )?,
+                    Some(token) => match &workspace.query {
+                        Some(workspace) => crate::auth::client_with_auth_and_workspace(
+                            &format!("Bearer {}", token),
+                            workspace,
+                        )?,
+                        None => crate::auth::client_with_header(&format!("Bearer {}", token))?,
+                    },
                     None => http.client.clone(),
                 };
 
@@ -495,7 +600,7 @@ impl ExecutionMode {
                     auth_token,
                     repository_name: Some(repo_name),
                     repository_uri: None,
-                    workspace: Some(workspace),
+                    workspace: workspace.query,
                 })
             }
         }
@@ -530,18 +635,32 @@ impl ExecutionMode {
             #[cfg(feature = "platform")]
             Self::Platform { .. } => {
                 let http = self.auth_http().await?;
-                let workspace = self.resolve_workspace_with_bootstrap(allow_prompt).await?;
+                let workspace = self
+                    .resolve_platform_workspace_context(allow_prompt)
+                    .await?;
                 let effective_project = project_override.or(self.project_override());
 
                 let link = if let Some(project_name) = effective_project {
-                    crate::project_link::get_project_by_name(&http, &workspace, project_name)
-                        .await?
+                    crate::project_link::get_project_by_name(
+                        &http,
+                        &workspace.name,
+                        workspace.query.as_deref(),
+                        project_name,
+                    )
+                    .await?
                 } else {
+                    let Some(workspace_query) = workspace.query.as_deref() else {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message:
+                                "API key mode requires `--project <name>` when no `--workspace` is supplied."
+                                    .to_string(),
+                        }));
+                    };
                     let current_dir = crate::get_current_dir()?;
                     crate::project_link::ensure_project_linked(
                         &current_dir,
                         &http,
-                        &workspace,
+                        workspace_query,
                         allow_prompt,
                     )
                     .await?
@@ -780,7 +899,7 @@ fn is_retryable_artifact_registry_error(error: &reqwest::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_base_url;
+    use super::{normalize_base_url, ExecutionMode};
 
     #[test]
     fn normalize_base_url_removes_trailing_slashes() {
@@ -799,6 +918,44 @@ mod tests {
         assert_eq!(
             normalize_base_url("http://localhost:8080"),
             "http://localhost:8080"
+        );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn api_key_without_explicit_workspace_omits_workspace_query() {
+        let mode = ExecutionMode::Platform {
+            base_url: "https://api.alien.localhost".to_string(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: None,
+            project: None,
+        };
+
+        assert_eq!(
+            mode.resolve_workspace_query_with_bootstrap(false)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn api_key_with_explicit_workspace_forwards_workspace_query() {
+        let mode = ExecutionMode::Platform {
+            base_url: "https://api.alien.localhost".to_string(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: Some("demo".to_string()),
+            project: None,
+        };
+
+        assert_eq!(
+            mode.resolve_workspace_query_with_bootstrap(false)
+                .await
+                .unwrap(),
+            Some("demo".to_string())
         );
     }
 }
