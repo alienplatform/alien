@@ -239,6 +239,16 @@ impl ExecutionMode {
         self.resolve_workspace_with_bootstrap(true).await
     }
 
+    /// Workspace from the `--workspace` flag or the saved profile, if any.
+    /// `None` in single-tenant modes (dev, standalone) — they don't need one.
+    pub fn configured_workspace(&self) -> Option<String> {
+        match self {
+            #[cfg(feature = "platform")]
+            Self::Platform { workspace, .. } => workspace.clone().or_else(load_workspace),
+            _ => None,
+        }
+    }
+
     /// Get global project override (if any).
     pub fn project_override(&self) -> Option<&str> {
         match self {
