@@ -24,11 +24,12 @@ use crate::commands::platform::{
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, deploy_task, deployments_task, destroy_task,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
     prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
     vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
+    DebugArgs,
     DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, ReleaseArgs,
     ReleasesArgs, RenderArgs, WhoamiArgs,
 };
@@ -93,9 +94,11 @@ impl Cli {
             Some(Commands::Onboard(args)) => args.json,
             Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
+            Some(Commands::Debug(args)) => args.json,
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
+                Some(DevSubcommand::Debug(args)) => args.json,
                 _ => false,
             },
             #[cfg(feature = "platform")]
@@ -141,6 +144,8 @@ pub enum Commands {
     /// Invoke remote commands on deployments
     #[command(alias = "command")]
     Commands(CommandsArgs),
+    /// Run a local command against a deployment using manager-side credentials
+    Debug(DebugArgs),
     /// Start a standalone alien-manager server
     Serve(ServeArgs),
     /// Local development commands
@@ -233,6 +238,8 @@ pub enum DevSubcommand {
     /// Invoke remote commands on local dev deployments
     #[command(alias = "command")]
     Commands(CommandsArgs),
+    /// Run a local command against a local dev deployment using manager-side credentials
+    Debug(DebugArgs),
 }
 
 pub fn get_current_dir() -> Result<std::path::PathBuf> {
@@ -877,6 +884,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
         Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
         Some(DevSubcommand::Commands(args)) => commands_task_dev(args, port).await?,
+        Some(DevSubcommand::Debug(args)) => debug_task_dev(args, port).await?,
     }
 
     Ok(())
@@ -1458,6 +1466,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
+            Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
             Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,
             Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
             #[cfg(feature = "platform")]
