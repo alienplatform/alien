@@ -20,6 +20,7 @@ use alien_core::{NetworkSettings, Platform, Stack};
 const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
     "container",       // Triggers ComputeClusterMutation -> needs VPC
     "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
+    "daemon",          // Transforms into compute-cluster in Phase 2 -> needs VPC
 ];
 
 /// Check if any resource in the stack requires VPC networking.
