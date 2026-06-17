@@ -134,16 +134,26 @@ impl ComputeClusterMutation {
             .collect();
 
         // Build capacity groups, categorized by hardware needs for cloud platforms.
-        let mut capacity_groups = build_categorized_capacity_groups(&containers, stack_state.platform)?;
-
         // Propagate `nested_virtualization` from any daemon in this cluster
         // up to every capacity group. (At least one daemon needing nested
         // virt is enough to constrain the whole pool — daemons share hosts.)
+        // We compute this BEFORE building capacity groups so the instance-type
+        // selector can restrict its candidates to nested-virt-capable
+        // families (m8i/c8i/r8i on AWS); otherwise the selector might
+        // return a t-class or *7g instance that AWS rejects at RunInstances
+        // with `nested virtualization is not supported for this instance type`.
         let needs_nested_virt = stack
             .resources
             .values()
             .filter_map(|entry| entry.config.downcast_ref::<Daemon>())
             .any(|d| d.cluster.as_deref() == Some(cluster_id.as_str()) && d.nested_virtualization);
+
+        let mut capacity_groups = build_categorized_capacity_groups(
+            &containers,
+            stack_state.platform,
+            needs_nested_virt,
+        )?;
+
         if needs_nested_virt {
             for group in &mut capacity_groups {
                 group.nested_virtualization = Some(true);
@@ -288,6 +298,15 @@ impl ComputeClusterMutation {
         new_group_ids.sort();
         new_group_ids.dedup();
 
+        // Detect nested-virt requirement the same way `create_cluster` does
+        // so newly-added capacity groups on an existing cluster also pick
+        // nested-virt-capable instance types.
+        let needs_nested_virt = stack
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<Daemon>())
+            .any(|d| d.cluster.as_deref() == Some(cluster_id.as_str()) && d.nested_virtualization);
+
         let mut new_groups: Vec<CapacityGroup> = Vec::new();
         for group_id in &new_group_ids {
             let group_containers: Vec<&Container> = stack
@@ -296,8 +315,15 @@ impl ComputeClusterMutation {
                 .filter_map(|e| e.config.downcast_ref::<Container>())
                 .filter(|c| c.pool.is_none() && needed_capacity_group(c) == group_id.as_str())
                 .collect();
-            let group =
-                build_capacity_group_for_id(group_id, &group_containers, stack_state.platform)?;
+            let mut group = build_capacity_group_for_id(
+                group_id,
+                &group_containers,
+                stack_state.platform,
+                needs_nested_virt,
+            )?;
+            if needs_nested_virt {
+                group.nested_virtualization = Some(true);
+            }
             info!(group_id = %group_id, instance_type = ?group.instance_type, "Adding new capacity group");
             new_groups.push(group);
         }
@@ -365,6 +391,7 @@ fn needed_capacity_group(container: &Container) -> &'static str {
 fn build_categorized_capacity_groups(
     containers: &[&Container],
     platform: Platform,
+    needs_nested_virt: bool,
 ) -> Result<Vec<CapacityGroup>> {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => {
@@ -380,13 +407,28 @@ fn build_categorized_capacity_groups(
             }
             let mut groups = vec![];
             if !general.is_empty() || (gpu.is_empty() && storage.is_empty()) {
-                groups.push(build_capacity_group_for_id("general", &general, platform)?);
+                groups.push(build_capacity_group_for_id(
+                    "general",
+                    &general,
+                    platform,
+                    needs_nested_virt,
+                )?);
             }
             if !storage.is_empty() {
-                groups.push(build_capacity_group_for_id("storage", &storage, platform)?);
+                groups.push(build_capacity_group_for_id(
+                    "storage",
+                    &storage,
+                    platform,
+                    needs_nested_virt,
+                )?);
             }
             if !gpu.is_empty() {
-                groups.push(build_capacity_group_for_id("gpu", &gpu, platform)?);
+                groups.push(build_capacity_group_for_id(
+                    "gpu",
+                    &gpu,
+                    platform,
+                    needs_nested_virt,
+                )?);
             }
             Ok(groups)
         }
@@ -424,8 +466,9 @@ fn build_capacity_group_for_id(
     group_id: &str,
     containers: &[&Container],
     platform: Platform,
+    needs_nested_virt: bool,
 ) -> Result<CapacityGroup> {
-    let requirements = if containers.is_empty() {
+    let mut requirements = if containers.is_empty() {
         WorkloadRequirements {
             total_cpu_at_desired: 1.0,
             total_memory_bytes_at_desired: 2 * 1024 * 1024 * 1024,
@@ -440,6 +483,7 @@ fn build_capacity_group_for_id(
     } else {
         aggregate_workload_requirements(containers)?
     };
+    requirements.nested_virt = needs_nested_virt;
     let effective = if group_id == "gpu" && requirements.gpu.is_none() {
         WorkloadRequirements {
             gpu: Some(alien_core::GpuSpec {
@@ -641,7 +685,8 @@ mod tests {
             (Platform::Gcp, "n2-standard-4"),
             (Platform::Azure, "Standard_D4s_v5"),
         ] {
-            let group = build_capacity_group_for_id("general", &refs, platform).unwrap();
+            let group =
+                build_capacity_group_for_id("general", &refs, platform, false).unwrap();
             assert_eq!(group.instance_type.as_deref(), Some(expected_instance));
             assert_eq!(group.min_size, 2);
             assert_eq!(group.max_size, 4);
@@ -1521,6 +1566,22 @@ mod tests {
                 Some(true),
                 "group '{}' should inherit nested_virtualization from the daemon",
                 group.group_id
+            );
+            // The propagation must also force a nested-virt-capable
+            // instance type. Without this, AWS would create the launch
+            // template with `CpuOptions.NestedVirtualization=enabled` but
+            // RunInstances would later reject the type (e.g. t4g.xlarge).
+            let instance = group
+                .instance_type
+                .as_deref()
+                .expect("propagation should produce a concrete instance_type");
+            assert!(
+                instance.starts_with("m8i.")
+                    || instance.starts_with("c8i.")
+                    || instance.starts_with("r8i."),
+                "group '{}' should pick a nested-virt-capable instance (m8i/c8i/r8i family); got {}",
+                group.group_id,
+                instance,
             );
         }
     }

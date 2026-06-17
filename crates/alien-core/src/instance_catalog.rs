@@ -150,6 +150,29 @@ pub struct InstanceTypeSpec {
 }
 
 impl InstanceTypeSpec {
+    /// Whether this instance type supports
+    /// `CpuOptions.NestedVirtualization=enabled` on AWS launch.
+    ///
+    /// Per AWS docs (`aws ec2 create-launch-template help`), nested
+    /// virtualization is only supported on 8th-generation Intel instance
+    /// types: c8i, m8i, r8i, and their `-flex` variants. We classify by
+    /// family-name prefix rather than a per-row bool so the existing 70+
+    /// catalog rows don't need an extra field.
+    pub fn is_nested_virt_capable(&self) -> bool {
+        if self.platform != Platform::Aws {
+            // GCP/Azure equivalents would need their own family lists.
+            // Today nested virt is wired through only for AWS.
+            return false;
+        }
+        let name = self.name;
+        name.starts_with("m8i.")
+            || name.starts_with("c8i.")
+            || name.starts_with("r8i.")
+            || name.starts_with("m8i-flex.")
+            || name.starts_with("c8i-flex.")
+            || name.starts_with("r8i-flex.")
+    }
+
     /// Convert this catalog entry into a `MachineProfile` for use in `CapacityGroup`.
     pub fn to_machine_profile(&self) -> MachineProfile {
         MachineProfile {
@@ -253,11 +276,38 @@ static CATALOG: &[InstanceTypeSpec] = &[
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
+    // m8i (8th-gen Intel Sapphire Rapids) is the only AWS family that
+    // accepts `CpuOptions.NestedVirtualization=enabled`. The catalog
+    // filter in `select_instance_type` includes m8i only when the
+    // workload requests nested virt, so ordinary workloads continue to
+    // pick the cost-efficient Graviton (m7g) above. The pairwise
+    // interleave keeps the per-family vCPU-non-decreasing invariant
+    // (see `test_catalog_instance_types_sorted_by_vcpu_within_family`).
+    InstanceTypeSpec {
+        name: "m8i.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
     InstanceTypeSpec {
         name: "m7g.xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::GeneralPurpose,
         architecture: Architecture::Arm64,
+        vcpu: 4,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "m8i.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
         vcpu: 4,
         memory_bytes: 16 * GI,
         ephemeral_storage_bytes: 20 * GI,
@@ -274,10 +324,30 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "m8i.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 8,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "m7g.4xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::GeneralPurpose,
         architecture: Architecture::Arm64,
+        vcpu: 16,
+        memory_bytes: 64 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "m8i.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
         vcpu: 16,
         memory_bytes: 64 * GI,
         ephemeral_storage_bytes: 20 * GI,
@@ -1068,19 +1138,46 @@ pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
-    // Determine which family to use
-    let family = select_family(requirements);
+    // Determine which family to use. Nested virt isn't available on
+    // burstable hardware on any cloud, so a workload that classifies as
+    // Burstable but needs nested virt must be upgraded to GeneralPurpose
+    // (the family that actually has nested-virt-capable entries).
+    let raw_family = select_family(requirements);
+    let family =
+        if requirements.nested_virt && raw_family == InstanceFamily::Burstable {
+            InstanceFamily::GeneralPurpose
+        } else {
+            raw_family
+        };
 
-    // Filter catalog to matching platform + family
+    // Filter catalog to matching platform + family. Nested-virt-capable
+    // entries (m8i/c8i/r8i on AWS) are NESTED-VIRT-ONLY: they're added
+    // exclusively to satisfy `CpuOptions.NestedVirtualization=enabled`
+    // workloads and cost more than the Graviton default. We include them
+    // ONLY when `requirements.nested_virt` is true, and exclude them
+    // otherwise so the cost-efficient default (e.g. m7g) keeps winning
+    // for ordinary workloads.
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
         .filter(|spec| spec.platform == platform && spec.family == family)
+        .filter(|spec| {
+            if requirements.nested_virt {
+                spec.is_nested_virt_capable()
+            } else {
+                !spec.is_nested_virt_capable()
+            }
+        })
         .collect();
 
     if candidates.is_empty() {
-        return Err(format!(
-            "no {family:?} instance types in catalog for platform {platform}"
-        ));
+        return Err(if requirements.nested_virt {
+            format!(
+                "no nested-virt-capable {family:?} instance types in catalog for platform {platform}; \
+                 only 8th-gen Intel families (m8i/c8i/r8i) support nested virtualization on AWS"
+            )
+        } else {
+            format!("no {family:?} instance types in catalog for platform {platform}")
+        });
     }
 
     // For GPU workloads, filter by GPU type
@@ -1584,6 +1681,61 @@ mod tests {
         // Should pick n2-standard-8 (8 vCPU, 32 GiB) — NOT c3-standard-44
         assert_eq!(sel.instance_type, "n2-standard-8");
         assert!(sel.max_machines >= 2);
+    }
+
+    /// When `nested_virt` is set on the workload, the selector must
+    /// restrict to nested-virt-capable families. On AWS that means an m8i
+    /// (or other 8th-gen Intel) entry, never a Graviton (`*7g`, `t4g`) or
+    /// burstable. Without this filter the launch template gets created
+    /// with `CpuOptions.NestedVirtualization=enabled` paired with an
+    /// instance type AWS rejects at RunInstances.
+    #[test]
+    fn test_select_aws_picks_m8i_when_nested_virt_required() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 4.0,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 4.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            nested_virt: true,
+        };
+        let sel = select_instance_type(Platform::Aws, &req).unwrap();
+        assert!(
+            sel.instance_type.starts_with("m8i.")
+                || sel.instance_type.starts_with("c8i.")
+                || sel.instance_type.starts_with("r8i."),
+            "expected an m8i/c8i/r8i instance, got {}",
+            sel.instance_type
+        );
+        let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
+        assert!(spec.is_nested_virt_capable());
+    }
+
+    /// Negative case: with `nested_virt = false`, the selector should
+    /// continue picking the cost-efficient Graviton default, unchanged
+    /// from prior behavior.
+    #[test]
+    fn test_select_aws_falls_back_to_graviton_without_nested_virt() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 4.0,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 4.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            nested_virt: false,
+        };
+        let sel = select_instance_type(Platform::Aws, &req).unwrap();
+        assert!(
+            sel.instance_type.starts_with("m7g.") || sel.instance_type.starts_with("t4g."),
+            "expected Graviton default, got {}",
+            sel.instance_type
+        );
     }
 
     #[test]
