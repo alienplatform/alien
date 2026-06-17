@@ -10,6 +10,7 @@ pub mod install;
 pub mod platforms;
 pub mod registry_proxy;
 pub mod releases;
+pub mod resolve;
 pub mod stack;
 pub mod sync;
 pub mod telemetry;
@@ -139,7 +140,9 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         // Build configuration (repo prefix discovery for CLI).
         .merge(build_config::router())
         // Configured platforms discovery.
-        .merge(platforms::router());
+        .merge(platforms::router())
+        // Manager + install-context discovery (alien-deploy `GET /v1/resolve`).
+        .merge(resolve::router());
 
     if options.include_install {
         router = router.merge(install::router());

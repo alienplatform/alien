@@ -33,6 +33,90 @@ use std::{
     str::FromStr,
 };
 
+/// Read `ALIEN_BYO_HORIZON_*` env vars and synthesize a
+/// `ComputeBackend::Horizon`. Returns `None` when the env vars aren't all
+/// set, so non-BYO callers get the production path unchanged.
+///
+/// When `ALIEN_BYO_HORIZON_AMI_AMD64` (and/or `_ARM64`) are also set, the
+/// AMI ID(s) are wired into `horizon_machine_image.aws` so the
+/// `AwsComputeClusterController` has something to bake into the launch
+/// template. Without these vars, `horizon_machine_image` stays `None` and
+/// the controller errors at `RESOURCE_CONFIG_INVALID`.
+fn synthesize_byo_horizon_compute_backend() -> Option<alien_core::ComputeBackend> {
+    let url = std::env::var("ALIEN_BYO_HORIZON_URL").ok()?;
+    let cluster_id = std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID").ok()?;
+    let token = std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN").ok()?;
+    if url.is_empty() || cluster_id.is_empty() || token.is_empty() {
+        return None;
+    }
+    let mut clusters: std::collections::HashMap<String, alien_core::HorizonClusterConfig> =
+        std::collections::HashMap::new();
+    clusters.insert(
+        cluster_id.clone(),
+        alien_core::HorizonClusterConfig {
+            cluster_id,
+            management_token: token,
+        },
+    );
+
+    let horizon_machine_image = synthesize_byo_horizon_machine_image();
+
+    Some(alien_core::ComputeBackend::Horizon(
+        alien_core::HorizonConfig {
+            url,
+            horizon_machine_image,
+            clusters,
+        },
+    ))
+}
+
+/// Build a minimal `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_*` env
+/// vars + `AWS_REGION`. Returns `None` when no AMI env vars are set so the
+/// production resolver (platform API) stays in charge.
+fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineImage> {
+    use alien_core::{
+        HorizonAwsMachineImages, HorizonMachineArchitecture, HorizonMachineBaseImage,
+        HorizonMachineImage,
+    };
+    use std::collections::HashMap;
+
+    let amd64 = std::env::var("ALIEN_BYO_HORIZON_AMI_AMD64").ok();
+    let arm64 = std::env::var("ALIEN_BYO_HORIZON_AMI_ARM64").ok();
+    if amd64.as_deref().unwrap_or("").is_empty() && arm64.as_deref().unwrap_or("").is_empty() {
+        return None;
+    }
+    let region = std::env::var("AWS_REGION")
+        .ok()
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let mut amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>> = HashMap::new();
+    if let Some(ami) = amd64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Amd64, by_region);
+    }
+    if let Some(ami) = arm64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Arm64, by_region);
+    }
+
+    Some(HorizonMachineImage {
+        channel: "byo".to_string(),
+        machine_image_version: "byo-local".to_string(),
+        horizond_version: "byo".to_string(),
+        git_sha: "byo".to_string(),
+        created_at: "1970-01-01T00:00:00Z".to_string(),
+        base_image: HorizonMachineBaseImage {
+            name: "byo".to_string(),
+            version: "byo".to_string(),
+        },
+        aws: Some(HorizonAwsMachineImages { amis }),
+        gcp: None,
+        azure: None,
+    })
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Deploy the application to a target environment",
@@ -378,15 +462,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &install_context_platform_str,
             )
             .await?;
-            let management_config = context.management_config.ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                    "Platform API did not return installContext.managementConfig for {} deployment",
-                    install_context_platform.as_str()
-                ),
-                })
-            })?;
-            (context.manager_url, Some(management_config))
+            // `management_config` is required by the production SaaS API to
+            // describe the cross-account role used at provisioning time. The
+            // standalone manager returns it as `None` when it runs in a
+            // single-account setup (where the deployment account *is* the
+            // managing account and no cross-account access is involved);
+            // downstream code is already `Option<ManagementConfig>`-aware.
+            (context.manager_url, context.management_config)
         } else {
             match resolved.manager_url {
                 Some(url) => (url, None),
@@ -1785,6 +1867,17 @@ pub async fn push_initial_setup(
     config.manager_url = Some(manager_base_url.to_string());
     config.deployment_token = Some(deployment_token.to_string());
     config.base_platform = base_platform;
+
+    // Standalone-mode bridge: when `ALIEN_BYO_HORIZON_*` env vars are set,
+    // synthesize a `ComputeBackend::Horizon` so cloud-container preflights
+    // pass without a SaaS-side platform API pre-populating the field. The
+    // controller's daemon resolver reads the same env vars directly, so no
+    // downstream code needs to change.
+    if config.compute_backend.is_none() {
+        if let Some(backend) = synthesize_byo_horizon_compute_backend() {
+            config.compute_backend = Some(backend);
+        }
+    }
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 

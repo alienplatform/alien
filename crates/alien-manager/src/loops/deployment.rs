@@ -492,7 +492,7 @@ impl DeploymentLoop {
         )
         .await;
 
-        let config = if let Some(mut config) = deployment.deployment_config.clone() {
+        let mut config = if let Some(mut config) = deployment.deployment_config.clone() {
             if config.deployment_name.is_none() {
                 config.deployment_name = Some(deployment.name.clone());
             }
@@ -538,6 +538,39 @@ impl DeploymentLoop {
                 native_image_host,
             }
         };
+
+        // Standalone-mode bridge: inject a BYO horizon `compute_backend` from
+        // env vars (`ALIEN_BYO_HORIZON_*`) when nothing supplied one. Cloud
+        // container deployments need a managed container backend or
+        // preflights reject them; the SaaS path populates this from the
+        // platform API at deployment-create time, but standalone managers
+        // have to read it themselves. Idempotent — no-op when env vars are
+        // unset or `compute_backend` is already set.
+        if config.compute_backend.is_none() {
+            if let (Ok(url), Ok(cluster_id), Ok(token)) = (
+                std::env::var("ALIEN_BYO_HORIZON_URL"),
+                std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID"),
+                std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN"),
+            ) {
+                if !url.is_empty() && !cluster_id.is_empty() && !token.is_empty() {
+                    let mut clusters = std::collections::HashMap::new();
+                    clusters.insert(
+                        cluster_id.clone(),
+                        alien_core::HorizonClusterConfig {
+                            cluster_id,
+                            management_token: token,
+                        },
+                    );
+                    config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
+                        alien_core::HorizonConfig {
+                            url,
+                            horizon_machine_image: None,
+                            clusters,
+                        },
+                    ));
+                }
+            }
+        }
 
         // 6. Build service provider.
         // Use LocalBindingsProvider for local platform, default provider for cloud platforms.

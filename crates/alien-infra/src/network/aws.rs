@@ -1263,7 +1263,12 @@ impl AwsNetworkController {
                     })
                 })?;
 
-                client
+                // Idempotent: a retried iteration of the state machine may have
+                // already added the 0.0.0.0/0 route in a prior partial attempt;
+                // AWS surfaces that as `RemoteResourceConflict` /
+                // `RouteAlreadyExists`. Treat as success so the state machine
+                // can advance.
+                match client
                     .create_route(
                         CreateRouteRequest::builder()
                             .route_table_id(private_rt_id.clone())
@@ -1272,10 +1277,27 @@ impl AwsNetworkController {
                             .build(),
                     )
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to create route to NAT Gateway".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(err)
+                        if matches!(
+                            &err.error,
+                            Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                        ) =>
+                    {
+                        info!(
+                            route_table_id = %private_rt_id,
+                            nat_gateway_id = %nat_gateway_id,
+                            "0.0.0.0/0 → NAT route already exists from a prior attempt — reusing"
+                        );
+                    }
+                    Err(err) => {
+                        return Err(err).context(ErrorData::CloudPlatformError {
+                            message: "Failed to create route to NAT Gateway".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        });
+                    }
+                }
 
                 Ok(HandlerAction::Continue {
                     state: CreatingSecurityGroup,
