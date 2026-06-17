@@ -590,6 +590,13 @@ mod tests {
             Err(missing_binding(binding_name))
         }
 
+        async fn load_postgres(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Postgres>> {
+            Err(missing_binding(binding_name))
+        }
+
         async fn load_queue(
             &self,
             binding_name: &str,

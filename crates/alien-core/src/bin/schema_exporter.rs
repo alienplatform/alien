@@ -73,6 +73,8 @@ use utoipa::OpenApi;
     VaultOutputs,
     Kv,
     KvOutputs,
+    Postgres,
+    PostgresOutputs,
     Queue,
     QueueOutputs,
     PlatformPermissions,

@@ -90,7 +90,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         | "azure-container-apps-environment"
         | "azure_service_bus_namespace"
         | "azure-service-bus-namespace" => frozen_only(),
-        "storage" | "queue" | "kv" | "vault" => user_choice(),
+        "storage" | "queue" | "kv" | "vault" | "postgres" => user_choice(),
         _ => user_choice(),
     }
 }
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn data_resources_can_be_frozen_or_live() {
-        for resource_type in ["storage", "queue", "kv", "vault"] {
+        for resource_type in ["storage", "queue", "kv", "vault", "postgres"] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
             assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));

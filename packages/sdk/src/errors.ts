@@ -257,3 +257,23 @@ export const InvalidBindingConfigError = defineError({
   internal: false,
   httpStatusCode: 400,
 })
+
+/**
+ * Error thrown when reading a Postgres connection-password secret from a cloud secret store fails
+ * for an upstream reason — throttle, network blip, service unavailable. Distinct from
+ * {@link InvalidBindingConfigError}: this is a transient upstream failure, so it is retryable and
+ * maps to 503, not a user-fixable 400. The genuinely non-retryable cases (a missing/empty secret,
+ * a malformed URI) keep using InvalidBindingConfigError.
+ */
+export const PostgresSecretResolutionError = defineError({
+  code: "POSTGRES_SECRET_RESOLUTION_ERROR",
+  context: z.object({
+    secret: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ secret, reason }) =>
+    `Failed to read Postgres connection-password secret '${secret}': ${reason}`,
+  retryable: true,
+  internal: false,
+  httpStatusCode: 503,
+})

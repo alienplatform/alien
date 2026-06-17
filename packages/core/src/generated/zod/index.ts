@@ -5,6 +5,7 @@ export type { ArtifactRegistryHeartbeatData } from "./artifact-registry-heartbea
 export type { ArtifactRegistryHeartbeatStatus } from "./artifact-registry-heartbeat-status-schema.js";
 export type { ArtifactRegistryOutputs } from "./artifact-registry-outputs-schema.js";
 export type { ArtifactRegistry } from "./artifact-registry-schema.js";
+export type { AuroraPostgresHeartbeatData } from "./aurora-postgres-heartbeat-data-schema.js";
 export type { AwsArtifactRegistryImportData } from "./aws-artifact-registry-import-data-schema.js";
 export type { AwsBuildImportData } from "./aws-build-import-data-schema.js";
 export type { AwsCodeBuildHeartbeatData } from "./aws-code-build-heartbeat-data-schema.js";
@@ -48,6 +49,7 @@ export type { AzureContainerAppsWorkerHeartbeatData } from "./azure-container-ap
 export type { AzureContainerRegistryHeartbeatData } from "./azure-container-registry-heartbeat-data-schema.js";
 export type { AzureCustomCertificateConfig } from "./azure-custom-certificate-config-schema.js";
 export type { AzureDaemonHeartbeatData } from "./azure-daemon-heartbeat-data-schema.js";
+export type { AzureFlexibleServerPostgresHeartbeatData } from "./azure-flexible-server-postgres-heartbeat-data-schema.js";
 export type { AzureKeyVaultHeartbeatData } from "./azure-key-vault-heartbeat-data-schema.js";
 export type { AzureKvImportData } from "./azure-kv-import-data-schema.js";
 export type { AzureManagedIdentityServiceAccountHeartbeatData } from "./azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -127,6 +129,7 @@ export type { GcpArtifactRegistryImportData } from "./gcp-artifact-registry-impo
 export type { GcpBuildImportData } from "./gcp-build-import-data-schema.js";
 export type { GcpCloudBuildHeartbeatData } from "./gcp-cloud-build-heartbeat-data-schema.js";
 export type { GcpCloudRunWorkerHeartbeatData } from "./gcp-cloud-run-worker-heartbeat-data-schema.js";
+export type { GcpCloudSqlPostgresHeartbeatData } from "./gcp-cloud-sql-postgres-heartbeat-data-schema.js";
 export type { GcpCloudStorageHeartbeatData } from "./gcp-cloud-storage-heartbeat-data-schema.js";
 export type { GcpComputeClusterHeartbeatData } from "./gcp-compute-cluster-heartbeat-data-schema.js";
 export type { GcpComputeClusterImportData } from "./gcp-compute-cluster-import-data-schema.js";
@@ -208,6 +211,7 @@ export type { LocalContainerHeartbeatData } from "./local-container-heartbeat-da
 export type { LocalDaemonHeartbeatData } from "./local-daemon-heartbeat-data-schema.js";
 export type { LocalKvHeartbeatData } from "./local-kv-heartbeat-data-schema.js";
 export type { LocalOperation } from "./local-operation-schema.js";
+export type { LocalPostgresHeartbeatData } from "./local-postgres-heartbeat-data-schema.js";
 export type { LocalQueueHeartbeatData } from "./local-queue-heartbeat-data-schema.js";
 export type { LocalRuntimeEventSnapshot } from "./local-runtime-event-snapshot-schema.js";
 export type { LocalRuntimeEventSubject } from "./local-runtime-event-subject-schema.js";
@@ -240,6 +244,11 @@ export type { PermissionsConfig } from "./permissions-config-schema.js";
 export type { PersistentStorage } from "./persistent-storage-schema.js";
 export type { PlatformPermissions } from "./platform-permissions-schema.js";
 export type { Platform } from "./platform-schema.js";
+export type { PostgresBackend } from "./postgres-backend-schema.js";
+export type { PostgresHeartbeatData } from "./postgres-heartbeat-data-schema.js";
+export type { PostgresHeartbeatStatus } from "./postgres-heartbeat-status-schema.js";
+export type { PostgresOutputs } from "./postgres-outputs-schema.js";
+export type { Postgres } from "./postgres-schema.js";
 export type { PresignedOperation } from "./presigned-operation-schema.js";
 export type { PresignedRequestBackend } from "./presigned-request-backend-schema.js";
 export type { PresignedRequest } from "./presigned-request-schema.js";
@@ -317,6 +326,7 @@ export { ArtifactRegistryHeartbeatDataSchema } from "./artifact-registry-heartbe
 export { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
 export { ArtifactRegistryOutputsSchema } from "./artifact-registry-outputs-schema.js";
 export { ArtifactRegistrySchema } from "./artifact-registry-schema.js";
+export { AuroraPostgresHeartbeatDataSchema } from "./aurora-postgres-heartbeat-data-schema.js";
 export { AwsArtifactRegistryImportDataSchema } from "./aws-artifact-registry-import-data-schema.js";
 export { AwsBuildImportDataSchema } from "./aws-build-import-data-schema.js";
 export { AwsCodeBuildHeartbeatDataSchema } from "./aws-code-build-heartbeat-data-schema.js";
@@ -360,6 +370,7 @@ export { AzureContainerAppsWorkerHeartbeatDataSchema } from "./azure-container-a
 export { AzureContainerRegistryHeartbeatDataSchema } from "./azure-container-registry-heartbeat-data-schema.js";
 export { AzureCustomCertificateConfigSchema } from "./azure-custom-certificate-config-schema.js";
 export { AzureDaemonHeartbeatDataSchema } from "./azure-daemon-heartbeat-data-schema.js";
+export { AzureFlexibleServerPostgresHeartbeatDataSchema } from "./azure-flexible-server-postgres-heartbeat-data-schema.js";
 export { AzureKeyVaultHeartbeatDataSchema } from "./azure-key-vault-heartbeat-data-schema.js";
 export { AzureKvImportDataSchema } from "./azure-kv-import-data-schema.js";
 export { AzureManagedIdentityServiceAccountHeartbeatDataSchema } from "./azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -439,6 +450,7 @@ export { GcpArtifactRegistryImportDataSchema } from "./gcp-artifact-registry-imp
 export { GcpBuildImportDataSchema } from "./gcp-build-import-data-schema.js";
 export { GcpCloudBuildHeartbeatDataSchema } from "./gcp-cloud-build-heartbeat-data-schema.js";
 export { GcpCloudRunWorkerHeartbeatDataSchema } from "./gcp-cloud-run-worker-heartbeat-data-schema.js";
+export { GcpCloudSqlPostgresHeartbeatDataSchema } from "./gcp-cloud-sql-postgres-heartbeat-data-schema.js";
 export { GcpCloudStorageHeartbeatDataSchema } from "./gcp-cloud-storage-heartbeat-data-schema.js";
 export { GcpComputeClusterHeartbeatDataSchema } from "./gcp-compute-cluster-heartbeat-data-schema.js";
 export { GcpComputeClusterImportDataSchema } from "./gcp-compute-cluster-import-data-schema.js";
@@ -520,6 +532,7 @@ export { LocalContainerHeartbeatDataSchema } from "./local-container-heartbeat-d
 export { LocalDaemonHeartbeatDataSchema } from "./local-daemon-heartbeat-data-schema.js";
 export { LocalKvHeartbeatDataSchema } from "./local-kv-heartbeat-data-schema.js";
 export { LocalOperationSchema } from "./local-operation-schema.js";
+export { LocalPostgresHeartbeatDataSchema } from "./local-postgres-heartbeat-data-schema.js";
 export { LocalQueueHeartbeatDataSchema } from "./local-queue-heartbeat-data-schema.js";
 export { LocalRuntimeEventSnapshotSchema } from "./local-runtime-event-snapshot-schema.js";
 export { LocalRuntimeEventSubjectSchema } from "./local-runtime-event-subject-schema.js";
@@ -552,6 +565,11 @@ export { PermissionsConfigSchema } from "./permissions-config-schema.js";
 export { PersistentStorageSchema } from "./persistent-storage-schema.js";
 export { PlatformPermissionsSchema } from "./platform-permissions-schema.js";
 export { PlatformSchema } from "./platform-schema.js";
+export { PostgresBackendSchema } from "./postgres-backend-schema.js";
+export { PostgresHeartbeatDataSchema } from "./postgres-heartbeat-data-schema.js";
+export { PostgresHeartbeatStatusSchema } from "./postgres-heartbeat-status-schema.js";
+export { PostgresOutputsSchema } from "./postgres-outputs-schema.js";
+export { PostgresSchema } from "./postgres-schema.js";
 export { PresignedOperationSchema } from "./presigned-operation-schema.js";
 export { PresignedRequestBackendSchema } from "./presigned-request-backend-schema.js";
 export { PresignedRequestSchema } from "./presigned-request-schema.js";

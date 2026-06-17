@@ -994,6 +994,11 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "local")]
         "LocalKvController" => deser!(crate::kv::LocalKvController),
 
+        // Postgres controllers: only Local is built in tree; cloud Postgres controllers register
+        // their deserializers out-of-tree via register_controller_deserializer_extension().
+        #[cfg(feature = "local")]
+        "LocalPostgresController" => deser!(crate::postgres::LocalPostgresController),
+
         // Queue controllers
         #[cfg(feature = "aws")]
         "AwsQueueController" => deser!(crate::queue::aws::AwsQueueController),
@@ -1366,5 +1371,41 @@ mod tests {
         let err = validate_controller_state_value(&value, Some("resource-a"))
             .expect_err("malformed controller state version should be incompatible");
         assert_eq!(err.code, "INCOMPATIBLE_CONTROLLER_STATE");
+    }
+
+    // Guards deserializer registration for the in-tree Local Postgres controller; cloud controllers
+    // are registered and covered out-of-tree. A missing entry makes a live deployment fail with
+    // "unknown controller type: LocalPostgresController" — an e2e-only failure until this test.
+    #[cfg(feature = "local")]
+    #[test]
+    fn local_postgres_controller_state_round_trips() {
+        use alien_core::bindings::PostgresBinding;
+
+        // `#[serde(skip)]` must keep the runtime-resolved password out of serialized controller
+        // state, which is persisted and can sync to the control plane. Populate `binding` first so
+        // this exercises the skip, not a `default()` controller whose `binding` is already `None`.
+        const PASSWORD: &str = "round-trip-secret-must-not-persist";
+        let mut controller = crate::postgres::LocalPostgresController::default();
+        controller.binding =
+            Some(PostgresBinding::local("127.0.0.1", 5432, "db", "alien", PASSWORD));
+
+        let value = serialize_controller(&controller).expect("controller serializes");
+        assert!(
+            !serde_json::to_string(&value).unwrap().contains(PASSWORD),
+            "serialized controller state must not contain the runtime password"
+        );
+
+        let restored =
+            deserialize_controller(value).expect("LocalPostgresController must deserialize");
+        assert_eq!(restored.controller_type(), "LocalPostgresController");
+        // The skipped field comes back empty; `ready` re-resolves it from the manager's 0600 file.
+        let restored_local = restored
+            .as_any()
+            .downcast_ref::<crate::postgres::LocalPostgresController>()
+            .expect("restored controller is a LocalPostgresController");
+        assert!(
+            restored_local.binding.is_none(),
+            "the skipped binding must deserialize back to None"
+        );
     }
 }

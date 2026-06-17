@@ -278,6 +278,7 @@ impl EnvironmentVariableBuilder {
                                 alien_core::ExternalBinding::ContainerAppsEnvironment(b) => {
                                     serde_json::to_value(b)
                                 }
+                                alien_core::ExternalBinding::Postgres(b) => serde_json::to_value(b),
                             }
                             .into_alien_error()
                             .context(
@@ -301,7 +302,6 @@ impl EnvironmentVariableBuilder {
                     .push((binding_name.to_string(), params.clone()));
 
                 let binding_env_vars = serialize_binding_as_env_var(binding_name, &params)
-                    .into_alien_error()
                     .context(ErrorData::ResourceConfigInvalid {
                         message: "Failed to serialize binding parameters".to_string(),
                         resource_id: Some(binding_name.to_string()),
