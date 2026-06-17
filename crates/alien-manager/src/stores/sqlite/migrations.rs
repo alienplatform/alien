@@ -42,6 +42,11 @@ pub(crate) enum Deployments {
     WorkspaceId,
     /// Project this deployment belongs to. Always `"default"` in this store.
     ProjectId,
+    /// JSON-encoded externally-supplied `DeploymentConfig` (carries
+    /// `compute_backend`, `public_urls`, `domain_metadata`, etc). In production
+    /// the platform API sets this at deployment-creation time. In standalone
+    /// mode the CLI sets it via `PUT /v1/deployments/{id}/deployment-config`.
+    DeploymentConfig,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -317,6 +322,11 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN import_source TEXT",
         "ALTER TABLE deployments ADD COLUMN base_platform TEXT",
         "ALTER TABLE deployments ADD COLUMN deployment_protocol_version INTEGER NOT NULL DEFAULT 1",
+        // JSON blob carrying an externally-supplied DeploymentConfig (compute_backend,
+        // public_urls, domain_metadata, etc). In production the platform API populates
+        // this at deployment-creation time; in standalone the CLI does it via the
+        // `PUT /v1/deployments/{id}/deployment-config` route.
+        "ALTER TABLE deployments ADD COLUMN deployment_config TEXT",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",

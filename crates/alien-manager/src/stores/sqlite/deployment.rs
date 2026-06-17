@@ -108,7 +108,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 28] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -136,6 +136,7 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
+        Deployments::DeploymentConfig,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -193,7 +194,7 @@ impl SqliteDeploymentStore {
             user_environment_variables,
             deployment_token: p.optional_string(18, "deployment_token")?,
             management_config: None,
-            deployment_config: None,
+            deployment_config: p.optional_json(27, "deployment_config")?,
             retry_requested: retry_requested_int != 0,
             locked_by: p.optional_string(20, "locked_by")?,
             locked_at: p.optional_datetime(21, "locked_at")?,
@@ -808,6 +809,25 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::DesiredReleaseId, release_id)
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
+    async fn set_deployment_config(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        config: alien_core::DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        let config_json = serde_json::to_string(&config).map_err(|e| {
+            AlienError::new(GenericError {
+                message: format!("Failed to serialize DeploymentConfig: {e}"),
+            })
+        })?;
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::DeploymentConfig, config_json)
             .and_where(Expr::col(Deployments::Id).eq(deployment_id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
