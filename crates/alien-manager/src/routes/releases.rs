@@ -49,6 +49,14 @@ pub struct CreateReleaseRequest {
     pub git_metadata: Option<GitMetadata>,
     /// Project this release belongs to. Required. The standalone server
     /// uses the canonical value `"default"`.
+    ///
+    /// The OSS CLI sends this field as `project` on `alien release`
+    /// (see `alien-cli` release flow); the underlying alien-managerx
+    /// release endpoint accepts both forms. Accept both here too so
+    /// `alien release` against an OSS standalone manager doesn't fail
+    /// at the schema layer with a confusing
+    /// `unknown field "project", expected "projectId"`.
+    #[serde(alias = "project")]
     pub project_id: String,
 }
 
@@ -72,6 +80,13 @@ pub struct ReleaseResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
     pub created_at: String,
+    /// Setup-step fingerprints — used by `alien release` to short-circuit
+    /// re-pushing artifacts that haven't changed across releases. The
+    /// platform-API client requires this field to be present (even if
+    /// empty). The OSS standalone manager doesn't track per-setup-step
+    /// fingerprints, so we return an empty map.
+    #[serde(default)]
+    pub setup_fingerprints: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +169,7 @@ fn record_to_response(
         stack: sbp,
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
+        setup_fingerprints: serde_json::Map::new(),
     })
 }
 
