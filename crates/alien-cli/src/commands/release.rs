@@ -84,6 +84,16 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub prebuilt: bool,
 
+    /// Target OS/architecture combinations to build for (comma-separated).
+    /// Same format as `alien build --targets` — e.g. `linux-x64`,
+    /// `linux-arm64`. When omitted, the default is picked from the
+    /// platform AND the stack: AWS deploys with a daemon that declares
+    /// `nestedVirtualization(true)` automatically build for `linux-x64`
+    /// (nested virt isn't available on Graviton); all other AWS deploys
+    /// keep AWS's `linux-arm64` default.
+    #[arg(long, value_delimiter = ',')]
+    pub targets: Option<Vec<String>>,
+
     /// Override the runtime base image used for source-built cloud containers.
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
     pub override_base_image: Option<String>,
@@ -262,6 +272,7 @@ async fn load_release_config(
             show_human_output,
             args.override_base_image.clone(),
             kubernetes_base_platform,
+            args.targets.as_deref(),
         )
         .await?;
     }
@@ -674,6 +685,20 @@ fn discover_built_platforms(
     Ok(platforms)
 }
 
+/// True if any daemon in this stack declared `nestedVirtualization(true)`.
+/// On AWS this implies x86_64 — nested virtualization is not available on
+/// Graviton, so a build targeting `linux-arm64` (the AWS default) for such
+/// a stack would produce an image the deploy can't actually run.
+fn stack_requires_x86_64_on_aws(stack: &Stack) -> bool {
+    use alien_core::Daemon;
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Daemon>()
+            .is_some_and(|daemon| daemon.nested_virtualization)
+    })
+}
+
 async fn auto_build_for_platforms(
     platform_strs: &[String],
     stack: &Stack,
@@ -681,9 +706,29 @@ async fn auto_build_for_platforms(
     _show_human_output: bool,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
+    user_targets: Option<&[String]>,
 ) -> Result<()> {
+    let stack_needs_x86_64_on_aws = stack_requires_x86_64_on_aws(stack);
+
     let mut plans = Vec::new();
     for platform_str in platform_strs {
+        // Resolve targets in priority order:
+        //   1. Explicit --targets always wins
+        //   2. AWS + nested-virt in the stack → linux-x64 (the only AWS
+        //      target that supports nested virt today)
+        //   3. None → let alien-build pick the platform default
+        let effective_targets = if let Some(targets) = user_targets {
+            Some(targets.to_vec())
+        } else if platform_str.eq_ignore_ascii_case("aws") && stack_needs_x86_64_on_aws {
+            tracing::info!(
+                "AWS daemon requires nested virtualization; defaulting target to linux-x64 \
+                 (override with `alien release --targets <...>`)."
+            );
+            Some(vec!["linux-x64".to_string()])
+        } else {
+            None
+        };
+
         plans.push(AutoBuildPlan {
             platform: platform_str.clone(),
             settings: auto_build_settings_for_platform(
@@ -691,6 +736,7 @@ async fn auto_build_for_platforms(
                 output_dir,
                 override_base_image.clone(),
                 kubernetes_base_platform,
+                effective_targets,
             )?,
         });
     }
@@ -730,6 +776,7 @@ fn auto_build_settings_for_platform(
     output_dir: &PathBuf,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
+    effective_targets: Option<Vec<String>>,
 ) -> Result<alien_build::settings::BuildSettings> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -751,9 +798,22 @@ fn auto_build_settings_for_platform(
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
 
-    let targets = match platform {
-        Platform::Local => Some(vec![alien_core::BinaryTarget::current_os()]),
-        _ => None,
+    // Resolve targets in priority order:
+    //   1. The caller (release_task) passed an effective_targets list (either
+    //      --targets verbatim or a stack-aware default like x86_64-for-nested-virt).
+    //   2. Local has always wanted the current host's OS.
+    //   3. Otherwise pass None and let alien-build apply its platform default.
+    let targets = if let Some(targets) = effective_targets {
+        Some(
+            targets
+                .iter()
+                .map(|t| parse_target(t))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    } else if matches!(platform, Platform::Local) {
+        Some(vec![alien_core::BinaryTarget::current_os()])
+    } else {
+        None
     };
 
     Ok(alien_build::settings::BuildSettings {
@@ -764,6 +824,23 @@ fn auto_build_settings_for_platform(
         override_base_image,
         debug_mode: false,
     })
+}
+
+fn parse_target(target_str: &str) -> Result<alien_core::BinaryTarget> {
+    use alien_core::BinaryTarget;
+    match target_str.to_ascii_lowercase().as_str() {
+        "windows-x64" => Ok(BinaryTarget::WindowsX64),
+        "linux-x64" => Ok(BinaryTarget::LinuxX64),
+        "linux-arm64" => Ok(BinaryTarget::LinuxArm64),
+        "darwin-arm64" => Ok(BinaryTarget::DarwinArm64),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "targets".to_string(),
+            message: format!(
+                "Unknown target '{target_str}'. Supported targets: \
+                 windows-x64, linux-x64, linux-arm64, darwin-arm64"
+            ),
+        })),
+    }
 }
 
 fn group_auto_builds(plans: Vec<AutoBuildPlan>) -> Vec<Vec<AutoBuildPlan>> {
@@ -1528,6 +1605,38 @@ mod tests {
             collected.get("agent-a1b2c3d4").map(String::as_str),
             Some("registry.example.com/agent:pushed")
         );
+    }
+
+    #[test]
+    fn stack_with_no_daemons_does_not_require_x86_64() {
+        let stack = Stack::new("nothing".to_string()).build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_daemon_no_nested_virt_does_not_require_x86_64() {
+        let stack = Stack::new("no-nested".to_string())
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_daemon_with_nested_virt_requires_x86_64() {
+        let daemon = Daemon::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: "ghcr.io/test/agent:1".to_string(),
+            })
+            .nested_virtualization(true)
+            .build();
+        let stack = Stack::new("nested".to_string())
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+        assert!(stack_requires_x86_64_on_aws(&stack));
     }
 
     #[test]
