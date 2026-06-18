@@ -155,6 +155,13 @@ pub enum NetworkSettings {
         /// Name of the dedicated classic Application Gateway subnet within the VNet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         application_gateway_subnet_name: Option<String>,
+        /// Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+        /// Postgres Flexible Server). A Private Endpoint must not share the private
+        /// subnet, which is already claimed by the Container Apps environment's
+        /// `infrastructure_subnet_id`. Required only when the stack contains a
+        /// Postgres resource; otherwise unused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        private_endpoint_subnet_name: Option<String>,
     },
 }
 

@@ -27,6 +27,7 @@ export const NetworkSettingsSchema = z.union([z.object({
 "type": z.enum(["byo-vpc-gcp"])
     }), z.object({
     "application_gateway_subnet_name": z.string().describe("Name of the dedicated classic Application Gateway subnet within the VNet.").nullish(),
+"private_endpoint_subnet_name": z.string().describe("Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.").nullish(),
 "private_subnet_name": z.string().describe("Name of the private subnet within the VNet"),
 "public_subnet_name": z.string().describe("Name of the public subnet within the VNet"),
 "type": z.enum(["byo-vnet-azure"]),

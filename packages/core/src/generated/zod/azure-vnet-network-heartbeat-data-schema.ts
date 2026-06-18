@@ -14,6 +14,7 @@ export const AzureVnetNetworkHeartbeatDataSchema = z.object({
 "location": z.string().nullish(),
 "natGatewayId": z.string().nullish(),
 "nsgId": z.string().nullish(),
+"privateEndpointSubnetName": z.string().nullish(),
 "privateSubnetName": z.string().nullish(),
 "publicIpId": z.string().nullish(),
 "publicSubnetName": z.string().nullish(),

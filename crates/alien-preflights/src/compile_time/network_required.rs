@@ -20,6 +20,7 @@ use alien_core::{NetworkSettings, Platform, Stack};
 const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
     "container",       // Triggers ComputeClusterMutation -> needs VPC
     "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
+    "postgres",        // Needs a VPC on cloud (private-only DB); no-op on Local
 ];
 
 /// Check if any resource in the stack requires VPC networking.
@@ -322,6 +323,22 @@ mod tests {
             ResourceEntry {
                 config: alien_core::Resource::new(cluster),
                 lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        let stack = create_stack(resources);
+        assert!(stack_requires_network(&stack));
+    }
+
+    #[test]
+    fn test_stack_requires_network_with_postgres() {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "db".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(alien_core::Postgres::new("db".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
             },

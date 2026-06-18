@@ -133,6 +133,7 @@ use utoipa::OpenApi;
     AwsBuildImportData,
     AwsArtifactRegistryImportData,
     AwsComputeClusterImportData,
+    AwsPostgresImportData,
     GcpStorageImportData,
     GcpWorkerImportData,
     GcpQueueImportData,
@@ -145,6 +146,7 @@ use utoipa::OpenApi;
     GcpBuildImportData,
     GcpArtifactRegistryImportData,
     GcpComputeClusterImportData,
+    GcpPostgresImportData,
     AzureStorageImportData,
     AzureWorkerImportData,
     AzureQueueImportData,
@@ -161,6 +163,7 @@ use utoipa::OpenApi;
     AzureContainerAppsEnvironmentImportData,
     AzureServiceBusNamespaceImportData,
     AzureStorageAccountImportData,
+    AzureFlexibleServerPostgresImportData,
 )))]
 struct ApiDoc;
 

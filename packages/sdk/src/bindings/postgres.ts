@@ -9,7 +9,7 @@
  * The cloud variants deliberately carry only a *reference* to the connection password
  * (Secrets Manager ARN / Secret Manager name / Key Vault URI), never the password itself.
  * The workload resolves that reference at runtime using its own least-privilege identity
- * — exactly what the `postgres/connect` permission set grants — so the password never
+ * — exactly what the `postgres/data-access` permission set grants — so the password never
  * flows through the control plane or sits as a plaintext environment variable.
  *
  * The matching cloud secret SDK is imported lazily, so a workload only loads the SDK for

@@ -22,6 +22,7 @@ use tracing::{debug, info};
 /// - kv: firestore.googleapis.com (Firestore)
 /// - queue: pubsub.googleapis.com (Pub/Sub)
 /// - vault: secretmanager.googleapis.com (Secret Manager)
+/// - postgres: sqladmin.googleapis.com (Cloud SQL) + compute.googleapis.com (PSC) + secretmanager.googleapis.com (connection secret)
 /// - network: compute.googleapis.com (Compute Engine)
 /// - compute-cluster: compute.googleapis.com (Compute Engine)
 pub struct GcpServiceActivationMutation;
@@ -164,6 +165,27 @@ impl GcpServiceActivationMutation {
                     );
                 }
                 "vault" => {
+                    services.insert(
+                        "enable-secret-manager".to_string(),
+                        "secretmanager.googleapis.com".to_string(),
+                    );
+                }
+                "postgres" => {
+                    services.insert(
+                        "enable-cloud-sql".to_string(),
+                        "sqladmin.googleapis.com".to_string(),
+                    );
+                    // The private connection uses Private Service Connect — a
+                    // `google_compute_address` + `google_compute_forwarding_rule` in the stack
+                    // VPC — so Compute Engine must be enabled too. Shares the `network` arm's key
+                    // so the two dedupe when both resources are present.
+                    services.insert(
+                        "enable-compute-engine".to_string(),
+                        "compute.googleapis.com".to_string(),
+                    );
+                    // The setup emitter stores the generated connection password in a
+                    // `google_secret_manager_secret`, so the apply needs the API even when the
+                    // stack has no `vault`. Shares the `vault` arm's key so the two dedupe.
                     services.insert(
                         "enable-secret-manager".to_string(),
                         "secretmanager.googleapis.com".to_string(),

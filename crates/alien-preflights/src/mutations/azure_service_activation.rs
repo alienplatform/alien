@@ -19,6 +19,7 @@ use tracing::{debug, info};
 /// - vault: Microsoft.KeyVault
 /// - artifact-registry: Microsoft.ContainerRegistry
 /// - queue: Microsoft.ServiceBus
+/// - postgres: Microsoft.DBforPostgreSQL + Microsoft.Network (private endpoint)
 pub struct AzureServiceActivationMutation;
 
 #[async_trait]
@@ -145,6 +146,19 @@ impl AzureServiceActivationMutation {
                     services.insert(
                         "enable-servicebus".to_string(),
                         "Microsoft.ServiceBus".to_string(),
+                    );
+                }
+                "postgres" => {
+                    services.insert(
+                        "enable-postgresql".to_string(),
+                        "Microsoft.DBforPostgreSQL".to_string(),
+                    );
+                    // The server is private-only: a Private Endpoint, a dedicated subnet, and a
+                    // `privatelink.postgres.database.azure.com` private DNS zone — all
+                    // `Microsoft.Network`. Shares the `network` arm's key so they dedupe.
+                    services.insert(
+                        "enable-network".to_string(),
+                        "Microsoft.Network".to_string(),
                     );
                 }
                 "kubernetes-cluster" => {

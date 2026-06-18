@@ -15,6 +15,9 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "queue/provision",
     "storage/provision",
     "vault/provision",
+    // postgres/provision creates a runtime (system-generated) DB security group and authorizes
+    // 5432 ingress, so its mutating EC2 actions must carry the stack/resource tag conditions.
+    "postgres/provision",
 ];
 
 #[test]
@@ -472,8 +475,25 @@ fn has_condition_key(binding: &AwsBindingSpec, expected_key: &str) -> bool {
 fn wildcard_action_allowed(action: &str, binding: &AwsBindingSpec) -> bool {
     action_is_forced_wildcard_read(action)
         || action_is_documented_cross_account_exception(action)
+        || action_is_documented_lambda_vpc_eni(action)
         || (action_requires_tag_condition(action)
             && has_condition_key(binding, "aws:RequestTag/${stackTag}"))
+}
+
+/// Lambda VPC networking requires these ENI actions on Resource "*": ENIs carry
+/// service-generated IDs and `CreateNetworkInterface` has no resource to scope to at
+/// call time, so AWS's own `AWSLambdaVPCAccessExecutionRole` managed policy uses "*".
+/// Workers attach to the stack's private subnets to reach private-only resources
+/// (Postgres, compute-cluster); the effective boundary is the subnet + security group
+/// the function is wired into, not an ENI ARN.
+fn action_is_documented_lambda_vpc_eni(action: &str) -> bool {
+    matches!(
+        action,
+        "ec2:CreateNetworkInterface"
+            | "ec2:DeleteNetworkInterface"
+            | "ec2:AssignPrivateIpAddresses"
+            | "ec2:UnassignPrivateIpAddresses"
+    )
 }
 
 fn action_is_forced_wildcard_read(action: &str) -> bool {

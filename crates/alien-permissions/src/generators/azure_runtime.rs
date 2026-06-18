@@ -35,26 +35,6 @@ pub struct AzureRoleDefinition {
     pub assignable_scopes: Vec<String>,
 }
 
-/// Azure role assignment properties
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureRoleAssignmentProperties {
-    /// Role definition ID
-    pub role_definition_id: String,
-    /// Principal ID (user, group, or service principal)
-    pub principal_id: String,
-    /// Scope where the role is assigned
-    pub scope: String,
-}
-
-/// Azure role assignment
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureRoleAssignment {
-    /// Role assignment properties
-    pub properties: AzureRoleAssignmentProperties,
-}
-
 /// Azure generated grant plan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +131,21 @@ impl AzureRuntimePermissionsGenerator {
                 })
             })?;
 
+        // An empty `azure` list is valid (postgres/data-access), but a single role definition has no
+        // empty form, so fail with a specific error instead of the generic "no residual actions"
+        // below. Empty-azure sets go through generate_grant_plan, never here.
+        if azure_platform_permissions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' declares Azure support but grants nothing, so it has no \
+                     custom role to generate; callers that tolerate empty Azure grants must use \
+                     generate_grant_plan",
+                    permission_set.id
+                ),
+            }));
+        }
+
         let base_role_name = self.generate_role_name(&permission_set.id);
         // Include the stack prefix in the role name to avoid 409
         // RoleDefinitionWithSameNameExists conflicts when multiple deployments
@@ -168,7 +163,6 @@ impl AzureRuntimePermissionsGenerator {
 
         for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
             self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
-            // Extract actions and data actions
             if let Some(actions) = &platform_permission.grant.actions {
                 all_actions.extend(actions.clone());
             }
@@ -216,7 +210,8 @@ impl AzureRuntimePermissionsGenerator {
             }));
         }
 
-        // Remove duplicates and sort
+        // Sort + dedup so a given permission set always renders the same role definition — a stable,
+        // deterministic action list (Azure also rejects duplicate actions in a role definition).
         all_actions.sort();
         all_actions.dedup();
         all_data_actions.sort();
@@ -254,6 +249,16 @@ impl AzureRuntimePermissionsGenerator {
 
         let mut custom_roles = Vec::new();
         let mut bindings = Vec::new();
+
+        // An empty `azure` list is valid by design (postgres/data-access). Return an empty plan rather
+        // than fail-fasting below, matching the Terraform emitter's
+        // `emit_role_definition_and_assignments` skip so the push and runtime paths agree.
+        if azure_platform_permissions.is_empty() {
+            return Ok(AzureGrantPlan {
+                custom_roles,
+                bindings,
+            });
+        }
 
         for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
             self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
@@ -336,80 +341,6 @@ impl AzureRuntimePermissionsGenerator {
         Ok(AzureGrantPlan {
             custom_roles,
             bindings: dedupe_azure_role_bindings(bindings),
-        })
-    }
-
-    /// Generate an Azure role assignment
-    ///
-    /// Takes a PermissionSet and binding target, produces Azure role assignments
-    /// that can be created at runtime.
-    pub fn generate_role_assignment(
-        &self,
-        permission_set: &PermissionSet,
-        binding_target: BindingTarget,
-        context: &PermissionContext,
-    ) -> Result<AzureRoleAssignment> {
-        let azure_platform_permissions =
-            permission_set.platforms.azure.as_ref().ok_or_else(|| {
-                alien_error::AlienError::new(ErrorData::PlatformNotSupported {
-                    platform: "azure".to_string(),
-                    permission_set_id: permission_set.id.clone(),
-                })
-            })?;
-
-        // For this example, we'll use placeholder values
-        let role_definition_id = format!(
-            "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/${{roleDefinitionGuid}}",
-            context
-                .subscription_id
-                .as_deref()
-                .unwrap_or("SUBSCRIPTION_ID")
-        );
-
-        let principal_id = context
-            .principal_id
-            .as_deref()
-            .unwrap_or("PRINCIPAL_ID")
-            .to_string();
-
-        // Use the first platform permission's binding for simplicity
-        // In practice, you might want to handle multiple bindings differently
-        let first_platform_permission = &azure_platform_permissions[0];
-        let binding_spec = match binding_target {
-            BindingTarget::Stack => first_platform_permission
-                .binding
-                .stack
-                .as_ref()
-                .ok_or_else(|| {
-                    alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                        platform: "azure".to_string(),
-                        binding_target: "stack".to_string(),
-                        permission_set_id: permission_set.id.clone(),
-                    })
-                })?,
-            BindingTarget::Resource => first_platform_permission
-                .binding
-                .resource
-                .as_ref()
-                .ok_or_else(|| {
-                    alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                        platform: "azure".to_string(),
-                        binding_target: "resource".to_string(),
-                        permission_set_id: permission_set.id.clone(),
-                    })
-                })?,
-        };
-
-        // Interpolate variables in the scope
-        let interpolated_scope =
-            VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
-
-        Ok(AzureRoleAssignment {
-            properties: AzureRoleAssignmentProperties {
-                role_definition_id,
-                principal_id,
-                scope: interpolated_scope,
-            },
         })
     }
 
