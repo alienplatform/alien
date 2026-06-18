@@ -409,6 +409,38 @@ fn test_aws_variable_interpolation() {
 }
 
 #[test]
+fn test_worker_provision_uses_resource_name_for_arn_and_resource_id_for_tags() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("worker/provision").expect("permission set exists");
+    let context = create_test_context()
+        .with_resource_id("job")
+        .with_resource_name("my-stack-job");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("Should generate AWS policy successfully");
+
+    let create_function_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"lambda:CreateFunction".to_string())
+                && statement.resource.contains(
+                    &"arn:aws:lambda:us-east-1:123456789012:function:my-stack-job".to_string(),
+                )
+        })
+        .expect("worker provision should allow creating the physical Lambda function");
+
+    assert!(condition_equals(
+        create_function_statement,
+        "aws:RequestTag/resource",
+        "job"
+    ));
+}
+
+#[test]
 fn test_aws_missing_variable_error() {
     let generator = AwsRuntimePermissionsGenerator::new();
 

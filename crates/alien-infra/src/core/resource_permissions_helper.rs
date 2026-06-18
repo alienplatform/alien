@@ -15,7 +15,7 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 fn gcp_custom_role_matches(
     existing: &alien_gcp_clients::iam::Role,
@@ -1034,8 +1034,9 @@ impl ResourcePermissionsHelper {
     /// 3. Generates an IAM policy with `BindingTarget::Resource` and attaches it as
     ///    an inline policy on the SA role.
     ///
-    /// After processing all app SA profiles it also applies **management SA**
-    /// resource-scoped permissions (non-provision sets from the management profile).
+    /// For setup-owned resources, it also applies concrete **management SA**
+    /// resource-scoped permissions. Live resources do not broaden the management
+    /// role at runtime; AWS setup output must grant those permissions up front.
     pub async fn apply_aws_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -1049,6 +1050,7 @@ impl ResourcePermissionsHelper {
             .with_aws_account_id(aws_config.account_id.to_string())
             .with_aws_region(aws_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_id(resource_id.to_string())
             .with_resource_name(resource_name.to_string());
 
         if let Some(aws_management) = ctx.get_aws_management_config()? {
@@ -1104,18 +1106,43 @@ impl ResourcePermissionsHelper {
             }
         }
 
-        // Process management SA resource-scoped permissions
-        Self::apply_aws_management_resource_permissions(
-            ctx,
-            resource_id,
-            resource_name,
-            resource_type,
-            &generator,
-            &permission_context,
-        )
-        .await?;
+        if Self::resource_is_setup_owned(ctx, resource_id) {
+            // Setup-owned resources run while setup credentials are still active.
+            // Live resource controllers must not edit the management role after
+            // the deployment has moved to provisioning credentials.
+            Self::apply_aws_management_resource_permissions(
+                ctx,
+                resource_id,
+                resource_name,
+                resource_type,
+                &generator,
+                &permission_context,
+            )
+            .await?;
+        } else if ctx
+            .desired_stack
+            .management()
+            .profile()
+            .map(|profile| {
+                !Self::aws_management_resource_permission_refs(profile, resource_id).is_empty()
+            })
+            .unwrap_or(false)
+        {
+            debug!(
+                resource_id = %resource_id,
+                resource_name = %resource_name,
+                "Skipping AWS management resource-scoped permissions for live resource; setup must grant them"
+            );
+        }
 
         Ok(())
+    }
+
+    fn resource_is_setup_owned(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+        ctx.desired_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
     }
 
     /// Process AWS permissions for a specific profile by attaching inline policies
