@@ -258,6 +258,9 @@ impl PreflightRegistry {
             deployment_prerequisites::DomainMetadataRequiredCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::AwsLiveManagementPermissionsSetupCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::TargetResourcesResolveCheck,
         ));
 

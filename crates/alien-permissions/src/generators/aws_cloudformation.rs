@@ -170,6 +170,7 @@ impl AwsCloudFormationPermissionsGenerator {
         let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
         let contains_regular_vars = [
             "${stackPrefix}",
+            "${resourceId}",
             "${resourceName}",
             "${awsRegion}",
             "${awsAccountId}",
@@ -210,6 +211,9 @@ impl AwsCloudFormationPermissionsGenerator {
                     // Simple resource reference, just use the name
                     result = result.replace("${resourceName}", resource_name);
                 }
+            }
+            if let Some(resource_id) = context.resource_id.as_ref() {
+                result = result.replace("${resourceId}", resource_id);
             }
 
             // Handle AWS-specific variables that should map to CloudFormation pseudo parameters

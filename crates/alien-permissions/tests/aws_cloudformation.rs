@@ -209,6 +209,7 @@ fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security
     let permission_set = get_permission_set("container/provision").expect("permission set exists");
     let context = PermissionContext::new()
         .with_stack_prefix("")
+        .with_resource_id("api")
         .with_resource_name("alien-manager")
         .with_aws_region("${AWS::Region}")
         .with_aws_account_id("${AWS::AccountId}");
@@ -263,6 +264,44 @@ fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security
     assert_eq!(
         string_equals.get("aws:ResourceTag/resource"),
         Some(&json!("compute"))
+    );
+}
+
+#[test]
+fn test_aws_cloudformation_resource_id_interpolates_in_conditions() {
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let permission_set = get_permission_set("worker/provision").expect("permission set exists");
+    let context = PermissionContext::new()
+        .with_stack_prefix("")
+        .with_resource_id("job")
+        .with_resource_name("${AWS::StackName}-job")
+        .with_aws_region("${AWS::Region}")
+        .with_aws_account_id("${AWS::AccountId}");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("Should generate AWS CloudFormation policy successfully");
+
+    let create_function_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement.action.contains(&json!("lambda:CreateFunction"))
+                && statement.resource.contains(&json!({
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-job"
+                }))
+        })
+        .expect("worker provision should allow creating the physical Lambda function");
+
+    let string_equals = create_function_statement
+        .condition
+        .as_ref()
+        .and_then(|condition| condition.get("StringEquals"))
+        .expect("Lambda creation should be request-tag conditioned");
+
+    assert_eq!(
+        string_equals.get("aws:RequestTag/resource"),
+        Some(&json!("job"))
     );
 }
 
