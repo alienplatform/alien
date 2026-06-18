@@ -17,7 +17,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -67,73 +67,10 @@ struct CreateDebugSessionRequest {
     deployment_id: String,
 }
 
-/// Wire response body. Discriminated by `kind`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-enum DebugSessionResponse {
-    Push(PushDebugSession),
-    Pull(PullDebugSession),
-}
-
-impl DebugSessionResponse {
-    /// RFC3339 expiry of the underlying credentials, if the manager surfaced
-    /// one. Sessions without an expiry can't be cached — we always re-mint.
-    fn expires_at(&self) -> Option<&str> {
-        match self {
-            Self::Push(p) => p.expires_at.as_deref(),
-            Self::Pull(p) => p.expires_at.as_deref(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PushDebugSession {
-    /// Short identifier shown to the user (e.g. for logging which provider is active).
-    provider: String,
-    /// Environment variables to set on the spawned process.
-    env: BTreeMap<String, String>,
-    /// Files to materialize before exec. If `env_var` is set, it's bound to the
-    /// resulting absolute file path.
-    #[serde(default)]
-    files: Vec<DebugCredFile>,
-    /// Optional shell snippet to run (`sh -c`) after env/files are set up
-    /// but before the user's command. Used by Azure to drive `az login`.
-    /// Must be idempotent — re-runs on every cache hit too.
-    #[serde(default)]
-    setup_script: Option<String>,
-    /// RFC3339 timestamp shown to the user when the session expires.
-    #[serde(default)]
-    expires_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DebugCredFile {
-    /// Filename — no path components. Written under a per-session temp dir.
-    file_name: String,
-    /// File contents.
-    content: String,
-    /// If set, the CLI binds this env var to the file's absolute path.
-    #[serde(default)]
-    env_var: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PullDebugSession {
-    /// Kubeconfig YAML written to a temp file; `KUBECONFIG` is bound to it.
-    kubeconfig: String,
-    /// Additional env vars to set on the spawned process.
-    #[serde(default)]
-    env: BTreeMap<String, String>,
-    /// Files to materialize alongside the kubeconfig.
-    #[serde(default)]
-    files: Vec<DebugCredFile>,
-    /// RFC3339 timestamp shown to the user when the session expires.
-    #[serde(default)]
-    expires_at: Option<String>,
-}
+// Wire types live in `alien-debug-session` so the manager (push mode) and
+// the agent (pull mode) can produce identical payloads. The CLI only
+// consumes — no provider-specific knowledge needed here.
+use alien_debug_session::{DebugCredFile, DebugSessionResponse};
 
 /// Top-level entry for `alien debug`.
 pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {

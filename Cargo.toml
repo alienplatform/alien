@@ -22,6 +22,7 @@ members = [
   "crates/alien-error-derive",
   "crates/alien-permissions",
   "crates/alien-preflights",
+  "crates/alien-debug-session",
   "crates/alien-deployment",
   "crates/alien-local",
   "crates/alien-cloudformation",
@@ -76,6 +77,7 @@ alien-error = { path = "crates/alien-error", version = "1.7.1", features = ["any
 alien-error-derive = { path = "crates/alien-error-derive", version = "1.7.1" }
 alien-permissions = { path = "crates/alien-permissions", version = "1.7.1" }
 alien-preflights = { path = "crates/alien-preflights", version = "1.7.1" }
+alien-debug-session = { path = "crates/alien-debug-session", version = "1.7.1" }
 alien-deployment = { path = "crates/alien-deployment", version = "1.7.1" }
 alien-cli-common = { path = "crates/alien-cli-common", version = "1.7.1" }
 alien-local = { path = "crates/alien-local", version = "1.7.1" }

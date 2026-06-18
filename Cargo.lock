@@ -298,6 +298,7 @@ dependencies = [
  "alien-commands",
  "alien-commands-client",
  "alien-core",
+ "alien-debug-session",
  "alien-deployment",
  "alien-error",
  "alien-helm",
@@ -497,6 +498,19 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "alien-debug-session"
+version = "1.7.1"
+dependencies = [
+ "alien-aws-clients",
+ "alien-azure-clients",
+ "alien-core",
+ "alien-error",
+ "alien-gcp-clients",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
