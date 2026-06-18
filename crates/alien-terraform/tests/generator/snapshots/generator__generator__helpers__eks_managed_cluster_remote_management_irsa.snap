@@ -162,6 +162,16 @@ variable "security_group_ids" {
   default     = []
 }
 
+variable "unsupported_availability_zone_ids" {
+  type        = list(string)
+  description = "Availability Zone IDs to exclude when selecting EKS control-plane subnets. AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are account-local — the same physical zone can be `us-east-1e` in one account and `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting EKS control plane today (see https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per region when AWS deprecates more."
+  default = [
+    "use1-az3",
+    "usw1-az2",
+    "cac1-az3"
+  ]
+}
+
 variable "kubernetes_cluster_mode" {
   type        = string
   description = "Kubernetes cluster mode. Values: create or existing."
@@ -232,7 +242,7 @@ locals {
         provider   = "awsAlb"
         scheme     = "internet-facing"
         targetType = "ip"
-        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []) : []
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
       }
     }
     certificate = {
@@ -281,13 +291,41 @@ locals {
 
 === kubernetes.tf ===
 data "aws_availability_zones" "kubernetes_available" {
-  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  state = "available"
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
 }
 
 data "aws_eks_cluster" "kubernetes_existing" {
   count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
   name  = var.eks_cluster_name
+}
+
+data "aws_vpc" "kubernetes_default" {
+  count   = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  default = true
+}
+
+data "aws_availability_zones" "kubernetes_eks_supported" {
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
+}
+
+data "aws_subnets" "kubernetes_default" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+
+  filter {
+    name = "vpc-id"
+    values = [
+      data.aws_vpc.kubernetes_default[0].id
+    ]
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
 }
 
 data "aws_eks_cluster" "target" {
@@ -456,7 +494,7 @@ resource "aws_eks_cluster" "kubernetes" {
   bootstrap_self_managed_addons = false
 
   vpc_config {
-    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
     endpoint_public_access  = true
     endpoint_private_access = true
   }
@@ -783,3 +821,9 @@ kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terrafor
 ```
 
 Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.
+
+## Destroy Order
+
+If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+
+If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.

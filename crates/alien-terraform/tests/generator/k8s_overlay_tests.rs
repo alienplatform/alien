@@ -36,6 +36,92 @@ fn storage_data_read_service_account() -> ServiceAccount {
 }
 
 #[test]
+fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
+    // EKS deployments rendered with `network = Some(UseDefault)` must build
+    // `subnet_ids` from the account's default VPC. This regression test
+    // exercises the active branch the prior snapshot tests don't:
+    //
+    //   - aws_vpc.<label>_default { default = true }
+    //   - aws_availability_zones.<label>_eks_supported {
+    //       exclude_zone_ids = var.unsupported_availability_zone_ids
+    //     }
+    //   - aws_subnets.<label>_default filtered by VPC id + AZ id
+    //   - subnet_ids ternary that routes through the data source when
+    //     network_mode == "use-default".
+    //
+    // Before the fix the ternary fell through to `[]` and AWS rejected the
+    // apply with "Attribute vpc_config.0.subnet_ids requires 1 item minimum"
+    // (ALIEN-202).
+    let stack = Stack::new("eks-use-default".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            storage_data_read_service_account(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+
+    // Concatenate the whole module so we can search across files.
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The default VPC + AZ-filtered subnet data sources must be present.
+    assert!(
+        rendered.contains("data \"aws_vpc\" \"kubernetes_default\""),
+        "expected `data aws_vpc kubernetes_default` block, got:\n{}",
+        rendered
+    );
+    assert!(
+        rendered.contains("data \"aws_subnets\" \"kubernetes_default\""),
+        "expected `data aws_subnets kubernetes_default` block"
+    );
+    assert!(
+        rendered.contains("exclude_zone_ids = var.unsupported_availability_zone_ids"),
+        "expected exclude_zone_ids wired to the user-overridable variable"
+    );
+    // The EKS subnet_ids ternary must route through the default data source
+    // for use-default. Looking for the specific terminal branch is enough.
+    assert!(
+        rendered.contains("data.aws_subnets.kubernetes_default[0].ids"),
+        "expected EKS subnet_ids to reference the default-VPC subnet data source"
+    );
+    // The variable itself must be declared with AZ IDs (not names) as the
+    // default — `us-east-1e`'s zone id is `use1-az3`.
+    assert!(
+        rendered.contains("variable \"unsupported_availability_zone_ids\""),
+        "expected unsupported_availability_zone_ids variable declared"
+    );
+    assert!(
+        rendered.contains("\"use1-az3\""),
+        "expected `use1-az3` (us-east-1e's stable zone id) in the default list"
+    );
+
+    snapshot_module("eks_overlay_use_default", &module);
+    assert_terraform_valid(&module, "eks_overlay_use_default");
+}
+
+#[test]
 fn eks_overlay_emits_irsa_service_account_annotation() {
     let stack = Stack::new("eks-overlay".to_string())
         .add(
