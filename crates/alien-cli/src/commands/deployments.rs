@@ -292,32 +292,16 @@ pub(crate) async fn resolve_manager_client(
     Ok(manager_ctx.client)
 }
 
-/// Resolve a deployment by name or ID.
+/// Resolve a deployment by name or ID via the shared resolver. The `is_dev`
+/// argument only affects the "not found" hint surfaced to the user; the
+/// `deployments` subcommand doesn't carry a dev/platform flag at this layer
+/// so we conservatively assume non-dev (callers in dev mode go through
+/// `dev_helpers`).
 async fn resolve_deployment_reference(
     client: &alien_manager_api::Client,
     reference: &str,
 ) -> Result<DeploymentResponse> {
-    let response = client
-        .list_deployments()
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "listing deployments for resolution".to_string(),
-            url: None,
-        })?
-        .into_inner();
-
-    response
-        .items
-        .into_iter()
-        .find(|d| d.id == reference || d.name == reference)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "deployment".to_string(),
-                message: format!("Deployment '{}' was not found.", reference),
-            })
-        })
+    crate::deployment_resolver::resolve(client, reference, false).await
 }
 
 // ---------------------------------------------------------------------------
