@@ -8,8 +8,8 @@ use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
     KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
+    ResourceOutputs, ResourceStatus, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -627,6 +627,7 @@ impl AwsRemoteStackManagementController {
         self.append_resource_scoped_management_statements(
             ctx,
             management_profile,
+            &permission_context,
             &generator,
             &mut all_statements,
         )?;
@@ -656,6 +657,7 @@ impl AwsRemoteStackManagementController {
         &self,
         ctx: &ResourceControllerContext<'_>,
         management_profile: &alien_core::permissions::PermissionProfile,
+        base_permission_context: &PermissionContext,
         generator: &AwsRuntimePermissionsGenerator,
         all_statements: &mut Vec<AwsIamStatement>,
     ) -> Result<()> {
@@ -668,14 +670,21 @@ impl AwsRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
-            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
                 continue;
-            };
-            let permission_context =
-                ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(ctx, cluster)?;
+            }
+            let permission_context = Self::resource_scoped_management_permission_context(
+                ctx,
+                base_permission_context,
+                resource_id,
+                resource_entry,
+            )?;
 
             for permission_set_ref in permission_set_refs {
                 if !seen.insert((resource_id.clone(), permission_set_ref.id().to_string())) {
+                    continue;
+                }
+                if permission_set_ref.id().ends_with("/provision") {
                     continue;
                 }
                 let Some(permission_set) =
@@ -702,6 +711,33 @@ impl AwsRemoteStackManagementController {
         }
 
         Ok(())
+    }
+
+    fn resource_scoped_management_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        base_permission_context: &PermissionContext,
+        resource_id: &str,
+        resource_entry: &alien_core::ResourceEntry,
+    ) -> Result<PermissionContext> {
+        if let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() {
+            return ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
+                ctx, cluster,
+            )
+            .map(|context| context.with_resource_id(resource_id.to_string()));
+        }
+
+        let mut context = base_permission_context
+            .clone()
+            .with_resource_id(resource_id.to_string());
+        context.resource_name = None;
+
+        if resource_entry.config.downcast_ref::<Worker>().is_some() {
+            return Ok(
+                context.with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id))
+            );
+        }
+
+        Ok(context)
     }
 
     fn chunk_management_policy_documents(
