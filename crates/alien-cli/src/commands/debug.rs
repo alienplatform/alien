@@ -97,6 +97,11 @@ struct PushDebugSession {
     /// resulting absolute file path.
     #[serde(default)]
     files: Vec<DebugCredFile>,
+    /// Optional shell snippet to run (`sh -c`) after env/files are set up
+    /// but before the user's command. Used by Azure to drive `az login`.
+    /// Must be idempotent — re-runs on every cache hit too.
+    #[serde(default)]
+    setup_script: Option<String>,
     /// RFC3339 timestamp shown to the user when the session expires.
     #[serde(default)]
     expires_at: Option<String>,
@@ -245,10 +250,15 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             reason: "Failed to create temporary directory for debug credentials".to_string(),
         })?;
 
-    let (mode_label, env, expires_at) = match session {
+    let (mode_label, env, setup_script, expires_at) = match session {
         DebugSessionResponse::Push(push) => {
             let env = materialize_session(&cred_dir, push.env, push.files)?;
-            (format!("push/{}", push.provider), env, push.expires_at)
+            (
+                format!("push/{}", push.provider),
+                env,
+                push.setup_script,
+                push.expires_at,
+            )
         }
         DebugSessionResponse::Pull(pull) => {
             let kubeconfig_path = write_session_file(
@@ -263,13 +273,17 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                 "KUBECONFIG".to_string(),
                 kubeconfig_path.display().to_string(),
             );
-            ("pull/kubernetes".to_string(), env, pull.expires_at)
+            ("pull/kubernetes".to_string(), env, None, pull.expires_at)
         }
     };
 
     match expires_at.as_deref() {
         Some(exp) => eprintln!("[alien debug] {} session — expires {}", mode_label, exp),
         None => eprintln!("[alien debug] {} session", mode_label),
+    }
+
+    if let Some(script) = setup_script {
+        run_setup_script(&script, &env).await?;
     }
 
     let status = spawn_child(cmd, &env).await?;
@@ -338,6 +352,39 @@ fn write_session_file(dir: &std::path::Path, name: &str, content: &str) -> Resul
             })?;
     }
     Ok(path)
+}
+
+/// Run the manager-supplied setup snippet (`sh -c <script>`) with the
+/// merged debug-session env. Used today by Azure to `az login` before the
+/// user's command. Output is forwarded to stderr so the user can see what
+/// it's doing; a non-zero exit aborts the debug session.
+async fn run_setup_script(script: &str, env: &BTreeMap<String, String>) -> Result<()> {
+    let status = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await
+        .into_alien_error()
+        .context(ErrorData::LocalServiceFailed {
+            service: "sh".to_string(),
+            reason: "Failed to run debug-session setup script".to_string(),
+        })?;
+
+    if !status.success() {
+        return Err(AlienError::new(ErrorData::LocalServiceFailed {
+            service: "sh".to_string(),
+            reason: format!(
+                "Debug-session setup script exited with status {}.",
+                status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
+            ),
+        }));
+    }
+
+    Ok(())
 }
 
 /// Spawn the user's command (or interactive shell) with the merged env.
