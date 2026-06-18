@@ -10,8 +10,9 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{generate_cloudformation_template, CfRegistry, RegistrationMode};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Network,
-    NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress,
+    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Platform,
+    RemoteStackManagement, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]
@@ -73,6 +74,39 @@ fn aws_function_basic_lambda() {
         "aws_function_basic",
     );
     insta::assert_snapshot!("aws_function_basic", yaml);
+}
+
+#[test]
+fn aws_remote_stack_management_skips_live_provision_sets() {
+    let stack = Stack::new("acme-mgmt".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new()
+                .resource("job", ["worker/provision", "worker/dispatch-command"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Worker::new("job".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/job:1.2.3".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws_remote_stack_management_skips_live_provision_sets",
+    );
+
+    assert!(yaml.contains("lambda:InvokeFunction"));
+    assert!(!yaml.contains("lambda:CreateFunction"));
 }
 
 #[test]

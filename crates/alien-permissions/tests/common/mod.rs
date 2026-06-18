@@ -12,6 +12,7 @@ pub fn create_test_context() -> PermissionContext {
         .with_stack_prefix("my-stack")
         .with_stack_name("byoc-database")
         .with_deployment_name("Payment Processor")
+        .with_resource_id("payments-data")
         .with_resource_name("my-stack-payments-data")
         .with_project_name("my-project")
         .with_project_number("123456789012")
@@ -24,6 +25,7 @@ pub fn create_test_context() -> PermissionContext {
         .with_external_id("my-external-id")
         .with_aws_account_id("123456789012")
         .with_aws_region("us-east-1")
+        .with_managing_account_id("210987654321")
 }
 
 /// Test helper to create AWS storage data read permission set
@@ -339,10 +341,12 @@ pub fn create_empty_context() -> PermissionContext {
 pub fn create_cloudformation_context() -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("my-stack")
+        .with_resource_id("payments-data")
         .with_resource_name("PaymentsDataBucket") // CloudFormation logical ID
         .with_aws_account_id("123456789012") // Managing account ID
         .with_aws_region("us-east-1")
         .with_external_id("my-external-id")
+        .with_managing_account_id("210987654321")
 }
 
 /// Test helper to create AWS permission set with CloudFormation-specific resource references
