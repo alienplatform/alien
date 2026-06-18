@@ -108,6 +108,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ),
             )
             )
+            // `create-new` picks AZs by name from this data source for the
+            // newly-created subnets. Apply the same EKS-disallowed AZ-ID
+            // exclusion here so a brand-new VPC also can't land its subnets
+            // in (e.g.) `use1-az3` and then fail at cluster creation.
             .with_data(data_block(
                 "aws_availability_zones",
                 &format!("{label}_available"),
@@ -117,6 +121,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("state", Expression::String("available".to_string())),
+                    attr(
+                        "exclude_zone_ids",
+                        expr::raw("var.unsupported_availability_zone_ids"),
+                    ),
                 ],
             ))
             .with_data(data_block(
@@ -150,14 +158,13 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ))
             // EKS control plane subnets must live in AZs the service supports.
-            // `us-east-1e` is the documented case — it's an active AZ in the
-            // default VPC but EKS rejects it with
-            // `UnsupportedAvailabilityZoneException`. AWS doesn't expose a
-            // dynamic "AZs that support EKS" data source, so we surface the
-            // exclusion list as a variable (`unsupported_availability_zones`)
-            // with `us-east-1e` as the default. Users in other regions, or
-            // hit by a future deprecation, can override. `exclude_names` is a
-            // no-op for AZs that don't exist in the current region.
+            // AWS publishes the disallowed list by **Availability Zone ID**
+            // (e.g. `use1-az3`), not by name (`us-east-1e`), because AZ
+            // names are account-local — the same physical zone can map to a
+            // different name in different accounts. The exclusion list is a
+            // module variable so callers in other regions / hit by future
+            // deprecations can override. `exclude_zone_ids` is a no-op for
+            // AZ IDs that don't exist in the current region.
             .with_data(data_block(
                 "aws_availability_zones",
                 &format!("{label}_eks_supported"),
@@ -170,8 +177,8 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     ),
                     attr("state", Expression::String("available".to_string())),
                     attr(
-                        "exclude_names",
-                        expr::raw("var.unsupported_availability_zones"),
+                        "exclude_zone_ids",
+                        expr::raw("var.unsupported_availability_zone_ids"),
                     ),
                 ],
             ))
@@ -202,12 +209,12 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         [
                             attr(
                                 "name",
-                                Expression::String("availability-zone".to_string()),
+                                Expression::String("availability-zone-id".to_string()),
                             ),
                             attr(
                                 "values",
                                 expr::raw(format!(
-                                    "data.aws_availability_zones.{label}_eks_supported[0].names"
+                                    "data.aws_availability_zones.{label}_eks_supported[0].zone_ids"
                                 )),
                             ),
                         ],
