@@ -17,11 +17,27 @@ jq_value() {
   printf '%s' "$TF_JSON" | jq -er --arg key "$key" '.[$key].value'
 }
 
+target_option() {
+  local output="$1"
+  local alias="$2"
+  local key="$3"
+  printf '%s' "$TF_JSON" | jq -er \
+    --arg output "$output" \
+    --arg alias "$alias" \
+    --arg key "$key" \
+    '.[$output].value[$alias][$key]'
+}
+
 write_kubeconfig() {
   local key="$1"
   local path="$2"
   jq_value "$key" > "$path"
   chmod 600 "$path"
+}
+
+should_configure_provider() {
+  local value="${1:-true}"
+  [[ "$value" == "true" || "$value" == "1" || "$value" == "yes" ]]
 }
 
 wait_for_kube_authorization() {
@@ -159,19 +175,39 @@ YAML
   wait_for_ingress_class "EKS" "$kubeconfig" "alb"
 }
 
-eks_kubeconfig="$tmp_dir/eks.yaml"
-write_kubeconfig e2e_eks_kubeconfig "$eks_kubeconfig"
-ensure_eks_gp3_default_storage_class "$eks_kubeconfig"
-configure_eks_auto_mode_ingress "$eks_kubeconfig"
+if should_configure_provider "${ALIEN_E2E_CONFIGURE_EKS:-true}"; then
+  eks_kubeconfig="$tmp_dir/eks.yaml"
+  write_kubeconfig e2e_eks_kubeconfig "$eks_kubeconfig"
+  ensure_eks_gp3_default_storage_class "$eks_kubeconfig"
+  configure_eks_auto_mode_ingress "$eks_kubeconfig"
+else
+  echo "Skipping EKS provider-native Kubernetes configuration"
+fi
 
-gke_kubeconfig="$tmp_dir/gke.yaml"
-write_kubeconfig e2e_gke_kubeconfig "$gke_kubeconfig"
-ensure_default_storage_class "GKE" "$gke_kubeconfig"
+if should_configure_provider "${ALIEN_E2E_CONFIGURE_GKE:-true}"; then
+  gke_alias="${ALIEN_E2E_GCP_TARGET:-gcp-target-3}"
+  gke_kubeconfig="$tmp_dir/gke.yaml"
+  gke_key_file="$tmp_dir/gke-key.json"
+  target_option gcp_target_options "$gke_alias" GOOGLE_TARGET_SERVICE_ACCOUNT_KEY > "$gke_key_file"
+  ./scripts/write-gke-kubeconfig.sh \
+    --key-file "$gke_key_file" \
+    --project "$(target_option gcp_target_options "$gke_alias" GOOGLE_TARGET_PROJECT_ID)" \
+    --cluster "$(target_option gcp_target_options "$gke_alias" ALIEN_TEST_GKE_CLUSTER_NAME)" \
+    --location "$(target_option gcp_target_options "$gke_alias" ALIEN_TEST_GKE_CLUSTER_LOCATION)" \
+    --kubeconfig "$gke_kubeconfig"
+  ensure_default_storage_class "GKE" "$gke_kubeconfig"
+else
+  echo "Skipping GKE provider-native Kubernetes configuration"
+fi
 
-aks_kubeconfig="$tmp_dir/aks.yaml"
-write_kubeconfig e2e_aks_kubeconfig "$aks_kubeconfig"
-wait_for_kube_authorization "AKS" "$aks_kubeconfig"
-ensure_default_storage_class "AKS" "$aks_kubeconfig"
-wait_for_ingress_class "AKS" "$aks_kubeconfig" "webapprouting.kubernetes.azure.com"
+if should_configure_provider "${ALIEN_E2E_CONFIGURE_AKS:-true}"; then
+  aks_kubeconfig="$tmp_dir/aks.yaml"
+  write_kubeconfig e2e_aks_kubeconfig "$aks_kubeconfig"
+  wait_for_kube_authorization "AKS" "$aks_kubeconfig"
+  ensure_default_storage_class "AKS" "$aks_kubeconfig"
+  wait_for_ingress_class "AKS" "$aks_kubeconfig" "webapprouting.kubernetes.azure.com"
+else
+  echo "Skipping AKS provider-native Kubernetes configuration"
+fi
 
 echo "Provider-native Kubernetes ingress and default storage classes are configured"

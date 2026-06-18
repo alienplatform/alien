@@ -1088,15 +1088,12 @@ mod tests {
     #[test]
     fn test_kubernetes_function_name() {
         // Test basic functionality
-        assert_eq!(
-            kubernetes_resource_name("my-stack", "my-func"),
-            "my-stack-my-func"
-        );
+        assert_eq!(kubernetes_resource_name("my-stack", "my-func"), "my-func");
 
         // Test character filtering and lowercasing
         assert_eq!(
             kubernetes_resource_name("My_Stack!", "Test#123"),
-            "my-stack-test-123"
+            "test-123"
         );
 
         // Test length truncation
@@ -1104,7 +1101,7 @@ mod tests {
         let long_id = "b".repeat(20);
         let result = kubernetes_resource_name(&long_prefix, &long_id);
         assert!(result.len() <= 63);
-        assert!(result.starts_with("aaa"));
+        assert_eq!(result, long_id);
     }
 
     #[test]

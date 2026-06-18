@@ -109,16 +109,17 @@ fn generate_auto_management_profile(
     for (resource_id, resource_entry) in stack.resources() {
         let resource_type_value = resource_entry.config.resource_type();
         let resource_type = resource_type_value.0.as_ref();
+        let permission_resource_type = permission_resource_type(resource_type);
         let policy = ownership_policy_for_resource_type(resource_type);
 
         match resource_entry.lifecycle {
             ResourceLifecycle::Live => {
                 // Live resources are Alien-owned. Provision is required so
                 // Alien can create, replace, and delete them after setup.
-                permission_set_ids.insert(format!("{}/provision", resource_type));
+                permission_set_ids.insert(format!("{}/provision", permission_resource_type));
             }
             ResourceLifecycle::Frozen if policy.requires_management_permissions() => {
-                permission_set_ids.insert(format!("{}/management", resource_type));
+                permission_set_ids.insert(format!("{}/management", permission_resource_type));
             }
             ResourceLifecycle::Frozen => {
                 // Frozen resources are setup-owned by default. Heartbeat,
@@ -133,6 +134,7 @@ fn generate_auto_management_profile(
             add_cloud_heartbeat_permission(
                 resource_id,
                 resource_type,
+                permission_resource_type,
                 resource_entry,
                 &mut permission_set_ids,
                 &mut resource_permission_set_ids,
@@ -142,7 +144,7 @@ fn generate_auto_management_profile(
         // Add telemetry permissions if telemetry is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.telemetry.is_enabled() {
-            permission_set_ids.insert(format!("{}/telemetry", resource_type));
+            permission_set_ids.insert(format!("{}/telemetry", permission_resource_type));
         }
 
         // Add command dispatch permissions for workers with commands_enabled = true.
@@ -284,6 +286,7 @@ fn resource_needs_cloud_heartbeat_permission(
 fn add_cloud_heartbeat_permission(
     resource_id: &str,
     resource_type: &str,
+    permission_resource_type: &str,
     resource_entry: &alien_core::ResourceEntry,
     permission_set_ids: &mut BTreeSet<String>,
     resource_permission_set_ids: &mut IndexMap<String, BTreeSet<String>>,
@@ -292,7 +295,7 @@ fn add_cloud_heartbeat_permission(
         return;
     }
 
-    let permission_set_id = format!("{}/heartbeat", resource_type);
+    let permission_set_id = format!("{}/heartbeat", permission_resource_type);
     if resource_type == KubernetesCluster::RESOURCE_TYPE.as_ref() {
         resource_permission_set_ids
             .entry(resource_id.to_string())
@@ -303,18 +306,31 @@ fn add_cloud_heartbeat_permission(
     }
 }
 
+fn permission_resource_type(resource_type: &str) -> &str {
+    match resource_type {
+        "azure_resource_group" => "azure-resource-group",
+        "azure_storage_account" => "azure-storage-account",
+        "azure_container_apps_environment" => "azure-container-apps-environment",
+        "azure_service_bus_namespace" => "azure-service-bus-namespace",
+        "service_activation" => "service-activation",
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        ArtifactRegistry, CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, Ingress,
-        KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
-        KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
-        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
-        StackState, Storage, TelemetryMode, Worker, WorkerCode,
+        ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
+        AzureServiceBusNamespace, AzureStorageAccount, CapacityGroup, ComputeCluster, Container,
+        ContainerCode, DeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
+        HeartbeatsMode, Ingress, KubernetesCertificateMode, KubernetesCluster,
+        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
+        KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+        KubernetesRouteProviderOptions, KubernetesSettings, ResourceEntry, ResourceLifecycle,
+        ResourceSpec, ServiceActivation, StackSettings, StackState, Storage, TelemetryMode, Worker,
+        WorkerCode,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -516,6 +532,75 @@ mod tests {
             result_stack.management().profile().is_none(),
             "API-only Kubernetes heartbeat should not author cloud IAM permissions"
         );
+    }
+
+    #[tokio::test]
+    async fn azure_setup_resource_heartbeats_use_permission_set_names() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureContainerAppsEnvironment::new("container-apps-env".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureServiceBusNamespace::new("service-bus".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceActivation::new("enable-storage".to_string())
+                    .service_name("Microsoft.Storage".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management(ManagementPermissions::Auto)
+            .build();
+
+        let stack_state = StackState::new(Platform::Azure);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let permission_names: Vec<String> = profile
+            .0
+            .get("*")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+
+        for permission_set in [
+            "azure-resource-group/heartbeat",
+            "azure-storage-account/heartbeat",
+            "azure-container-apps-environment/heartbeat",
+            "azure-service-bus-namespace/heartbeat",
+            "service-activation/heartbeat",
+        ] {
+            assert!(
+                permission_names.contains(&permission_set.to_string()),
+                "expected generated management profile to include {permission_set}"
+            );
+        }
+        assert!(!permission_names.iter().any(|permission| {
+            permission.contains("azure_") || permission.contains("service_activation")
+        }));
     }
 
     #[tokio::test]

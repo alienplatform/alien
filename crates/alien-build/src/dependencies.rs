@@ -1,8 +1,10 @@
 use crate::command_output::{image_build_error_with_output, CapturedCommandOutput};
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -27,6 +29,58 @@ impl PackageManager {
     /// Check if the package manager is available on the system
     pub fn is_available(&self) -> bool {
         which::which(self.command()).is_ok()
+    }
+}
+
+struct DependencyInstallLock {
+    path: PathBuf,
+}
+
+impl Drop for DependencyInstallLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
+}
+
+async fn acquire_dependency_install_lock(
+    install_dir: &Path,
+    pm_command: &str,
+) -> Result<DependencyInstallLock> {
+    let lock_path = install_dir.join(".alien-dependency-install.lock");
+    let start = Instant::now();
+    let timeout = Duration::from_secs(300);
+
+    loop {
+        match fs::create_dir(&lock_path) {
+            Ok(()) => return Ok(DependencyInstallLock { path: lock_path }),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                if start.elapsed() > timeout {
+                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                        resource_name: "dependency-install".to_string(),
+                        reason: format!(
+                            "Timed out waiting for another {} install in {}",
+                            pm_command,
+                            install_dir.display()
+                        ),
+                        build_output: None,
+                    }));
+                }
+
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(err) => {
+                return Err(err)
+                    .into_alien_error()
+                    .context(ErrorData::ImageBuildFailed {
+                        resource_name: "dependency-install".to_string(),
+                        reason: format!(
+                            "Failed to create dependency install lock in {}",
+                            install_dir.display()
+                        ),
+                        build_output: None,
+                    });
+            }
+        }
     }
 }
 
@@ -174,12 +228,14 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
 
     // Find workspace root and detect package manager
     let (install_dir, package_manager) = find_workspace_root(src_dir);
+    let pm_command = package_manager.command();
+
+    let _install_lock = acquire_dependency_install_lock(&install_dir, pm_command).await?;
 
     if install_dir.join("node_modules").exists() {
         debug!("node_modules already exists, skipping install");
         return Ok(());
     }
-    let pm_command = package_manager.command();
 
     info!("Detected package manager: {:?}", package_manager);
 

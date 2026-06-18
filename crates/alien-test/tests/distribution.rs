@@ -8,6 +8,7 @@ use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Response};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use test_context::test_context;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
@@ -17,12 +18,21 @@ mod common;
 async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
     match ctx.app {
         TestApp::ComprehensiveRust | TestApp::ComprehensiveTs => {
-            common::runner::check_all_bindings(&ctx.deployment, ctx.platform, ctx.model, ctx.app)
-                .await
-                .expect("binding checks failed");
-            common::commands::check_commands(&ctx.deployment)
-                .await
-                .expect("command checks failed");
+            if let Err(error) = common::runner::check_all_bindings(
+                &ctx.deployment,
+                ctx.platform,
+                ctx.model,
+                ctx.app,
+            )
+            .await
+            {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("binding checks failed: {error:#}");
+            }
+            if let Err(error) = common::commands::check_commands(&ctx.deployment).await {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("command checks failed: {error:#}");
+            }
         }
         TestApp::FullStackMicroservices => {
             if let Err(error) = check_full_stack_microservices(ctx).await {
@@ -259,7 +269,12 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         kubeconfig,
         kube_context,
         env,
-        &["get", "pods,svc,ingress,serviceaccount", "-o", "wide"],
+        &[
+            "get",
+            "pods,svc,ingress,serviceaccount,role,rolebinding",
+            "-o",
+            "wide",
+        ],
     )
     .await;
     run_kubectl_debug(
@@ -288,12 +303,46 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         kubeconfig,
         kube_context,
         env,
+        &["get", "role,rolebinding", "-o", "yaml"],
+    )
+    .await;
+    dump_service_account_auth(namespace, kubeconfig, kube_context, env).await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &["describe", "pods"],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &["get", "events", "--sort-by=.lastTimestamp"],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &["get", "gateway,httproute,healthcheckpolicy", "-o", "yaml"],
+    )
+    .await;
+    dump_pod_logs(namespace, kubeconfig, kube_context, env).await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
         &[
             "logs",
             "-l",
-            "managed-by=alien",
+            "managed-by=runtime",
             "--all-containers",
-            "--tail=200",
+            "--tail=500",
             "--prefix",
         ],
     )
@@ -306,14 +355,150 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         &[
             "logs",
             "-l",
-            "app.kubernetes.io/name=alien",
+            "app=alien-rs-worker",
             "--all-containers",
-            "--tail=200",
+            "--tail=500",
+            "--prefix",
+        ],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &[
+            "logs",
+            "-l",
+            "app.kubernetes.io/name=alien-e2e-comprehensive-rust",
+            "--all-containers",
+            "--tail=500",
             "--prefix",
         ],
     )
     .await;
     eprintln!("--- End Kubernetes debug for namespace {namespace} ---\n");
+}
+
+async fn dump_pod_logs(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    env: &[(String, String)],
+) {
+    let output = run_kubectl_capture(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &[
+            "get",
+            "pods",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+        ],
+    )
+    .await;
+
+    for pod_name in output
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let pod_ref = format!("pod/{pod_name}");
+        run_kubectl_debug(
+            namespace,
+            kubeconfig,
+            kube_context,
+            env,
+            &[
+                "logs",
+                &pod_ref,
+                "--all-containers",
+                "--tail=500",
+                "--prefix",
+            ],
+        )
+        .await;
+    }
+}
+
+async fn dump_service_account_auth(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    env: &[(String, String)],
+) {
+    let output = run_kubectl_capture(
+        namespace,
+        kubeconfig,
+        kube_context,
+        env,
+        &[
+            "get",
+            "pods",
+            "-o",
+            "jsonpath={range .items[*]}{.spec.serviceAccountName}{\"\\n\"}{end}",
+        ],
+    )
+    .await;
+
+    let service_accounts = output
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    for service_account in service_accounts {
+        let subject = format!("system:serviceaccount:{namespace}:{service_account}");
+        for (verb, resource) in [
+            ("get", "secrets"),
+            ("create", "secrets"),
+            ("update", "secrets"),
+            ("delete", "secrets"),
+            ("create", "jobs.batch"),
+        ] {
+            run_kubectl_debug(
+                namespace,
+                kubeconfig,
+                kube_context,
+                env,
+                &["auth", "can-i", verb, resource, "--as", &subject],
+            )
+            .await;
+        }
+    }
+}
+
+async fn run_kubectl_capture(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    env: &[(String, String)],
+    args: &[&str],
+) -> String {
+    let mut cmd = kubectl_debug_command(namespace, kubeconfig, kube_context, env, args);
+    match cmd.output().await {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into(),
+        Ok(output) => {
+            eprintln!("$ kubectl -n {namespace} {}", args.join(" "));
+            if !output.stdout.is_empty() {
+                eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+            if !output.stderr.is_empty() {
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+            eprintln!("kubectl exited with {}", output.status);
+            String::new()
+        }
+        Err(error) => {
+            eprintln!(
+                "failed to run kubectl -n {namespace} {}: {error}",
+                args.join(" ")
+            );
+            String::new()
+        }
+    }
 }
 
 async fn run_kubectl_debug(
@@ -323,16 +508,7 @@ async fn run_kubectl_debug(
     env: &[(String, String)],
     args: &[&str],
 ) {
-    let mut cmd = Command::new("kubectl");
-    cmd.args(["-n", namespace]);
-    cmd.args(args);
-    cmd.envs(env.iter().map(|(key, value)| (key, value)));
-    if let Some(kubeconfig) = kubeconfig {
-        cmd.env("KUBECONFIG", kubeconfig);
-    }
-    if let Some(kube_context) = kube_context {
-        cmd.args(["--context", kube_context]);
-    }
+    let mut cmd = kubectl_debug_command(namespace, kubeconfig, kube_context, env, args);
 
     match cmd.output().await {
         Ok(output) => {
@@ -354,6 +530,26 @@ async fn run_kubectl_debug(
             );
         }
     }
+}
+
+fn kubectl_debug_command(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    env: &[(String, String)],
+    args: &[&str],
+) -> Command {
+    let mut cmd = Command::new("kubectl");
+    cmd.args(["-n", namespace]);
+    cmd.args(args);
+    cmd.envs(env.iter().map(|(key, value)| (key, value)));
+    if let Some(kubeconfig) = kubeconfig {
+        cmd.env("KUBECONFIG", kubeconfig);
+    }
+    if let Some(kube_context) = kube_context {
+        cmd.args(["--context", kube_context]);
+    }
+    cmd
 }
 
 macro_rules! distribution_test_context {

@@ -50,11 +50,21 @@ impl TfEmitter for AzureVaultEmitter {
             Vec::<hcl::structure::Structure>::new(),
         ));
 
+        let name_suffix_label = vault_name_suffix_label(label);
+        fragment.resource_blocks.push(resource_block(
+            "random_id",
+            &name_suffix_label,
+            [attr(
+                "byte_length",
+                Expression::Number(hcl::Number::from(3i64)),
+            )],
+        ));
+
         fragment.resource_blocks.push(resource_block(
             "azurerm_key_vault",
             label,
             [
-                attr("name", vault_name_expr(vault.id())),
+                attr("name", vault_name_expr(vault.id(), &name_suffix_label)),
                 attr(
                     "resource_group_name",
                     expr::raw("var.azure_resource_group_name"),
@@ -113,15 +123,19 @@ impl TfEmitter for AzureVaultEmitter {
     }
 }
 
-/// Key Vault names are 3-24 alphanumeric-or-dash characters, globally
-/// unique. The runtime controller already enforces these constraints at
-/// resource-prefix derivation time; the HCL side trusts that and emits
-/// the lower-cased `${stack}-{id}` template.
-fn vault_name_expr(vault_id: &str) -> Expression {
+/// Key Vault names are 3-24 alphanumeric-or-dash characters and globally
+/// unique. Azure retains soft-deleted vault names for the recovery window,
+/// so each Terraform state gets a stable random suffix that changes only
+/// after destroy/reinstall.
+fn vault_name_expr(vault_id: &str, suffix_label: &str) -> Expression {
     expr::raw(format!(
-        "substr(lower(\"${{local.resource_prefix}}-{}\"), 0, 24)",
-        vault_id
+        "format(\"%s-%s\", trim(substr(lower(replace(\"${{local.resource_prefix}}-{}\", \"_\", \"-\")), 0, 17), \"-\"), random_id.{}.hex)",
+        vault_id, suffix_label
     ))
+}
+
+fn vault_name_suffix_label(vault_label: &str) -> String {
+    format!("{vault_label}_name_suffix")
 }
 
 fn emit_vault_permissions(
@@ -183,7 +197,6 @@ fn emit_vault_permissions(
                 };
                 emit_role_assignment(
                     fragment,
-                    ctx.resource_id,
                     vault_label,
                     &profile_name,
                     binding_index,
@@ -252,7 +265,6 @@ fn emit_vault_permissions(
             };
             emit_role_assignment(
                 fragment,
-                ctx.resource_id,
                 vault_label,
                 "management",
                 binding_index,
@@ -268,7 +280,6 @@ fn emit_vault_permissions(
 
 fn emit_role_assignment(
     fragment: &mut TfFragment,
-    vault_id: &str,
     vault_label: &str,
     principal_label: &str,
     binding_index: usize,
@@ -284,7 +295,7 @@ fn emit_role_assignment(
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{local.resource_prefix}}:{vault_id}:{role_label}:{principal_label}:{binding_index}\")"
+                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{azurerm_key_vault.{vault_label}.id}}:{role_label}:{principal_label}:{binding_index}\")"
                 )),
             ),
             attr(

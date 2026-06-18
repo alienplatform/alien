@@ -251,11 +251,12 @@ use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
 use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _};
 use alien_core::ClientConfig;
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
-    EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource, ResourceDefinition,
-    ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack,
-    StackResourceState, StackSettings, StackState, Storage, Worker, WorkerCode,
+    AwsManagementConfig, AzureContainerAppsEnvironment, AzureResourceGroup,
+    AzureServiceBusNamespace, AzureStorageAccount, ComputeBackend, DeploymentConfig,
+    DomainMetadata, EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource,
+    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
+    ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
@@ -922,9 +923,16 @@ impl SingleControllerExecutorBuilder {
 
         // Apply mutations only (skip compile-time checks) to process the stack
         let preflight_runner = PreflightRunner::new();
+        let management_config = self.management_config.clone().or_else(|| match platform {
+            Platform::Aws => Some(ManagementConfig::Aws(AwsManagementConfig {
+                managing_role_arn: "arn:aws:iam::111122223333:role/alien-test-manager".to_string(),
+            })),
+            _ => None,
+        });
+
         let config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
-            .maybe_management_config(self.management_config.clone())
+            .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
             .external_bindings(alien_core::ExternalBindings::default())
@@ -1012,7 +1020,7 @@ impl SingleControllerExecutorBuilder {
             platform,
             client_config,
             stack_settings: self.stack_settings,
-            management_config: self.management_config,
+            management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
             domain_metadata: self.domain_metadata,
