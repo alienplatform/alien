@@ -158,6 +158,14 @@ variable "security_group_ids" {
   default     = []
 }
 
+variable "unsupported_availability_zones" {
+  type        = list(string)
+  description = "AZs to exclude when picking subnets from the default VPC (network_mode = \"use-default\"). `us-east-1e` is the documented case — it exists in many default VPCs but EKS rejects it for control plane placement. AWS doesn't expose a dynamic 'AZs that support EKS' list; override this if AWS deprecates more AZs or your region has a different case."
+  default = [
+    "us-east-1e"
+  ]
+}
+
 variable "default_network_vpc_id" {
   type        = string
   description = "Existing VPC ID supplied by the customer."

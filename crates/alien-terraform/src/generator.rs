@@ -923,6 +923,14 @@ fn variables_body(
             "Existing security group IDs. Required when network is use-existing.",
             Some(vec![]),
         )));
+        blocks.push(nested(list_variable_block(
+            "unsupported_availability_zones",
+            "AZs to exclude when picking subnets from the default VPC (network_mode = \"use-default\"). \
+             `us-east-1e` is the documented case — it exists in many default VPCs but EKS rejects \
+             it for control plane placement. AWS doesn't expose a dynamic 'AZs that support EKS' \
+             list; override this if AWS deprecates more AZs or your region has a different case.",
+            Some(vec!["us-east-1e".to_string()]),
+        )));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         blocks.push(nested(variable_block(

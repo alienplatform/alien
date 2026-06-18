@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 61
 expression: buf
 ---
 === versions.tf ===
@@ -161,6 +160,14 @@ variable "security_group_ids" {
   type        = list(string)
   description = "Existing security group IDs. Required when network is use-existing."
   default     = []
+}
+
+variable "unsupported_availability_zones" {
+  type        = list(string)
+  description = "AZs to exclude when picking subnets from the default VPC (network_mode = \"use-default\"). `us-east-1e` is the documented case — it exists in many default VPCs but EKS rejects it for control plane placement. AWS doesn't expose a dynamic 'AZs that support EKS' list; override this if AWS deprecates more AZs or your region has a different case."
+  default = [
+    "us-east-1e"
+  ]
 }
 
 variable "kubernetes_cluster_mode" {
@@ -577,3 +584,9 @@ kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terrafor
 ```
 
 Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.
+
+## Destroy Order
+
+If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+
+If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.

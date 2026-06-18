@@ -129,6 +129,90 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     ),
                     attr("name", expr::raw("var.eks_cluster_name")),
                 ],
+            ))
+            // `network_mode == "use-default"` reuses the AWS account's default
+            // VPC + its existing subnets. Without these data sources the EKS
+            // cluster's `subnet_ids` would resolve to `[]` and the provider
+            // rejects the apply ("Attribute vpc_config.0.subnet_ids requires
+            // 1 item minimum"). The data blocks are gated by `count` so
+            // create-new / use-existing modes pay no API cost.
+            .with_data(data_block(
+                "aws_vpc",
+                &format!("{label}_default"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    attr("default", Expression::Bool(true)),
+                ],
+            ))
+            // EKS control plane subnets must live in AZs the service supports.
+            // `us-east-1e` is the documented case — it's an active AZ in the
+            // default VPC but EKS rejects it with
+            // `UnsupportedAvailabilityZoneException`. AWS doesn't expose a
+            // dynamic "AZs that support EKS" data source, so we surface the
+            // exclusion list as a variable (`unsupported_availability_zones`)
+            // with `us-east-1e` as the default. Users in other regions, or
+            // hit by a future deprecation, can override. `exclude_names` is a
+            // no-op for AZs that don't exist in the current region.
+            .with_data(data_block(
+                "aws_availability_zones",
+                &format!("{label}_eks_supported"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    attr("state", Expression::String("available".to_string())),
+                    attr(
+                        "exclude_names",
+                        expr::raw("var.unsupported_availability_zones"),
+                    ),
+                ],
+            ))
+            .with_data(data_block(
+                "aws_subnets",
+                &format!("{label}_default"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    nested(block(
+                        "filter",
+                        [
+                            attr("name", Expression::String("vpc-id".to_string())),
+                            attr(
+                                "values",
+                                expr::raw(format!(
+                                    "[data.aws_vpc.{label}_default[0].id]"
+                                )),
+                            ),
+                        ],
+                    )),
+                    nested(block(
+                        "filter",
+                        [
+                            attr(
+                                "name",
+                                Expression::String("availability-zone".to_string()),
+                            ),
+                            attr(
+                                "values",
+                                expr::raw(format!(
+                                    "data.aws_availability_zones.{label}_eks_supported[0].names"
+                                )),
+                            ),
+                        ],
+                    )),
+                ],
             ));
 
         add_eks_workload_identity_data(&mut fragment, label);
@@ -1318,13 +1402,19 @@ fn eks_subnet_tags(label: &str, kind: &str, role: &str) -> Expression {
 
 fn public_subnet_ids_expr(label: &str) -> String {
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 
 fn private_subnet_ids_expr(label: &str) -> String {
+    // For `use-default`, the AWS account's default VPC has only public subnets
+    // — there is no private/public distinction. Returning the same default
+    // subnet set here is the right behavior: EKS works on either, and ALB
+    // configurations downstream will use the same list. If a customer needs a
+    // proper private/public split they should switch to `create-new` or
+    // `use-existing`.
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 
