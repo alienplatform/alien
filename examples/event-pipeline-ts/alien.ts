@@ -20,7 +20,7 @@ const processor = new alien.Worker("processor")
 export default new alien.Stack("event-pipeline")
   .platforms(["aws", "gcp", "azure"])
   .add(inbox, "frozen")
-  .add(data, "live")
+  .add(data, "frozen")
   .add(events, "frozen")
   .add(processor, "live")
   .permissions({
@@ -29,7 +29,6 @@ export default new alien.Stack("event-pipeline")
         "*": [
           "queue/data-read",
           "queue/data-write",
-          "storage/provision",
           "storage/data-read",
           "storage/data-write",
           "kv/data-read",

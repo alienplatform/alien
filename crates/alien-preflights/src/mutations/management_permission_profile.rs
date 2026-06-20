@@ -5,7 +5,8 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, ExposeProtocol, Ingress,
     KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesRouteProviderOptions, Platform, ResourceLifecycle, Stack, StackState, Worker,
+    KubernetesRouteProviderOptions, Platform, ResourceLifecycle, Stack, StackState, Storage,
+    Worker, WorkerTrigger,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -178,6 +179,13 @@ fn generate_auto_management_profile(
                 .or_default()
                 .insert("kubernetes-public-endpoint/management".to_string());
         }
+
+        add_storage_trigger_source_management_permissions(
+            stack,
+            platform,
+            resource_entry,
+            &mut resource_permission_set_ids,
+        );
     }
 
     // Only create management permissions if there are resources that need management
@@ -227,6 +235,46 @@ fn generate_auto_management_profile(
     }
 
     Ok(Some(PermissionProfile(management_permissions)))
+}
+
+fn add_storage_trigger_source_management_permissions(
+    stack: &Stack,
+    platform: Platform,
+    resource_entry: &alien_core::ResourceEntry,
+    resource_permission_set_ids: &mut IndexMap<String, BTreeSet<String>>,
+) {
+    if !matches!(platform, Platform::Aws | Platform::Gcp) {
+        return;
+    }
+
+    if resource_entry.lifecycle != ResourceLifecycle::Live {
+        return;
+    }
+
+    let Some(worker) = resource_entry.config.downcast_ref::<Worker>() else {
+        return;
+    };
+
+    for trigger in &worker.triggers {
+        let WorkerTrigger::Storage { storage, .. } = trigger else {
+            continue;
+        };
+        if storage.resource_type != Storage::RESOURCE_TYPE {
+            continue;
+        }
+
+        let Some(source_entry) = stack.resources.get(storage.id()) else {
+            continue;
+        };
+        if source_entry.lifecycle != ResourceLifecycle::Frozen {
+            continue;
+        }
+
+        resource_permission_set_ids
+            .entry(storage.id().to_string())
+            .or_default()
+            .insert("storage/trigger-management".to_string());
+    }
 }
 
 fn kubernetes_exposure_needs_acm_import(config: &DeploymentConfig) -> bool {
@@ -456,6 +504,100 @@ mod tests {
             }
             _ => panic!("Expected Extend management permissions"),
         }
+    }
+
+    #[tokio::test]
+    async fn storage_trigger_from_frozen_storage_gets_source_management_permission() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let global_permissions = profile.0.get("*").expect("global management grants");
+        let global_permission_names: Vec<String> = global_permissions
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+        assert!(global_permission_names.contains(&"worker/provision".to_string()));
+
+        let storage_permissions = profile
+            .0
+            .get("uploads")
+            .expect("storage trigger source management grants");
+        let storage_permission_names: Vec<String> = storage_permissions
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+        assert!(storage_permission_names.contains(&"storage/trigger-management".to_string()));
+    }
+
+    #[tokio::test]
+    async fn azure_storage_trigger_from_frozen_storage_does_not_get_source_management_permission() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Azure);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        assert!(
+            !profile.0.contains_key("uploads"),
+            "Azure Dapr trigger wiring should be covered by worker/container-app permissions"
+        );
     }
 
     #[tokio::test]
