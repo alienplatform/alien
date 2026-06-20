@@ -1,14 +1,9 @@
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
+use crate::aws_sdk::{CodeBuildProjectConfig, CodeBuildProjectDescription};
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::codebuild::{
-    BatchGetProjectsRequest, CloudWatchLogsConfig, CreateProjectRequest, DeleteProjectRequest,
-    EnvironmentVariable, LogsConfig, Project, ProjectArtifacts, ProjectEnvironment, ProjectSource,
-    S3LogsConfig, Tag,
-};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsCodeBuildHeartbeatData, Build, BuildHeartbeatData,
     BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, ObservedHealth, Platform,
@@ -90,84 +85,24 @@ impl AwsBuildController {
         // Store the computed environment variables in controller state
         self.build_env_vars = Some(env_vars.clone());
 
-        // Create generic buildspec - actual script will be provided at runtime via bindings
-        let buildspec = r#"version: 0.2
-phases:
-  build:
-    commands:
-      - echo "Build script will be provided at runtime"
-"#
-        .to_string();
-
-        // Create project source configuration
-        let source = ProjectSource::builder()
-            .r#type("NO_SOURCE".to_string())
-            .buildspec(buildspec)
-            .build();
-
-        // Create project artifacts configuration (no artifacts needed)
-        let artifacts = ProjectArtifacts::builder()
-            .r#type("NO_ARTIFACTS".to_string())
-            .build();
-
-        // Convert environment variables
-        let environment_variables: Vec<EnvironmentVariable> = env_vars
-            .into_iter()
-            .map(|(name, value)| {
-                EnvironmentVariable::builder()
-                    .name(name)
-                    .value(value)
-                    .build()
-            })
-            .collect();
-
-        // Create project environment configuration
-        let environment = ProjectEnvironment::builder()
-            .r#type(map_environment_type(&cfg.compute_type))
-            .image("ghcr.io/alienplatform/alien-builder:latest".to_string())
-            .compute_type(map_compute_type(&cfg.compute_type))
-            .image_pull_credentials_type("SERVICE_ROLE".to_string())
-            .environment_variables(environment_variables)
-            .build();
-
-        let request = CreateProjectRequest::builder()
-            .name(aws_project_name.clone())
-            .source(source)
-            .artifacts(artifacts)
-            .environment(environment)
-            .logs_config(LogsConfig {
-                cloud_watch_logs: Some(CloudWatchLogsConfig {
-                    status: "ENABLED".to_string(),
-                    group_name: None,
-                    stream_name: None,
-                }),
-                s3_logs: Some(S3LogsConfig {
-                    status: "DISABLED".to_string(),
-                    location: None,
-                    encryption_disabled: None,
-                    bucket_owner_access: None,
-                }),
-            })
-            .service_role(role_arn)
-            .description(format!("Runtime build project: {}", cfg.id))
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &cfg.id)
-                    .into_iter()
-                    .map(|(key, value)| Tag::builder().key(key).value(value).build())
-                    .collect(),
-            )
-            .build();
+        let project_config = build_codebuild_project_config(
+            ctx.resource_prefix,
+            cfg,
+            aws_project_name.clone(),
+            role_arn,
+            env_vars,
+        );
 
         let response =
             client
-                .create_project(request)
+                .create_project(project_config)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to create CodeBuild project".to_string(),
                     resource_id: Some(cfg.id.clone()),
                 })?;
 
-        self.project_arn = response.project.arn.clone();
+        self.project_arn = response.arn.clone();
         self.project_name = Some(aws_project_name.clone());
 
         info!(name=%aws_project_name, arn=%self.project_arn.as_deref().unwrap_or("unknown"), "CodeBuild project created successfully");
@@ -228,30 +163,28 @@ phases:
 
         // Heartbeat check: verify CodeBuild project still exists and check basic properties
         if let Some(project_name) = &self.project_name {
-            let request = BatchGetProjectsRequest::builder()
-                .names(vec![project_name.clone()])
-                .build();
+            let project =
+                client
+                    .get_project(project_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to check CodeBuild project status".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
-            let result = client.batch_get_projects(request).await.context(
-                ErrorData::CloudPlatformError {
-                    message: "Failed to check CodeBuild project status".to_string(),
-                    resource_id: Some(config.id.clone()),
-                },
-            )?;
-
-            if result.projects.as_ref().map_or(true, |p| p.is_empty()) {
-                return Err(AlienError::new(ErrorData::ResourceDrift {
-                    resource_id: config.id.clone(),
-                    message: "CodeBuild project no longer exists".to_string(),
-                }));
-            }
-
-            let project = &result.projects.as_ref().unwrap()[0];
+            let project = match project {
+                Some(project) => project,
+                None => {
+                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                        resource_id: config.id.clone(),
+                        message: "CodeBuild project no longer exists".to_string(),
+                    }));
+                }
+            };
 
             // Check basic drift detection - compare compute type
             let expected_compute_type = map_compute_type(&config.compute_type);
-            if let Some(environment) = &project.environment {
-                let actual_compute_type = &environment.compute_type;
+            if let Some(actual_compute_type) = &project.compute_type {
                 if actual_compute_type != &expected_compute_type {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
@@ -263,7 +196,7 @@ phases:
                 }
             }
 
-            emit_aws_build_heartbeat(ctx, &config.id, project);
+            emit_aws_build_heartbeat(ctx, &config.id, &project);
         }
 
         debug!(name = %config.id, "Heartbeat check passed");
@@ -315,75 +248,25 @@ phases:
         // Store the computed environment variables in controller state
         self.build_env_vars = Some(env_vars.clone());
 
-        // Create updated generic buildspec - actual script will be provided at runtime via bindings
-        let buildspec = r#"version: 0.2
-phases:
-  build:
-    commands:
-      - echo "Build script will be provided at runtime"
-"#
-        .to_string();
+        let project_config = build_codebuild_project_config(
+            ctx.resource_prefix,
+            current_config,
+            aws_project_name.clone(),
+            role_arn,
+            env_vars,
+        );
 
-        // Create updated project source
-        let source = ProjectSource::builder()
-            .r#type("NO_SOURCE".to_string())
-            .buildspec(buildspec)
-            .build();
+        let response =
+            client
+                .update_project(project_config)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to update CodeBuild project".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })?;
 
-        // Convert environment variables
-        let environment_variables: Vec<EnvironmentVariable> = env_vars
-            .into_iter()
-            .map(|(name, value)| {
-                EnvironmentVariable::builder()
-                    .name(name)
-                    .value(value)
-                    .build()
-            })
-            .collect();
-
-        // Create updated environment
-        let environment = ProjectEnvironment::builder()
-            .r#type(map_environment_type(&current_config.compute_type))
-            .image("ghcr.io/alienplatform/alien-builder:latest".to_string())
-            .compute_type(map_compute_type(&current_config.compute_type))
-            .image_pull_credentials_type("SERVICE_ROLE".to_string())
-            .environment_variables(environment_variables)
-            .build();
-
-        // Create updated artifacts
-        let artifacts = ProjectArtifacts::builder()
-            .r#type("NO_ARTIFACTS".to_string())
-            .build();
-
-        let update_request = alien_aws_clients::codebuild::UpdateProjectRequest::builder()
-            .name(aws_project_name.clone())
-            .source(source)
-            .artifacts(artifacts)
-            .environment(environment)
-            .logs_config(LogsConfig {
-                cloud_watch_logs: Some(CloudWatchLogsConfig {
-                    status: "ENABLED".to_string(),
-                    group_name: None,
-                    stream_name: None,
-                }),
-                s3_logs: Some(S3LogsConfig {
-                    status: "DISABLED".to_string(),
-                    location: None,
-                    encryption_disabled: None,
-                    bucket_owner_access: None,
-                }),
-            })
-            .service_role(role_arn)
-            .description(format!("Runtime build project: {}", current_config.id))
-            .build();
-
-        client
-            .update_project(update_request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to update CodeBuild project".to_string(),
-                resource_id: Some(current_config.id.clone()),
-            })?;
+        self.project_arn = response.arn.clone();
+        self.project_name = Some(aws_project_name.clone());
 
         info!(name=%aws_project_name, "CodeBuild project updated successfully");
 
@@ -411,31 +294,28 @@ phases:
 
         info!(name=%aws_project_name, "Deleting CodeBuild project");
 
-        let request = DeleteProjectRequest::builder()
-            .name(aws_project_name.clone())
-            .build();
-
-        match client.delete_project(request).await {
-            Ok(_) => {
-                info!(name=%aws_project_name, "CodeBuild project deleted successfully");
+        match client.get_project(&aws_project_name).await {
+            Ok(None) => {
+                warn!(name=%aws_project_name, "CodeBuild project was already deleted");
                 self.project_arn = None;
                 self.project_name = None;
                 self.build_env_vars = None;
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                warn!(name=%aws_project_name, "CodeBuild project was already deleted");
+            Ok(Some(_)) => {
+                client.delete_project(&aws_project_name).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: "Failed to delete CodeBuild project".to_string(),
+                        resource_id: Some(build_config.id.clone()),
+                    },
+                )?;
+                info!(name=%aws_project_name, "CodeBuild project deleted successfully");
                 self.project_arn = None;
                 self.project_name = None;
                 self.build_env_vars = None;
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
-                    message: "Failed to delete CodeBuild project".to_string(),
+                    message: "Failed to check CodeBuild project before deletion".to_string(),
                     resource_id: Some(build_config.id.clone()),
                 }));
             }
@@ -549,19 +429,39 @@ impl AwsBuildController {
     }
 }
 
+fn build_codebuild_project_config(
+    resource_prefix: &str,
+    build: &Build,
+    project_name: String,
+    service_role: String,
+    environment_variables: HashMap<String, String>,
+) -> CodeBuildProjectConfig {
+    CodeBuildProjectConfig {
+        name: project_name,
+        buildspec: r#"version: 0.2
+phases:
+  build:
+    commands:
+      - echo "Build script will be provided at runtime"
+"#
+        .to_string(),
+        environment_type: map_environment_type(&build.compute_type),
+        image: "ghcr.io/alienplatform/alien-builder:latest".to_string(),
+        compute_type: map_compute_type(&build.compute_type),
+        image_pull_credentials_type: "SERVICE_ROLE".to_string(),
+        environment_variables: environment_variables.into_iter().collect(),
+        service_role,
+        description: format!("Runtime build project: {}", build.id),
+        tags: standard_resource_tags(resource_prefix, &build.id),
+    }
+}
+
 fn emit_aws_build_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    project: &Project,
+    project: &CodeBuildProjectDescription,
 ) {
-    let environment = project.environment.as_ref();
-    let artifacts = project.artifacts.as_ref();
-    let source = project.source.as_ref();
-    let logs_config = project.logs_config.as_ref();
-    let project_name = project
-        .name
-        .clone()
-        .unwrap_or_else(|| resource_id.to_string());
+    let project_name = project.name.clone();
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -586,28 +486,19 @@ fn emit_aws_build_heartbeat(
                 project_name,
                 project_arn: project.arn.clone(),
                 description: project.description.clone(),
-                source_type: source.map(|source| source.r#type.clone()),
-                artifacts_type: artifacts.map(|artifacts| artifacts.r#type.clone()),
-                artifacts_encryption_disabled: artifacts
-                    .and_then(|artifacts| artifacts.encryption_disabled),
-                environment_type: environment.map(|environment| environment.r#type.clone()),
-                environment_image: environment.map(|environment| environment.image.clone()),
-                compute_type: environment.map(|environment| environment.compute_type.clone()),
-                image_pull_credentials_type: environment
-                    .and_then(|environment| environment.image_pull_credentials_type.clone()),
-                privileged_mode: environment.and_then(|environment| environment.privileged_mode),
-                environment_variable_count: environment
-                    .and_then(|environment| environment.environment_variables.as_ref())
-                    .map(|environment_variables| environment_variables.len() as u32)
-                    .unwrap_or(0),
-                service_role_present: project.service_role.is_some(),
-                encryption_key_present: project.encryption_key.is_some(),
-                cloud_watch_logs_status: logs_config
-                    .and_then(|logs_config| logs_config.cloud_watch_logs.as_ref())
-                    .map(|logs| logs.status.clone()),
-                s3_logs_status: logs_config
-                    .and_then(|logs_config| logs_config.s3_logs.as_ref())
-                    .map(|logs| logs.status.clone()),
+                source_type: project.source_type.clone(),
+                artifacts_type: project.artifacts_type.clone(),
+                artifacts_encryption_disabled: project.artifacts_encryption_disabled,
+                environment_type: project.environment_type.clone(),
+                environment_image: project.environment_image.clone(),
+                compute_type: project.compute_type.clone(),
+                image_pull_credentials_type: project.image_pull_credentials_type.clone(),
+                privileged_mode: project.privileged_mode,
+                environment_variable_count: project.environment_variable_count,
+                service_role_present: project.service_role_present,
+                encryption_key_present: project.encryption_key_present,
+                cloud_watch_logs_status: project.cloud_watch_logs_status.clone(),
+                s3_logs_status: project.s3_logs_status.clone(),
                 timeout_in_minutes: project.timeout_in_minutes,
                 queued_timeout_in_minutes: project.queued_timeout_in_minutes,
                 created: project.created,
@@ -626,86 +517,85 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_aws_clients::codebuild::{
-        CreateProjectRequest, CreateProjectResponse, MockCodeBuildApi, Project,
-        UpdateProjectRequest, UpdateProjectResponse,
-    };
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
+    use crate::aws_sdk::{CodeBuildApi, CodeBuildProjectConfig, CodeBuildProjectDescription};
+    use crate::error::Result;
     use alien_core::{Build, BuildOutputs, Platform, ResourceStatus};
-    use alien_error::AlienError;
     use rstest::rstest;
 
     use crate::build::{fixtures::*, AwsBuildController};
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
-    };
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
 
-    fn create_successful_project_response(project_name: &str) -> CreateProjectResponse {
-        CreateProjectResponse {
-            project: Project::builder()
-                .name(project_name.to_string())
-                .arn(format!(
-                    "arn:aws:codebuild:us-east-1:123456789012:project/{}",
-                    project_name
-                ))
-                .description(format!("Runtime build project: {}", project_name))
-                .build(),
+    struct TestCodeBuildClient {
+        project_name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl CodeBuildApi for TestCodeBuildClient {
+        async fn create_project(
+            &self,
+            config: CodeBuildProjectConfig,
+        ) -> Result<CodeBuildProjectDescription> {
+            Ok(project_description(&config.name, Some(config.compute_type)))
+        }
+
+        async fn update_project(
+            &self,
+            config: CodeBuildProjectConfig,
+        ) -> Result<CodeBuildProjectDescription> {
+            Ok(project_description(&config.name, Some(config.compute_type)))
+        }
+
+        async fn get_project(
+            &self,
+            _project_name: &str,
+        ) -> Result<Option<CodeBuildProjectDescription>> {
+            Ok(Some(project_description(&self.project_name, None)))
+        }
+
+        async fn delete_project(&self, _project_name: &str) -> Result<()> {
+            Ok(())
         }
     }
 
-    fn create_successful_update_response(project_name: &str) -> UpdateProjectResponse {
-        UpdateProjectResponse {
-            project: Project::builder()
-                .name(project_name.to_string())
-                .arn(format!(
-                    "arn:aws:codebuild:us-east-1:123456789012:project/{}",
-                    project_name
-                ))
-                .description(format!("Runtime build project: {}", project_name))
-                .build(),
+    fn project_description(
+        project_name: &str,
+        compute_type: Option<String>,
+    ) -> CodeBuildProjectDescription {
+        CodeBuildProjectDescription {
+            name: project_name.to_string(),
+            arn: Some(format!(
+                "arn:aws:codebuild:us-east-1:123456789012:project/{}",
+                project_name
+            )),
+            description: Some(format!("Runtime build project: {}", project_name)),
+            source_type: Some("NO_SOURCE".to_string()),
+            artifacts_type: Some("NO_ARTIFACTS".to_string()),
+            artifacts_encryption_disabled: None,
+            environment_type: Some("LINUX_CONTAINER".to_string()),
+            environment_image: Some("ghcr.io/alienplatform/alien-builder:latest".to_string()),
+            compute_type: compute_type.or_else(|| Some("BUILD_GENERAL1_SMALL".to_string())),
+            image_pull_credentials_type: Some("SERVICE_ROLE".to_string()),
+            privileged_mode: None,
+            environment_variable_count: 0,
+            service_role_present: true,
+            encryption_key_present: false,
+            cloud_watch_logs_status: Some("ENABLED".to_string()),
+            s3_logs_status: Some("DISABLED".to_string()),
+            timeout_in_minutes: None,
+            queued_timeout_in_minutes: None,
+            created: None,
+            last_modified: None,
         }
     }
 
-    fn setup_mock_client_for_creation_and_deletion(project_name: &str) -> Arc<MockCodeBuildApi> {
-        let mut mock_codebuild = MockCodeBuildApi::new();
-
-        // Mock successful project creation
-        let project_name = project_name.to_string();
-        let project_name_for_create = project_name.clone();
-        mock_codebuild
-            .expect_create_project()
-            .returning(move |_| Ok(create_successful_project_response(&project_name_for_create)));
-
-        // Mock successful project deletion
-        mock_codebuild
-            .expect_delete_project()
-            .returning(|_| Ok(alien_aws_clients::codebuild::DeleteProjectResponse {}));
-
-        Arc::new(mock_codebuild)
-    }
-
-    fn setup_mock_client_for_creation_and_update(project_name: &str) -> Arc<MockCodeBuildApi> {
-        let mut mock_codebuild = MockCodeBuildApi::new();
-
-        // Mock successful project creation
-        let project_name = project_name.to_string();
-        let project_name_for_create = project_name.clone();
-        mock_codebuild
-            .expect_create_project()
-            .returning(move |_| Ok(create_successful_project_response(&project_name_for_create)));
-
-        // Mock successful project update
-        let project_name_for_update = project_name.clone();
-        mock_codebuild
-            .expect_update_project()
-            .returning(move |_| Ok(create_successful_update_response(&project_name_for_update)));
-
-        Arc::new(mock_codebuild)
+    fn setup_mock_client(project_name: &str) -> Arc<dyn CodeBuildApi> {
+        Arc::new(TestCodeBuildClient {
+            project_name: project_name.to_string(),
+        })
     }
 
     fn setup_mock_service_provider(
-        mock_codebuild: Arc<MockCodeBuildApi>,
+        mock_codebuild: Arc<dyn CodeBuildApi>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
@@ -726,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] build: Build) {
         let project_name = format!("test-{}", build.id);
-        let mock_codebuild = setup_mock_client_for_creation_and_deletion(&project_name);
+        let mock_codebuild = setup_mock_client(&project_name);
         let mock_provider = setup_mock_service_provider(mock_codebuild);
 
         let mut executor = SingleControllerExecutor::builder()
@@ -775,7 +665,7 @@ mod tests {
         to_build.id = build_id.clone();
 
         let project_name = format!("test-{}", build_id);
-        let mock_codebuild = setup_mock_client_for_creation_and_update(&project_name);
+        let mock_codebuild = setup_mock_client(&project_name);
         let mock_provider = setup_mock_service_provider(mock_codebuild);
 
         // Start with the "from" build in Ready state

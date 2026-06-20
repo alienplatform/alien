@@ -356,6 +356,38 @@ pub enum ErrorData {
         available_resources: Vec<String>,
     },
 
+    /// Cloud provider resource was not found.
+    #[error(
+        code = "CLOUD_RESOURCE_NOT_FOUND",
+        message = "Cloud resource '{resource_name}' of type '{resource_type}' was not found",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    CloudResourceNotFound {
+        /// Cloud provider resource type
+        resource_type: String,
+        /// Cloud provider resource name or ARN
+        resource_name: String,
+    },
+
+    /// Cloud provider resource already exists or is otherwise conflicting.
+    #[error(
+        code = "CLOUD_RESOURCE_CONFLICT",
+        message = "Cloud resource '{resource_name}' of type '{resource_type}' conflicts with the requested operation: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    CloudResourceConflict {
+        /// Cloud provider resource type
+        resource_type: String,
+        /// Cloud provider resource name or ARN
+        resource_name: String,
+        /// Conflict details
+        message: String,
+    },
+
     /// Resource configuration has drifted from expected state.
     #[error(
         code = "RESOURCE_DRIFT",

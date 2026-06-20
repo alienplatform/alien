@@ -98,21 +98,19 @@ pub(crate) use gcp::GcpCredentialBridge;
 #[cfg(feature = "aws")]
 mod aws {
     use super::*;
-    use alien_aws_clients::AwsCredentialProvider;
+    use aws_credential_types::provider::ProvideCredentials;
+    use aws_types::SdkConfig;
     use object_store::aws::AwsCredential;
 
-    /// Bridges `AwsCredentialProvider` to `object_store::CredentialProvider<Credential = AwsCredential>`.
-    ///
-    /// Delegates credential refresh to `AwsCredentialProvider` which handles WebIdentity/IRSA
-    /// token exchange and caching. This bridge only converts the credential format for `object_store`.
+    /// Bridges official AWS SDK credentials to `object_store::CredentialProvider`.
     #[derive(Debug)]
     pub(crate) struct AwsCredentialBridge {
-        provider: AwsCredentialProvider,
+        sdk_config: SdkConfig,
     }
 
     impl AwsCredentialBridge {
-        pub(crate) fn new(provider: AwsCredentialProvider) -> Self {
-            Self { provider }
+        pub(crate) fn new(sdk_config: SdkConfig) -> Self {
+            Self { sdk_config }
         }
     }
 
@@ -121,12 +119,19 @@ mod aws {
         type Credential = AwsCredential;
 
         async fn get_credential(&self) -> object_store::Result<Arc<AwsCredential>> {
-            self.provider
-                .ensure_fresh()
+            let provider = self.sdk_config.credentials_provider().ok_or_else(|| {
+                object_store::Error::Generic {
+                    store: "S3",
+                    source: Box::new(std::io::Error::other(
+                        "AWS SDK config does not have a credentials provider",
+                    )),
+                }
+            })?;
+
+            let creds = provider
+                .provide_credentials()
                 .await
                 .map_err(|e| to_object_store_error("S3", e))?;
-
-            let creds = self.provider.get_credentials();
             let credential = Arc::new(AwsCredential {
                 key_id: creds.access_key_id().to_string(),
                 secret_key: creds.secret_access_key().to_string(),

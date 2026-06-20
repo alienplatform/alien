@@ -1,9 +1,8 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesRequest};
 use alien_core::{
     standard_resource_tags, AwsSqsQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
@@ -43,12 +42,10 @@ impl AwsQueueController {
         let queue_name = get_aws_queue_name(ctx.resource_prefix, &config.id);
         info!(id=%config.id, name=%queue_name, "Creating SQS queue");
 
-        let resp = client
+        let queue_url = client
             .create_queue(
-                alien_aws_clients::sqs::CreateQueueRequest::builder()
-                    .queue_name(queue_name.clone())
-                    .tags(standard_resource_tags(ctx.resource_prefix, &config.id))
-                    .build(),
+                &queue_name,
+                standard_resource_tags(ctx.resource_prefix, &config.id),
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -56,7 +53,6 @@ impl AwsQueueController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let queue_url = resp.create_queue_result.queue_url;
         self.queue_url = Some(queue_url.clone());
         self.queue_name = Some(queue_name.clone());
 
@@ -125,20 +121,12 @@ impl AwsQueueController {
 
         // Read current visibility timeout to avoid decreasing it unintentionally
         let current_visibility_timeout = match client
-            .get_queue_attributes(
-                queue_url,
-                alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
-                    .attribute_names(vec!["VisibilityTimeout".to_string()])
-                    .build(),
-            )
+            .get_queue_attributes(queue_url, vec!["VisibilityTimeout".to_string()])
             .await
         {
-            Ok(resp) => resp
-                .get_queue_attributes_result
-                .attributes
-                .into_iter()
-                .find(|a| a.name == "VisibilityTimeout")
-                .and_then(|a| a.value.parse::<u32>().ok())
+            Ok(attributes) => attributes
+                .get("VisibilityTimeout")
+                .and_then(|value| value.parse::<u32>().ok())
                 .unwrap_or(0),
             Err(_) => 0, // If fetch fails, proceed with desired value
         };
@@ -154,19 +142,14 @@ impl AwsQueueController {
         );
 
         // VisibilityTimeout in seconds
-        let mut attrs = std::collections::HashMap::new();
+        let mut attrs = HashMap::new();
         attrs.insert(
             "VisibilityTimeout".to_string(),
             visibility_timeout.to_string(),
         );
 
         client
-            .set_queue_attributes(
-                queue_url,
-                SetQueueAttributesRequest::builder()
-                    .attributes(attrs)
-                    .build(),
-            )
+            .set_queue_attributes(queue_url, attrs)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -205,12 +188,7 @@ impl AwsQueueController {
         };
 
         let attributes = client
-            .get_queue_attributes(
-                queue_url,
-                alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
-                    .attribute_names(vec!["All".to_string()])
-                    .build(),
-            )
+            .get_queue_attributes(queue_url, vec!["All".to_string()])
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -399,15 +377,8 @@ fn emit_aws_sqs_queue_heartbeat(
     resource_id: &str,
     queue_name: Option<&str>,
     queue_url: &str,
-    response: GetQueueAttributesResponse,
+    attributes: HashMap<String, String>,
 ) {
-    let attributes = response
-        .get_queue_attributes_result
-        .attributes
-        .into_iter()
-        .map(|attribute| (attribute.name, attribute.value))
-        .collect::<std::collections::HashMap<_, _>>();
-
     let approximate_visible_messages = parse_u64_attr(&attributes, "ApproximateNumberOfMessages");
     let approximate_in_flight_messages =
         parse_u64_attr(&attributes, "ApproximateNumberOfMessagesNotVisible");
@@ -476,24 +447,15 @@ fn emit_aws_sqs_queue_heartbeat(
     });
 }
 
-fn parse_u64_attr(
-    attributes: &std::collections::HashMap<String, String>,
-    key: &str,
-) -> Option<u64> {
+fn parse_u64_attr(attributes: &HashMap<String, String>, key: &str) -> Option<u64> {
     attributes.get(key).and_then(|value| value.parse().ok())
 }
 
-fn parse_u32_attr(
-    attributes: &std::collections::HashMap<String, String>,
-    key: &str,
-) -> Option<u32> {
+fn parse_u32_attr(attributes: &HashMap<String, String>, key: &str) -> Option<u32> {
     attributes.get(key).and_then(|value| value.parse().ok())
 }
 
-fn parse_bool_attr(
-    attributes: &std::collections::HashMap<String, String>,
-    key: &str,
-) -> Option<bool> {
+fn parse_bool_attr(attributes: &HashMap<String, String>, key: &str) -> Option<bool> {
     attributes
         .get(key)
         .and_then(|value| value.parse::<bool>().ok())
@@ -509,42 +471,53 @@ fn region_from_queue_arn(queue_arn: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
-    };
-    use alien_aws_clients::sqs::{
-        CreateQueueResponse, CreateQueueResult, GetQueueAttributesResponse,
-        GetQueueAttributesResult, MockSqsApi,
-    };
+    use crate::aws_sdk::SqsApi;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use alien_core::{Platform, Queue, ResourceStatus};
     use std::sync::Arc;
 
-    fn setup_mock_sqs_for_create_and_delete(queue_url: &str) -> Arc<MockSqsApi> {
-        let mut mock = MockSqsApi::new();
-
-        mock.expect_create_queue().returning(|_req| {
-            Ok(CreateQueueResponse {
-                create_queue_result: CreateQueueResult {
-                    queue_url: "https://sqs.us-east-1.amazonaws.com/123/test-q".to_string(),
-                },
-            })
-        });
-
-        mock.expect_set_queue_attributes().returning(|_, _| Ok(()));
-
-        mock.expect_get_queue_attributes().returning(|_, _| {
-            Ok(GetQueueAttributesResponse {
-                get_queue_attributes_result: GetQueueAttributesResult { attributes: vec![] },
-            })
-        });
-
-        mock.expect_delete_queue().returning(|_| Ok(()));
-
-        Arc::new(mock)
+    struct TestSqsClient {
+        queue_url: String,
     }
 
-    fn setup_mock_provider(mock_sqs: Arc<MockSqsApi>) -> Arc<MockPlatformServiceProvider> {
+    #[async_trait::async_trait]
+    impl SqsApi for TestSqsClient {
+        async fn create_queue(
+            &self,
+            _queue_name: &str,
+            _tags: HashMap<String, String>,
+        ) -> Result<String> {
+            Ok(self.queue_url.clone())
+        }
+
+        async fn get_queue_attributes(
+            &self,
+            _queue_url: &str,
+            _attribute_names: Vec<String>,
+        ) -> Result<HashMap<String, String>> {
+            Ok(HashMap::new())
+        }
+
+        async fn set_queue_attributes(
+            &self,
+            _queue_url: &str,
+            _attributes: HashMap<String, String>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn delete_queue(&self, _queue_url: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn setup_mock_sqs_for_create_and_delete(queue_url: &str) -> Arc<dyn SqsApi> {
+        Arc::new(TestSqsClient {
+            queue_url: queue_url.to_string(),
+        })
+    }
+
+    fn setup_mock_provider(mock_sqs: Arc<dyn SqsApi>) -> Arc<MockPlatformServiceProvider> {
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_sqs_client()

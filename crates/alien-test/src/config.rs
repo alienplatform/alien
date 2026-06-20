@@ -66,7 +66,7 @@ pub struct AwsConfig {
 /// AWS-specific test resources provisioned by Terraform.
 ///
 /// These are cloud-client test resources (ALIEN_TEST_* env vars) used by
-/// unit/integration tests for `alien-aws-clients`, `alien-bindings`, etc.
+/// unit/integration tests for `alien-bindings`, etc.
 /// They are NOT used by E2E tests — those use `E2eArtifactRegistryConfig`.
 #[derive(Debug, Clone)]
 pub struct AwsTestResources {

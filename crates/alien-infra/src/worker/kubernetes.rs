@@ -7,6 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::SecretsApi;
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -1135,7 +1136,7 @@ mod tests {
 /// Create a Kubernetes Docker config Secret for authenticating with the
 /// manager's registry.
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    secrets_client: &std::sync::Arc<dyn SecretsApi>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

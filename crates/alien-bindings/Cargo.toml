@@ -11,10 +11,24 @@ crate-type = ["rlib"]
 [features]
 default = ["grpc", "all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
+aws = [
+    "object_store/aws",
+    "dep:base64",
+    "dep:aws-config",
+    "dep:aws-credential-types",
+    "dep:aws-sdk-codebuild",
+    "dep:aws-sdk-dynamodb",
+    "dep:aws-sdk-ecr",
+    "dep:aws-sdk-lambda",
+    "dep:aws-sdk-sqs",
+    "dep:aws-sdk-ssm",
+    "dep:aws-sdk-sts",
+    "dep:aws-types",
+    "alien-client-config/aws"
+]
 gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
-kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
+kubernetes = ["dep:kube", "dep:k8s-openapi", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:oci-client", "dep:sled", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tokio-stream", "dep:tonic-reflection", "dep:async-stream"]
@@ -30,10 +44,18 @@ alien-error = { workspace = true }
 alien-core = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
-alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
-alien-k8s-clients = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
+aws-sdk-codebuild = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+aws-sdk-ecr = { workspace = true, optional = true }
+aws-sdk-lambda = { workspace = true, optional = true }
+aws-sdk-sqs = { workspace = true, optional = true }
+aws-sdk-ssm = { workspace = true, optional = true }
+aws-sdk-sts = { workspace = true, optional = true }
+aws-types = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "io-util"] }
 url = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -64,9 +86,12 @@ async-stream = { workspace = true, optional = true }
 
 # Kubernetes
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
+kube = { workspace = true, optional = true }
+secrecy = { workspace = true }
+http = { workspace = true }
 
 [dev-dependencies]
-alien-aws-clients = { workspace = true, features = ["test-utils"] }
+aws-sdk-iam = { workspace = true }
 dotenvy = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

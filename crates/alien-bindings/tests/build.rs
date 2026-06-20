@@ -7,7 +7,7 @@ use alien_bindings::{
 
 #[cfg(feature = "grpc")]
 use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
-use alien_core::bindings::{self, BindingValue};
+use alien_core::bindings;
 
 // Platform-specific providers are now internal implementation details
 // The unified BindingsProvider handles routing to appropriate implementations
@@ -24,16 +24,21 @@ use tokio::task::JoinHandle;
 use workspace_root::get_workspace_root;
 
 #[cfg(feature = "aws")]
-use alien_aws_clients::{
-    codebuild::{
-        CodeBuildApi, CodeBuildClient, CreateProjectRequest, DeleteProjectRequest,
-        ProjectArtifacts, ProjectEnvironment, ProjectSource,
+use alien_bindings::aws_sdk::{codebuild_client_from_alien_config, sdk_config_from_alien_config};
+#[cfg(feature = "aws")]
+use alien_core::{AwsClientConfig, AwsCredentials};
+#[cfg(feature = "aws")]
+use aws_sdk_codebuild::{
+    types::{
+        ArtifactsType, ComputeType as CodeBuildComputeType, EnvironmentType,
+        ImagePullCredentialsType, ProjectArtifacts, ProjectEnvironment, ProjectSource, SourceType,
     },
-    iam::{CreateRoleRequest, IamApi, IamClient},
-    AwsClientConfig, AwsCredentialProvider,
+    Client as CodeBuildClient,
 };
 #[cfg(feature = "aws")]
-use {reqwest::Client, std::sync::Mutex, uuid::Uuid};
+use aws_sdk_iam::Client as IamClient;
+#[cfg(feature = "aws")]
+use {std::sync::Mutex, uuid::Uuid};
 
 const GRPC_BINDING_NAME: &str = "test-grpc-build-binding";
 
@@ -239,7 +244,7 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
         let aws_config = AwsClientConfig {
             account_id: account_id.clone(),
             region: region.clone(),
-            credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+            credentials: AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
                 session_token: None,
@@ -247,14 +252,13 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             service_overrides: None,
         };
 
-        let codebuild_client = CodeBuildClient::new(
-            Client::new(),
-            AwsCredentialProvider::from_config_sync(aws_config.clone()),
-        );
-        let iam_client = IamClient::new(
-            Client::new(),
-            AwsCredentialProvider::from_config_sync(aws_config.clone()),
-        );
+        let codebuild_client = codebuild_client_from_alien_config(&aws_config)
+            .await
+            .expect("Failed to create AWS CodeBuild SDK client for build test");
+        let sdk_config = sdk_config_from_alien_config(&aws_config)
+            .await
+            .expect("Failed to create AWS SDK config for IAM build test setup");
+        let iam_client = IamClient::new(&sdk_config);
 
         // Create IAM role for CodeBuild
         let role_name = format!("alien-test-build-role-{}", Uuid::new_v4().simple());
@@ -268,16 +272,18 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
         }"#
         .to_string();
 
-        let role_request = CreateRoleRequest::builder()
-            .role_name(role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .build();
-
         let role = iam_client
-            .create_role(role_request)
+            .create_role()
+            .role_name(&role_name)
+            .assume_role_policy_document(assume_role_policy)
+            .send()
             .await
             .expect("Failed to create IAM role");
-        let service_role_arn = role.create_role_result.role.arn.clone();
+        let service_role_arn = role
+            .role()
+            .expect("create role response should include role")
+            .arn()
+            .to_string();
 
         let policy_document = r#"{
             "Version": "2012-10-17",
@@ -296,7 +302,11 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
         .to_string();
 
         iam_client
-            .put_role_policy(&role_name, "CodeBuildDefaultPolicy", &policy_document)
+            .put_role_policy()
+            .role_name(&role_name)
+            .policy_name("CodeBuildDefaultPolicy")
+            .policy_document(policy_document)
+            .send()
             .await
             .expect("Failed to attach policy");
 
@@ -305,35 +315,36 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
 
         // Create CodeBuild project
         let project_name = format!("alien-test-build-{}", Uuid::new_v4().simple());
-        let create_project_req = CreateProjectRequest::builder()
-            .name(project_name.clone())
+        codebuild_client
+            .create_project()
+            .name(&project_name)
             .service_role(service_role_arn)
             .source(
                 ProjectSource::builder()
-                    .r#type("NO_SOURCE".to_string())
+                    .r#type(SourceType::NoSource)
                     .buildspec(
                         "version: 0.2\nphases:\n  build:\n    commands:\n      - echo 'test build'"
                             .to_string(),
                     )
-                    .build(),
+                    .build()
+                    .expect("CodeBuild project source should be valid"),
             )
             .artifacts(
                 ProjectArtifacts::builder()
-                    .r#type("NO_ARTIFACTS".to_string())
-                    .build(),
+                    .r#type(ArtifactsType::NoArtifacts)
+                    .build()
+                    .expect("CodeBuild artifacts should be valid"),
             )
             .environment(
                 ProjectEnvironment::builder()
-                    .r#type("LINUX_CONTAINER".to_string())
+                    .r#type(EnvironmentType::LinuxContainer)
                     .image(codebuild_image)
-                    .image_pull_credentials_type("SERVICE_ROLE".to_string())
-                    .compute_type("BUILD_GENERAL1_SMALL".to_string())
-                    .build(),
+                    .image_pull_credentials_type(ImagePullCredentialsType::ServiceRole)
+                    .compute_type(CodeBuildComputeType::BuildGeneral1Small)
+                    .build()
+                    .expect("CodeBuild environment should be valid"),
             )
-            .build();
-
-        codebuild_client
-            .create_project(create_project_req)
+            .send()
             .await
             .expect("Failed to create CodeBuild project");
 
@@ -375,25 +386,36 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
 
     async fn teardown(self) {
         // Clean up CodeBuild project
-        let delete_req = DeleteProjectRequest {
-            name: self.project_name.clone(),
-        };
-        self.codebuild_client.delete_project(delete_req).await.ok();
+        self.codebuild_client
+            .delete_project()
+            .name(&self.project_name)
+            .send()
+            .await
+            .ok();
 
         // Clean up any additional projects
         let projects = self.created_projects.lock().unwrap().clone();
         for project in projects {
-            let delete_req = DeleteProjectRequest { name: project };
-            self.codebuild_client.delete_project(delete_req).await.ok();
+            self.codebuild_client
+                .delete_project()
+                .name(project)
+                .send()
+                .await
+                .ok();
         }
 
         // Clean up IAM role
         self.iam_client
-            .delete_role_policy(&self.service_role_name, "CodeBuildDefaultPolicy")
+            .delete_role_policy()
+            .role_name(&self.service_role_name)
+            .policy_name("CodeBuildDefaultPolicy")
+            .send()
             .await
             .ok();
         self.iam_client
-            .delete_role(&self.service_role_name)
+            .delete_role()
+            .role_name(&self.service_role_name)
+            .send()
             .await
             .ok();
     }
@@ -409,28 +431,36 @@ impl BuildTestContext for AwsProviderBuildTestContext {
         "aws"
     }
     async fn cleanup(&self) {
-        use alien_aws_clients::codebuild::DeleteProjectRequest;
-
-        // Clean up CodeBuild project
-        let delete_req = DeleteProjectRequest {
-            name: self.project_name.clone(),
-        };
-        self.codebuild_client.delete_project(delete_req).await.ok();
+        self.codebuild_client
+            .delete_project()
+            .name(&self.project_name)
+            .send()
+            .await
+            .ok();
 
         // Clean up any additional projects
         let projects = self.created_projects.lock().unwrap().clone();
         for project in projects {
-            let delete_req = DeleteProjectRequest { name: project };
-            self.codebuild_client.delete_project(delete_req).await.ok();
+            self.codebuild_client
+                .delete_project()
+                .name(project)
+                .send()
+                .await
+                .ok();
         }
 
         // Clean up IAM role
         self.iam_client
-            .delete_role_policy(&self.service_role_name, "CodeBuildDefaultPolicy")
+            .delete_role_policy()
+            .role_name(&self.service_role_name)
+            .policy_name("CodeBuildDefaultPolicy")
+            .send()
             .await
             .ok();
         self.iam_client
-            .delete_role(&self.service_role_name)
+            .delete_role()
+            .role_name(&self.service_role_name)
+            .send()
             .await
             .ok();
     }

@@ -1,19 +1,91 @@
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
-use alien_error::Context;
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
+
+/// Minimal SSM operations required by the Parameter Store vault binding.
+#[async_trait]
+pub trait SsmParameterStore: Debug + Send + Sync {
+    /// Get a decrypted parameter value.
+    async fn get_parameter_value(&self, name: &str) -> Result<String>;
+
+    /// Create or update a SecureString parameter.
+    async fn put_secure_parameter(&self, name: &str, value: &str, description: &str) -> Result<()>;
+
+    /// Delete a parameter.
+    async fn delete_parameter(&self, name: &str) -> Result<()>;
+}
+
+#[async_trait]
+impl SsmParameterStore for aws_sdk_ssm::Client {
+    async fn get_parameter_value(&self, name: &str) -> Result<String> {
+        let response = self
+            .get_parameter()
+            .name(name)
+            .with_decryption(true)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get parameter '{}'", name),
+                resource_id: None,
+            })?;
+
+        response
+            .parameter()
+            .and_then(|parameter| parameter.value())
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Parameter '{}' has no value", name),
+                    resource_id: None,
+                })
+            })
+    }
+
+    async fn put_secure_parameter(&self, name: &str, value: &str, description: &str) -> Result<()> {
+        self.put_parameter()
+            .name(name)
+            .value(value)
+            .r#type(aws_sdk_ssm::types::ParameterType::SecureString)
+            .description(description)
+            .overwrite(true)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to put parameter '{}'", name),
+                resource_id: None,
+            })?;
+
+        Ok(())
+    }
+
+    async fn delete_parameter(&self, name: &str) -> Result<()> {
+        self.delete_parameter()
+            .name(name)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete parameter '{}'", name),
+                resource_id: None,
+            })?;
+
+        Ok(())
+    }
+}
 
 /// AWS SSM Parameter Store vault binding implementation.
 #[derive(Debug)]
 pub struct AwsParameterStoreVault {
-    client: Arc<SsmClient>,
+    client: Arc<dyn SsmParameterStore>,
     vault_prefix: String,
 }
 
 impl AwsParameterStoreVault {
     /// Create a new AWS SSM Parameter Store vault binding.
-    pub fn new(client: Arc<SsmClient>, vault_prefix: String) -> Self {
+    pub fn new(client: Arc<dyn SsmParameterStore>, vault_prefix: String) -> Self {
         Self {
             client,
             vault_prefix,
@@ -35,55 +107,19 @@ impl crate::traits::Vault for AwsParameterStoreVault {
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let full_name = self.full_parameter_name(secret_name);
 
-        let request = GetParameterRequest::builder()
-            .name(full_name.clone())
-            .with_decryption(true)
-            .build();
-
-        let response =
-            self.client
-                .get_parameter(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get parameter '{}'", full_name),
-                    resource_id: None,
-                })?;
-
-        let parameter = response.parameter.ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Parameter '{}' missing in response", full_name),
-                resource_id: None,
-            })
-        })?;
-
-        parameter.value.ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Parameter '{}' has no value", full_name),
-                resource_id: None,
-            })
-        })
+        self.client.get_parameter_value(&full_name).await
     }
 
     /// Set a secret value using SecureString parameters.
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         let full_name = self.full_parameter_name(secret_name);
 
-        let request = PutParameterRequest::builder()
-            .name(full_name.clone())
-            .value(value.to_string())
-            .parameter_type("SecureString".to_string())
-            .description(format!(
-                "Secret managed by Alien vault {}",
-                self.vault_prefix
-            ))
-            .overwrite(true)
-            .build();
-
+        let description = format!("Secret managed by Alien vault {}", self.vault_prefix);
         self.client
-            .put_parameter(request)
+            .put_secure_parameter(&full_name, value, &description)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to put parameter '{}'", full_name),
+                message: format!("Failed to set secret '{}'", secret_name),
                 resource_id: None,
             })?;
 
@@ -98,7 +134,7 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             .delete_parameter(&full_name)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete parameter '{}'", full_name),
+                message: format!("Failed to delete secret '{}'", secret_name),
                 resource_id: None,
             })?;
 

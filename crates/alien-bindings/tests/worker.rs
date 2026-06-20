@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use alien_bindings::{
+    aws_sdk::lambda_client_from_alien_config,
     traits::{BindingsProviderApi, Worker, WorkerInvokeRequest},
     BindingsProvider,
 };
@@ -11,12 +12,12 @@ use alien_core::bindings::{self, WorkerBinding};
 
 // Import cloud clients for creating test resources
 #[cfg(feature = "aws")]
-use alien_aws_clients::lambda::{
-    AddPermissionRequest, Cors, CreateFunctionRequest, CreateFunctionUrlConfigRequest,
-    FunctionCode, LambdaApi, LambdaClient,
-};
+use alien_core::{AwsClientConfig, AwsCredentials};
 #[cfg(feature = "aws")]
-use alien_aws_clients::AwsCredentialProvider;
+use aws_sdk_lambda::{
+    types::{Architecture, Cors, FunctionCode, FunctionUrlAuthType, InvokeMode, PackageType},
+    Client as LambdaClient,
+};
 #[cfg(feature = "azure")]
 use alien_azure_clients::authorization::{AuthorizationApi, AzureAuthorizationClient, Scope};
 #[cfg(feature = "azure")]
@@ -44,7 +45,7 @@ use alien_gcp_clients::cloudrun::{
     TrafficTarget, TrafficTargetAllocationType,
 };
 
-use alien_client_core::{Error, ErrorData};
+use alien_client_core::ErrorData;
 use async_trait::async_trait;
 use rstest::rstest;
 use std::path::PathBuf as StdPathBuf;
@@ -211,20 +212,19 @@ impl AsyncTestContext for AwsProviderTestContext {
         let account_id =
             env::var("AWS_MANAGEMENT_ACCOUNT_ID").expect("AWS_MANAGEMENT_ACCOUNT_ID must be set");
 
-        let aws_config = alien_aws_clients::AwsClientConfig {
+        let aws_config = AwsClientConfig {
             account_id: account_id.clone(),
             region: region.clone(),
-            credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+            credentials: AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
                 session_token: None,
             },
             service_overrides: None,
         };
-        let lambda_client = LambdaClient::new(
-            reqwest::Client::new(),
-            AwsCredentialProvider::from_config_sync(aws_config),
-        );
+        let lambda_client = lambda_client_from_alien_config(&aws_config)
+            .await
+            .expect("Failed to create AWS Lambda SDK client for worker test");
 
         let image_uri = env::var("ALIEN_TEST_AWS_LAMBDA_IMAGE")
             .expect("ALIEN_TEST_AWS_LAMBDA_IMAGE must be set in .env.test");
@@ -234,20 +234,22 @@ impl AsyncTestContext for AwsProviderTestContext {
         // Create a unique function name
         let function_name = format!("alien-test-worker-{}", Uuid::new_v4().simple());
 
-        // Create the Lambda function
-        let request = CreateFunctionRequest::builder()
-            .function_name(function_name.clone())
-            .role(role_arn.clone())
-            .code(FunctionCode::builder().image_uri(image_uri.clone()).build())
-            .description("Test function created by alien-bindings tests".to_string())
+        let _function_config = lambda_client
+            .create_function()
+            .function_name(&function_name)
+            .role(&role_arn)
+            .code(
+                FunctionCode::builder()
+                    .image_uri(&image_uri)
+                    .build(),
+            )
+            .package_type(PackageType::Image)
+            .description("Test function created by alien-bindings tests")
             .timeout(30)
             .memory_size(128)
             .publish(false)
-            .architectures(vec!["arm64".to_string()])
-            .build();
-
-        let _function_config = lambda_client
-            .create_function(request)
+            .architectures(Architecture::Arm64)
+            .send()
             .await
             .expect("Failed to create test Lambda function");
 
@@ -259,12 +261,18 @@ impl AsyncTestContext for AwsProviderTestContext {
         loop {
             attempts += 1;
             match lambda_client
-                .get_function_configuration(&function_name, None)
+                .get_function_configuration()
+                .function_name(&function_name)
+                .send()
                 .await
             {
                 Ok(config) => {
-                    if config.state == Some("Active".to_string())
-                        && config.last_update_status == Some("Successful".to_string())
+                    if config
+                        .state()
+                        .is_some_and(|state| state.as_str() == "Active")
+                        && config
+                            .last_update_status()
+                            .is_some_and(|status| status.as_str() == "Successful")
                     {
                         info!("✅ Worker is ready!");
                         break;
@@ -284,52 +292,61 @@ impl AsyncTestContext for AwsProviderTestContext {
             }
         }
 
-        // Create worker URL for HTTP access
-        let url_request = CreateFunctionUrlConfigRequest::builder()
-            .auth_type("NONE".to_string())
+        let url_response = lambda_client
+            .create_function_url_config()
+            .function_name(&function_name)
+            .auth_type(FunctionUrlAuthType::None)
             .cors(
                 Cors::builder()
                     .allow_credentials(false)
-                    .allow_headers(vec!["Content-Type".to_string(), "X-Amz-Date".to_string()])
-                    .allow_methods(vec!["GET".to_string(), "POST".to_string()])
-                    .allow_origins(vec!["*".to_string()])
+                    .allow_headers("Content-Type")
+                    .allow_headers("X-Amz-Date")
+                    .allow_methods("GET")
+                    .allow_methods("POST")
+                    .allow_origins("*")
                     .max_age(300)
                     .build(),
             )
-            .invoke_mode("BUFFERED".to_string())
-            .build();
-
-        let url_response = lambda_client
-            .create_function_url_config(&function_name, url_request)
+            .invoke_mode(InvokeMode::Buffered)
+            .send()
             .await
             .expect("Failed to create worker URL");
 
-        info!("✅ Created worker URL: {}", url_response.function_url);
+        info!(
+            "✅ Created worker URL: {}",
+            url_response.function_url()
+        );
 
         // Public Worker URLs require two resource-based policy statements:
         // 1. lambda:InvokeFunctionUrl with FunctionUrlAuthType=NONE
         // 2. lambda:InvokeWorker (the actual invoke permission)
         // Without both, unauthenticated HTTP requests return 403.
-        let url_permission = AddPermissionRequest::builder()
-            .statement_id("AllowFunctionUrlInvoke".to_string())
-            .action("lambda:InvokeFunctionUrl".to_string())
-            .principal("*".to_string())
-            .function_url_auth_type("NONE".to_string())
-            .build();
-
-        let invoke_permission = AddPermissionRequest::builder()
-            .statement_id("AllowPublicInvoke".to_string())
-            .action("lambda:InvokeFunction".to_string())
-            .principal("*".to_string())
-            .build();
-
-        for perm in [url_permission, invoke_permission] {
-            let sid = perm.statement_id.clone();
-            match lambda_client.add_permission(&function_name, perm).await {
+        for (sid, action, auth_type) in [
+            (
+                "AllowFunctionUrlInvoke",
+                "lambda:InvokeFunctionUrl",
+                Some(FunctionUrlAuthType::None),
+            ),
+            ("AllowPublicInvoke", "lambda:InvokeFunction", None),
+        ] {
+            let mut permission = lambda_client
+                .add_permission()
+                .function_name(&function_name)
+                .statement_id(sid)
+                .action(action)
+                .principal("*");
+            if let Some(auth_type) = auth_type {
+                permission = permission.function_url_auth_type(auth_type);
+            }
+            match permission.send().await {
                 Ok(_) => {
                     info!("✅ Added permission: {}", sid);
                 }
-                Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
+                Err(e)
+                    if e.as_service_error()
+                        .and_then(|error| error.meta().code())
+                        .is_some_and(|code| code == "ResourceConflictException") =>
+                {
                     info!("ℹ️ Permission {} already exists, continuing", sid);
                 }
                 Err(e) => panic!("Failed to add permission {}: {:?}", sid, e),
@@ -337,9 +354,14 @@ impl AsyncTestContext for AwsProviderTestContext {
         }
 
         // Verify the resource-based policy was applied
-        match lambda_client.get_policy(&function_name, None).await {
+        match lambda_client
+            .get_policy()
+            .function_name(&function_name)
+            .send()
+            .await
+        {
             Ok(policy) => {
-                let policy_str = policy.policy.unwrap_or_default();
+                let policy_str = policy.policy().unwrap_or_default();
                 info!("📋 Lambda resource policy: {}", policy_str);
             }
             Err(e) => {
@@ -409,18 +431,18 @@ impl AsyncTestContext for AwsProviderTestContext {
         for function_name in &urls_to_cleanup {
             match self
                 .lambda_client
-                .delete_function_url_config(function_name, None)
+                .delete_function_url_config()
+                .function_name(function_name)
+                .send()
                 .await
             {
                 Ok(_) => info!("✅ Worker URL {} deleted successfully", function_name),
                 Err(e) => {
-                    if !matches!(
-                        e,
-                        Error {
-                            error: Some(ErrorData::RemoteResourceNotFound { .. }),
-                            ..
-                        }
-                    ) {
+                    let is_not_found = e
+                        .as_service_error()
+                        .and_then(|error| error.meta().code())
+                        .is_some_and(|code| code == "ResourceNotFoundException");
+                    if !is_not_found {
                         warn!(
                             "Failed to delete worker URL {} during cleanup: {:?}",
                             function_name, e
@@ -434,18 +456,18 @@ impl AsyncTestContext for AwsProviderTestContext {
         for function_name in functions_to_cleanup {
             match self
                 .lambda_client
-                .delete_function(&function_name, None)
+                .delete_function()
+                .function_name(&function_name)
+                .send()
                 .await
             {
                 Ok(_) => info!("✅ Worker {} deleted successfully", function_name),
                 Err(e) => {
-                    if !matches!(
-                        e,
-                        Error {
-                            error: Some(ErrorData::RemoteResourceNotFound { .. }),
-                            ..
-                        }
-                    ) {
+                    let is_not_found = e
+                        .as_service_error()
+                        .and_then(|error| error.meta().code())
+                        .is_some_and(|code| code == "ResourceNotFoundException");
+                    if !is_not_found {
                         warn!(
                             "Failed to delete function {} during cleanup: {:?}",
                             function_name, e
@@ -1090,6 +1112,9 @@ impl AsyncTestContext for AzureProviderTestContext {
             }
             alien_azure_clients::AzureCredentials::ManagedIdentity { client_id, .. } => {
                 panic!("ManagedIdentity credentials not supported in worker binding tests, client_id: {}", client_id)
+            }
+            alien_azure_clients::AzureCredentials::VmManagedIdentity { .. } => {
+                panic!("VmManagedIdentity credentials not supported in worker binding tests")
             }
         };
 

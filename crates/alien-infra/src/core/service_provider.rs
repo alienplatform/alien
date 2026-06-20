@@ -1,23 +1,18 @@
+#[cfg(feature = "aws")]
+use crate::aws_sdk::{
+    acm_client_from_alien_config, apigatewayv2_client_from_alien_config,
+    codebuild_client_from_alien_config, dynamodb_client_from_alien_config,
+    ec2_client_from_alien_config, ecr_client_from_alien_config,
+    eventbridge_client_from_alien_config, iam_client_from_alien_config,
+    lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
+    AcmApi, ApiGatewayV2Api, CodeBuildApi, DynamoDbApi, Ec2Api, EcrApi, EventBridgeApi, IamApi,
+    LambdaApi, S3Api, SqsApi, SsmApi,
+};
 use crate::error::Result;
-use alien_aws_clients::{
-    acm::{AcmApi, AcmClient},
-    apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
-    autoscaling::{AutoScalingApi, AutoScalingClient},
-    cloudformation::{CloudFormationApi, CloudFormationClient},
-    codebuild::{CodeBuildApi, CodeBuildClient},
-    dynamodb::{DynamoDbApi, DynamoDbClient},
-    ec2::{Ec2Api, Ec2Client},
-    ecr::{EcrApi, EcrClient},
-    eks::{EksApi, EksClient},
-    elbv2::{Elbv2Api, Elbv2Client},
-    eventbridge::{EventBridgeApi, EventBridgeClient},
-    iam::{IamApi, IamClient},
-    lambda::{LambdaApi, LambdaClient},
-    s3::{S3Api, S3Client},
-    secrets_manager::{SecretsManagerApi, SecretsManagerClient},
-    sqs::{SqsApi, SqsClient},
-    ssm::{SsmApi, SsmClient},
-    AwsClientConfig, AwsCredentialProvider,
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_client::{
+    DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
+    SecretsApi, ServiceApi, VersionApi,
 };
 use alien_azure_clients::{
     application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient},
@@ -45,6 +40,9 @@ use alien_azure_clients::{
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
 };
+use alien_core::AwsClientConfig;
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesClientConfig;
 use alien_error::Context;
 use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
@@ -61,13 +59,6 @@ use alien_gcp_clients::{
     secret_manager::{SecretManagerApi, SecretManagerClient},
     service_usage::{ServiceUsageApi, ServiceUsageClient},
     GcpClientConfig,
-};
-#[cfg(feature = "kubernetes")]
-use alien_k8s_clients::{
-    deployments::DeploymentApi, events::EventApi, jobs::JobApi,
-    kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
-    routes::RouteApi, secrets::SecretsApi, services::ServiceApi, version::VersionApi,
-    KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -86,19 +77,11 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
-    async fn get_aws_cloudformation_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn CloudFormationApi>>;
     async fn get_aws_codebuild_client(
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn CodeBuildApi>>;
     async fn get_aws_ecr_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EcrApi>>;
-    async fn get_aws_secrets_manager_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn SecretsManagerApi>>;
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_dynamodb_client(
         &self,
@@ -106,12 +89,6 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn DynamoDbApi>>;
     async fn get_aws_sqs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SqsApi>>;
     async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>>;
-    async fn get_aws_autoscaling_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn AutoScalingApi>>;
-    async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>>;
-    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>>;
     async fn get_aws_apigatewayv2_client(
         &self,
@@ -395,242 +372,69 @@ impl DefaultPlatformServiceProvider {
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     // AWS implementations
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(IamClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(iam_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(LambdaClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(lambda_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(S3Client::new(reqwest::Client::new(), credentials)))
-    }
-
-    async fn get_aws_cloudformation_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn CloudFormationApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(CloudFormationClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(s3_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_codebuild_client(
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn CodeBuildApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(CodeBuildClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(codebuild_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_ecr_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EcrApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(EcrClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
-    }
-
-    async fn get_aws_secrets_manager_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn SecretsManagerApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(SecretsManagerClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(ecr_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(SsmClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(
+            crate::aws_sdk::ssm_client_from_alien_config(config).await?,
+        ))
     }
 
     async fn get_aws_dynamodb_client(
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn DynamoDbApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(DynamoDbClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(dynamodb_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_sqs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SqsApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(SqsClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(sqs_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(Ec2Client::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
-    }
-
-    async fn get_aws_autoscaling_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn AutoScalingApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(AutoScalingClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
-    }
-
-    async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(Elbv2Client::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
-    }
-
-    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(EksClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(ec2_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(AcmClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(acm_client_from_alien_config(config).await?))
     }
 
     async fn get_aws_apigatewayv2_client(
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn ApiGatewayV2Api>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(ApiGatewayV2Client::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(
+            apigatewayv2_client_from_alien_config(config).await?,
+        ))
     }
 
     async fn get_aws_eventbridge_client(
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(EventBridgeClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
+        Ok(Arc::new(
+            eventbridge_client_from_alien_config(config).await?,
+        ))
     }
 
     // GCP implementations

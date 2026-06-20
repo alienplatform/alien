@@ -56,3 +56,6 @@ rustc-ice-*.txt
 .codex/
 
 .pnpm-store
+
+# Local tool downloads used during development
+.tools/

@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use alien_bindings::{
+    aws_sdk::dynamodb_client_from_alien_config,
     traits::{BindingsProviderApi, Kv, PutOptions},
     BindingsProvider,
 };
@@ -21,14 +22,12 @@ use alien_gcp_clients::{GcpClientConfig, GcpCredentials};
 use reqwest::Client;
 
 #[cfg(feature = "aws")]
-use alien_aws_clients::dynamodb::{
-    AttributeDefinition, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DynamoDbApi,
-    DynamoDbClient, KeySchemaElement,
+use alien_core::{AwsClientConfig, AwsCredentials};
+#[cfg(feature = "aws")]
+use aws_sdk_dynamodb::{
+    types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType},
+    Client as DynamoDbClient,
 };
-#[cfg(feature = "aws")]
-use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
-#[cfg(feature = "aws")]
-use alien_client_core::{Error as CloudError, ErrorData as CloudErrorData};
 
 #[cfg(feature = "azure")]
 use alien_azure_clients::tables::{AzureTableManagementClient, TableManagementApi};
@@ -323,10 +322,9 @@ impl AsyncTestContext for AwsProviderTestContext {
             service_overrides: None,
         };
 
-        let dynamodb_client = DynamoDbClient::new(
-            Client::new(),
-            AwsCredentialProvider::from_config_sync(aws_config),
-        );
+        let dynamodb_client = dynamodb_client_from_alien_config(&aws_config).await;
+        let dynamodb_client =
+            dynamodb_client.expect("Failed to create AWS DynamoDB SDK client for KV test");
 
         info!("🚀 Creating DynamoDB table for KV test: {}", table_name);
 
@@ -406,35 +404,47 @@ impl KvTestContext for AwsProviderTestContext {
 
 #[cfg(feature = "aws")]
 impl AwsProviderTestContext {
-    async fn create_kv_table(client: &DynamoDbClient, table_name: &str) -> Result<(), CloudError> {
+    async fn create_kv_table(
+        client: &DynamoDbClient,
+        table_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("🏗️ Creating KV table: {}", table_name);
 
-        let create_request = CreateTableRequest::builder()
-            .table_name(table_name.to_string())
-            .billing_mode("PAY_PER_REQUEST".to_string())
-            .key_schema(vec![
+        match client
+            .create_table()
+            .table_name(table_name)
+            .billing_mode(BillingMode::PayPerRequest)
+            .key_schema(
                 KeySchemaElement::builder()
-                    .attribute_name("pk".to_string())
-                    .key_type("HASH".to_string())
-                    .build(),
+                    .attribute_name("pk")
+                    .key_type(KeyType::Hash)
+                    .build()
+                    .expect("pk key schema should be valid"),
+            )
+            .key_schema(
                 KeySchemaElement::builder()
-                    .attribute_name("sk".to_string())
-                    .key_type("RANGE".to_string())
-                    .build(),
-            ])
-            .attribute_definitions(vec![
+                    .attribute_name("sk")
+                    .key_type(KeyType::Range)
+                    .build()
+                    .expect("sk key schema should be valid"),
+            )
+            .attribute_definitions(
                 AttributeDefinition::builder()
-                    .attribute_name("pk".to_string())
-                    .attribute_type("S".to_string())
-                    .build(),
+                    .attribute_name("pk")
+                    .attribute_type(ScalarAttributeType::S)
+                    .build()
+                    .expect("pk attribute definition should be valid"),
+            )
+            .attribute_definitions(
                 AttributeDefinition::builder()
-                    .attribute_name("sk".to_string())
-                    .attribute_type("S".to_string())
-                    .build(),
-            ])
-            .build();
-
-        match client.create_table(create_request).await {
+                    .attribute_name("sk")
+                    .attribute_type(ScalarAttributeType::S)
+                    .build()
+                    .expect("sk attribute definition should be valid"),
+            )
+            .send()
+            .await
+        {
             Ok(_) => {
                 info!("✅ Table {} created successfully", table_name);
 
@@ -444,7 +454,7 @@ impl AwsProviderTestContext {
             }
             Err(e) => {
                 warn!("Failed to create table {}: {:?}", table_name, e);
-                Err(e)
+                Err(Box::new(e))
             }
         }
     }
@@ -452,7 +462,7 @@ impl AwsProviderTestContext {
     async fn wait_for_table_active(
         client: &DynamoDbClient,
         table_name: &str,
-    ) -> Result<(), CloudError> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("⏳ Waiting for table {} to become active...", table_name);
         let mut attempts = 0;
         let max_attempts = 30; // 5 minutes max wait
@@ -460,24 +470,23 @@ impl AwsProviderTestContext {
         loop {
             attempts += 1;
 
-            let describe_request = DescribeTableRequest::builder()
-                .table_name(table_name.to_string())
-                .build();
-
-            match client.describe_table(describe_request).await {
+            match client.describe_table().table_name(table_name).send().await {
                 Ok(response) => {
-                    if response.table.table_status.as_deref() == Some("ACTIVE") {
+                    if response
+                        .table()
+                        .and_then(|table| table.table_status())
+                        .is_some_and(|status| status.as_str() == "ACTIVE")
+                    {
                         info!("✅ Table {} is now active!", table_name);
                         return Ok(());
                     }
 
                     if attempts >= max_attempts {
-                        return Err(CloudError::new(CloudErrorData::Timeout {
-                            message: format!(
-                                "Table {} didn't become active within 5 minutes",
-                                table_name
-                            ),
-                        }));
+                        return Err(format!(
+                            "Table {} didn't become active within 5 minutes",
+                            table_name
+                        )
+                        .into());
                     }
 
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
@@ -493,29 +502,31 @@ impl AwsProviderTestContext {
     async fn cleanup_table(&self) {
         info!("🧹 Cleaning up table: {}", self.table_name);
 
-        let delete_request = DeleteTableRequest::builder()
-            .table_name(self.table_name.clone())
-            .build();
-
-        match self.dynamodb_client.delete_table(delete_request).await {
+        match self
+            .dynamodb_client
+            .delete_table()
+            .table_name(&self.table_name)
+            .send()
+            .await
+        {
             Ok(_) => {
                 info!("✅ Table {} deletion completed", self.table_name);
             }
             Err(e) => {
-                match &e.error {
-                    Some(CloudErrorData::RemoteResourceNotFound { .. }) => {
-                        info!(
-                            "Table {} already doesn't exist (skipping cleanup)",
-                            self.table_name
-                        );
-                    }
-                    _ => {
-                        warn!(
-                            "Failed to delete table {} during cleanup: {:?}",
-                            self.table_name, e
-                        );
-                        // Still continue cleanup to avoid retry loops
-                    }
+                if e.as_service_error()
+                    .and_then(|error| error.meta().code())
+                    .is_some_and(|code| code == "ResourceNotFoundException")
+                {
+                    info!(
+                        "Table {} already doesn't exist (skipping cleanup)",
+                        self.table_name
+                    );
+                } else {
+                    warn!(
+                        "Failed to delete table {} during cleanup: {:?}",
+                        self.table_name, e
+                    );
+                    // Still continue cleanup to avoid retry loops
                 }
             }
         }

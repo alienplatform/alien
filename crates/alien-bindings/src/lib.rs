@@ -26,7 +26,11 @@ pub mod presigned {
     pub use alien_core::presigned::*;
 }
 pub mod alien_context;
+#[cfg(feature = "aws")]
+pub mod aws_sdk;
 pub mod http_client;
+#[cfg(feature = "kubernetes")]
+pub mod kubernetes_client;
 pub mod provider;
 
 mod wait_until;

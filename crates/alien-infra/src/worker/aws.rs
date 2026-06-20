@@ -4,6 +4,20 @@ use tracing::{debug, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 
+use crate::aws_sdk::{
+    AcmTag, AddPermissionRequest, ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
+    ApiGatewayV2CreateApiRequest as CreateApiRequest,
+    ApiGatewayV2CreateDomainNameRequest as CreateDomainNameRequest,
+    ApiGatewayV2CreateIntegrationRequest as CreateIntegrationRequest,
+    ApiGatewayV2CreateRouteRequest as CreateRouteRequest,
+    ApiGatewayV2CreateStageRequest as CreateStageRequest,
+    ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
+    CreateEventSourceMappingRequest, CreateFunctionRequest, DescribeNetworkInterfacesRequest,
+    Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode, FunctionConfiguration,
+    ImportCertificateRequest, LambdaFunctionConfiguration, ListEventSourceMappingsRequest,
+    NotificationConfiguration, PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest,
+    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+};
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
@@ -11,24 +25,9 @@ use crate::error::{ErrorData, Result};
 use crate::worker::readiness_probe::{
     run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
 };
-use alien_aws_clients::apigatewayv2::{
-    CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
-    CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
-};
-use alien_aws_clients::ec2::{DescribeNetworkInterfacesRequest, Filter};
-use alien_aws_clients::eventbridge::{
-    EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
-};
-use alien_aws_clients::lambda::{
-    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
-    ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
-    VpcConfig,
-};
-use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, AwsLambdaWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
-    HeartbeatBackend, Ingress, Network, NetworkSettings, ObservedHealth, Platform,
+    standard_resource_tags, AwsClientConfig, AwsLambdaWorkerHeartbeatData, CertificateStatus,
+    DnsRecordStatus, HeartbeatBackend, Ingress, Network, NetworkSettings, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus,
@@ -70,11 +69,8 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
         .collect()
 }
 
-fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteResourceConflict { .. })
-    )
+fn is_remote_resource_conflict(error: &AlienError<ErrorData>) -> bool {
+    matches!(&error.error, Some(ErrorData::CloudResourceConflict { .. }))
 }
 
 fn replace_lambda_notification_config(
@@ -612,11 +608,11 @@ impl AwsWorkerController {
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
         let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
             .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+            .map(|(key, value)| AcmTag { key, value })
             .collect();
         let response = acm_client
             .import_certificate(
-                alien_aws_clients::acm::ImportCertificateRequest::builder()
+                ImportCertificateRequest::builder()
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
@@ -1791,19 +1787,13 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
-            .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
-            .collect();
-
         acm_client
             .reimport_certificate(
-                alien_aws_clients::acm::ReimportCertificateRequest::builder()
+                ReimportCertificateRequest::builder()
                     .certificate_arn(certificate_arn)
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
-                    .tags(tags)
                     .build(),
             )
             .await
@@ -2179,12 +2169,7 @@ impl AwsWorkerController {
                     Ok(_) => {
                         info!(worker=%current_config.id, uuid=%uuid, "Deleted existing event source mapping");
                     }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
+                    Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                         info!(worker=%current_config.id, uuid=%uuid, "Event source mapping was already deleted");
                     }
                     Err(e) => {
@@ -2564,12 +2549,7 @@ impl AwsWorkerController {
                 .await?;
             match client.delete_api_mapping(domain_name, api_mapping_id).await {
                 Ok(()) => info!(worker=%worker_config.id, "API mapping deleted"),
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "API mapping already gone");
                 }
                 Err(e) => {
@@ -2591,12 +2571,7 @@ impl AwsWorkerController {
                 Ok(()) => {
                     info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "Custom domain already gone");
                 }
                 Err(e) => {
@@ -2619,12 +2594,7 @@ impl AwsWorkerController {
                 Ok(()) => {
                     info!(worker=%worker_config.id, api_id=%api_id, "API Gateway deleted")
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "API Gateway already gone");
                 }
                 Err(e) => {
@@ -2669,12 +2639,7 @@ impl AwsWorkerController {
                     Ok(_) => {
                         info!(worker=%worker_config.id, uuid=%uuid, "Event source mapping deleted successfully");
                     }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
+                    Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                         info!(worker=%worker_config.id, uuid=%uuid, "Event source mapping was already deleted (not found)");
                     }
                     Err(e) => {
@@ -2853,12 +2818,7 @@ impl AwsWorkerController {
                     suggested_delay: Some(Duration::from_secs(5)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(worker=%worker_config.id, "Lambda already gone while detaching VPC config");
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
@@ -2916,12 +2876,7 @@ impl AwsWorkerController {
                 ),
                 resource_id: Some(worker_config.id.clone()),
             })),
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
                     suggested_delay: None,
@@ -2953,12 +2908,7 @@ impl AwsWorkerController {
             Ok(_) => {
                 info!(name=%aws_worker_name, "Worker deleted successfully, proceeding to DeleteWaitForNotFound state");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 warn!(name=%aws_worker_name, "Worker was already deleted (not found), proceeding to DeleteWaitForNotFound state");
             }
             Err(e) => {
@@ -2995,12 +2945,7 @@ impl AwsWorkerController {
             .get_function_configuration(lookup_identifier, None)
             .await
         {
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 self.arn = None;
                 self.url = None;
                 self.worker_name = None;
@@ -3113,12 +3058,7 @@ impl AwsWorkerController {
             let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
             match acm_client.delete_certificate(certificate_arn).await {
                 Ok(()) => info!(worker=%worker_config.id, "ACM certificate deleted"),
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "ACM certificate already gone");
                 }
                 Err(e) => {
@@ -3240,7 +3180,7 @@ impl AwsWorkerController {
     async fn create_queue_event_source_mapping(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        aws_cfg: &alien_aws_clients::AwsClientConfig,
+        aws_cfg: &AwsClientConfig,
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<()> {
@@ -3333,7 +3273,7 @@ impl AwsWorkerController {
             }
         }
 
-        let request = alien_aws_clients::lambda::CreateEventSourceMappingRequest::builder()
+        let request = CreateEventSourceMappingRequest::builder()
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
             .batch_size(1) // Always 1 message per invocation as per design
@@ -3510,14 +3450,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
-    use alien_aws_clients::apigatewayv2::{
-        Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
-        Route, Stage,
-    };
-    use alien_aws_clients::iam::MockIamApi;
-    use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
-    use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
         ResourceStatus, Worker, WorkerOutputs,
@@ -3526,8 +3458,17 @@ mod tests {
     use httpmock::prelude::*;
     use rstest::rstest;
 
+    use crate::aws_sdk::{
+        AddPermissionResponse, ApiGatewayV2ApiDescription as Api,
+        ApiGatewayV2ApiMapping as ApiMapping, ApiGatewayV2DomainName as DomainName,
+        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
+        ApiGatewayV2Integration as Integration, ApiGatewayV2Route as Route,
+        ApiGatewayV2Stage as Stage, FunctionConfiguration, ImportCertificateResponse, MockAcmApi,
+        MockApiGatewayV2Api, MockIamApi, MockLambdaApi,
+    };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
+    use crate::error::ErrorData;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
     };
@@ -3836,12 +3777,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         Arc::new(mock_lambda)
@@ -3856,12 +3795,10 @@ mod tests {
         // Mock worker deletion (might fail if worker missing)
         if function_missing {
             mock_lambda.expect_delete_function().returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
         } else {
             mock_lambda
@@ -3873,12 +3810,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         Arc::new(mock_lambda)
@@ -4201,12 +4136,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         // Validate ACM certificate import
@@ -4337,12 +4270,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
@@ -4402,12 +4333,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
@@ -4465,12 +4394,10 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Worker".to_string(),
-                        resource_name: "test-worker".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: "test-worker".to_string(),
+                }))
             });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);

@@ -14,11 +14,6 @@ alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", 
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
 
-# Cloud client crates
-alien-aws-clients = { workspace = true }
-alien-gcp-clients = { workspace = true }
-alien-azure-clients = { workspace = true }
-
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = { workspace = true }
@@ -27,7 +22,12 @@ async-trait = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Official cloud SDKs
+google-cloud-auth = { workspace = true }
+google-cloud-resourcemanager-v3 = { workspace = true }
+
 # HTTP client
+http = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
 
 # Manager API client SDK (for ManagerApiTransport)
@@ -59,4 +59,3 @@ features = ["test"]
 [dev-dependencies.alien-bindings]
 workspace = true
 features = ["local"]
-

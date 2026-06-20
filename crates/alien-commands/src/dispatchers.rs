@@ -39,11 +39,6 @@ impl CommandDispatcher for NullCommandDispatcher {
 #[cfg(any(feature = "server", feature = "dispatchers"))]
 mod platform_dispatchers {
     use super::*;
-    use alien_aws_clients::aws::{
-        lambda::{InvocationType, InvokeRequest, LambdaApi, LambdaClient},
-        AwsClientConfig,
-    };
-    use alien_aws_clients::AwsCredentialProvider;
     use alien_azure_clients::azure::{
         service_bus::{
             AzureServiceBusDataPlaneClient, SendMessageParameters, ServiceBusDataPlaneApi,
@@ -54,6 +49,9 @@ mod platform_dispatchers {
     use alien_gcp_clients::gcp::{
         pubsub::{PubSubApi, PubSubClient, PublishRequest, PubsubMessage},
         GcpClientConfig,
+    };
+    use aws_sdk_lambda::{
+        primitives::Blob as LambdaBlob, types::InvocationType, Client as LambdaClient,
     };
     use base64::prelude::*;
     use reqwest::Client;
@@ -68,20 +66,19 @@ mod platform_dispatchers {
 
     impl LambdaCommandDispatcher {
         pub async fn new(
-            client: Client,
-            config: AwsClientConfig,
+            _client: Client,
+            config: alien_core::AwsClientConfig,
             function_name: String,
         ) -> Result<Self> {
-            let credentials = AwsCredentialProvider::from_config(config)
+            let lambda_client = alien_bindings::aws_sdk::lambda_client_from_alien_config(&config)
                 .await
-                .into_alien_error()
                 .context(crate::ErrorData::TransportDispatchFailed {
-                    message: "Failed to create AWS credential provider".to_string(),
+                    message: "Failed to create official Lambda client".to_string(),
                     transport_type: Some("lambda".to_string()),
                     target: None,
                 })?;
             Ok(Self {
-                lambda_client: LambdaClient::new(client, credentials),
+                lambda_client,
                 function_name,
             })
         }
@@ -103,19 +100,19 @@ mod platform_dispatchers {
 
             // Use async invocation to send the envelope to the Lambda function
             // The Lambda function should have alien-runtime configured to handle command envelopes
-            let invoke_request = InvokeRequest::builder()
+            self.lambda_client
+                .invoke()
                 .function_name(function_name.clone())
-                .invocation_type(InvocationType::Event) // Async invocation
-                .payload(payload)
-                .build();
-
-            self.lambda_client.invoke(invoke_request).await.context(
-                crate::ErrorData::TransportDispatchFailed {
+                .invocation_type(InvocationType::Event)
+                .payload(LambdaBlob::new(payload))
+                .send()
+                .await
+                .into_alien_error()
+                .context(crate::ErrorData::TransportDispatchFailed {
                     message: format!("Failed to invoke Lambda function {}", function_name),
                     transport_type: Some("lambda".to_string()),
                     target: Some(envelope.command_id.clone()),
-                },
-            )?;
+                })?;
 
             tracing::debug!(
                 command_id = %envelope.command_id,

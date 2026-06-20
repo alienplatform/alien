@@ -1,5 +1,5 @@
 #[cfg(feature = "aws")]
-use alien_aws_clients::AwsClientConfigExt as _;
+use crate::ClientConfigExt as _;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine as _};
@@ -541,9 +541,11 @@ impl AuthInfo {
         if exec_config.command == "aws" || exec_config.command.ends_with("/aws") {
             if let Some(alien_core::Platform::Aws) = infra_platform {
                 #[cfg(feature = "aws")]
-                if let Ok(aws_config) = crate::AwsClientConfig::from_std_env().await {
+                if let Ok(alien_core::ClientConfig::Aws(aws_config)) =
+                    alien_core::ClientConfig::from_std_env(alien_core::Platform::Aws).await
+                {
                     match &aws_config.credentials {
-                        alien_aws_clients::AwsCredentials::AccessKeys {
+                        alien_core::AwsCredentials::AccessKeys {
                             access_key_id,
                             secret_access_key,
                             session_token,
@@ -558,7 +560,7 @@ impl AuthInfo {
                             }
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
-                        alien_aws_clients::AwsCredentials::SessionCredentials {
+                        alien_core::AwsCredentials::SessionCredentials {
                             access_key_id,
                             secret_access_key,
                             session_token,
@@ -572,20 +574,20 @@ impl AuthInfo {
                             cmd.env("AWS_SESSION_TOKEN", session_token);
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
-                        alien_aws_clients::AwsCredentials::Imds { .. } => {
+                        alien_core::AwsCredentials::Imds { .. } => {
                             tracing::debug!(
                                 "Using AWS IMDS credentials for kubeconfig exec command"
                             );
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
-                        alien_aws_clients::AwsCredentials::Profile { name } => {
+                        alien_core::AwsCredentials::Profile { name } => {
                             tracing::debug!(
                                 "Using AWS profile credentials for kubeconfig exec command"
                             );
                             cmd.env("AWS_PROFILE", name);
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
-                        alien_aws_clients::AwsCredentials::WebIdentity { config } => {
+                        alien_core::AwsCredentials::WebIdentity { config } => {
                             tracing::debug!(
                                 "Setting AWS web identity credentials for kubeconfig exec command"
                             );
@@ -756,7 +758,10 @@ fn parse_certificates(data: &[u8]) -> Result<Vec<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_k8s_clients::{KubernetesClientConfig, KubernetesClientConfigExt as _};
+    #[cfg(feature = "kubernetes")]
+    use crate::kubernetes_client::kube_config_from_alien_config;
+    #[cfg(feature = "kubernetes")]
+    use alien_core::KubernetesClientConfig;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -908,10 +913,11 @@ users:
     }
 
     #[tokio::test]
+    #[cfg(feature = "kubernetes")]
     async fn test_kubernetes_client_config_manual() {
         let config = KubernetesClientConfig::Manual {
             server_url: "https://test:6443".to_string(),
-            certificate_authority_data: Some("dGVzdA==".to_string()),
+            certificate_authority_data: None,
             insecure_skip_tls_verify: None,
             client_certificate_data: None,
             client_key_data: None,
@@ -922,17 +928,15 @@ users:
             namespace: Some("default".to_string()),
         };
 
-        let resolved = config.resolve().await.unwrap();
+        let resolved = kube_config_from_alien_config(config).await.unwrap();
 
-        assert_eq!(resolved.server_url, "https://test:6443");
-        assert_eq!(
-            resolved.certificate_authority_data,
-            Some("dGVzdA==".to_string())
-        );
-        assert_eq!(resolved.bearer_token, Some("test-token".to_string()));
+        assert_eq!(resolved.cluster_url.to_string(), "https://test:6443/");
+        assert_eq!(resolved.default_namespace, "default");
+        assert!(resolved.auth_info.token.is_some());
     }
 
     #[tokio::test]
+    #[cfg(feature = "kubernetes")]
     async fn test_kubernetes_client_config_incluster() {
         let config = KubernetesClientConfig::InCluster {
             additional_headers: None,
@@ -940,7 +944,7 @@ users:
         };
 
         // This test may fail if not running in a cluster, which is expected
-        let _resolved = config.resolve().await;
+        let _resolved = kube_config_from_alien_config(config).await;
         // Just test that it doesn't panic
     }
 }

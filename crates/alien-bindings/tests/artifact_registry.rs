@@ -29,9 +29,6 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
-#[cfg(feature = "aws")]
-use {alien_aws_clients::AwsClientConfig, reqwest::Client};
-
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::{artifactregistry::ArtifactRegistryClient, GcpClientConfig};
 

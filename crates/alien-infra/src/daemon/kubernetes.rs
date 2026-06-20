@@ -6,6 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::SecretsApi;
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -612,7 +613,7 @@ impl KubernetesDaemonController {
 }
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    secrets_client: &std::sync::Arc<dyn SecretsApi>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

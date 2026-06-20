@@ -551,10 +551,10 @@ use crate::{
     core::ResourceRegistry,
     error::{ErrorData, Result},
 };
-#[cfg(feature = "aws")]
-use alien_aws_clients::AwsClientConfig;
 #[cfg(feature = "azure")]
 use alien_azure_clients::AzureClientConfig;
+#[cfg(feature = "aws")]
+use alien_core::AwsClientConfig;
 use alien_core::ClientConfig;
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, GcpManagementConfig, KubernetesClientConfig,

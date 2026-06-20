@@ -1,20 +1,18 @@
-use alien_error::{AlienError, ContextError};
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
+use crate::aws_sdk::{
+    S3BucketMetadata, S3LifecycleRuleConfig, S3PublicAccessBlock, S3VersioningStatus,
+};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::s3::{
-    GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, VersioningStatus,
-};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
+use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
@@ -22,24 +20,6 @@ use chrono::Utc;
 /// Generates the full, prefixed AWS bucket name.
 fn get_aws_bucket_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
-}
-
-fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
-            if message.contains("BucketAlreadyOwnedByYou")
-                || message.contains("you already own")
-                || message.contains("already owned by you")
-                || message.contains("previous request to create the named bucket succeeded")
-    )
-}
-
-fn is_missing_optional_bucket_metadata(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-    )
 }
 
 #[controller]
@@ -72,22 +52,13 @@ impl AwsStorageController {
 
         info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
 
-        // Create the bucket using our custom S3 client
-        match client.create_bucket(&bucket_name).await {
-            Ok(()) => {}
-            Err(error) if is_bucket_already_owned(&error) => {
-                info!(
-                    bucket = %bucket_name,
-                    "S3 bucket already exists and is owned by this account; continuing create flow"
-                );
-            }
-            Err(error) => {
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create S3 bucket '{}'", bucket_name),
-                    resource_id: Some(config.id.clone()),
-                }));
-            }
-        }
+        client
+            .create_bucket(&bucket_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create S3 bucket '{}'", bucket_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         client
             .put_bucket_abac_tags(
@@ -131,9 +102,8 @@ impl AwsStorageController {
         if config.versioning {
             info!(bucket=%bucket_name, "Configuring bucket versioning");
 
-            // Configure versioning using our custom S3 client
             client
-                .put_bucket_versioning(bucket_name, VersioningStatus::Enabled)
+                .put_bucket_versioning(bucket_name, S3VersioningStatus::Enabled)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -177,13 +147,7 @@ impl AwsStorageController {
         if storage_config.public_read {
             info!(bucket=%bucket_name, "Configuring public access block");
 
-            // Configure public access block using our custom S3 client
-            let public_access_config = PublicAccessBlockConfiguration::builder()
-                .block_public_acls(false)
-                .block_public_policy(false)
-                .ignore_public_acls(false)
-                .restrict_public_buckets(false)
-                .build();
+            let public_access_config = public_access_block_config(false);
 
             client
                 .put_public_access_block(bucket_name, public_access_config)
@@ -288,33 +252,8 @@ impl AwsStorageController {
         if !config.lifecycle_rules.is_empty() {
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Configuring lifecycle rules");
 
-            // Convert our lifecycle rules to the S3 format
-            let mut s3_rules = Vec::new();
-            for (i, rule) in config.lifecycle_rules.iter().enumerate() {
-                let rule_id = format!("Rule{}", i + 1);
-
-                let s3_rule = LifecycleRule::builder()
-                    .id(rule_id)
-                    .status(LifecycleRuleStatus::Enabled)
-                    .filter(
-                        LifecycleRuleFilter::builder()
-                            .maybe_prefix(rule.prefix.clone())
-                            .build(),
-                    )
-                    .expiration(
-                        LifecycleExpiration::builder()
-                            .days(rule.days as i32)
-                            .build(),
-                    )
-                    .build();
-
-                s3_rules.push(s3_rule);
-            }
-
-            let lifecycle_config = LifecycleConfiguration::builder().rules(s3_rules).build();
-
             client
-                .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_config)
+                .put_bucket_lifecycle_configuration(bucket_name, lifecycle_rule_configs(config))
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -382,93 +321,14 @@ impl AwsStorageController {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
-            // Verify the bucket exists using get_bucket_location.
-            // This AWS API call is used because it requires s3:GetBucketLocation permission,
-            // which is included in 'heartbeat' level roles, unlike s3:ListBucket
-            // required by head_bucket.
-            let location = client.get_bucket_location(bucket_name).await.context(
+            let metadata = client.get_bucket_metadata(bucket_name).await.context(
                 ErrorData::CloudPlatformError {
-                    message: "Failed to check S3 bucket during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                },
-            )?;
-            let versioning = client.get_bucket_versioning(bucket_name).await.context(
-                ErrorData::CloudPlatformError {
-                    message: "Failed to get S3 bucket versioning during heartbeat".to_string(),
+                    message: "Failed to collect S3 bucket metadata during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
                 },
             )?;
 
-            let lifecycle = match client.get_bucket_lifecycle_configuration(bucket_name).await {
-                Ok(configuration) => Some(configuration),
-                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: "Failed to get S3 bucket lifecycle during heartbeat".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            };
-
-            let encryption = match client.get_bucket_encryption(bucket_name).await {
-                Ok(configuration) => Some(configuration),
-                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: "Failed to get S3 bucket encryption during heartbeat".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            };
-
-            let public_access_block = match client.get_public_access_block(bucket_name).await {
-                Ok(configuration) => Some(configuration),
-                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: "Failed to get S3 bucket public access block during heartbeat"
-                            .to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            };
-
-            let bucket_policy_present = match client.get_bucket_policy(bucket_name).await {
-                Ok(output) => Some(!output.policy.trim().is_empty()),
-                Err(error) if is_missing_optional_bucket_metadata(&error) => Some(false),
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: "Failed to get S3 bucket policy during heartbeat".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            };
-
-            let bucket_acl_present = match client.get_bucket_acl(bucket_name).await {
-                Ok(output) => {
-                    Some(output.owner.is_some() || !output.access_control_list.grants.is_empty())
-                }
-                Err(error) if is_missing_optional_bucket_metadata(&error) => Some(false),
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: "Failed to get S3 bucket ACL during heartbeat".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            };
-
-            emit_aws_s3_storage_heartbeat(
-                ctx,
-                &config.id,
-                bucket_name,
-                location,
-                versioning.status,
-                lifecycle,
-                encryption,
-                public_access_block,
-                bucket_policy_present,
-                bucket_acl_present,
-            );
+            emit_aws_s3_storage_heartbeat(ctx, &config.id, bucket_name, metadata);
 
             debug!(name = %config.id, bucket = %bucket_name, "S3 bucket exists and is accessible");
         }
@@ -506,11 +366,10 @@ impl AwsStorageController {
 
             info!(bucket=%bucket_name, current=%config.versioning, previous=%prev_config.versioning, "Updating bucket versioning");
 
-            // Update versioning configuration using our custom S3 client
             let status = if config.versioning {
-                VersioningStatus::Enabled
+                S3VersioningStatus::Enabled
             } else {
-                VersioningStatus::Suspended
+                S3VersioningStatus::Suspended
             };
 
             client
@@ -562,12 +421,7 @@ impl AwsStorageController {
 
             if storage_config.public_read {
                 // Enable public access
-                let public_access_config = PublicAccessBlockConfiguration::builder()
-                    .block_public_acls(false)
-                    .block_public_policy(false)
-                    .ignore_public_acls(false)
-                    .restrict_public_buckets(false)
-                    .build();
+                let public_access_config = public_access_block_config(false);
 
                 client
                     .put_public_access_block(bucket_name, public_access_config)
@@ -583,12 +437,7 @@ impl AwsStorageController {
                 info!(bucket=%bucket_name, "Public access enabled successfully");
             } else {
                 // Disable public access
-                let public_access_config = PublicAccessBlockConfiguration::builder()
-                    .block_public_acls(true)
-                    .block_public_policy(true)
-                    .ignore_public_acls(true)
-                    .restrict_public_buckets(true)
-                    .build();
+                let public_access_config = public_access_block_config(true);
 
                 client
                     .put_public_access_block(bucket_name, public_access_config)
@@ -665,29 +514,16 @@ impl AwsStorageController {
 
                 info!(bucket=%bucket_name, "Bucket policy set successfully");
             } else {
-                // Remove bucket policy - ignore NotFound errors
-                match client.delete_bucket_policy(bucket_name).await {
-                    Ok(_) => {
-                        info!(bucket=%bucket_name, "Bucket policy removed successfully");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(bucket=%bucket_name, "Bucket policy already removed or never existed");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to remove bucket policy for S3 bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
-                    }
-                }
+                client.delete_bucket_policy(bucket_name).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove bucket policy for S3 bucket '{}'",
+                            bucket_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )?;
+                info!(bucket=%bucket_name, "Bucket policy removed successfully");
             }
         } else {
             info!(name=%config.id, "Skipping bucket policy update (no changes needed)");
@@ -725,57 +561,19 @@ impl AwsStorageController {
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Updating lifecycle rules");
 
             if config.lifecycle_rules.is_empty() {
-                // Remove lifecycle configuration - ignore NotFound errors
-                match client.delete_bucket_lifecycle(bucket_name).await {
-                    Ok(_) => {
-                        info!(bucket=%bucket_name, "Lifecycle rules removed successfully");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(bucket=%bucket_name, "Lifecycle configuration already removed or never existed");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to remove lifecycle configuration for S3 bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
-                    }
-                }
+                client.delete_bucket_lifecycle(bucket_name).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove lifecycle configuration for S3 bucket '{}'",
+                            bucket_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )?;
+                info!(bucket=%bucket_name, "Lifecycle rules removed successfully");
             } else {
-                // Update lifecycle rules - convert our rules to S3 format
-                let mut s3_rules = Vec::new();
-                for (i, rule) in config.lifecycle_rules.iter().enumerate() {
-                    let rule_id = format!("Rule{}", i + 1);
-
-                    let s3_rule = LifecycleRule::builder()
-                        .id(rule_id)
-                        .status(LifecycleRuleStatus::Enabled)
-                        .filter(
-                            LifecycleRuleFilter::builder()
-                                .maybe_prefix(rule.prefix.clone())
-                                .build(),
-                        )
-                        .expiration(
-                            LifecycleExpiration::builder()
-                                .days(rule.days as i32)
-                                .build(),
-                        )
-                        .build();
-
-                    s3_rules.push(s3_rule);
-                }
-
-                let lifecycle_config = LifecycleConfiguration::builder().rules(s3_rules).build();
-
                 client
-                    .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_config)
+                    .put_bucket_lifecycle_configuration(bucket_name, lifecycle_rule_configs(config))
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -877,22 +675,15 @@ impl AwsStorageController {
             }
         }
 
-        // Best effort: try to delete the bucket
         match client.delete_bucket(bucket_name).await {
-            Ok(_) => {
+            Ok(true) => {
                 info!(bucket=%bucket_name, "S3 bucket deleted successfully");
             }
+            Ok(false) => {
+                info!(bucket=%bucket_name, "Bucket already deleted or never existed");
+            }
             Err(e) => {
-                // Check if it's a resource not found error (bucket doesn't exist)
-                match &e.error {
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. }) => {
-                        warn!(bucket=%bucket_name, "Bucket already deleted or never existed");
-                    }
-                    _ => {
-                        // Log but continue - bucket might already be deleted
-                        warn!(bucket=%bucket_name, error=?e, "Could not delete bucket, considering deletion complete");
-                    }
-                }
+                info!(bucket=%bucket_name, error=?e, "Could not delete bucket, considering deletion complete");
             }
         }
 
@@ -953,29 +744,20 @@ fn emit_aws_s3_storage_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     bucket_name: &str,
-    location: alien_aws_clients::s3::GetBucketLocationOutput,
-    versioning_status: Option<VersioningStatus>,
-    lifecycle: Option<LifecycleConfiguration>,
-    encryption: Option<GetBucketEncryptionOutput>,
-    public_access_block: Option<PublicAccessBlockConfiguration>,
-    bucket_policy_present: Option<bool>,
-    bucket_acl_present: Option<bool>,
+    metadata: S3BucketMetadata,
 ) {
-    let region = location.region();
-    let versioning_status_label = versioning_status.map(versioning_status_label);
+    let versioning_status_label = metadata.versioning_status.map(versioning_status_label);
     let versioning_enabled = Some(matches!(
         versioning_status_label.as_deref(),
         Some("Enabled")
     ));
-    let lifecycle_rule_count = lifecycle
-        .as_ref()
-        .map(|configuration| configuration.rules.len() as u64);
-    let lifecycle_present = lifecycle_rule_count.map(|count| count > 0).unwrap_or(false);
-    let encryption_config_present = encryption.is_some();
-    let encryption_enabled = encryption
-        .as_ref()
-        .map(|configuration| !configuration.rules.is_empty());
-    let public_access_block_present = public_access_block.is_some();
+    let lifecycle_present = metadata
+        .lifecycle_rule_count
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    let encryption_config_present = metadata.encryption_rule_count.is_some();
+    let encryption_enabled = metadata.encryption_rule_count.map(|count| count > 0);
+    let public_access_block_present = metadata.public_access_block.is_some();
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -995,39 +777,65 @@ fn emit_aws_s3_storage_heartbeat(
                     collection_issues: vec![],
                 },
                 name: bucket_name.to_string(),
-                region: Some(region.clone()),
-                bucket_location: Some(region),
+                region: Some(metadata.region.clone()),
+                bucket_location: Some(metadata.region),
                 versioning_status: versioning_status_label,
                 versioning_enabled,
                 lifecycle_present,
-                lifecycle_rule_count,
+                lifecycle_rule_count: metadata.lifecycle_rule_count,
                 encryption_config_present,
                 encryption_enabled,
                 public_access_block_present,
-                block_public_acls: public_access_block
+                block_public_acls: metadata
+                    .public_access_block
                     .as_ref()
                     .and_then(|configuration| configuration.block_public_acls),
-                ignore_public_acls: public_access_block
+                ignore_public_acls: metadata
+                    .public_access_block
                     .as_ref()
                     .and_then(|configuration| configuration.ignore_public_acls),
-                block_public_policy: public_access_block
+                block_public_policy: metadata
+                    .public_access_block
                     .as_ref()
                     .and_then(|configuration| configuration.block_public_policy),
-                restrict_public_buckets: public_access_block
+                restrict_public_buckets: metadata
+                    .public_access_block
                     .as_ref()
                     .and_then(|configuration| configuration.restrict_public_buckets),
-                bucket_policy_present,
-                bucket_acl_present,
+                bucket_policy_present: metadata.bucket_policy_present,
+                bucket_acl_present: metadata.bucket_acl_present,
             },
         )),
         raw: vec![],
     });
 }
 
-fn versioning_status_label(status: VersioningStatus) -> String {
+fn public_access_block_config(blocked: bool) -> S3PublicAccessBlock {
+    S3PublicAccessBlock {
+        block_public_acls: Some(blocked),
+        ignore_public_acls: Some(blocked),
+        block_public_policy: Some(blocked),
+        restrict_public_buckets: Some(blocked),
+    }
+}
+
+fn lifecycle_rule_configs(config: &Storage) -> Vec<S3LifecycleRuleConfig> {
+    config
+        .lifecycle_rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| S3LifecycleRuleConfig {
+            id: format!("Rule{}", index + 1),
+            prefix: rule.prefix.clone(),
+            days: rule.days as i32,
+        })
+        .collect()
+}
+
+fn versioning_status_label(status: S3VersioningStatus) -> String {
     match status {
-        VersioningStatus::Enabled => "Enabled".to_string(),
-        VersioningStatus::Suspended => "Suspended".to_string(),
+        S3VersioningStatus::Enabled => "Enabled".to_string(),
+        S3VersioningStatus::Suspended => "Suspended".to_string(),
     }
 }
 
@@ -1051,22 +859,18 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_aws_clients::s3::{
-        DeleteObjectsOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-        LifecycleRuleFilter, LifecycleRuleStatus, ListObjectsV2Output, ListVersionsOutput,
-        MockS3Api, PublicAccessBlockConfiguration, VersioningStatus,
-    };
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
     use rstest::{fixture, rstest};
 
+    use crate::aws_sdk::MockS3Api;
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
+    use crate::error::ErrorData;
     use crate::storage::AwsStorageController;
     use crate::AwsStorageState;
 
@@ -1121,7 +925,7 @@ mod tests {
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
-    fn setup_mock_client_for_creation_and_deletion(bucket_name: &str) -> Arc<MockS3Api> {
+    fn setup_mock_client_for_creation_and_deletion(_bucket_name: &str) -> Arc<MockS3Api> {
         let mut mock_s3 = MockS3Api::new();
 
         // Mock successful bucket creation
@@ -1144,12 +948,12 @@ mod tests {
 
         // Mock deletion methods
         mock_s3.expect_empty_bucket().returning(|_| Ok(()));
-        mock_s3.expect_delete_bucket().returning(|_| Ok(()));
+        mock_s3.expect_delete_bucket().returning(|_| Ok(true));
 
         Arc::new(mock_s3)
     }
 
-    fn setup_mock_client_for_creation_and_update(bucket_name: &str) -> Arc<MockS3Api> {
+    fn setup_mock_client_for_creation_and_update(_bucket_name: &str) -> Arc<MockS3Api> {
         let mut mock_s3 = MockS3Api::new();
 
         mock_s3.expect_create_bucket().returning(|_| Ok(()));
@@ -1181,16 +985,14 @@ mod tests {
 
         // Mock empty bucket failure (bucket doesn't exist)
         mock_s3.expect_empty_bucket().returning(|_| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "S3 Bucket".to_string(),
-                    resource_name: "test-bucket".to_string(),
-                },
-            ))
+            Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: "S3 bucket was already absent".to_string(),
+                resource_id: Some("test-bucket".to_string()),
+            }))
         });
 
         // Mock successful bucket deletion
-        mock_s3.expect_delete_bucket().returning(|_| Ok(()));
+        mock_s3.expect_delete_bucket().returning(|_| Ok(false));
 
         Arc::new(mock_s3)
     }
@@ -1347,12 +1149,10 @@ mod tests {
 
         // Mock bucket deletion failure (bucket doesn't exist)
         mock_s3.expect_delete_bucket().returning(|_| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "S3 Bucket".to_string(),
-                    resource_name: "test-bucket".to_string(),
-                },
-            ))
+            Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: "S3 bucket delete failed".to_string(),
+                resource_id: Some("test-bucket".to_string()),
+            }))
         });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_s3));
@@ -1463,49 +1263,40 @@ mod tests {
         // Validate that the generated lifecycle configuration contains expected rules
         mock_s3
             .expect_put_bucket_lifecycle_configuration()
-            .withf(|_bucket_name, lifecycle_config| {
+            .withf(|_bucket_name, lifecycle_rules| {
                 // Should have 2 rules
-                if lifecycle_config.rules.len() != 2 {
-                    eprintln!(
-                        "Expected 2 lifecycle rules, got {}",
-                        lifecycle_config.rules.len()
-                    );
+                if lifecycle_rules.len() != 2 {
+                    eprintln!("Expected 2 lifecycle rules, got {}", lifecycle_rules.len());
                     return false;
                 }
 
                 // Check first rule (with prefix)
-                let rule1 = &lifecycle_config.rules[0];
-                if rule1.id.as_ref().unwrap() != "Rule1" {
+                let rule1 = &lifecycle_rules[0];
+                if rule1.id != "Rule1" {
                     eprintln!("Expected rule ID 'Rule1', got {:?}", rule1.id);
                     return false;
                 }
-                if rule1.filter.prefix.as_ref().unwrap() != "logs/" {
-                    eprintln!("Expected prefix 'logs/', got {:?}", rule1.filter.prefix);
+                if rule1.prefix.as_ref().unwrap() != "logs/" {
+                    eprintln!("Expected prefix 'logs/', got {:?}", rule1.prefix);
                     return false;
                 }
-                if rule1.expiration.as_ref().unwrap().days.unwrap() != 30 {
-                    eprintln!(
-                        "Expected 30 days, got {:?}",
-                        rule1.expiration.as_ref().unwrap().days
-                    );
+                if rule1.days != 30 {
+                    eprintln!("Expected 30 days, got {:?}", rule1.days);
                     return false;
                 }
 
                 // Check second rule (no prefix)
-                let rule2 = &lifecycle_config.rules[1];
-                if rule2.id.as_ref().unwrap() != "Rule2" {
+                let rule2 = &lifecycle_rules[1];
+                if rule2.id != "Rule2" {
                     eprintln!("Expected rule ID 'Rule2', got {:?}", rule2.id);
                     return false;
                 }
-                if rule2.filter.prefix.is_some() {
-                    eprintln!("Expected no prefix, got {:?}", rule2.filter.prefix);
+                if rule2.prefix.is_some() {
+                    eprintln!("Expected no prefix, got {:?}", rule2.prefix);
                     return false;
                 }
-                if rule2.expiration.as_ref().unwrap().days.unwrap() != 365 {
-                    eprintln!(
-                        "Expected 365 days, got {:?}",
-                        rule2.expiration.as_ref().unwrap().days
-                    );
+                if rule2.days != 365 {
+                    eprintln!("Expected 365 days, got {:?}", rule2.days);
                     return false;
                 }
 

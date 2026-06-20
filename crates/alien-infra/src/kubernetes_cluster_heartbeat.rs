@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use crate::kubernetes_client::{
+    optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
+};
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesCluster, KubernetesClusterHeartbeatData,
@@ -9,9 +12,6 @@ use alien_core::{
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, WorkloadHeartbeatStatus,
 };
 use alien_error::Context;
-use alien_k8s_clients::{
-    optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
-};
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;

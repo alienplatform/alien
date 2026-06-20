@@ -1,12 +1,12 @@
 use std::time::Duration;
 use tracing::{info, warn};
 
+use crate::aws_sdk::{
+    AttachedPolicy, CreateRoleRequest, CreateRoleTag, Role, TrustPolicyDocument,
+    TrustPolicyPrincipal, TrustPolicyPrincipalValue, TrustPolicyStatement,
+};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{
-    CreateRoleRequest, CreateRoleTag, TrustPolicyDocument, TrustPolicyPrincipal,
-    TrustPolicyPrincipalValue, TrustPolicyStatement,
-};
 use alien_core::{
     standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
     Container, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
@@ -397,10 +397,7 @@ impl AwsServiceAccountController {
                             }
                             Err(e) => {
                                 // Check if it's a resource not found error
-                                if let Some(
-                                    alien_client_core::ErrorData::RemoteResourceNotFound { .. },
-                                ) = &e.error
-                                {
+                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                                     warn!(
                                         role_name = %role_name,
                                         policy_arn = %policy.policy_arn,
@@ -430,8 +427,7 @@ impl AwsServiceAccountController {
             }
             Err(e) => {
                 // Check if it's a resource not found error (role doesn't exist)
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "Role not found during managed policy cleanup");
                 } else {
                     return Err(e
@@ -467,10 +463,7 @@ impl AwsServiceAccountController {
                             }
                             Err(e) => {
                                 // Check if it's a resource not found error
-                                if let Some(
-                                    alien_client_core::ErrorData::RemoteResourceNotFound { .. },
-                                ) = &e.error
-                                {
+                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                                     warn!(
                                         role_name = %role_name,
                                         policy_name = %policy_name,
@@ -500,8 +493,7 @@ impl AwsServiceAccountController {
             }
             Err(e) => {
                 // Check if it's a resource not found error (role doesn't exist)
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "Role not found during inline policy cleanup");
                 } else {
                     return Err(e
@@ -551,8 +543,7 @@ impl AwsServiceAccountController {
             }
             Err(e) => {
                 // Check if it's a resource not found error (role doesn't exist)
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "IAM role already deleted");
                 } else {
                     return Err(e
@@ -995,8 +986,8 @@ impl AwsServiceAccountController {
 fn emit_aws_service_account_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    role: &alien_aws_clients::iam::Role,
-    attached_policies: Vec<alien_aws_clients::iam::AttachedPolicy>,
+    role: &Role,
+    attached_policies: Vec<AttachedPolicy>,
     inline_policy_names: Vec<String>,
     stack_permissions_applied: bool,
 ) {

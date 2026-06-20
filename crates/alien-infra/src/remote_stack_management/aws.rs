@@ -1,9 +1,9 @@
 use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
+use crate::aws_sdk::{CreateRoleRequest, CreateRoleTag, IamApi};
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
     KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
@@ -310,10 +310,7 @@ impl AwsRemoteStackManagementController {
                         match detach_result {
                             Ok(_) => {}
                             Err(e) => {
-                                if let Some(
-                                    alien_client_core::ErrorData::RemoteResourceNotFound { .. },
-                                ) = &e.error
-                                {
+                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                                     warn!(role_name = %role_name, policy_arn = %policy.policy_arn, "Managed policy already detached");
                                 } else {
                                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -335,8 +332,7 @@ impl AwsRemoteStackManagementController {
                 }
             }
             Err(e) => {
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "Management role not found when listing attached policies");
                 } else {
                     return Err(e
@@ -363,10 +359,7 @@ impl AwsRemoteStackManagementController {
                         match client.delete_role_policy(role_name, policy_name).await {
                             Ok(_) => {}
                             Err(e) => {
-                                if let Some(
-                                    alien_client_core::ErrorData::RemoteResourceNotFound { .. },
-                                ) = &e.error
-                                {
+                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                                     warn!(role_name = %role_name, policy_name = %policy_name, "Inline policy already deleted");
                                 } else {
                                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -383,8 +376,7 @@ impl AwsRemoteStackManagementController {
                 }
             }
             Err(e) => {
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "Management role not found when listing inline policies");
                 } else {
                     return Err(e
@@ -436,8 +428,7 @@ impl AwsRemoteStackManagementController {
             }
             Err(e) => {
                 // Check if it's a resource not found error (role doesn't exist)
-                if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) = &e.error
-                {
+                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
                     warn!(role_name = %role_name, "Cross-account management IAM role already deleted");
                 } else {
                     return Err(e
@@ -1102,16 +1093,10 @@ fn sanitize_iam_policy_name(input: &str) -> String {
         .collect()
 }
 
-fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
-    matches!(
-        error.error,
-        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-    )
+fn is_remote_conflict(error: &alien_error::AlienError<ErrorData>) -> bool {
+    matches!(error.error, Some(ErrorData::CloudResourceConflict { .. }))
 }
 
-fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
-    matches!(
-        error.error,
-        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-    )
+fn is_remote_not_found(error: &alien_error::AlienError<ErrorData>) -> bool {
+    matches!(error.error, Some(ErrorData::CloudResourceNotFound { .. }))
 }

@@ -1,35 +1,91 @@
 use crate::error::{ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
-use alien_aws_clients::lambda::{InvocationType, InvokeRequest, LambdaApi, LambdaClient};
-use alien_aws_clients::AwsCredentialProvider;
 use alien_core::bindings::LambdaWorkerBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
+use aws_sdk_lambda::{primitives::Blob, types::InvocationType};
 use base64::Engine;
-use reqwest::Client;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
-/// AWS Lambda worker binding implementation
+/// Response data returned from invoking a Lambda worker.
+#[derive(Debug, Clone)]
+pub struct LambdaInvokeOutput {
+    /// Optional Lambda function error marker.
+    pub function_error: Option<String>,
+    /// Raw Lambda response payload.
+    pub payload: Vec<u8>,
+}
+
+/// Minimal Lambda operations required by the worker binding.
+#[async_trait]
+pub trait LambdaWorkerClient: Debug + Send + Sync {
+    /// Invoke a Lambda function and return its raw payload.
+    async fn invoke_worker(
+        &self,
+        function_name: &str,
+        payload: Vec<u8>,
+    ) -> Result<LambdaInvokeOutput>;
+
+    /// Fetch a Lambda function URL, if one is configured.
+    async fn get_worker_url(&self, function_name: &str) -> Result<String>;
+}
+
+#[async_trait]
+impl LambdaWorkerClient for aws_sdk_lambda::Client {
+    async fn invoke_worker(
+        &self,
+        function_name: &str,
+        payload: Vec<u8>,
+    ) -> Result<LambdaInvokeOutput> {
+        let response = self
+            .invoke()
+            .function_name(function_name)
+            .invocation_type(InvocationType::RequestResponse)
+            .payload(Blob::new(payload))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: format!("Failed to invoke Lambda worker '{}'", function_name),
+            })?;
+
+        Ok(LambdaInvokeOutput {
+            function_error: response.function_error().map(ToString::to_string),
+            payload: response
+                .payload()
+                .map(|payload| payload.as_ref().to_vec())
+                .unwrap_or_default(),
+        })
+    }
+
+    async fn get_worker_url(&self, function_name: &str) -> Result<String> {
+        let response = self
+            .get_function_url_config()
+            .function_name(function_name)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: format!("Failed to get Lambda worker URL for '{}'", function_name),
+            })?;
+
+        Ok(response.function_url().to_string())
+    }
+}
+
+/// AWS Lambda worker binding implementation.
 #[derive(Debug)]
 pub struct LambdaWorker {
-    client: LambdaClient,
+    client: Arc<dyn LambdaWorkerClient>,
     binding: LambdaWorkerBinding,
 }
 
 impl LambdaWorker {
-    pub fn new(
-        client: Client,
-        credentials: AwsCredentialProvider,
-        binding: LambdaWorkerBinding,
-    ) -> Self {
-        let lambda_client = LambdaClient::new(client, credentials);
-        Self {
-            client: lambda_client,
-            binding,
-        }
+    pub fn new(client: Arc<dyn LambdaWorkerClient>, binding: LambdaWorkerBinding) -> Self {
+        Self { client, binding }
     }
 
-    /// Get the worker name from the binding, resolving template expressions if needed
+    /// Get the worker name from the binding, resolving template expressions if needed.
     fn get_worker_name(&self) -> Result<String> {
         self.binding
             .worker_name
@@ -49,8 +105,6 @@ impl Worker for LambdaWorker {
     async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse> {
         let worker_name = self.get_worker_name()?;
 
-        // Create the invoke request payload
-        // For Lambda, we need to construct an HTTP-like payload that the runtime can understand
         let payload = serde_json::json!({
             "httpMethod": request.method.to_uppercase(),
             "path": request.path,
@@ -66,28 +120,20 @@ impl Worker for LambdaWorker {
                     message: "Failed to serialize Lambda invoke payload".to_string(),
                 })?;
 
-        // Use the target_worker if provided, otherwise use the bound worker
-        let target_worker = if !request.target_worker.is_empty() {
-            request.target_worker.clone()
-        } else {
+        let target_worker = if request.target_worker.is_empty() {
             worker_name
+        } else {
+            request.target_worker.clone()
         };
-
-        let invoke_request = InvokeRequest::builder()
-            .function_name(target_worker.clone())
-            .invocation_type(InvocationType::RequestResponse)
-            .payload(payload_bytes)
-            .build();
 
         let response = self
             .client
-            .invoke(invoke_request)
+            .invoke_worker(&target_worker, payload_bytes)
             .await
             .context(ErrorData::Other {
                 message: format!("Failed to invoke Lambda worker '{}'", target_worker),
             })?;
 
-        // Check for worker error
         if let Some(function_error) = response.function_error {
             return Err(AlienError::new(ErrorData::Other {
                 message: format!(
@@ -97,45 +143,43 @@ impl Worker for LambdaWorker {
             }));
         }
 
-        // Parse the response payload
         let lambda_response: serde_json::Value = serde_json::from_slice(&response.payload)
             .into_alien_error()
             .context(ErrorData::Other {
                 message: "Failed to parse Lambda response payload".to_string(),
             })?;
 
-        // Extract HTTP response components
         let status = lambda_response
             .get("statusCode")
-            .and_then(|s| s.as_u64())
+            .and_then(|status| status.as_u64())
             .unwrap_or(200) as u16;
 
         let headers = lambda_response
             .get("headers")
-            .and_then(|h| h.as_object())
-            .map(|obj| {
-                obj.iter()
-                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+            .and_then(|headers| headers.as_object())
+            .map(|headers| {
+                headers
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.as_str().unwrap_or("").to_string()))
                     .collect::<BTreeMap<String, String>>()
             })
             .unwrap_or_default();
 
-        let body = if let Some(body_str) = lambda_response.get("body").and_then(|b| b.as_str()) {
-            // Check if body is base64 encoded
+        let body = if let Some(body) = lambda_response.get("body").and_then(|body| body.as_str()) {
             let is_base64 = lambda_response
                 .get("isBase64Encoded")
-                .and_then(|b| b.as_bool())
+                .and_then(|is_base64| is_base64.as_bool())
                 .unwrap_or(false);
 
             if is_base64 {
                 base64::engine::general_purpose::STANDARD
-                    .decode(body_str)
+                    .decode(body)
                     .into_alien_error()
                     .context(ErrorData::Other {
                         message: "Failed to decode base64 response body".to_string(),
                     })?
             } else {
-                body_str.as_bytes().to_vec()
+                body.as_bytes().to_vec()
             }
         } else {
             Vec::new()
@@ -149,7 +193,6 @@ impl Worker for LambdaWorker {
     }
 
     async fn get_worker_url(&self) -> Result<Option<String>> {
-        // First check if we have it in the binding
         if let Some(url_binding) = &self.binding.url {
             let url = url_binding.clone().into_value("worker", "url").context(
                 ErrorData::BindingConfigInvalid {
@@ -160,15 +203,10 @@ impl Worker for LambdaWorker {
             return Ok(Some(url));
         }
 
-        // If not in binding, try to fetch it from AWS
         let worker_name = self.get_worker_name()?;
-        match self
-            .client
-            .get_function_url_config(&worker_name, None)
-            .await
-        {
-            Ok(url_config) => Ok(Some(url_config.function_url)),
-            Err(_) => Ok(None), // Worker URL doesn't exist
+        match self.client.get_worker_url(&worker_name).await {
+            Ok(url) => Ok(Some(url)),
+            Err(_) => Ok(None),
         }
     }
 

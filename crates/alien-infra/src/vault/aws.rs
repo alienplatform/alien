@@ -3,12 +3,10 @@ use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::aws_sdk::{DescribeSsmParametersResponse, SsmParameterMetadata};
 use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::ssm::{
-    DescribeParametersRequest, DescribeParametersResponse, ParameterMetadata, ParameterStringFilter,
-};
 use alien_core::{
     AwsParameterStoreVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -169,15 +167,7 @@ impl AwsVaultController {
         if let Some(vault_prefix) = &self.vault_prefix {
             let client = ctx.service_provider.get_aws_ssm_client(aws_cfg).await?;
             let response = client
-                .describe_parameters(DescribeParametersRequest {
-                    parameter_filters: Some(vec![ParameterStringFilter {
-                        key: "Name".to_string(),
-                        option: Some("BeginsWith".to_string()),
-                        values: Some(vec![vault_prefix.clone()]),
-                    }]),
-                    max_results: Some(50),
-                    next_token: None,
-                })
+                .describe_parameters_by_prefix(vault_prefix, 50)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -251,10 +241,10 @@ fn emit_aws_parameter_store_vault_heartbeat(
     account_id: &str,
     region: &str,
     prefix: &str,
-    response: DescribeParametersResponse,
+    response: DescribeSsmParametersResponse,
 ) {
-    let parameters = response.parameters.unwrap_or_default();
-    let has_more_parameters = response.next_token.is_some();
+    let parameters = response.parameters;
+    let has_more_parameters = response.has_more_parameters;
     let sampled_parameter_count = parameters.len() as u32;
     let latest_modified_at = latest_modified_at(&parameters);
 
@@ -293,7 +283,7 @@ fn emit_aws_parameter_store_vault_heartbeat(
                 sampled_kms_key_metadata_present_count: Some(
                     parameters
                         .iter()
-                        .filter(|parameter| parameter.key_id.is_some())
+                        .filter(|parameter| parameter.has_key_id)
                         .count() as u32,
                 ),
                 latest_modified_at,
@@ -304,37 +294,23 @@ fn emit_aws_parameter_store_vault_heartbeat(
     });
 }
 
-fn count_parameter_type(parameters: &[ParameterMetadata], parameter_type: &str) -> u32 {
+fn count_parameter_type(parameters: &[SsmParameterMetadata], parameter_type: &str) -> u32 {
     parameters
         .iter()
         .filter(|parameter| parameter.parameter_type.as_deref() == Some(parameter_type))
         .count() as u32
 }
 
-fn count_parameter_tier(parameters: &[ParameterMetadata], tier: &str) -> u32 {
+fn count_parameter_tier(parameters: &[SsmParameterMetadata], tier: &str) -> u32 {
     parameters
         .iter()
         .filter(|parameter| parameter.tier.as_deref() == Some(tier))
         .count() as u32
 }
 
-fn latest_modified_at(parameters: &[ParameterMetadata]) -> Option<DateTime<Utc>> {
+fn latest_modified_at(parameters: &[SsmParameterMetadata]) -> Option<DateTime<Utc>> {
     parameters
         .iter()
-        .filter_map(|parameter| {
-            parameter
-                .last_modified_date
-                .and_then(aws_epoch_seconds_to_utc)
-        })
+        .filter_map(|parameter| parameter.last_modified_at)
         .max()
-}
-
-fn aws_epoch_seconds_to_utc(seconds: f64) -> Option<DateTime<Utc>> {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
-
-    let secs = seconds.trunc() as i64;
-    let nanos = (seconds.fract() * 1_000_000_000.0).round() as u32;
-    DateTime::<Utc>::from_timestamp(secs, nanos.min(999_999_999))
 }

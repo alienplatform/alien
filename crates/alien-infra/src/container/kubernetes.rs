@@ -7,6 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::SecretsApi;
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -43,7 +44,7 @@ use crate::core::applicable_secret_environment_variables;
 const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    secrets_client: &std::sync::Arc<dyn SecretsApi>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

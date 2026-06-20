@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use alien_aws_clients::{ErrorData as AwsErrorData, IamApi};
 use alien_core::{ClientConfig, ManagementConfig, Platform, Stack};
 use alien_permissions::generators::{AwsIamPolicy, AwsIamStatement};
 use alien_permissions::PermissionContext;
@@ -146,8 +145,7 @@ async fn build_aws_scoped_config_with_policies(
     session_purpose: &str,
     role_description: &str,
 ) -> anyhow::Result<ClientConfig> {
-    use alien_aws_clients::{AwsClientConfigExt as _, AwsCredentialProvider, IamApi};
-    use alien_core::{AwsClientConfig, AwsCredentials};
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsImpersonationConfig};
 
     let target = config
         .aws_target
@@ -168,12 +166,11 @@ async fn build_aws_scoped_config_with_policies(
         service_overrides: None,
     };
 
-    let admin_creds = AwsCredentialProvider::from_config(admin_config.clone())
+    let sdk_config = alien_bindings::aws_sdk::sdk_config_from_alien_config(&admin_config)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create admin credential provider: {}", e))?;
-
+        .map_err(|e| anyhow::anyhow!("Failed to create official AWS SDK config: {}", e))?;
     let iam_client =
-        alien_aws_clients::iam::IamClient::new(reqwest::Client::new(), admin_creds.clone());
+        aws_sdk_iam::Client::from_conf(aws_sdk_iam::config::Builder::from(&sdk_config).build());
 
     // Create the scoped role
     // Use first 8 chars of deployment name for role naming (not for permissions)
@@ -194,34 +191,26 @@ async fn build_aws_scoped_config_with_policies(
 
     // Create or update the role
     let create_result = iam_client
-        .create_role(alien_aws_clients::iam::CreateRoleRequest {
-            role_name: role_name.clone(),
-            assume_role_policy_document: trust_policy.to_string(),
-            description: Some(role_description.to_string()),
-            path: None,
-            max_session_duration: None,
-            tags: None,
-        })
+        .create_role()
+        .role_name(&role_name)
+        .assume_role_policy_document(trust_policy.to_string())
+        .description(role_description)
+        .send()
         .await;
 
     match create_result {
         Ok(response) => {
             info!(
                 role_name = %role_name,
-                role_arn = %response.create_role_result.role.arn,
+                role_arn = %response.role().map(|role| role.arn()).unwrap_or_default(),
                 "Created scoped IAM role"
             );
         }
-        Err(e) => {
-            let err_str = format!("{}", e);
-            if err_str.contains("already exists")
-                || err_str.contains("EntityAlreadyExists")
-                || err_str.contains("Conflict")
-            {
-                info!(role_name = %role_name, "Scoped IAM role already exists, updating policy");
-            } else {
-                return Err(anyhow::anyhow!("Failed to create scoped role: {}", e));
-            }
+        Err(error) if is_iam_entity_exists(&error) => {
+            info!(role_name = %role_name, "Scoped IAM role already exists, updating policy");
+        }
+        Err(error) => {
+            return Err(anyhow::anyhow!("Failed to create scoped role: {}", error));
         }
     }
 
@@ -238,16 +227,18 @@ async fn build_aws_scoped_config_with_policies(
 
     // Assume the scoped role
     let role_arn = format!("arn:aws:iam::{}:role/{}", account_id, role_name);
-    let scoped_config = admin_config
-        .impersonate(alien_aws_clients::AwsImpersonationConfig {
+    let scoped_config = alien_bindings::aws_sdk::assume_role_config_from_alien_config(
+        &admin_config,
+        AwsImpersonationConfig {
             role_arn: role_arn.clone(),
             session_name: Some(format!("alien-e2e-{}", session_purpose)),
             duration_seconds: Some(3600),
             external_id: None,
             target_region: None,
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to assume scoped role {}: {}", role_arn, e))?;
+        },
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to assume scoped role {}: {}", role_arn, e))?;
 
     info!(role_arn = %role_arn, "Assumed scoped initial setup role");
 
@@ -278,7 +269,7 @@ fn aws_permission_context(config: &TestConfig) -> anyhow::Result<PermissionConte
 }
 
 async fn attach_policy_chunks(
-    iam_client: &alien_aws_clients::iam::IamClient,
+    iam_client: &aws_sdk_iam::Client,
     role_name: &str,
     policy_name: &str,
     policy: AwsIamPolicy,
@@ -301,13 +292,31 @@ async fn attach_policy_chunks(
         );
 
         let create_response = iam_client
-            .create_policy(&chunk_name, &policy_json, Some("/alien-e2e/".to_string()))
+            .create_policy()
+            .policy_name(&chunk_name)
+            .policy_document(policy_json)
+            .path("/alien-e2e/")
+            .send()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create scoped managed policy: {}", e))?;
-        let policy_arn = create_response.create_policy_result.policy.arn;
+        let policy_arn = create_response
+            .policy()
+            .and_then(|policy| policy.arn())
+            .map(ToString::to_string)
+            .context("CreatePolicy response did not include policy ARN")?;
 
-        if let Err(error) = iam_client.attach_role_policy(role_name, &policy_arn).await {
-            let _ = iam_client.delete_policy(&policy_arn).await;
+        if let Err(error) = iam_client
+            .attach_role_policy()
+            .role_name(role_name)
+            .policy_arn(&policy_arn)
+            .send()
+            .await
+        {
+            let _ = iam_client
+                .delete_policy()
+                .policy_arn(&policy_arn)
+                .send()
+                .await;
             return Err(anyhow::anyhow!(
                 "Failed to attach managed policy to scoped role: {}",
                 error
@@ -325,25 +334,31 @@ async fn attach_policy_chunks(
 }
 
 async fn cleanup_scoped_role_policies(
-    iam_client: &alien_aws_clients::iam::IamClient,
+    iam_client: &aws_sdk_iam::Client,
     role_name: &str,
 ) -> anyhow::Result<()> {
-    match iam_client.list_role_policies(role_name).await {
+    match iam_client
+        .list_role_policies()
+        .role_name(role_name)
+        .send()
+        .await
+    {
         Ok(response) => {
-            if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                for policy_name in policy_names.member {
-                    iam_client
-                        .delete_role_policy(role_name, &policy_name)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to delete stale scoped inline policy {policy_name}: {e}"
-                            )
-                        })?;
-                }
+            for policy_name in response.policy_names() {
+                iam_client
+                    .delete_role_policy()
+                    .role_name(role_name)
+                    .policy_name(policy_name)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to delete stale scoped inline policy {policy_name}: {e}"
+                        )
+                    })?;
             }
         }
-        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) if is_iam_not_found(&error) => {}
         Err(error) => {
             return Err(anyhow::anyhow!(
                 "Failed to list stale scoped inline policies: {}",
@@ -352,40 +367,51 @@ async fn cleanup_scoped_role_policies(
         }
     }
 
-    match iam_client.list_attached_role_policies(role_name).await {
+    match iam_client
+        .list_attached_role_policies()
+        .role_name(role_name)
+        .send()
+        .await
+    {
         Ok(response) => {
-            if let Some(attached_policies) = response
-                .list_attached_role_policies_result
-                .attached_policies
-            {
-                for policy in attached_policies.member {
-                    iam_client
-                        .detach_role_policy(role_name, &policy.policy_arn)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to detach stale scoped managed policy {}: {e}",
-                                policy.policy_arn
-                            )
-                        })?;
+            for policy in response.attached_policies() {
+                let policy_arn = policy.policy_arn().unwrap_or_default();
+                let policy_name = policy.policy_name().unwrap_or_default();
 
-                    if policy.policy_name.starts_with("alien-e2e-scoped-") {
-                        match iam_client.delete_policy(&policy.policy_arn).await {
-                            Ok(()) => {}
-                            Err(error) if is_aws_not_found(&error) => {}
-                            Err(error) => {
-                                return Err(anyhow::anyhow!(
-                                    "Failed to delete stale scoped managed policy {}: {}",
-                                    policy.policy_arn,
-                                    error
-                                ));
-                            }
+                iam_client
+                    .detach_role_policy()
+                    .role_name(role_name)
+                    .policy_arn(policy_arn)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to detach stale scoped managed policy {}: {e}",
+                            policy_arn
+                        )
+                    })?;
+
+                if policy_name.starts_with("alien-e2e-scoped-") {
+                    match iam_client
+                        .delete_policy()
+                        .policy_arn(policy_arn)
+                        .send()
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(error) if is_iam_not_found(&error) => {}
+                        Err(error) => {
+                            return Err(anyhow::anyhow!(
+                                "Failed to delete stale scoped managed policy {}: {}",
+                                policy_arn,
+                                error
+                            ));
                         }
                     }
                 }
             }
         }
-        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) if is_iam_not_found(&error) => {}
         Err(error) => {
             return Err(anyhow::anyhow!(
                 "Failed to list stale scoped managed policies: {}",
@@ -419,11 +445,18 @@ fn scoped_managed_policy_name(
     format!("{trimmed}-{suffix}")
 }
 
-fn is_aws_not_found(error: &alien_error::AlienError<AwsErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(AwsErrorData::RemoteResourceNotFound { .. })
-    )
+fn is_iam_not_found<E>(error: &aws_sdk_iam::error::SdkError<E>) -> bool
+where
+    E: aws_sdk_iam::error::ProvideErrorMetadata,
+{
+    error.as_service_error().and_then(|error| error.code()) == Some("NoSuchEntity")
+}
+
+fn is_iam_entity_exists<E>(error: &aws_sdk_iam::error::SdkError<E>) -> bool
+where
+    E: aws_sdk_iam::error::ProvideErrorMetadata,
+{
+    error.as_service_error().and_then(|error| error.code()) == Some("EntityAlreadyExists")
 }
 
 fn split_policy(policy: AwsIamPolicy, max_json_len: usize) -> anyhow::Result<Vec<AwsIamPolicy>> {

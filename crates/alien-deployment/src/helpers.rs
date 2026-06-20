@@ -1,5 +1,4 @@
-use crate::{ErrorData, Result};
-use alien_aws_clients::{StsApi, StsClient};
+use crate::{ErrorData, Result, gcp_sdk};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
@@ -8,7 +7,6 @@ use alien_core::{
     TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -55,19 +53,24 @@ async fn collect_aws_env_info(client_config: &ClientConfig) -> Result<Environmen
         })
     })?;
 
-    let sts_client = StsClient::new(reqwest::Client::new(), aws_config.clone());
-    let identity = sts_client.get_caller_identity().await.context(
-        ErrorData::EnvironmentInfoCollectionFailed {
+    let sts_client = alien_bindings::aws_sdk::sts_client_from_alien_config(aws_config)
+        .await
+        .context(ErrorData::EnvironmentInfoCollectionFailed {
+            platform: "AWS".to_string(),
+            reason: "Failed to create official STS client".to_string(),
+        })?;
+    let identity = sts_client
+        .get_caller_identity()
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::EnvironmentInfoCollectionFailed {
             platform: "AWS".to_string(),
             reason: "STS GetCallerIdentity failed".to_string(),
-        },
-    )?;
+        })?;
 
     Ok(EnvironmentInfo::Aws(AwsEnvironmentInfo {
-        account_id: identity
-            .get_caller_identity_result
-            .account
-            .unwrap_or_default(),
+        account_id: identity.account().unwrap_or_default().to_string(),
         region: aws_config.region.clone(),
     }))
 }
@@ -79,9 +82,7 @@ async fn collect_gcp_env_info(client_config: &ClientConfig) -> Result<Environmen
         })
     })?;
 
-    let rm_client = ResourceManagerClient::new(reqwest::Client::new(), gcp_config.clone());
-    let project = rm_client
-        .get_project_metadata(gcp_config.project_id.clone())
+    let project_number = gcp_sdk::get_project_number(gcp_config)
         .await
         .context(ErrorData::EnvironmentInfoCollectionFailed {
             platform: "GCP".to_string(),
@@ -89,7 +90,7 @@ async fn collect_gcp_env_info(client_config: &ClientConfig) -> Result<Environmen
         })?;
 
     Ok(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-        project_number: project.project_number.unwrap_or_default(),
+        project_number,
         project_id: gcp_config.project_id.clone(),
         region: gcp_config.region.clone(),
     }))

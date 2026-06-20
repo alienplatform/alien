@@ -6,7 +6,7 @@
 use crate::error::{ErrorData, Result};
 use crate::ClientConfigExt as _;
 #[cfg(feature = "aws")]
-use alien_aws_clients::AwsImpersonationConfig;
+use alien_core::AwsImpersonationConfig;
 use alien_core::{
     ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteStackManagement,
     RemoteStackManagementOutputs, StackState,

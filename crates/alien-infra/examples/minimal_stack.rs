@@ -1,5 +1,4 @@
-use alien_aws_clients::AwsClientConfig;
-use alien_core::{ResourceLifecycle, Stack, StackState, Storage};
+use alien_core::{AwsClientConfig, AwsCredentials, ResourceLifecycle, Stack, StackState, Storage};
 use alien_infra::{ClientConfig, StackExecutor};
 
 #[tokio::main(flavor = "current_thread")]
@@ -36,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aws_platform_struct = AwsClientConfig {
         account_id: account_id.clone(),
         region,
-        credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+        credentials: AwsCredentials::AccessKeys {
             access_key_id,
             secret_access_key,
             session_token,

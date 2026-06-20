@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::SecretsApi;
 use alien_error::{Context, ContextError, IntoAlienError};
-use alien_k8s_clients::secrets::SecretsApi;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;

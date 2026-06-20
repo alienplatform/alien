@@ -42,6 +42,8 @@ pub use compute_cluster::*;
 mod kubernetes_cluster;
 
 #[cfg(feature = "kubernetes")]
+mod kubernetes_client;
+#[cfg(feature = "kubernetes")]
 mod kubernetes_cluster_heartbeat;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_public_endpoint;
@@ -76,6 +78,8 @@ pub mod import_helpers;
 
 #[cfg(feature = "aws")]
 mod aws_importers;
+#[cfg(feature = "aws")]
+pub mod aws_sdk;
 #[cfg(feature = "azure")]
 mod azure_importers;
 #[cfg(feature = "gcp")]
@@ -99,10 +103,10 @@ pub use core::controller_test;
 #[cfg(any(feature = "test-utils", doc, test))]
 pub use core::MockPlatformServiceProvider;
 
-#[cfg(feature = "aws")]
-pub use alien_aws_clients::AwsClientConfig;
 #[cfg(feature = "azure")]
 pub use alien_azure_clients::AzureClientConfig;
+#[cfg(feature = "aws")]
+pub use alien_core::AwsClientConfig;
 #[cfg(feature = "gcp")]
 pub use alien_gcp_clients::GcpClientConfig;
 

@@ -21,9 +21,12 @@ use serde_json::{json, Value};
 use tracing::info;
 
 #[cfg(feature = "aws")]
+use crate::aws_sdk::{AcmTag, ImportCertificateRequest, ReimportCertificateRequest};
+#[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::{RouteApi, SecretsApi, ServiceApi};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -505,7 +508,7 @@ async fn cleanup_stale_endpoint_objects(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     resource_id: &str,
-    route_client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    route_client: &std::sync::Arc<dyn RouteApi>,
     previous: PreviousEndpointObjects,
     active: ActiveEndpointObjects,
     state: &mut KubernetesPublicEndpointState,
@@ -606,12 +609,11 @@ async fn publish_managed_acm_certificate(
     let certificate_arn = if let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() {
         acm_client
             .reimport_certificate(
-                alien_aws_clients::acm::ReimportCertificateRequest::builder()
+                ReimportCertificateRequest::builder()
                     .certificate_arn(certificate_arn.clone())
                     .certificate(leaf)
                     .private_key(input.private_key)
                     .maybe_certificate_chain(chain)
-                    .tags(tags)
                     .build(),
             )
             .await
@@ -624,7 +626,7 @@ async fn publish_managed_acm_certificate(
     } else {
         acm_client
             .import_certificate(
-                alien_aws_clients::acm::ImportCertificateRequest::builder()
+                ImportCertificateRequest::builder()
                     .certificate(leaf)
                     .private_key(input.private_key)
                     .maybe_certificate_chain(chain)
@@ -678,12 +680,7 @@ async fn delete_managed_acm_certificate(
             state.managed_acm_certificate_arn = None;
             Ok(())
         }
-        Err(e)
-            if matches!(
-                e.error,
-                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-            ) =>
-        {
+        Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
             state.managed_acm_certificate_arn = None;
             Ok(())
         }
@@ -1305,7 +1302,7 @@ fn build_azure_health_check_policy(
 }
 
 async fn upsert_service(
-    client: &std::sync::Arc<dyn alien_k8s_clients::ServiceApi>,
+    client: &std::sync::Arc<dyn ServiceApi>,
     namespace: &str,
     name: &str,
     mut service: Service,
@@ -1338,7 +1335,7 @@ async fn upsert_service(
 }
 
 async fn upsert_tls_secret(
-    client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    client: &std::sync::Arc<dyn SecretsApi>,
     namespace: &str,
     name: &str,
     certificate_chain: &str,
@@ -1401,7 +1398,7 @@ async fn upsert_tls_secret(
 }
 
 async fn upsert_ingress(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     mut ingress: K8sIngress,
@@ -1434,7 +1431,7 @@ async fn upsert_ingress(
 }
 
 async fn upsert_gateway(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     mut gateway: Value,
@@ -1467,7 +1464,7 @@ async fn upsert_gateway(
 }
 
 async fn upsert_http_route(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     mut route: Value,
@@ -1500,7 +1497,7 @@ async fn upsert_http_route(
 }
 
 async fn upsert_gke_health_check_policy(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     mut policy: Value,
@@ -1540,7 +1537,7 @@ async fn upsert_gke_health_check_policy(
 }
 
 async fn upsert_azure_health_check_policy(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     mut policy: Value,
@@ -1580,7 +1577,7 @@ async fn upsert_azure_health_check_policy(
 }
 
 async fn observe_ingress_endpoint(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
     profile: &KubernetesIngressRouteProfile,
@@ -1619,7 +1616,7 @@ async fn observe_ingress_endpoint(
 }
 
 async fn observe_gateway_endpoint(
-    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    client: &std::sync::Arc<dyn RouteApi>,
     namespace: &str,
     name: &str,
 ) -> Result<Option<LoadBalancerEndpoint>> {
@@ -1714,14 +1711,14 @@ fn acm_tags(
     resource_prefix: &str,
     resource_id: &str,
     mut custom_tags: HashMap<String, String>,
-) -> Vec<alien_aws_clients::acm::Tag> {
+) -> Vec<AcmTag> {
     for (key, value) in alien_core::standard_resource_tags(resource_prefix, resource_id) {
         custom_tags.insert(key, value);
     }
 
     custom_tags
         .into_iter()
-        .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+        .map(|(key, value)| AcmTag { key, value })
         .collect()
 }
 

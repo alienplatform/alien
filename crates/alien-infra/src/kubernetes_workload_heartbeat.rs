@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
+use crate::kubernetes_client::{
+    optional_events_read, optional_metrics_read, ContainerMetrics, OptionalKubernetesReadStatus,
+};
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesContainerHeartbeatData, KubernetesDaemonHeartbeatData,
@@ -10,10 +13,6 @@ use alien_core::{
     ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
 };
 use alien_error::Context;
-use alien_k8s_clients::{
-    kubernetes::metrics::ContainerMetrics, optional_events_read, optional_metrics_read,
-    OptionalKubernetesReadStatus,
-};
 use k8s_openapi::api::apps::v1::{
     DaemonSet, DaemonSetStatus, Deployment, DeploymentStatus, StatefulSet, StatefulSetStatus,
 };

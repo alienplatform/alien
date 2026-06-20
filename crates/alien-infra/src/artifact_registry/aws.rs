@@ -4,9 +4,13 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::aws_sdk::{
+    CreateRoleRequest, CreateRoleTag, DescribeEcrRepositoriesRequest, EcrApi,
+    EcrReplicationConfiguration, EcrReplicationDestination, EcrReplicationRule, EcrRepository,
+    IamApi,
+};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
@@ -15,10 +19,6 @@ use alien_core::{
     ResourceStatus,
 };
 
-use alien_aws_clients::aws::ecr::{
-    DescribeRepositoriesRequest, PutReplicationConfigurationRequest, ReplicationConfiguration,
-    ReplicationDestination, ReplicationRule, Repository,
-};
 use chrono::Utc;
 
 fn role_name_from_arn(arn: &str) -> Option<&str> {
@@ -655,20 +655,10 @@ impl AwsArtifactRegistryController {
             Ok(_) => {
                 info!(role_name = %pull_role_name, "Pull role deleted successfully");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(role_name = %pull_role_name, "Pull role already deleted");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceConflict { .. })) => {
                 info!(
                     role_name = %pull_role_name,
                     "Pull role still has policies attached; retrying policy cleanup"
@@ -748,20 +738,10 @@ impl AwsArtifactRegistryController {
             Ok(_) => {
                 info!(role_name = %push_role_name, "Push role deleted successfully");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(role_name = %push_role_name, "Push role already deleted");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceConflict { .. })) => {
                 info!(
                     role_name = %push_role_name,
                     "Push role still has policies attached; retrying policy cleanup"
@@ -828,7 +808,7 @@ impl AwsArtifactRegistryController {
                 .clone()
                 .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
             let repositories_response = ecr_client
-                .describe_repositories(DescribeRepositoriesRequest {
+                .describe_repositories(DescribeEcrRepositoriesRequest {
                     registry_id: Some(stored_account_id.clone()),
                     repository_names: None,
                     next_token: None,
@@ -947,9 +927,7 @@ impl AwsArtifactRegistryController {
                             Err(e)
                                 if matches!(
                                     e.error,
-                                    Some(
-                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
-                                    )
+                                    Some(ErrorData::CloudResourceNotFound { .. })
                                 ) =>
                             {
                                 info!(
@@ -974,12 +952,7 @@ impl AwsArtifactRegistryController {
                     }
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(role_name = %role_name, role_label = %role_label, "Artifact registry role already deleted");
                 return Ok(());
             }
@@ -1007,9 +980,7 @@ impl AwsArtifactRegistryController {
                             Err(e)
                                 if matches!(
                                     e.error,
-                                    Some(
-                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
-                                    )
+                                    Some(ErrorData::CloudResourceNotFound { .. })
                                 ) =>
                             {
                                 info!(
@@ -1034,12 +1005,7 @@ impl AwsArtifactRegistryController {
                     }
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(role_name = %role_name, role_label = %role_label, "Artifact registry role already deleted");
             }
             Err(e) => {
@@ -1060,17 +1026,17 @@ impl AwsArtifactRegistryController {
     /// regions, and writes back the updated configuration.
     async fn apply_replication_config(
         &self,
-        ecr_client: &dyn alien_aws_clients::aws::ecr::EcrApi,
+        ecr_client: &dyn EcrApi,
         account_id: &str,
         home_region: &str,
         replication_regions: &[String],
         registry_id: &str,
     ) -> Result<()> {
         // Build the set of desired destinations (same account, different regions)
-        let desired_destinations: Vec<ReplicationDestination> = replication_regions
+        let desired_destinations: Vec<EcrReplicationDestination> = replication_regions
             .iter()
             .filter(|r| r.as_str() != home_region)
-            .map(|region| ReplicationDestination {
+            .map(|region| EcrReplicationDestination {
                 region: region.clone(),
                 registry_id: account_id.to_string(),
             })
@@ -1095,9 +1061,9 @@ impl AwsArtifactRegistryController {
                 })?;
 
         // Merge: find or create a rule whose destinations include ours
-        let mut rules = current.replication_configuration.rules;
+        let mut rules = current.rules;
         if rules.is_empty() {
-            rules.push(ReplicationRule {
+            rules.push(EcrReplicationRule {
                 destinations: desired_destinations.clone(),
                 repository_filters: vec![],
             });
@@ -1112,9 +1078,7 @@ impl AwsArtifactRegistryController {
         }
 
         ecr_client
-            .put_replication_configuration(PutReplicationConfigurationRequest {
-                replication_configuration: ReplicationConfiguration { rules },
-            })
+            .put_replication_configuration(EcrReplicationConfiguration { rules })
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure ECR replication".to_string(),
@@ -1295,7 +1259,7 @@ fn emit_aws_artifact_registry_heartbeat(
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
     repositories_truncated: bool,
-    repositories: Vec<Repository>,
+    repositories: Vec<EcrRepository>,
 ) {
     let repository_data = repositories
         .into_iter()
@@ -1360,13 +1324,13 @@ fn emit_aws_artifact_registry_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller_test::SingleControllerExecutor;
-    use crate::MockPlatformServiceProvider;
-    use alien_aws_clients::iam::{
+    use crate::aws_sdk::{
         AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
         ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
         MockIamApi, PolicyNames, Role,
     };
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
     use std::sync::Arc;
 
@@ -1406,6 +1370,16 @@ mod tests {
         mock_iam
             .expect_put_role_policy()
             .returning(|_, _, _| Ok(()));
+
+        mock_iam
+            .expect_list_attached_role_policies()
+            .returning(|role_name| {
+                assert!(
+                    matches!(role_name, "test-my-registry-pull" | "test-my-registry-push"),
+                    "expected artifact registry role name, got {role_name}"
+                );
+                Ok(empty_attached_role_policies_response())
+            });
 
         // Mock successful policy deletion (for both roles)
         mock_iam.expect_list_role_policies().returning(|role_name| {

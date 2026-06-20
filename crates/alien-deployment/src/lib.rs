@@ -6,6 +6,7 @@
 
 mod deleting;
 mod error;
+mod gcp_sdk;
 mod helpers;
 mod initial_setup;
 pub mod loop_contract;
@@ -39,18 +40,9 @@ async fn resolve_gcp_project_number(
 ) -> alien_core::ClientConfig {
     if let alien_core::ClientConfig::Gcp(mut gcp_config) = client_config {
         if gcp_config.project_number.is_none() {
-            let rm_client = alien_gcp_clients::ResourceManagerClient::new(
-                reqwest::Client::new(),
-                *gcp_config.clone(),
-            );
-            match alien_gcp_clients::ResourceManagerApi::get_project_metadata(
-                &rm_client,
-                gcp_config.project_id.clone(),
-            )
-            .await
-            {
-                Ok(project) => {
-                    gcp_config.project_number = project.project_number;
+            match gcp_sdk::get_project_number(&gcp_config).await {
+                Ok(project_number) => {
+                    gcp_config.project_number = Some(project_number);
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to resolve GCP project number; IAM conditions may not work");

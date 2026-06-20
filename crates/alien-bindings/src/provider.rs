@@ -369,14 +369,6 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::BindingSetupFailed {
-                            binding_type: "AWS S3 storage".to_string(),
-                            reason: "Failed to create credential provider".to_string(),
-                        })?;
-
                 // Extract bucket name from binding
                 let bucket_name = config
                     .bucket_name
@@ -386,7 +378,19 @@ impl BindingsProviderApi for BindingsProvider {
                         reason: "Failed to extract bucket_name from S3 binding".to_string(),
                     })?;
 
-                let storage: Arc<dyn Storage> = Arc::new(S3Storage::new(bucket_name, credentials)?);
+                let sdk_config = crate::aws_sdk::sdk_config_from_alien_config(aws_config).await?;
+                let s3_endpoint = aws_config
+                    .service_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.endpoints.get("s3"))
+                    .map(String::as_str);
+
+                let storage: Arc<dyn Storage> = Arc::new(S3Storage::new(
+                    bucket_name,
+                    aws_config.region.clone(),
+                    sdk_config,
+                    s3_endpoint,
+                )?);
                 Ok(storage)
             }
             #[cfg(not(feature = "aws"))]
@@ -517,21 +521,16 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
+                let client =
+                    Arc::new(crate::aws_sdk::codebuild_client_from_alien_config(aws_config).await?);
 
                 let build = Arc::new(
-                    CodebuildBuild::new(binding_name.to_string(), binding, &credentials)
-                        .await
-                        .context(ErrorData::BindingConfigInvalid {
+                    CodebuildBuild::new(binding_name.to_string(), binding, client).context(
+                        ErrorData::BindingConfigInvalid {
                             binding_name: binding_name.to_string(),
                             reason: "Failed to initialize AWS CodeBuild client".to_string(),
-                        })?,
+                        },
+                    )?,
                 );
                 Ok(build)
             }
@@ -657,16 +656,8 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
-
                 let registry: Arc<dyn ArtifactRegistry> = Arc::new(
-                    EcrArtifactRegistry::new(binding_name.to_string(), binding, &credentials)
+                    EcrArtifactRegistry::new(binding_name.to_string(), binding, aws_config.clone())
                         .await
                         .context(ErrorData::BindingConfigInvalid {
                             binding_name: binding_name.to_string(),
@@ -788,7 +779,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "aws")]
             VaultBinding::ParameterStore(config) => {
                 use crate::providers::vault::aws_parameter_store::AwsParameterStoreVault;
-                use alien_aws_clients::ssm::SsmClient;
 
                 let aws_config = self.client_config.aws_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -796,18 +786,8 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
-
-                let client = Arc::new(SsmClient::new(
-                    crate::http_client::create_http_client(),
-                    credentials,
-                ));
+                let client =
+                    Arc::new(crate::aws_sdk::ssm_client_from_alien_config(aws_config).await?);
 
                 // Extract the vault prefix from the binding configuration
                 let vault_prefix = config
@@ -931,8 +911,8 @@ impl BindingsProviderApi for BindingsProvider {
 
             #[cfg(feature = "kubernetes")]
             VaultBinding::KubernetesSecret(config) => {
+                use crate::kubernetes_client::{KubernetesClient, SecretsApi};
                 use crate::providers::vault::kubernetes_secret::KubernetesSecretVault;
-                use alien_k8s_clients::{secrets::SecretsApi, KubernetesClient};
 
                 let kubernetes_config =
                     self.client_config.kubernetes_config().ok_or_else(|| {
@@ -1027,17 +1007,8 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
-                let dynamodb_client = alien_aws_clients::dynamodb::DynamoDbClient::new(
-                    crate::http_client::create_http_client(),
-                    credentials,
-                );
+                let dynamodb_client =
+                    Arc::new(crate::aws_sdk::dynamodb_client_from_alien_config(aws_config).await?);
                 let kv_impl = AwsDynamodbKv::new(table_name, dynamodb_client);
                 let kv: Arc<dyn Kv> = Arc::new(kv_impl);
                 Ok(kv)
@@ -1237,17 +1208,8 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
-                let client = alien_aws_clients::sqs::SqsClient::new(
-                    crate::http_client::create_http_client(),
-                    credentials,
-                );
+                let client =
+                    Arc::new(crate::aws_sdk::sqs_client_from_alien_config(aws_config).await?);
                 let q: Arc<dyn Queue> = Arc::new(AwsSqsQueue::new(queue_url, client));
                 Ok(q)
             }
@@ -1384,16 +1346,10 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
-                        .await
-                        .context(ErrorData::ClientConfigInvalid {
-                            platform: Platform::Aws,
-                            message: "Failed to create AWS credential provider".to_string(),
-                        })?;
-                let client = crate::http_client::create_http_client();
+                let client =
+                    Arc::new(crate::aws_sdk::lambda_client_from_alien_config(aws_config).await?);
 
-                let function_impl = LambdaWorker::new(client, credentials, lambda_binding);
+                let function_impl = LambdaWorker::new(client, lambda_binding);
                 let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
@@ -1564,7 +1520,8 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "AWS config not available".to_string(),
                     })
                 })?;
-                let client = crate::http_client::create_http_client();
+                let client =
+                    Arc::new(crate::aws_sdk::sts_client_from_alien_config(aws_config).await?);
 
                 let service_account_impl =
                     AwsIamServiceAccount::new(client, aws_config.clone(), aws_binding);

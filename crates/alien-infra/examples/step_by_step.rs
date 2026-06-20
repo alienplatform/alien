@@ -1,7 +1,7 @@
-use alien_aws_clients::AwsClientConfig;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, LifecycleRule,
-    ResourceLifecycle, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+    AwsClientConfig, AwsCredentials, DeploymentConfig, EnvironmentVariablesSnapshot,
+    ExternalBindings, LifecycleRule, ResourceLifecycle, Stack, StackSettings, StackState, Storage,
+    Worker, WorkerCode,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aws_platform_struct = AwsClientConfig {
         account_id: account_id.clone(),
         region,
-        credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+        credentials: AwsCredentials::AccessKeys {
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default(),
             session_token: std::env::var("AWS_SESSION_TOKEN").ok(),

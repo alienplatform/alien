@@ -1,25 +1,160 @@
 use crate::{
-    error::{map_cloud_client_error, Error, ErrorData},
+    error::{Error, ErrorData},
     providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
 use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatus};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use std::collections::HashMap;
+use aws_sdk_codebuild::{primitives::DateTimeFormat, types::EnvironmentVariable};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use alien_aws_clients::{
-    codebuild::{
-        BatchGetBuildsRequest, CodeBuildApi, CodeBuildClient, EnvironmentVariable,
-        StartBuildRequest, StopBuildRequest,
-    },
-    AwsCredentialProvider,
-};
+/// Minimal CodeBuild operations required by the build binding.
+#[async_trait]
+pub trait CodeBuildClient: Debug + Send + Sync {
+    /// Start a build.
+    async fn start_build(
+        &self,
+        project_name: &str,
+        buildspec_override: String,
+        environment: Vec<(String, String)>,
+    ) -> Result<BuildExecution, Error>;
+
+    /// Get a build by ID.
+    async fn get_build(&self, build_id: &str) -> Result<BuildExecution, Error>;
+
+    /// Stop a build by ID.
+    async fn stop_build(&self, build_id: &str) -> Result<(), Error>;
+}
+
+#[async_trait]
+impl CodeBuildClient for aws_sdk_codebuild::Client {
+    async fn start_build(
+        &self,
+        project_name: &str,
+        buildspec_override: String,
+        environment: Vec<(String, String)>,
+    ) -> Result<BuildExecution, Error> {
+        let env_vars = environment
+            .into_iter()
+            .map(|(name, value)| {
+                EnvironmentVariable::builder()
+                    .name(name)
+                    .value(value)
+                    .build()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: project_name.to_string(),
+                operation: "build CodeBuild environment override".to_string(),
+            })?;
+
+        let response = self
+            .start_build()
+            .project_name(project_name)
+            .buildspec_override(buildspec_override)
+            .set_environment_variables_override(Some(env_vars))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: project_name.to_string(),
+                operation: format!("start CodeBuild build '{}'", project_name),
+            })?;
+
+        let build = response.build_value().ok_or_else(|| {
+            AlienError::new(ErrorData::BuildOperationFailed {
+                binding_name: project_name.to_string(),
+                operation: "read CodeBuild start response".to_string(),
+            })
+        })?;
+
+        build_execution_from_codebuild(build, project_name)
+    }
+
+    async fn get_build(&self, build_id: &str) -> Result<BuildExecution, Error> {
+        let response = self
+            .batch_get_builds()
+            .ids(build_id)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: build_id.to_string(),
+                operation: format!("get CodeBuild status for build '{}'", build_id),
+            })?;
+
+        let build = response.builds().first().ok_or_else(|| {
+            AlienError::new(ErrorData::BuildOperationFailed {
+                binding_name: build_id.to_string(),
+                operation: format!("find build {}", build_id),
+            })
+        })?;
+
+        build_execution_from_codebuild(build, build_id)
+    }
+
+    async fn stop_build(&self, build_id: &str) -> Result<(), Error> {
+        self.stop_build()
+            .id(build_id)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: build_id.to_string(),
+                operation: format!("stop CodeBuild build '{}'", build_id),
+            })?;
+
+        Ok(())
+    }
+}
+
+fn build_execution_from_codebuild(
+    build: &aws_sdk_codebuild::types::Build,
+    fallback_id: &str,
+) -> Result<BuildExecution, Error> {
+    Ok(BuildExecution {
+        id: build.id().unwrap_or(fallback_id).to_string(),
+        status: map_build_status(build.build_status().map(|status| status.as_str())),
+        start_time: build
+            .start_time()
+            .map(|time| time.fmt(DateTimeFormat::DateTime))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: fallback_id.to_string(),
+                operation: "format CodeBuild start time".to_string(),
+            })?,
+        end_time: build
+            .end_time()
+            .map(|time| time.fmt(DateTimeFormat::DateTime))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: fallback_id.to_string(),
+                operation: "format CodeBuild end time".to_string(),
+            })?,
+    })
+}
+
+/// Convert AWS CodeBuild status string to alien BuildStatus.
+fn map_build_status(status: Option<&str>) -> BuildStatus {
+    match status {
+        Some("SUCCEEDED") => BuildStatus::Succeeded,
+        Some("FAILED") | Some("FAULT") => BuildStatus::Failed,
+        Some("STOPPED") => BuildStatus::Cancelled,
+        Some("TIMED_OUT") => BuildStatus::TimedOut,
+        Some("IN_PROGRESS") => BuildStatus::Running,
+        Some("NOT_STARTED") => BuildStatus::Queued,
+        _ => BuildStatus::Queued,
+    }
+}
 
 /// AWS implementation of the `Build` trait using CodeBuild.
 #[derive(Debug)]
 pub struct CodebuildBuild {
-    client: CodeBuildClient,
+    client: Arc<dyn CodeBuildClient>,
     binding_name: String,
     project_name: String,
     build_env_vars: HashMap<String, String>,
@@ -28,17 +163,11 @@ pub struct CodebuildBuild {
 
 impl CodebuildBuild {
     /// Creates a new AWS Build instance from binding parameters.
-    pub async fn new(
+    pub fn new(
         binding_name: String,
         binding: BuildBinding,
-        credentials: &AwsCredentialProvider,
+        client: Arc<dyn CodeBuildClient>,
     ) -> Result<Self, Error> {
-        let client = CodeBuildClient::new(
-            crate::http_client::create_http_client(),
-            credentials.clone(),
-        );
-
-        // Extract values from binding
         let config = match binding {
             BuildBinding::Codebuild(config) => config,
             _ => {
@@ -81,47 +210,19 @@ impl CodebuildBuild {
             monitoring,
         })
     }
-
-    /// Convert AWS CodeBuild status string to alien BuildStatus
-    fn map_build_status(status: Option<&str>) -> BuildStatus {
-        match status {
-            Some("SUCCEEDED") => BuildStatus::Succeeded,
-            Some("FAILED") | Some("FAULT") => BuildStatus::Failed,
-            Some("STOPPED") => BuildStatus::Cancelled,
-            Some("TIMED_OUT") => BuildStatus::TimedOut,
-            Some("IN_PROGRESS") => BuildStatus::Running,
-            Some("NOT_STARTED") => BuildStatus::Queued,
-            _ => BuildStatus::Queued,
-        }
-    }
 }
 
 #[async_trait]
 impl Build for CodebuildBuild {
     async fn start_build(&self, config: BuildConfig) -> Result<BuildExecution, Error> {
-        // Merge build config environment with binding environment variables
-        // Build config environment takes precedence over binding environment
         let mut merged_env = self.build_env_vars.clone();
         merged_env.extend(config.environment);
 
-        // Merge monitoring configuration - build config takes precedence over binding
         let monitoring = config.monitoring.or_else(|| self.monitoring.clone());
 
-        // Convert environment variables
-        let env_vars: Vec<EnvironmentVariable> = merged_env
-            .iter()
-            .map(|(key, value)| {
-                EnvironmentVariable::builder()
-                    .name(key.clone())
-                    .value(value.clone())
-                    .build()
-            })
-            .collect();
-
-        // Create buildspec content with the unified wrapper script
+        let environment = merged_env.into_iter().collect::<Vec<_>>();
         let wrapper_script = create_build_wrapper_script(&config.script, monitoring.as_ref());
 
-        // Properly indent the wrapper script for YAML literal block
         let indented_wrapper_script = wrapper_script
             .lines()
             .map(|line| {
@@ -145,104 +246,33 @@ phases:
             indented_wrapper_script
         );
 
-        let start_build_request = StartBuildRequest::builder()
-            .project_name(self.project_name.clone())
-            .buildspec_override(buildspec_content)
-            .environment_variables_override(env_vars)
-            .build();
-
-        let start_build_response =
-            self.client
-                .start_build(start_build_request)
-                .await
-                .map_err(|e| {
-                    map_cloud_client_error(
-                        e,
-                        format!("Failed to start CodeBuild build '{}'", self.project_name),
-                        None,
-                    )
-                })?;
-
-        let build = &start_build_response.build;
-        let build_id = build.id.as_deref().unwrap_or_default();
-        let status = Self::map_build_status(build.build_status.as_deref());
-        let start_time = build.start_time.map(|t| {
-            chrono::DateTime::from_timestamp(t as i64, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        });
-
-        Ok(BuildExecution {
-            id: build_id.to_string(),
-            status,
-            start_time,
-            end_time: None,
-        })
+        self.client
+            .start_build(&self.project_name, buildspec_content, environment)
+            .await
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: self.binding_name.clone(),
+                operation: format!("start CodeBuild build '{}'", self.project_name),
+            })
     }
 
     async fn get_build_status(&self, build_id: &str) -> Result<BuildExecution, Error> {
-        let batch_get_builds_request = BatchGetBuildsRequest::builder()
-            .ids(vec![build_id.to_string()])
-            .build();
-
-        let batch_get_builds_response = self
-            .client
-            .batch_get_builds(batch_get_builds_request)
+        self.client
+            .get_build(build_id)
             .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to get CodeBuild status for build '{}'", build_id),
-                    Some(build_id.to_string()),
-                )
-            })?;
-
-        let build = batch_get_builds_response
-            .builds
-            .as_ref()
-            .and_then(|builds| builds.first())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::BuildOperationFailed {
-                    binding_name: self.binding_name.clone(),
-                    operation: format!("find build {}", build_id),
-                })
-            })?;
-
-        let status = Self::map_build_status(build.build_status.as_deref());
-        let start_time = build.start_time.map(|t| {
-            chrono::DateTime::from_timestamp(t as i64, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        });
-        let end_time = build.end_time.map(|t| {
-            chrono::DateTime::from_timestamp(t as i64, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        });
-
-        Ok(BuildExecution {
-            id: build_id.to_string(),
-            status,
-            start_time,
-            end_time,
-        })
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: self.binding_name.clone(),
+                operation: format!("get CodeBuild status for build '{}'", build_id),
+            })
     }
 
     async fn stop_build(&self, build_id: &str) -> Result<(), Error> {
-        let stop_build_request = StopBuildRequest::builder().id(build_id.to_string()).build();
-
         self.client
-            .stop_build(stop_build_request)
+            .stop_build(build_id)
             .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to stop CodeBuild build '{}'", build_id),
-                    Some(build_id.to_string()),
-                )
-            })?;
-
-        Ok(())
+            .context(ErrorData::BuildOperationFailed {
+                binding_name: self.binding_name.clone(),
+                operation: format!("stop CodeBuild build '{}'", build_id),
+            })
     }
 }
 

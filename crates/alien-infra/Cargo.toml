@@ -9,16 +9,33 @@ license-file.workspace = true
 [features]
 default = []  # Minimal default, let consumers choose
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["dep:alien-aws-clients", "dep:alien-preflights", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
+aws = [
+    "dep:alien-preflights",
+    "dep:aws-config",
+    "dep:aws-credential-types",
+    "dep:aws-sdk-acm",
+    "dep:aws-sdk-apigatewayv2",
+    "dep:aws-sdk-codebuild",
+    "dep:aws-sdk-dynamodb",
+    "dep:aws-sdk-ec2",
+    "dep:aws-sdk-ecr",
+    "dep:aws-sdk-eventbridge",
+    "dep:aws-sdk-iam",
+    "dep:aws-sdk-lambda",
+    "dep:aws-sdk-s3",
+    "dep:aws-sdk-sqs",
+    "dep:aws-sdk-ssm",
+    "dep:aws-types",
+    "alien-client-config/aws"
+]  # TODO: Remove preflights from here, necessary because of CF
 gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
-kubernetes = ["dep:alien-k8s-clients", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
+kubernetes = ["dep:kube", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
 local = ["dep:alien-local"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
     "alien-core/test-utils",
-    "alien-aws-clients/test-utils",
     "alien-gcp-clients/test-utils", 
     "alien-azure-clients/test-utils",
     "alien-client-config/test-utils",
@@ -34,10 +51,23 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
-alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
-alien-k8s-clients = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
+aws-sdk-acm = { workspace = true, optional = true }
+aws-sdk-apigatewayv2 = { workspace = true, optional = true }
+aws-sdk-codebuild = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+aws-sdk-ec2 = { workspace = true, optional = true }
+aws-sdk-ecr = { workspace = true, optional = true }
+aws-sdk-eventbridge = { workspace = true, optional = true }
+aws-sdk-iam = { workspace = true, optional = true }
+aws-sdk-lambda = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-sdk-sqs = { workspace = true, optional = true }
+aws-sdk-ssm = { workspace = true, optional = true }
+aws-types = { workspace = true, optional = true }
 alien-helm = { workspace = true }
 alien-local = { workspace = true, optional = true }
 alien-macros = { workspace = true }
@@ -61,6 +91,9 @@ sha2 = { workspace = true }
 serde_yaml = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+kube = { workspace = true, optional = true }
+http = { workspace = true }
+secrecy = { workspace = true }
 alien-preflights = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 pem = { workspace = true }
@@ -80,10 +113,8 @@ console_error_panic_hook = { workspace = true }
 [dev-dependencies]
 alien-infra = { path = ".", features = ["test-utils"] }
 alien-preflights = { workspace = true }
-alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
-alien-k8s-clients = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -98,4 +129,5 @@ httpmock = { version = "0.7" }
 rstest = { workspace = true }
 axum = { workspace = true }
 mockall = { workspace = true }
+tower-test = { workspace = true }
 tracing-subscriber = { workspace = true }

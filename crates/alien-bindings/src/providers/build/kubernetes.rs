@@ -1,12 +1,11 @@
+use crate::kubernetes_client::{JobApi, KubernetesClient, KubernetesClientConfigExt as _};
 use crate::{
     error::{Error, ErrorData},
     traits::{Binding, Build},
 };
+use alien_core::KubernetesClientConfig;
 use alien_core::{BuildConfig, BuildExecution, BuildStatus};
 use alien_error::{AlienError, Context};
-use alien_k8s_clients::{
-    kubernetes_client::KubernetesClient, KubernetesClientConfig, KubernetesClientConfigExt as _,
-};
 use async_trait::async_trait;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec, PodTemplateSpec, SecurityContext};

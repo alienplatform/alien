@@ -2,15 +2,9 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::aws_sdk::{DynamoDbTableDescription, DynamoDbTtlDescription};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::dynamodb::{
-    attribute_types, billing_modes, key_types, table_status, AttributeDefinition,
-    CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DescribeTimeToLiveRequest,
-    KeySchemaElement, TableDescription, Tag, TimeToLiveDescription, TimeToLiveSpecification,
-    UpdateTimeToLiveRequest,
-};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsDynamoDbKeySchemaElement, AwsDynamoDbKvHeartbeatData,
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
@@ -58,42 +52,11 @@ impl AwsKvController {
             .get_aws_dynamodb_client(aws_config)
             .await?;
 
-        // Create table with a simple key schema for KV store
-        // pk (partition key) = hash bucket for load distribution
-        // sk (sort key) = actual key for the KV operation
-        let create_table_request = CreateTableRequest::builder()
-            .table_name(table_name.clone())
-            .key_schema(vec![
-                KeySchemaElement::builder()
-                    .attribute_name("pk".to_string())
-                    .key_type(key_types::HASH.to_string())
-                    .build(),
-                KeySchemaElement::builder()
-                    .attribute_name("sk".to_string())
-                    .key_type(key_types::RANGE.to_string())
-                    .build(),
-            ])
-            .attribute_definitions(vec![
-                AttributeDefinition::builder()
-                    .attribute_name("pk".to_string())
-                    .attribute_type(attribute_types::STRING.to_string())
-                    .build(),
-                AttributeDefinition::builder()
-                    .attribute_name("sk".to_string())
-                    .attribute_type(attribute_types::STRING.to_string())
-                    .build(),
-            ])
-            .billing_mode(billing_modes::PAY_PER_REQUEST.to_string())
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| Tag::builder().key(key).value(value).build())
-                    .collect(),
-            )
-            .build();
-
         client
-            .create_table(create_table_request)
+            .create_kv_table(
+                &table_name,
+                standard_resource_tags(ctx.resource_prefix, &config.id),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create DynamoDB table '{}'", table_name),
@@ -134,15 +97,10 @@ impl AwsKvController {
 
         debug!(table_name=%table_name, "Checking DynamoDB table status");
 
-        let describe_table_request = DescribeTableRequest::builder()
-            .table_name(table_name.clone())
-            .build();
-
-        match client.describe_table(describe_table_request).await {
-            Ok(output) => {
-                let table = output.table;
+        match client.describe_table(table_name).await {
+            Ok(Some(table)) => {
                 match table.table_status.as_deref() {
-                    Some(table_status::ACTIVE) => {
+                    Some("ACTIVE") => {
                         info!(table_name=%table_name, "DynamoDB table is now active");
                         self.table_arn = table.table_arn;
 
@@ -152,7 +110,7 @@ impl AwsKvController {
                             suggested_delay: Some(Duration::from_secs(5)),
                         })
                     }
-                    Some(table_status::CREATING) => {
+                    Some("CREATING") => {
                         debug!(table_name=%table_name, "DynamoDB table still creating");
                         Ok(HandlerAction::Continue {
                             state: WaitingForTableCreation,
@@ -178,12 +136,7 @@ impl AwsKvController {
                     }
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Ok(None) => {
                 debug!(table_name=%table_name, "Table not found yet, continuing to wait");
                 Ok(HandlerAction::Continue {
                     state: WaitingForTableCreation,
@@ -219,18 +172,8 @@ impl AwsKvController {
 
         info!(table_name=%table_name, "Enabling TTL on DynamoDB table");
 
-        let ttl_spec = TimeToLiveSpecification::builder()
-            .attribute_name("ttl".to_string())
-            .enabled(true)
-            .build();
-
-        let update_ttl_request = UpdateTimeToLiveRequest::builder()
-            .table_name(table_name.clone())
-            .time_to_live_specification(ttl_spec)
-            .build();
-
         client
-            .update_time_to_live(update_ttl_request)
+            .enable_ttl(table_name, "ttl")
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to enable TTL on DynamoDB table '{}'", table_name),
@@ -297,14 +240,9 @@ impl AwsKvController {
             .await?;
 
         // Heartbeat check: verify table still exists and is active
-        let describe_table_request = DescribeTableRequest::builder()
-            .table_name(table_name.clone())
-            .build();
-
-        match client.describe_table(describe_table_request).await {
-            Ok(output) => {
-                let table = output.table;
-                if table.table_status.as_deref() != Some(table_status::ACTIVE) {
+        match client.describe_table(table_name).await {
+            Ok(Some(table)) => {
+                if table.table_status.as_deref() != Some("ACTIVE") {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(
@@ -314,15 +252,8 @@ impl AwsKvController {
                     }));
                 }
 
-                let (ttl_description, ttl_issue) = match client
-                    .describe_time_to_live(
-                        DescribeTimeToLiveRequest::builder()
-                            .table_name(table_name.clone())
-                            .build(),
-                    )
-                    .await
-                {
-                    Ok(output) => (output.time_to_live_description, None),
+                let (ttl_description, ttl_issue) = match client.describe_ttl(table_name).await {
+                    Ok(ttl_description) => (ttl_description, None),
                     Err(e) => (
                         None,
                         Some(HeartbeatCollectionIssue {
@@ -339,12 +270,7 @@ impl AwsKvController {
 
                 emit_aws_dynamodb_kv_heartbeat(ctx, &config.id, table, ttl_description, ttl_issue);
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Ok(None) => {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: "Table no longer exists".to_string(),
@@ -415,24 +341,15 @@ impl AwsKvController {
             .get_aws_dynamodb_client(aws_config)
             .await?;
 
-        let delete_table_request = DeleteTableRequest::builder()
-            .table_name(table_name.clone())
-            .build();
-
-        match client.delete_table(delete_table_request).await {
-            Ok(_) => {
+        match client.delete_table(table_name).await {
+            Ok(true) => {
                 info!(table_name=%table_name, "DynamoDB table deletion initiated");
                 Ok(HandlerAction::Continue {
                     state: WaitingForTableDeletion,
                     suggested_delay: Some(Duration::from_secs(10)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Ok(false) => {
                 info!(table_name=%table_name, "DynamoDB table already deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -472,14 +389,9 @@ impl AwsKvController {
 
         debug!(table_name=%table_name, "Checking DynamoDB table deletion status");
 
-        let describe_table_request = DescribeTableRequest::builder()
-            .table_name(table_name.clone())
-            .build();
-
-        match client.describe_table(describe_table_request).await {
-            Ok(output) => {
-                let table = output.table;
-                if table.table_status.as_deref() == Some(table_status::DELETING) {
+        match client.describe_table(table_name).await {
+            Ok(Some(table)) => {
+                if table.table_status.as_deref() == Some("DELETING") {
                     debug!(table_name=%table_name, "DynamoDB table still deleting");
                     Ok(HandlerAction::Continue {
                         state: WaitingForTableDeletion,
@@ -493,12 +405,7 @@ impl AwsKvController {
                     })
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Ok(None) => {
                 info!(table_name=%table_name, "DynamoDB table successfully deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -600,8 +507,8 @@ impl AwsKvController {
 fn emit_aws_dynamodb_kv_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    table: TableDescription,
-    ttl_description: Option<TimeToLiveDescription>,
+    table: DynamoDbTableDescription,
+    ttl_description: Option<DynamoDbTtlDescription>,
     ttl_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let table_name = table
@@ -609,8 +516,8 @@ fn emit_aws_dynamodb_kv_heartbeat(
         .clone()
         .unwrap_or_else(|| resource_id.to_string());
     let table_status = table.table_status.clone();
-    let item_count = nonnegative_i64_to_u64(table.item_count);
-    let table_size_bytes = nonnegative_i64_to_u64(table.table_size_bytes);
+    let item_count = table.item_count;
+    let table_size_bytes = table.table_size_bytes;
     let collection_issues = ttl_issue.into_iter().collect::<Vec<_>>();
     let partial = !collection_issues.is_empty();
 
@@ -636,59 +543,32 @@ fn emit_aws_dynamodb_kv_heartbeat(
             region: region_from_table_arn(table.table_arn.as_deref()),
             table_arn: table.table_arn,
             table_status,
-            billing_mode: table
-                .billing_mode_summary
-                .and_then(|summary| summary.billing_mode),
+            billing_mode: table.billing_mode,
             key_schema: table
                 .key_schema
-                .unwrap_or_default()
                 .into_iter()
                 .map(|key| AwsDynamoDbKeySchemaElement {
                     attribute_name: key.attribute_name,
                     key_type: key.key_type,
                 })
                 .collect(),
-            global_secondary_index_count: len_to_u32(&table.global_secondary_indexes),
-            local_secondary_index_count: len_to_u32(&table.local_secondary_indexes),
+            global_secondary_index_count: table.global_secondary_index_count,
+            local_secondary_index_count: table.local_secondary_index_count,
             item_count,
             table_size_bytes,
-            stream_enabled: table
-                .stream_specification
-                .as_ref()
-                .and_then(|stream| stream.stream_enabled),
-            stream_view_type: table
-                .stream_specification
-                .and_then(|stream| stream.stream_view_type),
-            ttl_status: ttl_description
-                .as_ref()
-                .and_then(|ttl| ttl.time_to_live_status.clone()),
+            stream_enabled: table.stream_enabled,
+            stream_view_type: table.stream_view_type,
+            ttl_status: ttl_description.as_ref().and_then(|ttl| ttl.status.clone()),
             ttl_attribute_name: ttl_description.and_then(|ttl| ttl.attribute_name),
             deletion_protection_enabled: table.deletion_protection_enabled,
-            sse_status: table
-                .sse_description
-                .as_ref()
-                .and_then(|sse| sse.status.clone()),
-            sse_type: table.sse_description.and_then(|sse| sse.sse_type),
-            table_class: table
-                .table_class_summary
-                .and_then(|summary| summary.table_class),
-            replica_count: len_to_u32(&table.replicas),
-            restore_in_progress: table
-                .restore_summary
-                .and_then(|summary| summary.restore_in_progress),
+            sse_status: table.sse_status,
+            sse_type: table.sse_type,
+            table_class: table.table_class,
+            replica_count: table.replica_count,
+            restore_in_progress: table.restore_in_progress,
         })),
         raw: vec![],
     });
-}
-
-fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
-    value.and_then(|value| u64::try_from(value).ok())
-}
-
-fn len_to_u32<T>(items: &Option<Vec<T>>) -> Option<u32> {
-    items
-        .as_ref()
-        .and_then(|items| u32::try_from(items.len()).ok())
 }
 
 fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {

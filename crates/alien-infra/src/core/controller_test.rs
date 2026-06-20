@@ -53,7 +53,7 @@
 //! This makes it easy to simulate cloud API responses:
 //!
 //! ```rust
-//! use alien_aws_clients::iam::{MockIamApi, CreateRoleResponse, CreateRoleResult, Role};
+//! use alien_infra::aws_sdk::{CreateRoleResponse, CreateRoleResult, MockIamApi, Role};
 //!
 //! # fn create_successful_response() -> CreateRoleResponse {
 //! #     CreateRoleResponse {
@@ -247,15 +247,15 @@ use crate::infra_requirements::AzureResourceGroupController;
 use crate::infra_requirements::AzureServiceBusNamespaceController;
 use crate::infra_requirements::AzureStorageAccountController;
 use crate::storage::{AwsStorageController, AzureStorageController, GcpStorageController};
-use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
 use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _};
 use alien_core::ClientConfig;
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
-    EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource, ResourceDefinition,
-    ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack,
-    StackResourceState, StackSettings, StackState, Storage, Worker, WorkerCode,
+    AwsClientConfig, AwsCredentials, AzureContainerAppsEnvironment, AzureResourceGroup,
+    AzureServiceBusNamespace, AzureStorageAccount, ComputeBackend, DeploymentConfig,
+    DomainMetadata, EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource,
+    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
+    ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
@@ -265,6 +265,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
+
+fn mock_aws_client_config() -> AwsClientConfig {
+    AwsClientConfig {
+        account_id: "123456789012".to_string(),
+        region: "us-east-1".to_string(),
+        credentials: AwsCredentials::AccessKeys {
+            access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_access_key: "WJALRXUTNFEMI/K7MDENG/BPXRFICYEXAMPLEKEY".to_string(),
+            session_token: None,
+        },
+        service_overrides: None,
+    }
+}
 
 /// A simplified executor for testing a single controller.
 ///
@@ -796,7 +809,7 @@ impl SingleControllerExecutorBuilder {
 
         // Create platform config with mock values
         let client_config = match platform {
-            Platform::Aws => ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            Platform::Aws => ClientConfig::Aws(Box::new(mock_aws_client_config())),
             Platform::Gcp => ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
             Platform::Azure => ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
             Platform::Test => ClientConfig::Test,

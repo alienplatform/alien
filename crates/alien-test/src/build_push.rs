@@ -254,9 +254,8 @@ pub async fn wait_for_ecr_replication(
     config: &TestConfig,
     image_tags: &[String],
 ) -> anyhow::Result<()> {
-    use alien_aws_clients::aws::ecr::{BatchGetImageRequest, ImageIdentifier};
-    use alien_aws_clients::{EcrApi, EcrClient};
     use alien_core::{AwsClientConfig, AwsCredentials};
+    use aws_sdk_ecr::types::ImageIdentifier;
 
     let mgmt = config
         .aws_mgmt
@@ -293,17 +292,15 @@ pub async fn wait_for_ecr_replication(
         service_overrides: None,
     };
 
-    let cred_provider = alien_aws_clients::AwsCredentialProvider::from_config(target_ecr_config)
+    let sdk_config = alien_bindings::aws_sdk::sdk_config_from_alien_config(&target_ecr_config)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create ECR credential provider: {}", e))?;
-    let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
+        .map_err(|e| anyhow::anyhow!("Failed to create official AWS SDK config: {}", e))?;
+    let ecr_client =
+        aws_sdk_ecr::Client::from_conf(aws_sdk_ecr::config::Builder::from(&sdk_config).build());
 
     let image_ids: Vec<ImageIdentifier> = image_tags
         .iter()
-        .map(|tag| ImageIdentifier {
-            image_tag: Some(tag.clone()),
-            image_digest: None,
-        })
+        .map(|tag| ImageIdentifier::builder().image_tag(tag).build())
         .collect();
 
     let max_wait = std::time::Duration::from_secs(300);
@@ -320,16 +317,14 @@ pub async fn wait_for_ecr_replication(
 
     loop {
         let resp = ecr_client
-            .batch_get_image(
-                BatchGetImageRequest::builder()
-                    .repository_name(repo_name.to_string())
-                    .image_ids(image_ids.clone())
-                    .build(),
-            )
+            .batch_get_image()
+            .repository_name(repo_name)
+            .set_image_ids(Some(image_ids.clone()))
+            .send()
             .await;
 
         match resp {
-            Ok(r) if r.failures.is_empty() => {
+            Ok(r) if r.failures().is_empty() => {
                 info!(
                     elapsed_secs = start.elapsed().as_secs(),
                     "ECR image replication complete"
@@ -338,9 +333,11 @@ pub async fn wait_for_ecr_replication(
             }
             Ok(r) => {
                 let missing: Vec<_> = r
-                    .failures
+                    .failures()
                     .iter()
-                    .filter_map(|f| f.image_id.image_tag.as_deref())
+                    .filter_map(|failure| {
+                        failure.image_id().and_then(|image_id| image_id.image_tag())
+                    })
                     .collect();
                 if start.elapsed() > max_wait {
                     anyhow::bail!(

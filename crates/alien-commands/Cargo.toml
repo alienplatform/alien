@@ -9,13 +9,14 @@ license-file.workspace = true
 default = ["server", "runtime"]
 server = [
     "alien-bindings",
+    "alien-bindings/aws",
     "reqwest",
     "axum",
     "uuid",
     "http",
     "object_store",
     "bytes",
-    "alien-aws-clients",
+    "aws-sdk-lambda",
     "alien-gcp-clients",
     "alien-azure-clients",
     "tokio",
@@ -30,7 +31,9 @@ runtime = [
     "futures",
 ]
 dispatchers = [
-    "alien-aws-clients",
+    "alien-bindings",
+    "alien-bindings/aws",
+    "aws-sdk-lambda",
     "alien-gcp-clients",
     "alien-azure-clients",
     "reqwest",
@@ -60,10 +63,10 @@ hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 alien-bindings = { workspace = true, optional = true }
-alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
 alien-client-core = { workspace = true, optional = true }
+aws-sdk-lambda = { workspace = true, optional = true }
 axum = { workspace = true, features = ["macros", "json", "tokio", "http1"], optional = true }
 uuid = { workspace = true, features = ["v4", "serde"], optional = true }
 http = { workspace = true, optional = true }

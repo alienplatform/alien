@@ -5,9 +5,9 @@ use crate::{
     presigned::{PresignedOperation, PresignedRequest, PresignedRequestBackend},
     traits::{Binding, Storage},
 };
-use alien_aws_clients::AwsCredentialProvider;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
+use aws_types::SdkConfig;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::stream::BoxStream;
@@ -37,7 +37,12 @@ impl S3Storage {
     /// Creates a new `S3Storage` instance from bucket configuration.
     ///
     /// Uses AWS config for credentials.
-    pub fn new(bucket_name: String, credentials: AwsCredentialProvider) -> Result<Self, Error> {
+    pub fn new(
+        bucket_name: String,
+        region: String,
+        sdk_config: SdkConfig,
+        endpoint: Option<&str>,
+    ) -> Result<Self, Error> {
         let s3_url = format!("s3://{}", bucket_name);
         let url =
             Url::parse(&s3_url)
@@ -47,19 +52,24 @@ impl S3Storage {
                     reason: "Invalid S3 URL format".to_string(),
                 })?;
 
-        // Build the store with credentials bridged from AwsCredentialProvider
-        let region = credentials.region().to_string();
-        let cred_bridge = AwsCredentialBridge::new(credentials);
-        let store = AmazonS3Builder::new()
+        let cred_bridge = AwsCredentialBridge::new(sdk_config);
+        let mut store_builder = AmazonS3Builder::new()
             .with_bucket_name(&bucket_name)
             .with_region(&region)
-            .with_credentials(Arc::new(cred_bridge))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "AWS S3 storage".to_string(),
-                reason: format!("Failed to build S3 client for bucket: {}", bucket_name),
-            })?;
+            .with_credentials(Arc::new(cred_bridge));
+
+        if let Some(endpoint) = endpoint {
+            store_builder = store_builder.with_endpoint(endpoint);
+        }
+
+        let store =
+            store_builder
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "AWS S3 storage".to_string(),
+                    reason: format!("Failed to build S3 client for bucket: {}", bucket_name),
+                })?;
 
         // Extract the base path from the URL path segments, handling the None case.
         let base_dir = match url.path_segments() {

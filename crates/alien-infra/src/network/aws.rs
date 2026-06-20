@@ -21,17 +21,16 @@
 //! - Validates the infrastructure exists (via preflights)
 //! - Transitions directly to Ready state
 
-use alien_aws_clients::ec2::{
+use crate::aws_sdk::{
     AllocateAddressRequest, AssociateRouteTableRequest, AttachInternetGatewayRequest,
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
     DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
-    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, Tag,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Tag as Tag,
+    Filter, IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup,
     TagSpecification,
 };
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
     NetworkHeartbeatData, NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth,
@@ -49,10 +48,10 @@ use tracing::{debug, info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
-fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
+fn is_security_group_duplicate(error: &AlienError<ErrorData>) -> bool {
     matches!(
         &error.error,
-        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+        Some(ErrorData::CloudResourceConflict { message, .. })
             if message.contains("InvalidGroup.Duplicate")
                 || message.contains("already exists")
     )
@@ -109,10 +108,10 @@ fn emit_aws_network_heartbeat(
     });
 }
 
-fn is_security_group_rule_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
+fn is_security_group_rule_duplicate(error: &AlienError<ErrorData>) -> bool {
     matches!(
         &error.error,
-        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+        Some(ErrorData::CloudResourceConflict { message, .. })
             if message.contains("InvalidPermission.Duplicate")
                 || message.contains("specified rule")
                 || message.contains("already exists")
@@ -136,7 +135,7 @@ fn has_ipv4_all_protocol_rule(
 
 #[cfg(test)]
 mod tests {
-    use alien_aws_clients::ec2::{IpPermissionSet, IpRangeResponse, IpRangeSet};
+    use crate::aws_sdk::{IpPermissionSet, IpRangeResponse, IpRangeSet};
 
     use super::*;
 
@@ -1742,12 +1741,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deletion initiated");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already deleted");
                 }
                 Err(e) => {
@@ -1766,12 +1760,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(allocation_id = %allocation_id, "Elastic IP released");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(allocation_id = %allocation_id, "Elastic IP already released");
                 }
                 Err(e) => {
@@ -1808,12 +1797,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(sg_id = %sg_id, "Security group deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(sg_id = %sg_id, "Security group already deleted");
                 }
                 Err(e) => {
@@ -1854,12 +1838,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(subnet_id = %subnet_id, "Subnet deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(subnet_id = %subnet_id, "Subnet already deleted");
                 }
                 Err(e) => {
@@ -1908,12 +1887,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Public route table deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(rt_id = %rt_id, "Public route table already deleted");
                 }
                 Err(e) => {
@@ -1930,12 +1904,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Private route table deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(rt_id = %rt_id, "Private route table already deleted");
                 }
                 Err(e) => {
@@ -1991,12 +1960,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(igw_id = %igw_id, "Internet Gateway deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(igw_id = %igw_id, "Internet Gateway already deleted");
                 }
                 Err(e) => {
@@ -2030,12 +1994,7 @@ impl AwsNetworkController {
                 Ok(_) => {
                     info!(vpc_id = %vpc_id, "VPC deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     warn!(vpc_id = %vpc_id, "VPC already deleted");
                 }
                 Err(e) => {
