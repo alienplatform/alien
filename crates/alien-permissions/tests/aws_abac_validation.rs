@@ -497,7 +497,16 @@ fn action_is_documented_lambda_vpc_eni(action: &str) -> bool {
 }
 
 fn action_is_forced_wildcard_read(action: &str) -> bool {
-    if matches!(action, "ec2:DescribeVpcAttribute" | "ec2:GetConsoleOutput") {
+    // A secret-value read is never benign on Resource "*" — it would read every secret in the
+    // account. It must always be ARN-scoped or condition-gated, so keep it out of the "Get*/List*/
+    // Describe* is a safe wildcard read" allowlist even though the name starts with "Get".
+    if matches!(
+        action,
+        "ec2:DescribeVpcAttribute"
+            | "ec2:GetConsoleOutput"
+            | "secretsmanager:GetSecretValue"
+            | "secretsmanager:BatchGetSecretValue"
+    ) {
         return false;
     }
 

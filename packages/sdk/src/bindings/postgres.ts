@@ -25,8 +25,9 @@ import {
 } from "../errors.js"
 
 /**
- * Everything a Postgres driver needs to connect. `ssl` is shaped for node-postgres
- * (`new Client({ connectionString, ssl })`) but is a plain value any driver can read.
+ * Everything a Postgres driver needs to connect. `ssl` is the node-postgres TLS value; for
+ * node-postgres pass it with the individual fields, not the connectionString (see the `ssl` note).
+ * It is a plain value any driver can read.
  */
 export interface PostgresConnection {
   /**
@@ -36,9 +37,14 @@ export interface PostgresConnection {
    */
   connectionString: string
   /**
-   * pg ignores the URL's `sslmode`, so this field decides TLS: `false` for plaintext-capable
-   * bindings (local/external), `{ rejectUnauthorized: false }` for managed clouds (TLS on, cert not
-   * yet verified against a pinned CA).
+   * The TLS setting for the driver: `false` for plaintext-capable bindings (local/external),
+   * `{ rejectUnauthorized: false }` for managed clouds (TLS on, cert not yet verified against a
+   * pinned CA).
+   *
+   * For node-postgres, pass this with the individual fields — `new Client({ host, port, ..., ssl })`
+   * — NOT with the connectionString. node-postgres parses the URL's `sslmode` (it treats `require`
+   * as `verify-full`) and that overwrites an explicit `ssl`, so the URL form rejects the cloud cert
+   * with "unable to get local issuer certificate". Field style lets this value take effect.
    *
    * `rejectUnauthorized: false` is a deliberate v1 posture: Postgres is private-only on every cloud
    * (no public IP, reachable only from same-stack workloads), so the network boundary is the primary
@@ -80,8 +86,8 @@ const postgresBindingSchema = z.discriminatedUnion("service", [
   z.object({ service: z.literal("aurora"), clusterEndpoint: z.string(), passwordSecretArn: z.string(), ...connectionFields }).strict(),
   z.object({ service: z.literal("cloud-sql"), host: z.string(), passwordSecretName: z.string(), ...connectionFields }).strict(),
   z.object({ service: z.literal("flexible-server"), host: z.string(), passwordSecretUri: z.string(), ...connectionFields }).strict(),
-  z.object({ service: z.literal("external"), host: z.string(), password: z.string(), ...connectionFields }).strict(),
-  z.object({ service: z.literal("local-postgres"), host: z.string(), password: z.string(), ...connectionFields }).strict(),
+  z.object({ service: z.literal("external"), host: z.string(), password: z.string().min(1), ...connectionFields }).strict(),
+  z.object({ service: z.literal("local-postgres"), host: z.string(), password: z.string().min(1), ...connectionFields }).strict(),
 ])
 
 /** Matches the Rust `binding_env_var_name`: `ALIEN_<NAME>_BINDING`, hyphens to underscores. */
@@ -149,10 +155,8 @@ function makeConnection(
  * import { getPostgresConnection } from "@alienplatform/sdk"
  *
  * const conn = await getPostgresConnection("my-db")
- * // URL style:
- * const client = new Client({ connectionString: conn.connectionString, ssl: conn.ssl })
- * // ...or field style:
- * const client2 = new Client({
+ * // Field style: node-postgres parses a URL's sslmode and would override `ssl`, so pass fields.
+ * const client = new Client({
  *   host: conn.host, port: conn.port, database: conn.database,
  *   user: conn.username, password: conn.password, ssl: conn.ssl,
  * })

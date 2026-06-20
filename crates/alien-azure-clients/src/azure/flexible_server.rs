@@ -56,6 +56,10 @@ pub struct FlexibleServerProperties {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FlexibleServerStorage {
+    /// `rename_all = camelCase` would emit `storageSizeGb`, but ARM's canonical key is
+    /// `storageSizeGB` (capital GB). serde deserialize is case-sensitive, so the GET
+    /// read-back of this required field would fail without the explicit rename.
+    #[serde(rename = "storageSizeGB")]
     pub storage_size_gb: u32,
 }
 
@@ -349,6 +353,10 @@ mod tests {
         assert_eq!(json["properties"]["network"]["publicNetworkAccess"], "Disabled");
         assert_eq!(json["properties"]["highAvailability"]["mode"], "ZoneRedundant");
         assert_eq!(json["properties"]["administratorLoginPassword"], "secret");
+        // ARM's canonical storage key is `storageSizeGB` (capital GB); camelCase would
+        // wrongly emit `storageSizeGb`. Pin both so a dropped rename regresses here.
+        assert_eq!(json["properties"]["storage"]["storageSizeGB"], 32);
+        assert!(json["properties"]["storage"].get("storageSizeGb").is_none());
         // state is response-only; absent on the way out.
         assert!(json["properties"].get("state").is_none());
     }
@@ -376,12 +384,15 @@ mod tests {
 
     #[test]
     fn server_deserializes_get_response() {
+        // Storage key mirrors a real ARM response: `storageSizeGB` (capital GB).
         let body = r#"{"location":"eastus","sku":{"name":"Standard_B1ms","tier":"Burstable"},
-            "properties":{"version":"17","storage":{"storageSizeGb":32},
+            "properties":{"version":"17","storage":{"storageSizeGB":32},
             "backup":{"backupRetentionDays":7},"network":{"publicNetworkAccess":"Disabled"},
             "state":"Ready"}}"#;
         let server: FlexibleServer = serde_json::from_str(body).unwrap();
         assert_eq!(server.properties.state.as_deref(), Some("Ready"));
         assert_eq!(server.properties.network.public_network_access, "Disabled");
+        // Read-back of the canonical key must populate the required storage field.
+        assert_eq!(server.properties.storage.storage_size_gb, 32);
     }
 }
