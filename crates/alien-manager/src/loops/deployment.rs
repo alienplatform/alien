@@ -45,6 +45,58 @@ const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 
+/// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
+/// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
+/// the production resolver (platform API) stays in charge. Mirrors
+/// `alien_deploy_cli::commands::up::synthesize_byo_horizon_machine_image`
+/// so both the deploy CLI and the standalone manager produce the same
+/// `compute_backend` when only env vars are available.
+fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineImage> {
+    use alien_core::{
+        HorizonAwsMachineImages, HorizonMachineArchitecture, HorizonMachineBaseImage,
+        HorizonMachineImage,
+    };
+
+    let amd64 = std::env::var("ALIEN_BYO_HORIZON_AMI_AMD64").ok();
+    let arm64 = std::env::var("ALIEN_BYO_HORIZON_AMI_ARM64").ok();
+    if amd64.as_deref().unwrap_or("").is_empty()
+        && arm64.as_deref().unwrap_or("").is_empty()
+    {
+        return None;
+    }
+    let region = std::env::var("AWS_REGION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let mut amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>> = HashMap::new();
+    if let Some(ami) = amd64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Amd64, by_region);
+    }
+    if let Some(ami) = arm64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Arm64, by_region);
+    }
+
+    Some(HorizonMachineImage {
+        channel: "byo".to_string(),
+        machine_image_version: "byo-local".to_string(),
+        horizond_version: "byo".to_string(),
+        git_sha: "byo".to_string(),
+        created_at: "1970-01-01T00:00:00Z".to_string(),
+        base_image: HorizonMachineBaseImage {
+            name: "byo".to_string(),
+            version: "byo".to_string(),
+        },
+        aws: Some(HorizonAwsMachineImages { amis }),
+        gcp: None,
+        azure: None,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ProcessOptions {
     max_steps: usize,
@@ -564,7 +616,7 @@ impl DeploymentLoop {
                     config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
                         alien_core::HorizonConfig {
                             url,
-                            horizon_machine_image: None,
+                            horizon_machine_image: synthesize_byo_horizon_machine_image(),
                             clusters,
                         },
                     ));
