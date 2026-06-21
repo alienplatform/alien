@@ -6,7 +6,7 @@ use tracing::{debug, info};
 
 use crate::core::{
     AzureKeyVault, AzureKeyVaultCreateOrUpdateParameters, AzureKeyVaultManagementApi,
-    AzureKeyVaultProperties, AzureKeyVaultSku, ResourceControllerContext,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -14,8 +14,9 @@ use alien_core::{
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
-use azure_mgmt_keyvault::package_preview_2022_02::models::sku::{
-    Family as AzureKeyVaultSkuFamily, Name as AzureKeyVaultSkuName,
+use azure_mgmt_keyvault::package_preview_2022_02::models::{
+    sku::{Family as AzureKeyVaultSkuFamily, Name as AzureKeyVaultSkuName},
+    Sku, VaultProperties,
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -440,9 +441,9 @@ impl AzureVaultController {
 
         // Use RBAC authorization — permissions are managed via Azure role assignments
         // created by the service account controller, not vault access policies.
-        let mut vault_properties = AzureKeyVaultProperties::new(
+        let mut vault_properties = VaultProperties::new(
             azure_config.tenant_id.clone(),
-            AzureKeyVaultSku::new(AzureKeyVaultSkuFamily::A, AzureKeyVaultSkuName::Standard),
+            Sku::new(AzureKeyVaultSkuFamily::A, AzureKeyVaultSkuName::Standard),
         );
         vault_properties.enable_rbac_authorization = Some(true);
         vault_properties.enable_soft_delete = Some(true);

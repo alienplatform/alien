@@ -49,9 +49,7 @@ pub use azure_mgmt_containerregistry::package_2023_11_preview::models::{
     Resource as AzureContainerRegistryResource, Sku,
 };
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
-    Sku as AzureKeyVaultSku, Vault as AzureKeyVault,
-    VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
-    VaultProperties as AzureKeyVaultProperties,
+    Vault as AzureKeyVault, VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
 };
 pub use azure_mgmt_msi::package_2023_01_31::models::{
     FederatedIdentityCredential,
