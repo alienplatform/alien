@@ -807,13 +807,17 @@ impl AwsArtifactRegistryController {
                 .repository_prefix
                 .clone()
                 .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
+            let repositories_request = DescribeEcrRepositoriesRequest::builder()
+                .registry_id(stored_account_id)
+                .max_results(100)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build ECR DescribeRepositories request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
             let repositories_response = ecr_client
-                .describe_repositories(DescribeEcrRepositoriesRequest {
-                    registry_id: Some(stored_account_id.clone()),
-                    repository_names: None,
-                    next_token: None,
-                    max_results: Some(100),
-                })
+                .describe_repositories(repositories_request)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to describe ECR repositories during heartbeat check"
@@ -1036,11 +1040,18 @@ impl AwsArtifactRegistryController {
         let desired_destinations: Vec<EcrReplicationDestination> = replication_regions
             .iter()
             .filter(|r| r.as_str() != home_region)
-            .map(|region| EcrReplicationDestination {
-                region: region.clone(),
-                registry_id: account_id.to_string(),
+            .map(|region| {
+                EcrReplicationDestination::builder()
+                    .region(region)
+                    .registry_id(account_id)
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build ECR replication destination".to_string(),
+                        resource_id: Some(registry_id.to_string()),
+                    })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         if desired_destinations.is_empty() {
             info!(
@@ -1063,10 +1074,16 @@ impl AwsArtifactRegistryController {
         // Merge: find or create a rule whose destinations include ours
         let mut rules = current.rules;
         if rules.is_empty() {
-            rules.push(EcrReplicationRule {
-                destinations: desired_destinations.clone(),
-                repository_filters: vec![],
-            });
+            rules.push(
+                EcrReplicationRule::builder()
+                    .set_destinations(Some(desired_destinations.clone()))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build ECR replication rule".to_string(),
+                        resource_id: Some(registry_id.to_string()),
+                    })?,
+            );
         } else {
             // Merge into the first rule's destinations
             let first_rule = &mut rules[0];
@@ -1077,8 +1094,17 @@ impl AwsArtifactRegistryController {
             }
         }
 
+        let replication_configuration = EcrReplicationConfiguration::builder()
+            .set_rules(Some(rules))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build ECR replication configuration".to_string(),
+                resource_id: Some(registry_id.to_string()),
+            })?;
+
         ecr_client
-            .put_replication_configuration(EcrReplicationConfiguration { rules })
+            .put_replication_configuration(replication_configuration)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure ECR replication".to_string(),

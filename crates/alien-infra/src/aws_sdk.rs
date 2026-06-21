@@ -41,10 +41,7 @@ use aws_sdk_ec2::{
 use aws_sdk_ecr::{
     types::{
         ImageScanningConfiguration as AwsEcrImageScanningConfiguration,
-        ReplicationConfiguration as AwsEcrReplicationConfiguration,
-        ReplicationDestination as AwsEcrReplicationDestination,
-        ReplicationRule as AwsEcrReplicationRule, Repository as AwsEcrRepository,
-        RepositoryFilter as AwsEcrRepositoryFilter,
+        Repository as AwsEcrRepository,
     },
     Client as EcrClient,
 };
@@ -151,6 +148,12 @@ pub use aws_sdk_eventbridge::{
         put_targets::PutTargetsInput as PutTargetsRequest,
     },
     types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
+};
+
+pub use aws_sdk_ecr::operation::describe_repositories::DescribeRepositoriesInput as DescribeEcrRepositoriesRequest;
+pub use aws_sdk_ecr::types::{
+    ReplicationConfiguration as EcrReplicationConfiguration,
+    ReplicationDestination as EcrReplicationDestination, ReplicationRule as EcrReplicationRule,
 };
 
 pub use aws_sdk_lambda::operation::{
@@ -942,19 +945,6 @@ pub struct EcrEncryptionConfiguration {
     pub kms_key: Option<String>,
 }
 
-/// Request for listing ECR repositories.
-#[derive(Debug, Clone, Default)]
-pub struct DescribeEcrRepositoriesRequest {
-    /// Registry account ID.
-    pub registry_id: Option<String>,
-    /// Optional explicit repository names.
-    pub repository_names: Option<Vec<String>>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-    /// Maximum repositories to return.
-    pub max_results: Option<i32>,
-}
-
 /// Response from listing ECR repositories.
 #[derive(Debug, Clone)]
 pub struct DescribeEcrRepositoriesResponse {
@@ -962,40 +952,6 @@ pub struct DescribeEcrRepositoriesResponse {
     pub repositories: Vec<EcrRepository>,
     /// Pagination token when more repositories are available.
     pub next_token: Option<String>,
-}
-
-/// ECR registry replication configuration.
-#[derive(Debug, Clone)]
-pub struct EcrReplicationConfiguration {
-    /// Replication rules.
-    pub rules: Vec<EcrReplicationRule>,
-}
-
-/// ECR registry replication rule.
-#[derive(Debug, Clone)]
-pub struct EcrReplicationRule {
-    /// Replication destinations.
-    pub destinations: Vec<EcrReplicationDestination>,
-    /// Optional repository filters.
-    pub repository_filters: Vec<EcrRepositoryFilter>,
-}
-
-/// ECR registry replication destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EcrReplicationDestination {
-    /// Destination region.
-    pub region: String,
-    /// Destination registry account ID.
-    pub registry_id: String,
-}
-
-/// ECR registry repository filter.
-#[derive(Debug, Clone)]
-pub struct EcrRepositoryFilter {
-    /// Filter value.
-    pub filter: String,
-    /// Filter type.
-    pub filter_type: String,
 }
 
 /// S3 bucket versioning status used by infra controllers.
@@ -3659,20 +3615,26 @@ impl EcrApi for EcrClient {
                 resource_id: None,
             })?;
 
-        Ok(response
-            .replication_configuration()
-            .map(ecr_replication_configuration)
-            .unwrap_or_else(|| EcrReplicationConfiguration { rules: vec![] }))
+        match response.replication_configuration {
+            Some(replication_configuration) => Ok(replication_configuration),
+            None => EcrReplicationConfiguration::builder()
+                .set_rules(Some(vec![]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build empty ECR replication configuration".to_string(),
+                    resource_id: None,
+                }),
+        }
     }
 
     async fn put_replication_configuration(
         &self,
         replication_configuration: EcrReplicationConfiguration,
     ) -> Result<EcrReplicationConfiguration> {
-        let request_config = aws_ecr_replication_configuration(replication_configuration)?;
         let response = self
             .put_replication_configuration()
-            .replication_configuration(request_config)
+            .replication_configuration(replication_configuration)
             .send()
             .await
             .into_alien_error()
@@ -3682,8 +3644,7 @@ impl EcrApi for EcrClient {
             })?;
 
         response
-            .replication_configuration()
-            .map(ecr_replication_configuration)
+            .replication_configuration
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: "ECR PutReplicationConfiguration response did not include replication configuration".to_string(),
@@ -5342,99 +5303,6 @@ fn ecr_image_scanning_configuration(
     EcrImageScanningConfiguration {
         scan_on_push: Some(config.scan_on_push()),
     }
-}
-
-fn ecr_replication_configuration(
-    config: &AwsEcrReplicationConfiguration,
-) -> EcrReplicationConfiguration {
-    EcrReplicationConfiguration {
-        rules: config
-            .rules()
-            .iter()
-            .map(|rule| EcrReplicationRule {
-                destinations: rule
-                    .destinations()
-                    .iter()
-                    .map(|destination| EcrReplicationDestination {
-                        region: destination.region().to_string(),
-                        registry_id: destination.registry_id().to_string(),
-                    })
-                    .collect(),
-                repository_filters: rule
-                    .repository_filters()
-                    .iter()
-                    .map(|filter| EcrRepositoryFilter {
-                        filter: filter.filter().to_string(),
-                        filter_type: filter.filter_type().as_str().to_string(),
-                    })
-                    .collect(),
-            })
-            .collect(),
-    }
-}
-
-fn aws_ecr_replication_configuration(
-    config: EcrReplicationConfiguration,
-) -> Result<AwsEcrReplicationConfiguration> {
-    let rules = config
-        .rules
-        .into_iter()
-        .map(aws_ecr_replication_rule)
-        .collect::<Result<Vec<_>>>()?;
-
-    AwsEcrReplicationConfiguration::builder()
-        .set_rules(Some(rules))
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to build ECR replication configuration".to_string(),
-            resource_id: None,
-        })
-}
-
-fn aws_ecr_replication_rule(rule: EcrReplicationRule) -> Result<AwsEcrReplicationRule> {
-    let destinations = rule
-        .destinations
-        .into_iter()
-        .map(|destination| {
-            AwsEcrReplicationDestination::builder()
-                .region(destination.region)
-                .registry_id(destination.registry_id)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build ECR replication destination".to_string(),
-                    resource_id: None,
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let repository_filters = rule
-        .repository_filters
-        .into_iter()
-        .map(|filter| {
-            AwsEcrRepositoryFilter::builder()
-                .filter(filter.filter)
-                .filter_type(aws_sdk_ecr::types::RepositoryFilterType::from(
-                    filter.filter_type.as_str(),
-                ))
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build ECR repository filter".to_string(),
-                    resource_id: None,
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    AwsEcrReplicationRule::builder()
-        .set_destinations(Some(destinations))
-        .set_repository_filters(nonempty_vec(repository_filters))
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to build ECR replication rule".to_string(),
-            resource_id: None,
-        })
 }
 
 fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamTag>> {
