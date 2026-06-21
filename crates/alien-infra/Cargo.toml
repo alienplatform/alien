@@ -54,6 +54,7 @@ azure = [
     "dep:azure_identity",
     "dep:azure_mgmt_app",
     "dep:azure_mgmt_authorization",
+    "dep:azure_mgmt_containerregistry",
     "dep:azure_mgmt_keyvault",
     "dep:azure_mgmt_network",
     "dep:azure_mgmt_resources",
@@ -100,6 +101,7 @@ azure_core = { workspace = true, optional = true }
 azure_identity = { workspace = true, optional = true }
 azure_mgmt_app = { workspace = true, optional = true }
 azure_mgmt_authorization = { workspace = true, optional = true }
+azure_mgmt_containerregistry = { workspace = true, optional = true }
 azure_mgmt_keyvault = { workspace = true, optional = true }
 azure_mgmt_network = { workspace = true, optional = true }
 azure_mgmt_resources = { workspace = true, optional = true }

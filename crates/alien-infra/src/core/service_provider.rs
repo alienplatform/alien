@@ -43,6 +43,11 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     Permission, RoleAssignment, RoleAssignmentListResult, RoleAssignmentProperties, RoleDefinition,
     RoleDefinitionProperties,
 };
+pub use azure_mgmt_containerregistry::package_2023_11_preview::models::{
+    encryption_property, network_rule_set, registry_properties, sku, EncryptionProperty,
+    KeyVaultProperties, NetworkRuleSet, Policies, Registry, RegistryProperties,
+    Resource as AzureContainerRegistryResource, Sku,
+};
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     Sku as AzureKeyVaultSku, Vault as AzureKeyVault,
     VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
@@ -4133,165 +4138,6 @@ impl ContainerRegistryApi for OfficialAzureContainerRegistryClient {
             .await?;
         self.parse_response("Azure Container Registry", registry_name, &response)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Registry {
-    /// Fully qualified Azure resource ID for the registry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Managed identity configuration for the registry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity: Option<Value>,
-    /// Azure region where the registry lives.
-    pub location: String,
-    /// Container registry name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Container registry properties.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<RegistryProperties>,
-    /// Container registry SKU.
-    pub sku: Sku,
-    /// ARM system metadata returned for the registry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_data: Option<Value>,
-    /// Resource tags attached to the registry.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    /// Azure resource type.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RegistryProperties {
-    /// Whether the admin user is enabled.
-    #[serde(default)]
-    pub admin_user_enabled: bool,
-    /// Whether anonymous pulls are enabled.
-    #[serde(default)]
-    pub anonymous_pull_enabled: bool,
-    /// Registry creation timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub creation_date: Option<String>,
-    /// Whether a data endpoint is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_endpoint_enabled: Option<bool>,
-    /// Data endpoint host names.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub data_endpoint_host_names: Vec<String>,
-    /// Registry encryption settings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption: Option<EncryptionProperty>,
-    /// Registry login server.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub login_server: Option<String>,
-    /// Network rule bypass behavior.
-    #[serde(default = "default_acr_network_rule_bypass_options")]
-    pub network_rule_bypass_options: String,
-    /// Registry network rule set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_rule_set: Option<NetworkRuleSet>,
-    /// Registry policy settings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policies: Option<Policies>,
-    /// Private endpoint connections.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub private_endpoint_connections: Vec<Value>,
-    /// ARM provisioning state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioning_state: Option<String>,
-    /// Whether public network access is allowed.
-    #[serde(default = "default_enabled")]
-    pub public_network_access: String,
-    /// Registry status payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<Value>,
-    /// Whether zone redundancy is enabled.
-    #[serde(default = "default_disabled")]
-    pub zone_redundancy: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sku {
-    /// Container registry SKU name.
-    pub name: String,
-    /// Container registry SKU tier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tier: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkRuleSet {
-    /// Default action when no network rule matches.
-    #[serde(default = "default_allow")]
-    pub default_action: String,
-    /// IP ACL rules.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ip_rules: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EncryptionProperty {
-    /// Key Vault settings used for customer-managed keys.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_vault_properties: Option<KeyVaultProperties>,
-    /// Encryption status.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KeyVaultProperties {
-    /// Key vault URI to access the encryption key.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_identifier: Option<String>,
-    /// Versioned key identifier used for encryption.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub versioned_key_identifier: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Policies {
-    /// Azure AD authentication as ARM policy payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub azure_ad_authentication_as_arm_policy: Option<Value>,
-    /// Export policy payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub export_policy: Option<Value>,
-    /// Quarantine policy payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quarantine_policy: Option<Value>,
-    /// Retention policy payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_policy: Option<Value>,
-    /// Trust policy payload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_policy: Option<Value>,
-}
-
-fn default_acr_network_rule_bypass_options() -> String {
-    "AzureServices".to_string()
-}
-
-fn default_enabled() -> String {
-    "Enabled".to_string()
-}
-
-fn default_disabled() -> String {
-    "Disabled".to_string()
-}
-
-fn default_allow() -> String {
-    "Allow".to_string()
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]

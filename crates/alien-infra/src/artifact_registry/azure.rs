@@ -1,10 +1,12 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::{OperationResult, Registry, RegistryProperties, ResourceControllerContext, Sku};
+use crate::core::{
+    registry_properties, sku, AzureContainerRegistryResource, OperationResult, Registry,
+    RegistryProperties, ResourceControllerContext, Sku,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
@@ -13,6 +15,12 @@ use alien_core::{
     ResourceStatus,
 };
 use chrono::Utc;
+
+fn serialized_field<T: serde::Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToString::to_string))
+}
 
 /// Azure Artifact Registry controller.
 ///
@@ -66,42 +74,26 @@ impl AzureArtifactRegistryController {
             .service_provider
             .get_azure_container_registry_client(azure_cfg)?;
 
-        let registry = Registry {
-            id: None,
-            name: Some(registry_name.clone()),
-            type_: None,
-            location: azure_cfg.region.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::ClientConfigInvalid {
-                    platform: alien_core::Platform::Azure,
-                    message: "Azure region is required but not specified in configuration"
-                        .to_string(),
-                })
-            })?,
-            tags: HashMap::new(),
-            properties: Some(RegistryProperties {
-                login_server: None,
-                creation_date: None,
-                provisioning_state: None,
-                status: None,
-                admin_user_enabled: false,
-                anonymous_pull_enabled: false,
-                network_rule_set: None,
-                policies: None,
-                encryption: None,
-                data_endpoint_enabled: None,
-                data_endpoint_host_names: Vec::new(),
-                private_endpoint_connections: Vec::new(),
-                public_network_access: "Enabled".to_string(),
-                zone_redundancy: "Disabled".to_string(),
-                network_rule_bypass_options: "AzureServices".to_string(),
-            }),
-            sku: Sku {
-                name: "Basic".to_string(),
-                tier: None,
-            },
-            identity: None,
-            system_data: None,
-        };
+        let location = azure_cfg.region.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ClientConfigInvalid {
+                platform: alien_core::Platform::Azure,
+                message: "Azure region is required but not specified in configuration".to_string(),
+            })
+        })?;
+        let mut resource = AzureContainerRegistryResource::new(location);
+        resource.name = Some(registry_name.clone());
+
+        let mut registry = Registry::new(resource, Sku::new(sku::Name::Basic));
+        registry.properties = Some(RegistryProperties {
+            admin_user_enabled: Some(false),
+            anonymous_pull_enabled: Some(false),
+            public_network_access: Some(registry_properties::PublicNetworkAccess::Enabled),
+            zone_redundancy: Some(registry_properties::ZoneRedundancy::Disabled),
+            network_rule_bypass_options: Some(
+                registry_properties::NetworkRuleBypassOptions::AzureServices,
+            ),
+            ..Default::default()
+        });
 
         let operation_result = acr_client
             .create_registry(&resource_group_name, &registry_name, &registry)
@@ -616,10 +608,12 @@ fn emit_azure_artifact_registry_heartbeat(
         })
         .unwrap_or(0);
     let managed_tag_count = registry
+        .resource
         .tags
-        .keys()
-        .filter(|key| key.starts_with("alien"))
-        .count() as u32;
+        .as_ref()
+        .and_then(|tags| tags.as_object())
+        .map(|tags| tags.keys().filter(|key| key.starts_with("alien")).count() as u32)
+        .unwrap_or(0);
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -643,39 +637,43 @@ fn emit_azure_artifact_registry_heartbeat(
                         collection_issues: vec![],
                     },
                     name: registry
+                        .resource
                         .name
                         .clone()
                         .unwrap_or_else(|| registry_name.to_string()),
-                    resource_id: registry.id.clone(),
+                    resource_id: registry.resource.id.clone(),
                     resource_group: resource_group_name.to_string(),
-                    location: registry.location.clone(),
-                    type_: registry.type_.clone(),
+                    location: registry.resource.location.clone(),
+                    type_: registry.resource.type_.clone(),
                     login_server: properties.and_then(|properties| properties.login_server.clone()),
-                    sku_name: registry.sku.name.to_string(),
-                    sku_tier: registry.sku.tier.as_ref().map(ToString::to_string),
+                    sku_name: serialized_field(&registry.sku.name)
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    sku_tier: registry.sku.tier.as_ref().and_then(serialized_field),
                     provisioning_state: properties
                         .and_then(|properties| properties.provisioning_state.as_ref())
-                        .map(ToString::to_string),
+                        .and_then(serialized_field),
                     admin_user_enabled: properties
-                        .map(|properties| properties.admin_user_enabled)
+                        .and_then(|properties| properties.admin_user_enabled)
                         .unwrap_or(false),
                     anonymous_pull_enabled: properties
-                        .map(|properties| properties.anonymous_pull_enabled)
+                        .and_then(|properties| properties.anonymous_pull_enabled)
                         .unwrap_or(false),
                     public_network_access: properties
-                        .map(|properties| properties.public_network_access.to_string())
+                        .and_then(|properties| properties.public_network_access.as_ref())
+                        .and_then(serialized_field)
                         .unwrap_or_else(|| "Unknown".to_string()),
                     network_rule_bypass_options: properties
-                        .map(|properties| properties.network_rule_bypass_options.to_string())
+                        .and_then(|properties| properties.network_rule_bypass_options.as_ref())
+                        .and_then(serialized_field)
                         .unwrap_or_else(|| "Unknown".to_string()),
                     network_rule_default_action: network_rule_set
-                        .map(|rules| rules.default_action.to_string()),
+                        .and_then(|rules| serialized_field(&rules.default_action)),
                     ip_rule_count: network_rule_set
                         .map(|rules| rules.ip_rules.len() as u32)
                         .unwrap_or(0),
                     encryption_status: encryption
                         .and_then(|encryption| encryption.status.as_ref())
-                        .map(ToString::to_string),
+                        .and_then(serialized_field),
                     encryption_key_vault_uri_present: key_vault_properties
                         .and_then(|properties| properties.key_identifier.as_ref())
                         .is_some(),
@@ -693,10 +691,12 @@ fn emit_azure_artifact_registry_heartbeat(
                         .map(|properties| properties.data_endpoint_host_names.clone())
                         .unwrap_or_default(),
                     zone_redundancy: properties
-                        .map(|properties| properties.zone_redundancy.to_string())
+                        .and_then(|properties| properties.zone_redundancy.as_ref())
+                        .and_then(serialized_field)
                         .unwrap_or_else(|| "Unknown".to_string()),
                     creation_date: properties
-                        .and_then(|properties| properties.creation_date.clone()),
+                        .and_then(|properties| properties.creation_date.as_ref())
+                        .map(ToString::to_string),
                     managed_tag_count,
                 },
             ),

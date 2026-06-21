@@ -559,6 +559,7 @@ dependencies = [
  "azure_identity",
  "azure_mgmt_app",
  "azure_mgmt_authorization",
+ "azure_mgmt_containerregistry",
  "azure_mgmt_keyvault",
  "azure_mgmt_network",
  "azure_mgmt_resources",
@@ -2300,6 +2301,22 @@ name = "azure_mgmt_authorization"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fbb60abdc00edf3545c0a235fbd3aa26a8dc870676361c4064114de0c4c607b8"
+dependencies = [
+ "azure_core 0.21.0",
+ "bytes",
+ "futures",
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
+name = "azure_mgmt_containerregistry"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc9f88777172b62c358e90baa4925eb8b6c4ab29c82fb590a1db570978338c41"
 dependencies = [
  "azure_core 0.21.0",
  "bytes",
