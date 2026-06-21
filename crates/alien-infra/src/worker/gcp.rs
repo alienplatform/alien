@@ -1779,44 +1779,34 @@ impl GcpWorkerController {
                 })?
                 .to_string();
 
-            Some(OidcToken {
-                service_account_email,
-                audience: Some(push_endpoint.clone()),
-            })
+            Some(
+                OidcToken::new()
+                    .set_service_account_email(service_account_email)
+                    .set_audience(push_endpoint.clone()),
+            )
         } else {
             None
         };
 
-        let push_config = PushConfig {
-            push_endpoint: Some(push_endpoint.clone()),
-            attributes: Some(std::collections::HashMap::new()),
-            oidc_token,
-            pubsub_wrapper: None,
-            no_wrapper: None,
-        };
+        let mut push_config = PushConfig::new()
+            .set_push_endpoint(push_endpoint.clone())
+            .set_attributes(HashMap::<String, String>::new());
+        if let Some(oidc_token) = oidc_token {
+            push_config = push_config.set_oidc_token(oidc_token);
+        }
 
-        let subscription = Subscription {
-            name: Some(subscription_name.clone()),
-            topic: Some(topic_full_name.clone()),
-            push_config: Some(push_config),
-            ack_deadline_seconds: Some(cfg.timeout_seconds as i32),
-            retain_acked_messages: Some(false),
-            message_retention_duration: None,
-            labels: Some(std::collections::HashMap::from([
+        let subscription = Subscription::new()
+            .set_name(subscription_name.clone())
+            .set_topic(topic_full_name.clone())
+            .set_push_config(push_config)
+            .set_ack_deadline_seconds(cfg.timeout_seconds as i32)
+            .set_retain_acked_messages(false)
+            .set_labels([
                 ("commands".to_string(), cfg.id.clone()),
                 ("deployment".to_string(), ctx.resource_prefix.to_string()),
-            ])),
-            enable_message_ordering: Some(false),
-            expiration_policy: None,
-            filter: None,
-            dead_letter_policy: None,
-            retry_policy: None,
-            detached: Some(false),
-            state: None,
-            analytics_hub_subscription_info: None,
-            bigquery_config: None,
-            cloud_storage_config: None,
-        };
+            ])
+            .set_enable_message_ordering(false)
+            .set_detached(false);
 
         if self.commands_subscription_name.is_none() {
             info!(
@@ -4885,41 +4875,27 @@ impl GcpWorkerController {
             .to_string();
 
         // Create push config with OIDC authentication
-        let oidc_token = OidcToken {
-            service_account_email: service_account_email.clone(),
-            audience: Some(push_endpoint.clone()),
-        };
+        let oidc_token = OidcToken::new()
+            .set_service_account_email(service_account_email.clone())
+            .set_audience(push_endpoint.clone());
 
-        let push_config = PushConfig {
-            push_endpoint: Some(push_endpoint.clone()),
-            attributes: Some(std::collections::HashMap::new()),
-            oidc_token: Some(oidc_token),
-            pubsub_wrapper: None,
-            no_wrapper: None,
-        };
+        let push_config = PushConfig::new()
+            .set_push_endpoint(push_endpoint.clone())
+            .set_attributes(HashMap::<String, String>::new())
+            .set_oidc_token(oidc_token);
 
-        let subscription = Subscription {
-            name: Some(subscription_name.clone()),
-            topic: Some(topic_name.clone()),
-            push_config: Some(push_config),
-            ack_deadline_seconds: Some(worker_config.timeout_seconds as i32),
-            retain_acked_messages: Some(false),
-            message_retention_duration: None,
-            labels: Some(std::collections::HashMap::from([
+        let subscription = Subscription::new()
+            .set_name(subscription_name.clone())
+            .set_topic(topic_name.clone())
+            .set_push_config(push_config)
+            .set_ack_deadline_seconds(worker_config.timeout_seconds as i32)
+            .set_retain_acked_messages(false)
+            .set_labels([
                 ("worker".to_string(), worker_config.id.clone()),
                 ("deployment".to_string(), ctx.resource_prefix.to_string()),
-            ])),
-            enable_message_ordering: Some(false),
-            expiration_policy: None,
-            filter: None,
-            dead_letter_policy: None,
-            retry_policy: None,
-            detached: Some(false),
-            state: None,
-            analytics_hub_subscription_info: None,
-            bigquery_config: None,
-            cloud_storage_config: None,
-        };
+            ])
+            .set_enable_message_ordering(false)
+            .set_detached(false);
 
         info!(
             worker=%worker_config.id,
@@ -5226,47 +5202,33 @@ impl GcpWorkerController {
         // Get service account email for OIDC authentication
         let service_account_email = self.get_service_account_email(ctx, worker_config)?;
 
-        let oidc_token = OidcToken {
-            service_account_email,
-            audience: Some(push_endpoint.clone()),
-        };
+        let oidc_token = OidcToken::new()
+            .set_service_account_email(service_account_email)
+            .set_audience(push_endpoint.clone());
 
         let subscription_name = format!(
             "{}-{}-{}-notif-sub",
             ctx.resource_prefix, worker_config.id, storage_ref.id
         );
 
-        let push_config = PushConfig {
-            push_endpoint: Some(push_endpoint),
-            attributes: Some(std::collections::HashMap::new()),
-            oidc_token: Some(oidc_token),
-            pubsub_wrapper: None,
-            no_wrapper: None,
-        };
+        let push_config = PushConfig::new()
+            .set_push_endpoint(push_endpoint)
+            .set_attributes(HashMap::<String, String>::new())
+            .set_oidc_token(oidc_token);
 
-        let subscription = Subscription {
-            name: Some(subscription_name.clone()),
-            topic: Some(topic_full_name.clone()),
-            push_config: Some(push_config),
-            ack_deadline_seconds: Some(worker_config.timeout_seconds as i32),
-            retain_acked_messages: Some(false),
-            message_retention_duration: None,
-            labels: Some(std::collections::HashMap::from([
+        let subscription = Subscription::new()
+            .set_name(subscription_name.clone())
+            .set_topic(topic_full_name.clone())
+            .set_push_config(push_config)
+            .set_ack_deadline_seconds(worker_config.timeout_seconds as i32)
+            .set_retain_acked_messages(false)
+            .set_labels([
                 ("worker".to_string(), worker_config.id.clone()),
                 ("deployment".to_string(), ctx.resource_prefix.to_string()),
                 ("storage".to_string(), storage_ref.id.clone()),
-            ])),
-            enable_message_ordering: Some(false),
-            expiration_policy: None,
-            filter: None,
-            dead_letter_policy: None,
-            retry_policy: None,
-            detached: Some(false),
-            state: None,
-            analytics_hub_subscription_info: None,
-            bigquery_config: None,
-            cloud_storage_config: None,
-        };
+            ])
+            .set_enable_message_ordering(false)
+            .set_detached(false);
 
         info!(
             worker=%worker_config.id,

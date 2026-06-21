@@ -108,13 +108,10 @@ use google_cloud_iam_admin_v1::{
     },
 };
 use google_cloud_longrunning::model::Operation;
-use google_cloud_pubsub::{
-    client::{SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin},
-    model::{
-        push_config::OidcToken as OfficialPubSubOidcToken, PushConfig as OfficialPushConfig,
-        Subscription as OfficialSubscription, Topic as OfficialTopic,
-    },
+use google_cloud_pubsub::client::{
+    SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
 };
+pub use google_cloud_pubsub::model::{push_config::OidcToken, PushConfig, Subscription, Topic};
 use google_cloud_resourcemanager_v3::{client::Projects, model::Project as OfficialGcpProject};
 use google_cloud_scheduler_v1::client::CloudScheduler as OfficialCloudScheduler;
 pub use google_cloud_scheduler_v1::model::{
@@ -784,176 +781,6 @@ pub trait PubSubApi: Send + Sync + std::fmt::Debug {
     ) -> Result<IamPolicy>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Topic {
-    /// Pub/Sub topic resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Topic labels.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
-    /// Message storage policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_storage_policy: Option<MessageStoragePolicy>,
-    /// KMS key used for topic message encryption.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kms_key_name: Option<String>,
-    /// Schema validation settings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_settings: Option<SchemaSettings>,
-    /// Whether the topic satisfies physical zone separation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub satisfies_pzs: Option<bool>,
-    /// Message retention duration string.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_retention_duration: Option<String>,
-    /// Topic state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Subscription {
-    /// Pub/Sub subscription resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Topic resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub topic: Option<String>,
-    /// Push delivery configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub push_config: Option<PushConfig>,
-    /// Ack deadline in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ack_deadline_seconds: Option<i32>,
-    /// Whether acknowledged messages are retained.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retain_acked_messages: Option<bool>,
-    /// Message retention duration string.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_retention_duration: Option<String>,
-    /// Subscription labels.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
-    /// Whether message ordering is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_message_ordering: Option<bool>,
-    /// Expiration policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expiration_policy: Option<Value>,
-    /// Pub/Sub filter expression.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filter: Option<String>,
-    /// Dead letter policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dead_letter_policy: Option<DeadLetterPolicy>,
-    /// Retry policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_policy: Option<Value>,
-    /// Whether the subscription is detached.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detached: Option<bool>,
-    /// Subscription state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-    /// Analytics Hub subscription info.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analytics_hub_subscription_info: Option<Value>,
-    /// BigQuery delivery config.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bigquery_config: Option<Value>,
-    /// Cloud Storage delivery config.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cloud_storage_config: Option<Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct PushConfig {
-    /// Push endpoint URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub push_endpoint: Option<String>,
-    /// Push endpoint attributes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attributes: Option<HashMap<String, String>>,
-    /// OIDC authentication configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_token: Option<OidcToken>,
-    /// Pub/Sub wrapper configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pubsub_wrapper: Option<PubsubWrapper>,
-    /// No-wrapper configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_wrapper: Option<NoWrapper>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct OidcToken {
-    /// Service account email used to mint the OIDC token.
-    pub service_account_email: String,
-    /// OIDC audience.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audience: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct PubsubWrapper {
-    /// Whether to write Pub/Sub metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub write_metadata: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct NoWrapper {
-    /// Whether to write Pub/Sub metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub write_metadata: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct DeadLetterPolicy {
-    /// Dead-letter topic resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dead_letter_topic: Option<String>,
-    /// Maximum delivery attempts before dead-lettering.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_delivery_attempts: Option<i32>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageStoragePolicy {
-    /// Allowed persistence regions.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_persistence_regions: Vec<String>,
-    /// Whether in-transit enforcement is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enforce_in_transit: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct SchemaSettings {
-    /// Schema resource name.
-    pub schema: String,
-    /// Schema encoding.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encoding: Option<String>,
-    /// First allowed schema revision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_revision_id: Option<String>,
-    /// Last allowed schema revision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_revision_id: Option<String>,
-}
-
 struct OfficialGcpPubSubClient {
     config: GcpClientConfig,
     topic_admin: OnceCell<OfficialTopicAdmin>,
@@ -1089,20 +916,20 @@ impl OfficialGcpPubSubClient {
 #[async_trait::async_trait]
 impl PubSubApi for OfficialGcpPubSubClient {
     async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic> {
-        let mut official_topic = topic_to_official(topic)?;
-        if official_topic.name.is_empty() {
-            official_topic.name = self.topic_name(&topic_id);
+        let mut topic = topic;
+        if topic.name.is_empty() {
+            topic.name = self.topic_name(&topic_id);
         }
 
         match self
             .topic_admin()
             .await?
             .create_topic()
-            .with_request(official_topic)
+            .with_request(topic)
             .send()
             .await
         {
-            Ok(topic) => Ok(topic_from_official(topic)),
+            Ok(topic) => Ok(topic),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "Pub/Sub topic".to_string(),
@@ -1130,7 +957,7 @@ impl PubSubApi for OfficialGcpPubSubClient {
             .send()
             .await
         {
-            Ok(topic) => Ok(topic_from_official(topic)),
+            Ok(topic) => Ok(topic),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "Pub/Sub topic".to_string(),
@@ -1189,20 +1016,20 @@ impl PubSubApi for OfficialGcpPubSubClient {
         subscription_id: String,
         subscription: Subscription,
     ) -> Result<Subscription> {
-        let mut official_subscription = subscription_to_official(subscription)?;
-        if official_subscription.name.is_empty() {
-            official_subscription.name = self.subscription_name(&subscription_id);
+        let mut subscription = subscription;
+        if subscription.name.is_empty() {
+            subscription.name = self.subscription_name(&subscription_id);
         }
 
         match self
             .subscription_admin()
             .await?
             .create_subscription()
-            .with_request(official_subscription)
+            .with_request(subscription)
             .send()
             .await
         {
-            Ok(subscription) => Ok(subscription_from_official(subscription)),
+            Ok(subscription) => Ok(subscription),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "Pub/Sub subscription".to_string(),
@@ -1231,7 +1058,7 @@ impl PubSubApi for OfficialGcpPubSubClient {
             .send()
             .await
         {
-            Ok(subscription) => Ok(subscription_from_official(subscription)),
+            Ok(subscription) => Ok(subscription),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "Pub/Sub subscription".to_string(),
@@ -7237,201 +7064,6 @@ async fn gcs_http_error(
             message: format!("GCS {operation} returned HTTP {}: {text}", status.as_u16()),
             resource_id,
         })
-    }
-}
-
-fn topic_to_official(topic: Topic) -> Result<OfficialTopic> {
-    let mut official = OfficialTopic::new();
-    if let Some(name) = topic.name {
-        official = official.set_name(name);
-    }
-    if let Some(labels) = topic.labels {
-        official = official.set_labels(labels);
-    }
-    if let Some(kms_key_name) = topic.kms_key_name {
-        official = official.set_kms_key_name(kms_key_name);
-    }
-    if topic.message_storage_policy.is_some()
-        || topic.schema_settings.is_some()
-        || topic.message_retention_duration.is_some()
-    {
-        return Err(AlienError::new(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Pub/Sub topic optional storage/schema/retention fields are not supported by the official adapter yet".to_string(),
-                resource_id: official.name.clone().into(),
-            },
-        ));
-    }
-    Ok(official)
-}
-
-fn topic_from_official(topic: OfficialTopic) -> Topic {
-    Topic {
-        name: none_if_empty(topic.name),
-        labels: if topic.labels.is_empty() {
-            None
-        } else {
-            Some(topic.labels)
-        },
-        message_storage_policy: topic
-            .message_storage_policy
-            .map(|policy| MessageStoragePolicy {
-                allowed_persistence_regions: policy.allowed_persistence_regions,
-                enforce_in_transit: Some(policy.enforce_in_transit),
-            }),
-        kms_key_name: none_if_empty(topic.kms_key_name),
-        schema_settings: topic.schema_settings.map(|settings| SchemaSettings {
-            schema: settings.schema,
-            encoding: settings.encoding.name().map(String::from),
-            first_revision_id: none_if_empty(settings.first_revision_id),
-            last_revision_id: none_if_empty(settings.last_revision_id),
-        }),
-        satisfies_pzs: Some(topic.satisfies_pzs),
-        message_retention_duration: topic.message_retention_duration.map(String::from),
-        state: topic.state.name().map(String::from),
-    }
-}
-
-fn subscription_to_official(subscription: Subscription) -> Result<OfficialSubscription> {
-    let mut official = OfficialSubscription::new();
-    if let Some(name) = subscription.name {
-        official = official.set_name(name);
-    }
-    if let Some(topic) = subscription.topic {
-        official = official.set_topic(topic);
-    }
-    if let Some(push_config) = subscription.push_config {
-        official = official.set_push_config(push_config_to_official(push_config)?);
-    }
-    if let Some(ack_deadline_seconds) = subscription.ack_deadline_seconds {
-        official = official.set_ack_deadline_seconds(ack_deadline_seconds);
-    }
-    if let Some(retain_acked_messages) = subscription.retain_acked_messages {
-        official = official.set_retain_acked_messages(retain_acked_messages);
-    }
-    if let Some(labels) = subscription.labels {
-        official = official.set_labels(labels);
-    }
-    if let Some(enable_message_ordering) = subscription.enable_message_ordering {
-        official = official.set_enable_message_ordering(enable_message_ordering);
-    }
-    if let Some(filter) = subscription.filter {
-        official = official.set_filter(filter);
-    }
-    if let Some(detached) = subscription.detached {
-        official = official.set_detached(detached);
-    }
-    if subscription.message_retention_duration.is_some()
-        || subscription.expiration_policy.is_some()
-        || subscription.dead_letter_policy.is_some()
-        || subscription.retry_policy.is_some()
-        || subscription.bigquery_config.is_some()
-        || subscription.cloud_storage_config.is_some()
-    {
-        return Err(AlienError::new(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Pub/Sub subscription optional retention/expiration/dead-letter/retry/export fields are not supported by the official adapter yet".to_string(),
-                resource_id: official.name.clone().into(),
-            },
-        ));
-    }
-
-    Ok(official)
-}
-
-fn subscription_from_official(subscription: OfficialSubscription) -> Subscription {
-    Subscription {
-        name: none_if_empty(subscription.name),
-        topic: none_if_empty(subscription.topic),
-        push_config: subscription.push_config.map(push_config_from_official),
-        ack_deadline_seconds: Some(subscription.ack_deadline_seconds),
-        retain_acked_messages: Some(subscription.retain_acked_messages),
-        message_retention_duration: subscription.message_retention_duration.map(String::from),
-        labels: if subscription.labels.is_empty() {
-            None
-        } else {
-            Some(subscription.labels)
-        },
-        enable_message_ordering: Some(subscription.enable_message_ordering),
-        expiration_policy: None,
-        filter: none_if_empty(subscription.filter),
-        dead_letter_policy: subscription
-            .dead_letter_policy
-            .map(|policy| DeadLetterPolicy {
-                dead_letter_topic: none_if_empty(policy.dead_letter_topic),
-                max_delivery_attempts: Some(policy.max_delivery_attempts),
-            }),
-        retry_policy: None,
-        detached: Some(subscription.detached),
-        state: subscription.state.name().map(String::from),
-        analytics_hub_subscription_info: None,
-        bigquery_config: None,
-        cloud_storage_config: None,
-    }
-}
-
-fn push_config_to_official(push_config: PushConfig) -> Result<OfficialPushConfig> {
-    let mut official = OfficialPushConfig::new();
-    if let Some(push_endpoint) = push_config.push_endpoint {
-        official = official.set_push_endpoint(push_endpoint);
-    }
-    if let Some(attributes) = push_config.attributes {
-        official = official.set_attributes(attributes);
-    }
-    if let Some(oidc_token) = push_config.oidc_token {
-        let mut official_oidc = OfficialPubSubOidcToken::new()
-            .set_service_account_email(oidc_token.service_account_email);
-        if let Some(audience) = oidc_token.audience {
-            official_oidc = official_oidc.set_audience(audience);
-        }
-        official = official.set_oidc_token(official_oidc);
-    }
-    if let Some(pubsub_wrapper) = push_config.pubsub_wrapper {
-        if pubsub_wrapper.write_metadata.is_some() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message:
-                        "Pub/Sub pubsubWrapper.writeMetadata is not supported by the official API"
-                            .to_string(),
-                    resource_id: None,
-                },
-            ));
-        }
-        official = official
-            .set_pubsub_wrapper(google_cloud_pubsub::model::push_config::PubsubWrapper::new());
-    }
-    if let Some(no_wrapper) = push_config.no_wrapper {
-        let mut official_wrapper = google_cloud_pubsub::model::push_config::NoWrapper::new();
-        if let Some(write_metadata) = no_wrapper.write_metadata {
-            official_wrapper = official_wrapper.set_write_metadata(write_metadata);
-        }
-        official = official.set_no_wrapper(official_wrapper);
-    }
-    Ok(official)
-}
-
-fn push_config_from_official(push_config: OfficialPushConfig) -> PushConfig {
-    let oidc_token = push_config.oidc_token().map(|token| OidcToken {
-        service_account_email: token.service_account_email.clone(),
-        audience: none_if_empty(token.audience.clone()),
-    });
-    let pubsub_wrapper = push_config.pubsub_wrapper().map(|_wrapper| PubsubWrapper {
-        write_metadata: None,
-    });
-    let no_wrapper = push_config.no_wrapper().map(|wrapper| NoWrapper {
-        write_metadata: Some(wrapper.write_metadata),
-    });
-
-    PushConfig {
-        push_endpoint: none_if_empty(push_config.push_endpoint),
-        attributes: if push_config.attributes.is_empty() {
-            None
-        } else {
-            Some(push_config.attributes)
-        },
-        oidc_token,
-        pubsub_wrapper,
-        no_wrapper,
     }
 }
 

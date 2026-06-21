@@ -84,9 +84,8 @@ impl GcpQueueController {
         let sub = format!("{}-sub", topic);
 
         // Create pull subscription
-        let subscription = Subscription::builder()
-            .topic(format!("projects/{}/topics/{}", cfg.project_id, topic))
-            .build();
+        let subscription =
+            Subscription::new().set_topic(format!("projects/{}/topics/{}", cfg.project_id, topic));
 
         client
             .create_subscription(sub.clone(), subscription)
@@ -375,13 +374,13 @@ fn emit_gcp_pubsub_queue_heartbeat(
     topic: Topic,
     subscription: Option<Subscription>,
 ) {
-    let topic_labels = topic.labels.unwrap_or_default().into_iter().collect();
+    let topic_labels = topic.labels.into_iter().collect();
     let (message_storage_allowed_persistence_regions, message_storage_enforce_in_transit) = topic
         .message_storage_policy
         .map(|policy| {
             (
                 policy.allowed_persistence_regions,
-                policy.enforce_in_transit,
+                Some(policy.enforce_in_transit),
             )
         })
         .unwrap_or_default();
@@ -390,16 +389,16 @@ fn emit_gcp_pubsub_queue_heartbeat(
         .map(|settings| {
             (
                 Some(settings.schema),
-                serialize_enum_opt(settings.encoding),
-                settings.first_revision_id,
-                settings.last_revision_id,
+                settings.encoding.name().map(String::from),
+                none_if_empty(settings.first_revision_id),
+                none_if_empty(settings.last_revision_id),
             )
         })
         .unwrap_or_default();
 
     let subscription_labels: BTreeMap<_, _> = subscription
         .as_ref()
-        .and_then(|subscription| subscription.labels.clone())
+        .map(|subscription| subscription.labels.clone())
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -407,13 +406,12 @@ fn emit_gcp_pubsub_queue_heartbeat(
         .as_ref()
         .and_then(|subscription| subscription.push_config.as_ref());
     let push_attributes = push_config
-        .and_then(|push_config| push_config.attributes.clone())
+        .map(|push_config| push_config.attributes.clone())
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let oidc_token = push_config.and_then(|push_config| push_config.oidc_token.as_ref());
-    let pubsub_wrapper = push_config.and_then(|push_config| push_config.pubsub_wrapper.as_ref());
-    let no_wrapper = push_config.and_then(|push_config| push_config.no_wrapper.as_ref());
+    let oidc_token = push_config.and_then(|push_config| push_config.oidc_token());
+    let no_wrapper = push_config.and_then(|push_config| push_config.no_wrapper());
     let dead_letter_policy = subscription
         .as_ref()
         .and_then(|subscription| subscription.dead_letter_policy.as_ref());
@@ -440,8 +438,10 @@ fn emit_gcp_pubsub_queue_heartbeat(
                 topic_name: topic_name.to_string(),
                 subscription_name: subscription_name.map(ToString::to_string),
                 project_id: Some(project_id.to_string()),
-                topic_full_name: topic.name,
-                subscription_full_name: subscription.as_ref().and_then(|sub| sub.name.clone()),
+                topic_full_name: none_if_empty(topic.name),
+                subscription_full_name: subscription
+                    .as_ref()
+                    .and_then(|sub| none_if_empty(sub.name.clone())),
                 endpoint: Some(format!(
                     "https://pubsub.googleapis.com/v1/projects/{}/topics/{}",
                     project_id, topic_name
@@ -450,45 +450,49 @@ fn emit_gcp_pubsub_queue_heartbeat(
                 subscription_labels,
                 message_storage_allowed_persistence_regions,
                 message_storage_enforce_in_transit,
-                kms_key_name: topic.kms_key_name,
+                kms_key_name: none_if_empty(topic.kms_key_name),
                 schema_name,
                 schema_encoding,
                 schema_first_revision_id,
                 schema_last_revision_id,
-                topic_message_retention_duration: topic.message_retention_duration,
-                topic_state: serialize_enum_opt(topic.state),
+                topic_message_retention_duration: topic
+                    .message_retention_duration
+                    .map(String::from),
+                topic_state: topic.state.name().map(String::from),
                 subscription_ack_deadline_seconds: subscription
                     .as_ref()
                     .and_then(|sub| nonnegative_i32_to_u32(sub.ack_deadline_seconds)),
                 subscription_message_retention_duration: subscription
                     .as_ref()
-                    .and_then(|sub| sub.message_retention_duration.clone()),
+                    .and_then(|sub| sub.message_retention_duration.clone().map(String::from)),
                 subscription_retain_acked_messages: subscription
                     .as_ref()
-                    .and_then(|sub| sub.retain_acked_messages),
+                    .map(|sub| sub.retain_acked_messages),
                 subscription_enable_message_ordering: subscription
                     .as_ref()
-                    .and_then(|sub| sub.enable_message_ordering),
-                subscription_filter: subscription.as_ref().and_then(|sub| sub.filter.clone()),
-                subscription_detached: subscription.as_ref().and_then(|sub| sub.detached),
+                    .map(|sub| sub.enable_message_ordering),
+                subscription_filter: subscription
+                    .as_ref()
+                    .and_then(|sub| none_if_empty(sub.filter.clone())),
+                subscription_detached: subscription.as_ref().map(|sub| sub.detached),
                 subscription_state: subscription
                     .as_ref()
-                    .and_then(|sub| serialize_enum_opt(sub.state.clone())),
+                    .and_then(|sub| sub.state.name().map(String::from)),
                 subscription_push_config_present: subscription
                     .as_ref()
                     .map(|sub| sub.push_config.is_some()),
-                subscription_push_endpoint: push_config.and_then(|push| push.push_endpoint.clone()),
+                subscription_push_endpoint: push_config
+                    .and_then(|push| none_if_empty(push.push_endpoint.clone())),
                 subscription_push_attributes: push_attributes,
                 subscription_push_oidc_service_account_email: oidc_token
-                    .map(|token| token.service_account_email.clone()),
+                    .and_then(|token| none_if_empty(token.service_account_email.clone())),
                 subscription_push_oidc_audience: oidc_token
-                    .and_then(|token| token.audience.clone()),
-                subscription_push_pubsub_wrapper_write_metadata: pubsub_wrapper
-                    .and_then(|wrapper| wrapper.write_metadata),
+                    .and_then(|token| none_if_empty(token.audience.clone())),
+                subscription_push_pubsub_wrapper_write_metadata: None,
                 subscription_push_no_wrapper_write_metadata: no_wrapper
-                    .and_then(|wrapper| wrapper.write_metadata),
+                    .map(|wrapper| wrapper.write_metadata),
                 subscription_dead_letter_topic: dead_letter_policy
-                    .and_then(|policy| policy.dead_letter_topic.clone()),
+                    .and_then(|policy| none_if_empty(policy.dead_letter_topic.clone())),
                 subscription_dead_letter_max_delivery_attempts: dead_letter_policy
                     .and_then(|policy| nonnegative_i32_to_u32(policy.max_delivery_attempts)),
             },
@@ -497,18 +501,16 @@ fn emit_gcp_pubsub_queue_heartbeat(
     });
 }
 
-fn serialize_enum<T: serde::Serialize>(value: &T) -> Option<String> {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(ToString::to_string))
+fn none_if_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
-fn serialize_enum_opt<T: serde::Serialize>(value: Option<T>) -> Option<String> {
-    value.and_then(|value| serialize_enum(&value))
-}
-
-fn nonnegative_i32_to_u32(value: Option<i32>) -> Option<u32> {
-    value.and_then(|value| u32::try_from(value).ok())
+fn nonnegative_i32_to_u32(value: i32) -> Option<u32> {
+    u32::try_from(value).ok()
 }
 
 #[cfg(test)]
