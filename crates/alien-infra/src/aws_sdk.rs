@@ -69,10 +69,9 @@ use aws_sdk_iam::{
 };
 use aws_sdk_lambda::{
     types::{
-        Architecture as AwsLambdaArchitecture, Environment as AwsLambdaEnvironment,
+        Architecture as AwsLambdaArchitecture,
         EventSourceMappingConfiguration as AwsEventSourceMappingConfiguration,
-        FunctionCode as AwsLambdaFunctionCode, FunctionResponseType, FunctionUrlAuthType,
-        PackageType, VpcConfig as AwsLambdaVpcConfig,
+        FunctionResponseType, FunctionUrlAuthType, PackageType,
     },
     Client as LambdaClient,
 };
@@ -123,6 +122,8 @@ pub use aws_sdk_acm::{
 };
 
 pub type ReimportCertificateRequest = ImportCertificateRequest;
+
+pub use aws_sdk_lambda::types::{Environment, FunctionCode, VpcConfig};
 
 /// Parameter metadata returned from SSM for vault heartbeat sampling.
 #[derive(Debug, Clone)]
@@ -271,29 +272,6 @@ pub struct CodeBuildProjectDescription {
     pub created: Option<f64>,
     /// Last modified timestamp as epoch seconds.
     pub last_modified: Option<f64>,
-}
-
-/// Lambda container image code configuration.
-#[derive(Debug, Clone, Builder)]
-pub struct FunctionCode {
-    /// ECR image URI for image-package Lambda functions.
-    pub image_uri: Option<String>,
-}
-
-/// Lambda environment variables.
-#[derive(Debug, Clone, Builder)]
-pub struct Environment {
-    /// Environment variables keyed by name.
-    pub variables: Option<HashMap<String, String>>,
-}
-
-/// Lambda VPC networking configuration.
-#[derive(Debug, Clone, Builder)]
-pub struct VpcConfig {
-    /// Subnet IDs where Lambda should create network interfaces.
-    pub subnet_ids: Option<Vec<String>>,
-    /// Security group IDs for Lambda network interfaces.
-    pub security_group_ids: Option<Vec<String>>,
 }
 
 /// Lambda function creation request used by worker controllers.
@@ -2937,17 +2915,17 @@ impl LambdaApi for LambdaClient {
             self.create_function()
                 .function_name(request.function_name.clone())
                 .role(request.role)
-                .code(lambda_function_code_to_aws(request.code))
+                .code(request.code)
                 .package_type(PackageType::from(request.package_type.as_str()))
                 .set_description(request.description)
                 .set_timeout(request.timeout)
                 .set_memory_size(request.memory_size)
                 .set_publish(request.publish)
-                .set_environment(lambda_environment_to_aws(request.environment))
+                .set_environment(request.environment)
                 .set_architectures(request.architectures.map(lambda_architectures_to_aws))
                 .set_tags(request.tags)
                 .set_kms_key_arn(request.kms_key_arn)
-                .set_vpc_config(lambda_vpc_config_to_aws(request.vpc_config))
+                .set_vpc_config(request.vpc_config)
                 .send()
                 .await,
             "CreateFunction",
@@ -3020,8 +2998,8 @@ impl LambdaApi for LambdaClient {
                 .set_role(request.role)
                 .set_timeout(request.timeout)
                 .set_memory_size(request.memory_size)
-                .set_environment(lambda_environment_to_aws(request.environment))
-                .set_vpc_config(lambda_vpc_config_to_aws(request.vpc_config))
+                .set_environment(request.environment)
+                .set_vpc_config(request.vpc_config)
                 .send()
                 .await,
             "UpdateFunctionConfiguration",
@@ -6026,29 +6004,6 @@ where
                 }))
         }
     }
-}
-
-fn lambda_function_code_to_aws(code: FunctionCode) -> AwsLambdaFunctionCode {
-    AwsLambdaFunctionCode::builder()
-        .set_image_uri(code.image_uri)
-        .build()
-}
-
-fn lambda_environment_to_aws(environment: Option<Environment>) -> Option<AwsLambdaEnvironment> {
-    environment.map(|environment| {
-        AwsLambdaEnvironment::builder()
-            .set_variables(environment.variables)
-            .build()
-    })
-}
-
-fn lambda_vpc_config_to_aws(vpc_config: Option<VpcConfig>) -> Option<AwsLambdaVpcConfig> {
-    vpc_config.map(|vpc_config| {
-        AwsLambdaVpcConfig::builder()
-            .set_subnet_ids(vpc_config.subnet_ids)
-            .set_security_group_ids(vpc_config.security_group_ids)
-            .build()
-    })
 }
 
 fn lambda_architectures_to_aws(architectures: Vec<String>) -> Vec<AwsLambdaArchitecture> {

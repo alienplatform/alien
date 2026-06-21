@@ -423,7 +423,7 @@ impl AwsWorkerController {
             .await?;
 
         let environment = if !env_vars.is_empty() {
-            Some(Environment::builder().variables(env_vars).build())
+            Some(Environment::builder().set_variables(Some(env_vars)).build())
         } else {
             None
         };
@@ -1298,7 +1298,11 @@ impl AwsWorkerController {
             .await?;
 
         let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
+            Some(
+                Environment::builder()
+                    .set_variables(Some(final_env_vars))
+                    .build(),
+            )
         } else {
             None
         };
@@ -2032,7 +2036,11 @@ impl AwsWorkerController {
             .await?;
 
         let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
+            Some(
+                Environment::builder()
+                    .set_variables(Some(final_env_vars))
+                    .build(),
+            )
         } else {
             None
         };
@@ -3309,8 +3317,8 @@ impl AwsWorkerController {
         let request = UpdateFunctionConfigurationRequest::builder()
             .vpc_config(
                 VpcConfig::builder()
-                    .subnet_ids(Vec::new())
-                    .security_group_ids(Vec::new())
+                    .set_subnet_ids(Some(Vec::new()))
+                    .set_security_group_ids(Some(Vec::new()))
                     .build(),
             )
             .build();
@@ -3889,8 +3897,8 @@ impl AwsWorkerController {
 
         Ok(Some(
             VpcConfig::builder()
-                .subnet_ids(network_state.private_subnet_ids.clone())
-                .security_group_ids(security_group_ids)
+                .set_subnet_ids(Some(network_state.private_subnet_ids.clone()))
+                .set_security_group_ids(Some(security_group_ids))
                 .build(),
         ))
     }
