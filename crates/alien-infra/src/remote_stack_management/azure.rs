@@ -1451,7 +1451,7 @@ impl AzureRemoteStackManagementController {
                 principal_id: principal_id.to_string(),
                 role_definition_id: role_definition_id.to_string(),
                 scope: Some(scope.to_string()),
-                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
                 description: Some(description.to_string()),
                 condition: None,
                 condition_version: None,

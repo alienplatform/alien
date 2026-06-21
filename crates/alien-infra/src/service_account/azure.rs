@@ -496,7 +496,9 @@ impl AzureServiceAccountController {
                                 binding.role_name, config_id
                             )),
                             principal_id: principal_id.clone(),
-                            principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                            principal_type: Some(
+                                RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                            ),
                             role_definition_id: role_definition_id.clone(),
                             scope: Some(binding.scope.clone()),
                             updated_by: None,

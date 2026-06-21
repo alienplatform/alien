@@ -38,6 +38,11 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
+pub use azure_mgmt_authorization::package_2022_04_01::models::{
+    role_assignment_properties::{self, PrincipalType as RoleAssignmentPropertiesPrincipalType},
+    Permission, RoleAssignment, RoleAssignmentListResult, RoleAssignmentProperties, RoleDefinition,
+    RoleDefinitionProperties,
+};
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     Sku as AzureKeyVaultSku, Vault as AzureKeyVault,
     VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
@@ -3326,11 +3331,6 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         scope: &Scope,
         role_definition_id: Option<String>,
     ) -> Result<Vec<RoleAssignment>> {
-        #[derive(Deserialize)]
-        struct RoleAssignmentListResponse {
-            value: Vec<RoleAssignment>,
-        }
-
         let scope_string = scope.to_scope_string(&self.config);
         let response = self
             .request(
@@ -3341,7 +3341,7 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
                 &scope_string,
             )
             .await?;
-        let response = serde_json::from_str::<RoleAssignmentListResponse>(&response)
+        let response = serde_json::from_str::<RoleAssignmentListResult>(&response)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: format!("Failed to parse Azure role assignments for '{scope_string}'"),
@@ -3405,107 +3405,6 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
             role_assignment_name,
         )
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RoleAssignment {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<RoleAssignmentProperties>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RoleAssignmentProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_on: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegated_managed_identity_resource_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub principal_id: String,
-    pub principal_type: RoleAssignmentPropertiesPrincipalType,
-    pub role_definition_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_on: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
-pub enum RoleAssignmentPropertiesPrincipalType {
-    User,
-    Group,
-    ServicePrincipal,
-    ForeignGroup,
-    Device,
-}
-
-impl Default for RoleAssignmentPropertiesPrincipalType {
-    fn default() -> Self {
-        Self::User
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RoleDefinition {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<RoleDefinitionProperties>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RoleDefinitionProperties {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assignable_scopes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_on: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub permissions: Vec<Permission>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_name: Option<String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_on: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Permission {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub data_actions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub not_actions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub not_data_actions: Vec<String>,
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]

@@ -465,7 +465,7 @@ impl AzurePermissionsHelper {
                 principal_id: principal_id.to_string(),
                 role_definition_id: role_definition_id.to_string(),
                 scope: Some(scope.to_resource_id_string(azure_config)),
-                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
                 condition: None,
                 condition_version: None,
                 delegated_managed_identity_resource_id: None,
