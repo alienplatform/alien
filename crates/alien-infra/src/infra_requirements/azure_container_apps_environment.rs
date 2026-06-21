@@ -3,14 +3,14 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
-use crate::error::{ErrorData, Result};
-use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
-use alien_azure_clients::models::managed_environments::{
+use crate::azure_container_apps::{
     ManagedEnvironment, ManagedEnvironmentProperties,
     ManagedEnvironmentPropertiesProvisioningState, VnetConfiguration,
 };
+use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
+use crate::core::ResourceControllerContext;
+use crate::core::{LongRunningOperation, OperationResult};
+use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
@@ -210,7 +210,7 @@ impl AzureContainerAppsEnvironmentController {
         {
             Ok(managed_env) => {
                 if let Some(properties) = &managed_env.properties {
-                    use alien_azure_clients::models::managed_environments::ManagedEnvironmentPropertiesProvisioningState::*;
+                    use crate::azure_container_apps::ManagedEnvironmentPropertiesProvisioningState::*;
                     match properties.provisioning_state {
                         Some(Succeeded) => {
                             info!(environment_name=%environment_name, "Environment creation completed");
@@ -345,7 +345,7 @@ impl AzureContainerAppsEnvironmentController {
             );
 
             if let Some(properties) = &managed_env.properties {
-                use alien_azure_clients::models::managed_environments::ManagedEnvironmentPropertiesProvisioningState::*;
+                use crate::azure_container_apps::ManagedEnvironmentPropertiesProvisioningState::*;
                 match properties.provisioning_state {
                     Some(Succeeded) => {
                         // Environment is healthy

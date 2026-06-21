@@ -619,7 +619,6 @@ dependencies = [
 name = "alien-infra"
 version = "1.7.1"
 dependencies = [
- "alien-azure-clients",
  "alien-client-config",
  "alien-client-core",
  "alien-core",

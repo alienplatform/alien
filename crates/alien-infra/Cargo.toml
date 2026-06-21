@@ -49,7 +49,6 @@ gcp = [
     "dep:wkt",
 ]
 azure = [
-    "dep:alien-azure-clients",
     "alien-client-config/azure",
     "dep:azure_core",
     "dep:azure_identity",
@@ -61,7 +60,6 @@ test = []  # Test platform support - fast mock implementations without real clou
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
     "alien-core/test-utils",
-    "alien-azure-clients/test-utils",
     "alien-client-config/test-utils",
     "dep:alien-preflights",
     "dep:mockall"
@@ -75,7 +73,6 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
-alien-azure-clients = { workspace = true, optional = true }
 google-cloud-api-serviceusage-v1 = { workspace = true, optional = true }
 google-cloud-artifactregistry-v1 = { workspace = true, optional = true }
 google-cloud-auth = { workspace = true, optional = true }
@@ -154,7 +151,6 @@ console_error_panic_hook = { workspace = true }
 [dev-dependencies]
 alien-infra = { path = ".", features = ["test-utils"] }
 alien-preflights = { workspace = true }
-alien-azure-clients = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

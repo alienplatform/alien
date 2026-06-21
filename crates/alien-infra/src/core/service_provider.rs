@@ -8,6 +8,10 @@ use crate::aws_sdk::{
     AcmApi, ApiGatewayV2Api, CodeBuildApi, DynamoDbApi, Ec2Api, EcrApi, EventBridgeApi, IamApi,
     LambdaApi, S3Api, SqsApi, SsmApi,
 };
+use crate::azure_container_apps::{
+    ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
+    OfficialAzureLongRunningOperationClient,
+};
 use crate::error::Result;
 use crate::gcp_cloudrun::{CloudRunApi, OfficialGcpCloudRunClient};
 use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
@@ -15,11 +19,6 @@ use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
 use crate::kubernetes_client::{
     DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
     SecretsApi, ServiceApi, VersionApi,
-};
-use alien_azure_clients::{
-    container_apps::{AzureContainerAppsClient, ContainerAppsApi},
-    long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
-    AzureTokenCache,
 };
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesClientConfig;
@@ -7568,9 +7567,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ContainerAppsApi>> {
-        Ok(Arc::new(AzureContainerAppsClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
+        Ok(Arc::new(OfficialAzureContainerAppsClient::new(
+            config.clone(),
+            azure_credential_from_config(config)?,
         )))
     }
 
@@ -7588,9 +7587,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn LongRunningOperationApi>> {
-        Ok(Arc::new(LongRunningOperationClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
+        Ok(Arc::new(OfficialAzureLongRunningOperationClient::new(
+            config.clone(),
+            azure_credential_from_config(config)?,
         )))
     }
 
@@ -9325,7 +9324,9 @@ impl TokenCredential for StaticAzureAccessTokenCredential {
     }
 }
 
-fn azure_credential_from_config(config: &AzureClientConfig) -> Result<Arc<dyn TokenCredential>> {
+pub(crate) fn azure_credential_from_config(
+    config: &AzureClientConfig,
+) -> Result<Arc<dyn TokenCredential>> {
     match &config.credentials {
         AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
             token: token.clone(),
@@ -9419,7 +9420,7 @@ fn azure_client_options(authority_host: Option<&str>) -> ClientOptions {
     }
 }
 
-fn azure_management_endpoint(config: &AzureClientConfig) -> &str {
+pub(crate) fn azure_management_endpoint(config: &AzureClientConfig) -> &str {
     config
         .service_overrides
         .as_ref()

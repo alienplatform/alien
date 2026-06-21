@@ -1,14 +1,12 @@
-use alien_azure_clients::container_apps::{
-    ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
-    ManagedEnvironmentCertificateProperties,
-};
-use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
-use alien_azure_clients::models::container_apps::{
+use crate::azure_container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
     ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
-    CustomDomain, CustomDomainBindingType, EnvironmentVar, IdentitySettings,
-    IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
-    TrafficWeight,
+    CustomDomain, CustomDomainBindingType, Dapr, DaprAppProtocol, EnvironmentVar, IdentitySettings,
+    IdentitySettingsLifecycle, Ingress as AzureContainerAppsIngress, IngressTransport,
+    ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
+    ManagedEnvironmentCertificateProperties, ManagedServiceIdentity, ManagedServiceIdentityType,
+    RegistryCredentials, Scale, Secret, Template, TrafficWeight, UserAssignedIdentities,
+    UserAssignedIdentity,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -27,6 +25,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
 use crate::core::{AzureServiceBusQueueProperties, EnvironmentVariableBuilder};
+use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -1561,9 +1560,7 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
+        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
@@ -1948,7 +1945,7 @@ impl AzureWorkerController {
 
         // Verify Container App is in Succeeded state - drift is non-retryable
         if let Some(properties) = &container_app.properties {
-            use alien_azure_clients::models::container_apps::ContainerAppPropertiesProvisioningState;
+            use crate::azure_container_apps::ContainerAppPropertiesProvisioningState;
             if properties.provisioning_state
                 == Some(ContainerAppPropertiesProvisioningState::Failed)
             {
@@ -3347,9 +3344,7 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
+        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
@@ -3844,7 +3839,7 @@ impl AzureWorkerController {
         let environment_id = azure_utils::get_container_apps_environment_resource_id(ctx.state)?;
 
         let ingress_cfg = if func.ingress == Ingress::Public {
-            Some(alien_azure_clients::models::container_apps::Ingress {
+            Some(AzureContainerAppsIngress {
                 external: true,
                 target_port: Some(8080),
                 traffic: vec![TrafficWeight {
@@ -3875,11 +3870,6 @@ impl AzureWorkerController {
         // Collect all ServiceAccounts:
         // 1. Permission-based ServiceAccount (from permission profile)
         // 2. Linked ServiceAccounts (from worker.links)
-        use alien_azure_clients::models::container_apps::{
-            ManagedServiceIdentity, ManagedServiceIdentityType, UserAssignedIdentities,
-            UserAssignedIdentity,
-        };
-
         let mut identity_map = HashMap::new();
 
         // Add permission-based ServiceAccount
@@ -3967,8 +3957,6 @@ impl AzureWorkerController {
         // Dapr handles delivery for queue (Service Bus), storage (blob), and cron triggers.
         let needs_dapr = func.commands_enabled || !func.triggers.is_empty();
         let dapr_config = if needs_dapr {
-            use alien_azure_clients::models::container_apps::{Dapr, DaprAppProtocol};
-
             Some(Dapr {
                 app_id: Some(container_app_name.to_string()),
                 app_port: Some(8080), // Port that alien-runtime listens on
@@ -4057,9 +4045,7 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<DaprComponentOperation> {
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
+        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         // Dapr components live on the Container Apps Environment, which may be in a
@@ -4205,9 +4191,7 @@ impl AzureWorkerController {
         storage_ref: &alien_core::ResourceRef,
         _events: &[String],
     ) -> Result<DaprComponentOperation> {
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
+        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -4342,9 +4326,7 @@ impl AzureWorkerController {
         cron: &str,
         index: usize,
     ) -> Result<DaprComponentOperation> {
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
+        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -4530,15 +4512,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use alien_azure_clients::models::container_apps::{
+    use crate::azure_container_apps::{
         Configuration, ConfigurationActiveRevisionsMode, ContainerApp, ContainerAppProperties,
-        ContainerAppPropertiesProvisioningState, IngressTransport, TrafficWeight,
-    };
-    use alien_azure_clients::{
-        container_apps::MockContainerAppsApi,
-        long_running_operation::{
-            LongRunningOperation, MockLongRunningOperationApi, OperationResult,
-        },
+        ContainerAppPropertiesProvisioningState, Ingress as AzureContainerAppsIngress,
+        IngressTransport, MockContainerAppsApi, MockLongRunningOperationApi, TrafficWeight,
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
@@ -4548,6 +4525,7 @@ mod tests {
 
     use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::{LongRunningOperation, OperationResult};
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
@@ -4630,17 +4608,17 @@ mod tests {
         };
 
         let ingress = if has_url {
-            Some(alien_azure_clients::models::container_apps::Ingress {
+            Some(AzureContainerAppsIngress {
                 external: true,
                 target_port: Some(8080),
                 fqdn: fqdn.clone(),
-                traffic: vec![alien_azure_clients::models::container_apps::TrafficWeight {
+                traffic: vec![TrafficWeight {
                     latest_revision: true,
                     weight: Some(100),
                     revision_name: None,
                     label: None,
                 }],
-                transport: alien_azure_clients::models::container_apps::IngressTransport::Auto,
+                transport: IngressTransport::Auto,
                 allow_insecure: false,
                 additional_port_mappings: vec![],
                 custom_domains: vec![],
@@ -5072,17 +5050,17 @@ mod tests {
             host.to_string()
         };
 
-        let ingress = Some(alien_azure_clients::models::container_apps::Ingress {
+        let ingress = Some(AzureContainerAppsIngress {
             external: true,
             target_port: Some(8080),
             fqdn: Some(custom_url.to_string()), // Use the full URL as FQDN for the test
-            traffic: vec![alien_azure_clients::models::container_apps::TrafficWeight {
+            traffic: vec![TrafficWeight {
                 latest_revision: true,
                 weight: Some(100),
                 revision_name: None,
                 label: None,
             }],
-            transport: alien_azure_clients::models::container_apps::IngressTransport::Auto,
+            transport: IngressTransport::Auto,
             allow_insecure: false,
             additional_port_mappings: vec![],
             custom_domains: vec![],
