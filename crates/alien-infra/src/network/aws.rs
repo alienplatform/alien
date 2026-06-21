@@ -29,7 +29,7 @@ use crate::aws_sdk::{
     DeleteNatGatewayRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
     DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
     DetachInternetGatewayRequest, DomainType, Ec2ResourceType, Ec2Tag as Tag, Filter, IpPermission,
-    IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, TagSpecification,
+    IpRange, ModifyVpcAttributeRequest, SecurityGroup, TagSpecification,
 };
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
@@ -118,42 +118,26 @@ fn is_security_group_rule_duplicate(error: &AlienError<ErrorData>) -> bool {
     )
 }
 
-fn has_ipv4_all_protocol_rule(
-    permissions: Option<&[IpPermissionResponse]>,
-    cidr_block: &str,
-) -> bool {
+fn has_ipv4_all_protocol_rule(permissions: Option<&[IpPermission]>, cidr_block: &str) -> bool {
     permissions.unwrap_or_default().iter().any(|permission| {
-        permission.ip_protocol.as_deref() == Some("-1")
-            && permission.ip_ranges.as_ref().is_some_and(|ranges| {
-                ranges
-                    .items
-                    .iter()
-                    .any(|range| range.cidr_ip.as_deref() == Some(cidr_block))
-            })
+        permission.ip_protocol() == Some("-1")
+            && permission
+                .ip_ranges()
+                .iter()
+                .any(|range| range.cidr_ip() == Some(cidr_block))
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::aws_sdk::{IpPermissionSet, IpRangeResponse, IpRangeSet};
-
     use super::*;
 
     #[test]
     fn detects_existing_all_protocol_ipv4_rule() {
-        let permissions = [IpPermissionResponse {
-            ip_protocol: Some("-1".to_string()),
-            from_port: None,
-            to_port: None,
-            ip_ranges: Some(IpRangeSet {
-                items: vec![IpRangeResponse {
-                    cidr_ip: Some("10.0.0.0/16".to_string()),
-                    description: None,
-                }],
-            }),
-            ipv6_ranges: None,
-            groups: None,
-        }];
+        let permissions = [IpPermission::builder()
+            .ip_protocol("-1")
+            .ip_ranges(IpRange::builder().cidr_ip("10.0.0.0/16").build())
+            .build()];
 
         assert!(has_ipv4_all_protocol_rule(
             Some(&permissions),
@@ -164,32 +148,16 @@ mod tests {
     #[test]
     fn ignores_rules_for_other_cidrs_or_protocols() {
         let permissions = [
-            IpPermissionResponse {
-                ip_protocol: Some("tcp".to_string()),
-                from_port: Some(443),
-                to_port: Some(443),
-                ip_ranges: Some(IpRangeSet {
-                    items: vec![IpRangeResponse {
-                        cidr_ip: Some("10.0.0.0/16".to_string()),
-                        description: None,
-                    }],
-                }),
-                ipv6_ranges: None,
-                groups: None,
-            },
-            IpPermissionResponse {
-                ip_protocol: Some("-1".to_string()),
-                from_port: None,
-                to_port: None,
-                ip_ranges: Some(IpRangeSet {
-                    items: vec![IpRangeResponse {
-                        cidr_ip: Some("192.168.0.0/16".to_string()),
-                        description: None,
-                    }],
-                }),
-                ipv6_ranges: None,
-                groups: None,
-            },
+            IpPermission::builder()
+                .ip_protocol("tcp")
+                .from_port(443)
+                .to_port(443)
+                .ip_ranges(IpRange::builder().cidr_ip("10.0.0.0/16").build())
+                .build(),
+            IpPermission::builder()
+                .ip_protocol("-1")
+                .ip_ranges(IpRange::builder().cidr_ip("192.168.0.0/16").build())
+                .build(),
         ];
 
         assert!(!has_ipv4_all_protocol_rule(
@@ -200,9 +168,9 @@ mod tests {
 
     #[test]
     fn handles_empty_permission_sets() {
-        let set = IpPermissionSet { items: Vec::new() };
+        let permissions: [IpPermission; 0] = [];
 
-        assert!(!has_ipv4_all_protocol_rule(Some(&set.items), "0.0.0.0/0"));
+        assert!(!has_ipv4_all_protocol_rule(Some(&permissions), "0.0.0.0/0"));
         assert!(!has_ipv4_all_protocol_rule(None, "0.0.0.0/0"));
     }
 }
@@ -254,14 +222,19 @@ impl AwsNetworkController {
         let response = client
             .describe_security_groups(
                 DescribeSecurityGroupsRequest::builder()
-                    .filters(vec![
+                    .set_filters(Some(vec![
                         Filter::builder().name("vpc-id").values(vpc_id).build(),
                         Filter::builder()
                             .name("group-name")
                             .values(group_name)
                             .build(),
-                    ])
-                    .build(),
+                    ]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build security group lookup request".to_string(),
+                        resource_id: Some(resource_id.to_string()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -270,8 +243,9 @@ impl AwsNetworkController {
             })?;
 
         Ok(response
-            .security_group_info
-            .and_then(|set| set.items.into_iter().find_map(|sg| sg.group_id)))
+            .security_groups()
+            .iter()
+            .find_map(|sg| sg.group_id().map(ToString::to_string)))
     }
 
     async fn find_security_group_by_id(
@@ -286,8 +260,13 @@ impl AwsNetworkController {
         let response = client
             .describe_security_groups(
                 DescribeSecurityGroupsRequest::builder()
-                    .group_ids(vec![group_id.to_string()])
-                    .build(),
+                    .group_ids(group_id.to_string())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build security group describe request".to_string(),
+                        resource_id: Some(resource_id.to_string()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -295,15 +274,12 @@ impl AwsNetworkController {
                 resource_id: Some(resource_id.to_string()),
             })?;
 
-        response
-            .security_group_info
-            .and_then(|set| set.items.into_iter().next())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("Security group '{group_id}' was not found"),
-                    resource_id: Some(resource_id.to_string()),
-                })
+        response.security_groups().first().cloned().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("Security group '{group_id}' was not found"),
+                resource_id: Some(resource_id.to_string()),
             })
+        })
     }
 
     /// Find an available CIDR block for the VPC.
@@ -1464,22 +1440,32 @@ impl AwsNetworkController {
                         "Alien managed security group for VPC internal communication".to_string(),
                     )
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(self.create_tags(
+                    .set_tag_specifications(Some(self.create_tags(
                         ctx.resource_prefix,
                         &config.id,
                         "security-group",
-                    ))
-                    .build(),
+                    )))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build security group creation request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await;
 
         let sg_id = match sg_result {
-            Ok(sg_response) => sg_response.group_id.ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "Security group created but no ID returned".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?,
+            Ok(sg_response) => {
+                sg_response
+                    .group_id()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: "Security group created but no ID returned".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?
+            }
             Err(error) if is_security_group_duplicate(&error) => {
                 let sg_id = self
                     .find_security_group_id_by_name(ctx, vpc_id, &group_name, &config.id)
@@ -1549,13 +1535,7 @@ impl AwsNetworkController {
         let security_group = self
             .find_security_group_by_id(ctx, sg_id, &config.id)
             .await?;
-        if has_ipv4_all_protocol_rule(
-            security_group
-                .ip_permissions
-                .as_ref()
-                .map(|permissions| permissions.items.as_slice()),
-            cidr_block,
-        ) {
+        if has_ipv4_all_protocol_rule(Some(security_group.ip_permissions()), cidr_block) {
             debug!(sg_id = %sg_id, cidr_block = %cidr_block, "Security group ingress rule already exists");
             return Ok(HandlerAction::Continue {
                 state: AuthorizingSecurityGroupEgress,
@@ -1567,7 +1547,7 @@ impl AwsNetworkController {
             .authorize_security_group_ingress(
                 AuthorizeSecurityGroupIngressRequest::builder()
                     .group_id(sg_id.clone())
-                    .ip_permissions(vec![IpPermission::builder()
+                    .set_ip_permissions(Some(vec![IpPermission::builder()
                         .ip_protocol("-1") // All protocols
                         .ip_ranges(
                             IpRange::builder()
@@ -1575,8 +1555,13 @@ impl AwsNetworkController {
                                 .description("Allow all traffic from VPC")
                                 .build(),
                         )
-                        .build()])
-                    .build(),
+                        .build()]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build security group ingress request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
         {
@@ -1621,13 +1606,7 @@ impl AwsNetworkController {
         let security_group = self
             .find_security_group_by_id(ctx, sg_id, &config.id)
             .await?;
-        if has_ipv4_all_protocol_rule(
-            security_group
-                .ip_permissions_egress
-                .as_ref()
-                .map(|permissions| permissions.items.as_slice()),
-            "0.0.0.0/0",
-        ) {
+        if has_ipv4_all_protocol_rule(Some(security_group.ip_permissions_egress()), "0.0.0.0/0") {
             debug!(sg_id = %sg_id, "Security group egress rule already exists");
             return Ok(HandlerAction::Continue {
                 state: Ready,
@@ -1639,7 +1618,7 @@ impl AwsNetworkController {
             .authorize_security_group_egress(
                 AuthorizeSecurityGroupEgressRequest::builder()
                     .group_id(sg_id.clone())
-                    .ip_permissions(vec![IpPermission::builder()
+                    .set_ip_permissions(Some(vec![IpPermission::builder()
                         .ip_protocol("-1")
                         .ip_ranges(
                             IpRange::builder()
@@ -1647,8 +1626,13 @@ impl AwsNetworkController {
                                 .description("Allow all outbound traffic")
                                 .build(),
                         )
-                        .build()])
-                    .build(),
+                        .build()]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build security group egress request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
         {

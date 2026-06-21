@@ -21,10 +21,7 @@ use aws_sdk_dynamodb::{
     Client as DynamoDbClient,
 };
 use aws_sdk_ec2::{
-    types::{
-        AttributeBooleanValue as AwsEc2AttributeBooleanValue, IpPermission as AwsEc2IpPermission,
-    },
-    Client as Ec2Client,
+    types::AttributeBooleanValue as AwsEc2AttributeBooleanValue, Client as Ec2Client,
 };
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
@@ -141,6 +138,8 @@ pub use aws_sdk_ec2::{
             AssociateRouteTableOutput as AssociateRouteTableResponse,
         },
         attach_internet_gateway::AttachInternetGatewayInput as AttachInternetGatewayRequest,
+        authorize_security_group_egress::AuthorizeSecurityGroupEgressInput as AuthorizeSecurityGroupEgressRequest,
+        authorize_security_group_ingress::AuthorizeSecurityGroupIngressInput as AuthorizeSecurityGroupIngressRequest,
         create_internet_gateway::{
             CreateInternetGatewayInput as CreateInternetGatewayRequest,
             CreateInternetGatewayOutput as CreateInternetGatewayResponse,
@@ -154,6 +153,10 @@ pub use aws_sdk_ec2::{
             CreateRouteTableInput as CreateRouteTableRequest,
             CreateRouteTableOutput as CreateRouteTableResponse,
         },
+        create_security_group::{
+            CreateSecurityGroupInput as CreateSecurityGroupRequest,
+            CreateSecurityGroupOutput as CreateSecurityGroupResponse,
+        },
         create_subnet::{
             CreateSubnetInput as CreateSubnetRequest, CreateSubnetOutput as CreateSubnetResponse,
         },
@@ -166,6 +169,10 @@ pub use aws_sdk_ec2::{
             DescribeNatGatewaysInput as DescribeNatGatewaysRequest,
             DescribeNatGatewaysOutput as DescribeNatGatewaysResponse,
         },
+        describe_security_groups::{
+            DescribeSecurityGroupsInput as DescribeSecurityGroupsRequest,
+            DescribeSecurityGroupsOutput as DescribeSecurityGroupsResponse,
+        },
         describe_subnets::{
             DescribeSubnetsInput as DescribeSubnetsRequest,
             DescribeSubnetsOutput as DescribeSubnetsResponse,
@@ -177,7 +184,8 @@ pub use aws_sdk_ec2::{
     },
     types::{
         ConnectivityType, DomainType, Filter, InternetGateway, IpPermission, IpRange, NatGateway,
-        ResourceType as Ec2ResourceType, RouteTable, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
+        ResourceType as Ec2ResourceType, RouteTable, SecurityGroup, Subnet, Tag as Ec2Tag,
+        TagSpecification, Vpc,
     },
 };
 
@@ -304,48 +312,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_hostnames: Option<bool>,
 }
 
-/// Request to describe security groups.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeSecurityGroupsRequest {
-    /// Group IDs.
-    pub group_ids: Option<Vec<String>>,
-    /// Group names.
-    pub group_names: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Maximum results.
-    pub max_results: Option<i32>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// Response from describing security groups.
-#[derive(Debug, Clone)]
-pub struct DescribeSecurityGroupsResponse {
-    /// Security group set.
-    pub security_group_info: Option<SecurityGroupSet>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// EC2 security group set.
-#[derive(Debug, Clone)]
-pub struct SecurityGroupSet {
-    /// Security groups.
-    pub items: Vec<SecurityGroup>,
-}
-
-/// EC2 security group metadata.
-#[derive(Debug, Clone)]
-pub struct SecurityGroup {
-    /// Group ID.
-    pub group_id: Option<String>,
-    /// Ingress permissions.
-    pub ip_permissions: Option<IpPermissionSet>,
-    /// Egress permissions.
-    pub ip_permissions_egress: Option<IpPermissionSet>,
-}
-
 /// Request to describe network interfaces.
 #[derive(Debug, Clone, Builder, Default)]
 pub struct DescribeNetworkInterfacesRequest {
@@ -380,84 +346,6 @@ pub struct NetworkInterfaceSet {
 pub struct NetworkInterface {
     /// Network interface ID.
     pub network_interface_id: Option<String>,
-}
-
-/// Security group permission set.
-#[derive(Debug, Clone)]
-pub struct IpPermissionSet {
-    /// Permissions.
-    pub items: Vec<IpPermissionResponse>,
-}
-
-/// Security group permission returned by EC2.
-#[derive(Debug, Clone)]
-pub struct IpPermissionResponse {
-    /// IP protocol.
-    pub ip_protocol: Option<String>,
-    /// From port.
-    pub from_port: Option<i32>,
-    /// To port.
-    pub to_port: Option<i32>,
-    /// IPv4 ranges.
-    pub ip_ranges: Option<IpRangeSet>,
-    /// IPv6 ranges are not used by current infra code.
-    pub ipv6_ranges: Option<()>,
-    /// Source security groups are not used by current infra code.
-    pub groups: Option<()>,
-}
-
-/// IPv4 range set.
-#[derive(Debug, Clone)]
-pub struct IpRangeSet {
-    /// IPv4 ranges.
-    pub items: Vec<IpRangeResponse>,
-}
-
-/// IPv4 range returned by EC2.
-#[derive(Debug, Clone)]
-pub struct IpRangeResponse {
-    /// CIDR block.
-    pub cidr_ip: Option<String>,
-    /// Description.
-    pub description: Option<String>,
-}
-
-/// Request to create a security group.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateSecurityGroupRequest {
-    /// Group name.
-    pub group_name: String,
-    /// Group description.
-    pub description: String,
-    /// VPC ID.
-    pub vpc_id: String,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating a security group.
-#[derive(Debug, Clone)]
-pub struct CreateSecurityGroupResponse {
-    /// Security group ID.
-    pub group_id: Option<String>,
-}
-
-/// Request to authorize security group ingress.
-#[derive(Debug, Clone, Builder)]
-pub struct AuthorizeSecurityGroupIngressRequest {
-    /// Security group ID.
-    pub group_id: String,
-    /// Permissions.
-    pub ip_permissions: Vec<IpPermission>,
-}
-
-/// Request to authorize security group egress.
-#[derive(Debug, Clone, Builder)]
-pub struct AuthorizeSecurityGroupEgressRequest {
-    /// Security group ID.
-    pub group_id: String,
-    /// Permissions.
-    pub ip_permissions: Vec<IpPermission>,
 }
 
 /// Request to describe availability zones.
@@ -3555,30 +3443,20 @@ impl Ec2Api for Ec2Client {
         &self,
         request: DescribeSecurityGroupsRequest,
     ) -> Result<DescribeSecurityGroupsResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_security_groups()
                 .set_group_ids(request.group_ids)
                 .set_group_names(request.group_names)
-                .set_filters(request.filters)
-                .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
+                .set_max_results(request.max_results)
+                .set_dry_run(request.dry_run)
+                .set_filters(request.filters)
                 .send()
                 .await,
             "DescribeSecurityGroups",
             "SecurityGroup",
             "*",
-        )?;
-
-        Ok(DescribeSecurityGroupsResponse {
-            security_group_info: Some(SecurityGroupSet {
-                items: response
-                    .security_groups()
-                    .iter()
-                    .map(ec2_security_group)
-                    .collect(),
-            }),
-            next_token: response.next_token().map(ToString::to_string),
-        })
+        )
     }
 
     async fn describe_network_interfaces(
@@ -3618,23 +3496,21 @@ impl Ec2Api for Ec2Client {
         &self,
         request: CreateSecurityGroupRequest,
     ) -> Result<CreateSecurityGroupResponse> {
-        let group_name = request.group_name.clone();
-        let response = ec2_result(
+        let group_name = request.group_name().unwrap_or("<unknown>").to_string();
+
+        ec2_result(
             self.create_security_group()
-                .group_name(&group_name)
-                .description(request.description)
-                .vpc_id(request.vpc_id)
+                .set_description(request.description)
+                .set_group_name(request.group_name)
+                .set_vpc_id(request.vpc_id)
                 .set_tag_specifications(request.tag_specifications)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "CreateSecurityGroup",
             "SecurityGroup",
             &group_name,
-        )?;
-
-        Ok(CreateSecurityGroupResponse {
-            group_id: response.group_id().map(ToString::to_string),
-        })
+        )
     }
 
     async fn delete_security_group(&self, group_id: &str) -> Result<()> {
@@ -3651,11 +3527,21 @@ impl Ec2Api for Ec2Client {
         &self,
         request: AuthorizeSecurityGroupIngressRequest,
     ) -> Result<()> {
-        let group_id = request.group_id.clone();
+        let group_id = request.group_id().unwrap_or("<unknown>").to_string();
+
         ec2_result(
             self.authorize_security_group_ingress()
-                .group_id(&group_id)
-                .set_ip_permissions(Some(request.ip_permissions))
+                .set_cidr_ip(request.cidr_ip)
+                .set_from_port(request.from_port)
+                .set_group_id(request.group_id)
+                .set_group_name(request.group_name)
+                .set_ip_permissions(request.ip_permissions)
+                .set_ip_protocol(request.ip_protocol)
+                .set_source_security_group_name(request.source_security_group_name)
+                .set_source_security_group_owner_id(request.source_security_group_owner_id)
+                .set_to_port(request.to_port)
+                .set_tag_specifications(request.tag_specifications)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "AuthorizeSecurityGroupIngress",
@@ -3669,11 +3555,20 @@ impl Ec2Api for Ec2Client {
         &self,
         request: AuthorizeSecurityGroupEgressRequest,
     ) -> Result<()> {
-        let group_id = request.group_id.clone();
+        let group_id = request.group_id().unwrap_or("<unknown>").to_string();
+
         ec2_result(
             self.authorize_security_group_egress()
-                .group_id(&group_id)
-                .set_ip_permissions(Some(request.ip_permissions))
+                .set_tag_specifications(request.tag_specifications)
+                .set_dry_run(request.dry_run)
+                .set_group_id(request.group_id)
+                .set_source_security_group_name(request.source_security_group_name)
+                .set_source_security_group_owner_id(request.source_security_group_owner_id)
+                .set_ip_protocol(request.ip_protocol)
+                .set_from_port(request.from_port)
+                .set_to_port(request.to_port)
+                .set_cidr_ip(request.cidr_ip)
+                .set_ip_permissions(request.ip_permissions)
                 .send()
                 .await,
             "AuthorizeSecurityGroupEgress",
@@ -4345,46 +4240,6 @@ fn nonempty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
         None
     } else {
         Some(values)
-    }
-}
-
-fn ec2_security_group(group: &aws_sdk_ec2::types::SecurityGroup) -> SecurityGroup {
-    SecurityGroup {
-        group_id: group.group_id().map(ToString::to_string),
-        ip_permissions: Some(IpPermissionSet {
-            items: group
-                .ip_permissions()
-                .iter()
-                .map(ec2_ip_permission_response)
-                .collect(),
-        }),
-        ip_permissions_egress: Some(IpPermissionSet {
-            items: group
-                .ip_permissions_egress()
-                .iter()
-                .map(ec2_ip_permission_response)
-                .collect(),
-        }),
-    }
-}
-
-fn ec2_ip_permission_response(permission: &AwsEc2IpPermission) -> IpPermissionResponse {
-    IpPermissionResponse {
-        ip_protocol: permission.ip_protocol().map(ToString::to_string),
-        from_port: permission.from_port(),
-        to_port: permission.to_port(),
-        ip_ranges: Some(IpRangeSet {
-            items: permission
-                .ip_ranges()
-                .iter()
-                .map(|range| IpRangeResponse {
-                    cidr_ip: range.cidr_ip().map(ToString::to_string),
-                    description: range.description().map(ToString::to_string),
-                })
-                .collect(),
-        }),
-        ipv6_ranges: None,
-        groups: None,
     }
 }
 
