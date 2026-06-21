@@ -37,7 +37,7 @@ use alien_core::{
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 use std::collections::HashSet;
@@ -322,20 +322,25 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Get all existing VPC CIDRs in the account
-        let existing_vpcs = client
-            .describe_vpcs(DescribeVpcsRequest::builder().build())
-            .await
+        let describe_vpcs_request = DescribeVpcsRequest::builder()
+            .build()
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe existing VPCs for CIDR allocation".to_string(),
+                message: "Failed to build DescribeVpcs request for CIDR allocation".to_string(),
                 resource_id: Some(stack_id.to_string()),
             })?;
 
+        let existing_vpcs = client.describe_vpcs(describe_vpcs_request).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Failed to describe existing VPCs for CIDR allocation".to_string(),
+                resource_id: Some(stack_id.to_string()),
+            },
+        )?;
+
         let used_cidrs: HashSet<String> = existing_vpcs
-            .vpc_set
-            .map(|set| set.items)
-            .unwrap_or_default()
+            .vpcs()
             .iter()
-            .filter_map(|vpc| vpc.cidr_block.clone())
+            .filter_map(|vpc| vpc.cidr_block().map(ToString::to_string))
             .collect();
 
         // Start with hash-based offset for determinism
@@ -501,15 +506,18 @@ impl AwsNetworkController {
 
                 info!("Discovering AWS default VPC");
 
+                let describe_vpcs_request = DescribeVpcsRequest::builder()
+                    .filters(Filter::builder().name("is-default").values("true").build())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::InfrastructureError {
+                        message: "Failed to build default VPC discovery request".to_string(),
+                        operation: Some("discover_default_vpc".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+
                 let vpcs_response = ec2_client
-                    .describe_vpcs(
-                        DescribeVpcsRequest::builder()
-                            .filters(vec![Filter::builder()
-                                .name("is-default")
-                                .values("true")
-                                .build()])
-                            .build(),
-                    )
+                    .describe_vpcs(describe_vpcs_request)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: "Failed to discover default VPC".to_string(),
@@ -517,38 +525,46 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                let default_vpc = vpcs_response
-                    .vpc_set
-                    .and_then(|set| set.items.into_iter().next())
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::InfrastructureError {
-                            message: "Default VPC not found. It may have been deleted. \
+                let default_vpc = vpcs_response.vpcs().first().ok_or_else(|| {
+                    AlienError::new(ErrorData::InfrastructureError {
+                        message: "Default VPC not found. It may have been deleted. \
                                       Use NetworkSettings::Create to create an isolated VPC, \
                                       or ByoVpcAws to reference an existing one."
-                                .to_string(),
-                            operation: Some("discover_default_vpc".to_string()),
-                            resource_id: Some(config.id.clone()),
-                        })
-                    })?;
-
-                let vpc_id = default_vpc.vpc_id.ok_or_else(|| {
-                    AlienError::new(ErrorData::InfrastructureError {
-                        message: "Default VPC has no ID".to_string(),
+                            .to_string(),
                         operation: Some("discover_default_vpc".to_string()),
                         resource_id: Some(config.id.clone()),
                     })
                 })?;
 
+                let vpc_id = default_vpc
+                    .vpc_id()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::InfrastructureError {
+                            message: "Default VPC has no ID".to_string(),
+                            operation: Some("discover_default_vpc".to_string()),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+
                 // List subnets in the default VPC
-                let subnets_response = ec2_client
-                    .describe_subnets(
-                        DescribeSubnetsRequest::builder()
-                            .filters(vec![Filter::builder()
-                                .name("vpc-id")
-                                .values(vpc_id.clone())
-                                .build()])
+                let describe_subnets_request = DescribeSubnetsRequest::builder()
+                    .filters(
+                        Filter::builder()
+                            .name("vpc-id")
+                            .values(vpc_id.clone())
                             .build(),
                     )
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::InfrastructureError {
+                        message: "Failed to build default subnet discovery request".to_string(),
+                        operation: Some("discover_default_subnets".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+
+                let subnets_response = ec2_client
+                    .describe_subnets(describe_subnets_request)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: "Failed to list subnets in default VPC".to_string(),
@@ -557,9 +573,10 @@ impl AwsNetworkController {
                     })?;
 
                 let subnet_ids: Vec<String> = subnets_response
-                    .subnet_set
-                    .map(|set| set.items.into_iter().filter_map(|s| s.subnet_id).collect())
-                    .unwrap_or_default();
+                    .subnets()
+                    .iter()
+                    .filter_map(|subnet| subnet.subnet_id().map(ToString::to_string))
+                    .collect();
 
                 info!(
                     vpc_id = %vpc_id,
@@ -658,25 +675,39 @@ impl AwsNetworkController {
         info!(cidr = %vpc_cidr, "Creating VPC");
 
         // Create the VPC
-        let create_response = client
-            .create_vpc(
-                CreateVpcRequest::builder()
-                    .cidr_block(vpc_cidr.clone())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, &config.id, "vpc"))
-                    .build(),
-            )
-            .await
+        let create_vpc_request = CreateVpcRequest::builder()
+            .cidr_block(vpc_cidr.clone())
+            .set_tag_specifications(Some(self.create_tags(
+                ctx.resource_prefix,
+                &config.id,
+                "vpc",
+            )))
+            .build()
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to create VPC".to_string(),
+                message: "Failed to build CreateVpc request".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let vpc_id = create_response.vpc.and_then(|v| v.vpc_id).ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "VPC created but no VPC ID returned".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        let create_response =
+            client
+                .create_vpc(create_vpc_request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to create VPC".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+        let vpc_id = create_response
+            .vpc()
+            .and_then(|vpc| vpc.vpc_id())
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "VPC created but no VPC ID returned".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
         info!(vpc_id = %vpc_id, "VPC created, enabling DNS support");
 
@@ -868,28 +899,36 @@ impl AwsNetworkController {
         {
             let subnet_name = format!("{}-public-{}", ctx.resource_prefix, i + 1);
 
-            let subnet_response = client
-                .create_subnet(
-                    CreateSubnetRequest::builder()
-                        .vpc_id(vpc_id.clone())
-                        .cidr_block(cidr.clone())
-                        .availability_zone(az.clone())
-                        .tag_specifications(vec![self.create_tag_specification(
-                            ctx.resource_prefix,
-                            &config.id,
-                            "subnet",
-                            subnet_name,
-                            [("Type".to_string(), "Public".to_string())],
-                        )])
-                        .build(),
-                )
-                .await
+            let create_subnet_request = CreateSubnetRequest::builder()
+                .vpc_id(vpc_id.clone())
+                .cidr_block(cidr.clone())
+                .availability_zone(az.clone())
+                .set_tag_specifications(Some(vec![self.create_tag_specification(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "subnet",
+                    subnet_name,
+                    [("Type".to_string(), "Public".to_string())],
+                )]))
+                .build()
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create public subnet in {}", az),
+                    message: format!("Failed to build public CreateSubnet request for {az}"),
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
+            let subnet_response = client.create_subnet(create_subnet_request).await.context(
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to create public subnet in {}", az),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
+
+            if let Some(subnet_id) = subnet_response
+                .subnet()
+                .and_then(|subnet| subnet.subnet_id())
+                .map(ToString::to_string)
+            {
                 self.public_subnet_ids.push(subnet_id);
             }
         }
@@ -902,28 +941,36 @@ impl AwsNetworkController {
         {
             let subnet_name = format!("{}-private-{}", ctx.resource_prefix, i + 1);
 
-            let subnet_response = client
-                .create_subnet(
-                    CreateSubnetRequest::builder()
-                        .vpc_id(vpc_id.clone())
-                        .cidr_block(cidr.clone())
-                        .availability_zone(az.clone())
-                        .tag_specifications(vec![self.create_tag_specification(
-                            ctx.resource_prefix,
-                            &config.id,
-                            "subnet",
-                            subnet_name,
-                            [("Type".to_string(), "Private".to_string())],
-                        )])
-                        .build(),
-                )
-                .await
+            let create_subnet_request = CreateSubnetRequest::builder()
+                .vpc_id(vpc_id.clone())
+                .cidr_block(cidr.clone())
+                .availability_zone(az.clone())
+                .set_tag_specifications(Some(vec![self.create_tag_specification(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "subnet",
+                    subnet_name,
+                    [("Type".to_string(), "Private".to_string())],
+                )]))
+                .build()
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create private subnet in {}", az),
+                    message: format!("Failed to build private CreateSubnet request for {az}"),
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
+            let subnet_response = client.create_subnet(create_subnet_request).await.context(
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to create private subnet in {}", az),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
+
+            if let Some(subnet_id) = subnet_response
+                .subnet()
+                .and_then(|subnet| subnet.subnet_id())
+                .map(ToString::to_string)
+            {
                 self.private_subnet_ids.push(subnet_id);
             }
         }
@@ -1580,30 +1627,34 @@ impl AwsNetworkController {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-            let vpc_response = client
-                .describe_vpcs(
-                    DescribeVpcsRequest::builder()
-                        .vpc_ids(vec![vpc_id.clone()])
-                        .build(),
-                )
-                .await
+            let describe_vpcs_request = DescribeVpcsRequest::builder()
+                .vpc_ids(vpc_id.clone())
+                .build()
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
-                    message: "Failed to verify VPC during heartbeat".to_string(),
+                    message: "Failed to build heartbeat DescribeVpcs request".to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let vpcs = vpc_response
-                .vpc_set
-                .map(|set| set.items)
-                .unwrap_or_default();
-            if vpcs.is_empty() {
+            let vpc_response = client.describe_vpcs(describe_vpcs_request).await.context(
+                ErrorData::CloudPlatformError {
+                    message: "Failed to verify VPC during heartbeat".to_string(),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
+
+            if vpc_response.vpcs().is_empty() {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: "VPC no longer exists".to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }
 
-            let vpc_state = vpcs.first().and_then(|vpc| vpc.state.clone());
+            let vpc_state = vpc_response
+                .vpcs()
+                .first()
+                .and_then(|vpc| vpc.state())
+                .map(|state| state.as_str().to_string());
             debug!(vpc_id = %vpc_id, "VPC exists and is accessible");
             emit_aws_network_heartbeat(ctx, &config.id, self, vpc_state);
         } else {

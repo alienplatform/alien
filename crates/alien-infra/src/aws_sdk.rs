@@ -132,8 +132,24 @@ pub use aws_sdk_dynamodb::types::{
     TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
 };
 
-pub use aws_sdk_ec2::types::{
-    Filter, IpPermission, IpRange, ResourceType as Ec2ResourceType, Tag as Ec2Tag, TagSpecification,
+pub use aws_sdk_ec2::{
+    operation::{
+        create_subnet::{
+            CreateSubnetInput as CreateSubnetRequest, CreateSubnetOutput as CreateSubnetResponse,
+        },
+        create_vpc::{CreateVpcInput as CreateVpcRequest, CreateVpcOutput as CreateVpcResponse},
+        describe_subnets::{
+            DescribeSubnetsInput as DescribeSubnetsRequest,
+            DescribeSubnetsOutput as DescribeSubnetsResponse,
+        },
+        describe_vpcs::{
+            DescribeVpcsInput as DescribeVpcsRequest, DescribeVpcsOutput as DescribeVpcsResponse,
+        },
+    },
+    types::{
+        Filter, IpPermission, IpRange, ResourceType as Ec2ResourceType, Subnet, Tag as Ec2Tag,
+        TagSpecification, Vpc,
+    },
 };
 
 pub use aws_sdk_eventbridge::{
@@ -248,62 +264,6 @@ pub struct FunctionConfiguration {
     pub kms_key_arn: Option<String>,
 }
 
-/// Request to describe VPCs.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeVpcsRequest {
-    /// Optional VPC IDs.
-    pub vpc_ids: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Maximum results.
-    pub max_results: Option<i32>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// Response from describing VPCs.
-#[derive(Debug, Clone)]
-pub struct DescribeVpcsResponse {
-    /// VPC set.
-    pub vpc_set: Option<VpcSet>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// EC2 VPC set.
-#[derive(Debug, Clone)]
-pub struct VpcSet {
-    /// VPCs.
-    pub items: Vec<Vpc>,
-}
-
-/// EC2 VPC metadata.
-#[derive(Debug, Clone)]
-pub struct Vpc {
-    /// VPC ID.
-    pub vpc_id: Option<String>,
-    /// VPC state.
-    pub state: Option<String>,
-    /// Primary CIDR block.
-    pub cidr_block: Option<String>,
-}
-
-/// Request to create a VPC.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateVpcRequest {
-    /// CIDR block.
-    pub cidr_block: String,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating a VPC.
-#[derive(Debug, Clone)]
-pub struct CreateVpcResponse {
-    /// Created VPC.
-    pub vpc: Option<Vpc>,
-}
-
 /// Request to modify VPC attributes.
 #[derive(Debug, Clone, Builder)]
 pub struct ModifyVpcAttributeRequest {
@@ -313,62 +273,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_support: Option<bool>,
     /// Enable DNS hostnames.
     pub enable_dns_hostnames: Option<bool>,
-}
-
-/// Request to describe subnets.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeSubnetsRequest {
-    /// Optional subnet IDs.
-    pub subnet_ids: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Maximum results.
-    pub max_results: Option<i32>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// Response from describing subnets.
-#[derive(Debug, Clone)]
-pub struct DescribeSubnetsResponse {
-    /// Subnet set.
-    pub subnet_set: Option<SubnetSet>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// EC2 subnet set.
-#[derive(Debug, Clone)]
-pub struct SubnetSet {
-    /// Subnets.
-    pub items: Vec<Subnet>,
-}
-
-/// EC2 subnet metadata.
-#[derive(Debug, Clone)]
-pub struct Subnet {
-    /// Subnet ID.
-    pub subnet_id: Option<String>,
-}
-
-/// Request to create a subnet.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateSubnetRequest {
-    /// VPC ID.
-    pub vpc_id: String,
-    /// CIDR block.
-    pub cidr_block: String,
-    /// Availability zone name.
-    pub availability_zone: Option<String>,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating a subnet.
-#[derive(Debug, Clone)]
-pub struct CreateSubnetResponse {
-    /// Created subnet.
-    pub subnet: Option<Subnet>,
 }
 
 /// Request to create an internet gateway.
@@ -3393,43 +3297,46 @@ impl EcrApi for EcrClient {
 #[async_trait]
 impl Ec2Api for Ec2Client {
     async fn describe_vpcs(&self, request: DescribeVpcsRequest) -> Result<DescribeVpcsResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_vpcs()
                 .set_vpc_ids(request.vpc_ids)
                 .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "DescribeVpcs",
             "VPC",
             "*",
-        )?;
-
-        Ok(DescribeVpcsResponse {
-            vpc_set: Some(VpcSet {
-                items: response.vpcs().iter().map(ec2_vpc).collect(),
-            }),
-            next_token: response.next_token().map(ToString::to_string),
-        })
+        )
     }
 
     async fn create_vpc(&self, request: CreateVpcRequest) -> Result<CreateVpcResponse> {
-        let cidr_block = request.cidr_block.clone();
-        let response = ec2_result(
+        let cidr_block = request.cidr_block().unwrap_or("<unknown>").to_string();
+        ec2_result(
             self.create_vpc()
-                .cidr_block(cidr_block.clone())
+                .set_cidr_block(request.cidr_block)
+                .set_ipv6_pool(request.ipv6_pool)
+                .set_ipv6_cidr_block(request.ipv6_cidr_block)
+                .set_ipv4_ipam_pool_id(request.ipv4_ipam_pool_id)
+                .set_ipv4_netmask_length(request.ipv4_netmask_length)
+                .set_ipv6_ipam_pool_id(request.ipv6_ipam_pool_id)
+                .set_ipv6_netmask_length(request.ipv6_netmask_length)
+                .set_ipv6_cidr_block_network_border_group(
+                    request.ipv6_cidr_block_network_border_group,
+                )
+                .set_vpc_encryption_control(request.vpc_encryption_control)
                 .set_tag_specifications(request.tag_specifications)
+                .set_dry_run(request.dry_run)
+                .set_instance_tenancy(request.instance_tenancy)
+                .set_amazon_provided_ipv6_cidr_block(request.amazon_provided_ipv6_cidr_block)
                 .send()
                 .await,
             "CreateVpc",
             "VPC",
             &cidr_block,
-        )?;
-
-        Ok(CreateVpcResponse {
-            vpc: response.vpc().map(ec2_vpc),
-        })
+        )
     }
 
     async fn delete_vpc(&self, vpc_id: &str) -> Result<()> {
@@ -3468,45 +3375,44 @@ impl Ec2Api for Ec2Client {
         &self,
         request: DescribeSubnetsRequest,
     ) -> Result<DescribeSubnetsResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_subnets()
                 .set_subnet_ids(request.subnet_ids)
                 .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "DescribeSubnets",
             "Subnet",
             "*",
-        )?;
-
-        Ok(DescribeSubnetsResponse {
-            subnet_set: Some(SubnetSet {
-                items: response.subnets().iter().map(ec2_subnet).collect(),
-            }),
-            next_token: response.next_token().map(ToString::to_string),
-        })
+        )
     }
 
     async fn create_subnet(&self, request: CreateSubnetRequest) -> Result<CreateSubnetResponse> {
-        let cidr_block = request.cidr_block.clone();
-        let response = ec2_result(
+        let cidr_block = request.cidr_block().unwrap_or("<unknown>").to_string();
+        ec2_result(
             self.create_subnet()
-                .vpc_id(request.vpc_id)
-                .cidr_block(&cidr_block)
-                .set_availability_zone(request.availability_zone)
                 .set_tag_specifications(request.tag_specifications)
+                .set_availability_zone(request.availability_zone)
+                .set_availability_zone_id(request.availability_zone_id)
+                .set_cidr_block(request.cidr_block)
+                .set_ipv6_cidr_block(request.ipv6_cidr_block)
+                .set_outpost_arn(request.outpost_arn)
+                .set_vpc_id(request.vpc_id)
+                .set_ipv6_native(request.ipv6_native)
+                .set_ipv4_ipam_pool_id(request.ipv4_ipam_pool_id)
+                .set_ipv4_netmask_length(request.ipv4_netmask_length)
+                .set_ipv6_ipam_pool_id(request.ipv6_ipam_pool_id)
+                .set_ipv6_netmask_length(request.ipv6_netmask_length)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "CreateSubnet",
             "Subnet",
             &cidr_block,
-        )?;
-
-        Ok(CreateSubnetResponse {
-            subnet: response.subnet().map(ec2_subnet),
-        })
+        )
     }
 
     async fn delete_subnet(&self, subnet_id: &str) -> Result<()> {
@@ -4570,20 +4476,6 @@ fn nonempty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
         None
     } else {
         Some(values)
-    }
-}
-
-fn ec2_vpc(vpc: &aws_sdk_ec2::types::Vpc) -> Vpc {
-    Vpc {
-        vpc_id: vpc.vpc_id().map(ToString::to_string),
-        state: vpc.state().map(|state| state.as_str().to_string()),
-        cidr_block: vpc.cidr_block().map(ToString::to_string),
-    }
-}
-
-fn ec2_subnet(subnet: &aws_sdk_ec2::types::Subnet) -> Subnet {
-    Subnet {
-        subnet_id: subnet.subnet_id().map(ToString::to_string),
     }
 }
 
