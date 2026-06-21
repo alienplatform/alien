@@ -3087,7 +3087,7 @@ mod tests {
         );
         assert_eq!(targets[0].resource_names, vec!["agent".to_string()]);
         assert_eq!(targets[0].resource_type, "daemon");
-        assert_eq!(targets[0].local_image_dir, agent_dir);
+        assert_eq!(targets[0].local_image_dir, daemon_dir);
 
         let updates = targets[0].push_result_updates("registry.example.com/agent:tag".into());
         apply_pushed_images(&mut stack, updates);
