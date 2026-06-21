@@ -27,9 +27,9 @@ use crate::aws_sdk::{
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
     DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Tag as Tag,
-    Filter, IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup,
-    TagSpecification,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2ResourceType,
+    Ec2Tag as Tag, Filter, IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest,
+    SecurityGroup, TagSpecification,
 };
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
@@ -255,14 +255,11 @@ impl AwsNetworkController {
             .describe_security_groups(
                 DescribeSecurityGroupsRequest::builder()
                     .filters(vec![
-                        Filter {
-                            name: "vpc-id".to_string(),
-                            values: vec![vpc_id.to_string()],
-                        },
-                        Filter {
-                            name: "group-name".to_string(),
-                            values: vec![group_name.to_string()],
-                        },
+                        Filter::builder().name("vpc-id").values(vpc_id).build(),
+                        Filter::builder()
+                            .name("group-name")
+                            .values(group_name)
+                            .build(),
                     ])
                     .build(),
             )
@@ -449,22 +446,19 @@ impl AwsNetworkController {
         name: impl Into<String>,
         extra_tags: impl IntoIterator<Item = (String, String)>,
     ) -> TagSpecification {
-        let mut tags = vec![Tag {
-            key: "Name".to_string(),
-            value: name.into(),
-        }];
+        let mut tags = vec![Tag::builder().key("Name").value(name.into()).build()];
 
         tags.extend(
             standard_resource_tags(resource_prefix, resource_id)
                 .into_iter()
                 .chain(extra_tags)
-                .map(|(key, value)| Tag { key, value }),
+                .map(|(key, value)| Tag::builder().key(key).value(value).build()),
         );
 
-        TagSpecification {
-            resource_type: resource_type.to_string(),
-            tags,
-        }
+        TagSpecification::builder()
+            .resource_type(Ec2ResourceType::from(resource_type))
+            .set_tags(Some(tags))
+            .build()
     }
 
     /// Create tags for AWS resources.
@@ -474,18 +468,13 @@ impl AwsNetworkController {
         resource_id: &str,
         resource_type: &str,
     ) -> Vec<TagSpecification> {
-        vec![TagSpecification {
-            resource_type: resource_type.to_string(),
-            tags: self
-                .create_tag_specification(
-                    resource_prefix,
-                    resource_id,
-                    resource_type,
-                    format!("{}-{}", resource_prefix, resource_type.to_lowercase()),
-                    [],
-                )
-                .tags,
-        }]
+        vec![self.create_tag_specification(
+            resource_prefix,
+            resource_id,
+            resource_type,
+            format!("{}-{}", resource_prefix, resource_type.to_lowercase()),
+            [],
+        )]
     }
 }
 
@@ -516,8 +505,8 @@ impl AwsNetworkController {
                     .describe_vpcs(
                         DescribeVpcsRequest::builder()
                             .filters(vec![Filter::builder()
-                                .name("is-default".to_string())
-                                .values(vec!["true".to_string()])
+                                .name("is-default")
+                                .values("true")
                                 .build()])
                             .build(),
                     )
@@ -555,8 +544,8 @@ impl AwsNetworkController {
                     .describe_subnets(
                         DescribeSubnetsRequest::builder()
                             .filters(vec![Filter::builder()
-                                .name("vpc-id".to_string())
-                                .values(vec![vpc_id.clone()])
+                                .name("vpc-id")
+                                .values(vpc_id.clone())
                                 .build()])
                             .build(),
                     )
@@ -1463,17 +1452,15 @@ impl AwsNetworkController {
             .authorize_security_group_ingress(
                 AuthorizeSecurityGroupIngressRequest::builder()
                     .group_id(sg_id.clone())
-                    .ip_permissions(vec![IpPermission {
-                        ip_protocol: "-1".to_string(), // All protocols
-                        from_port: None,
-                        to_port: None,
-                        ip_ranges: Some(vec![IpRange {
-                            cidr_ip: cidr_block.clone(),
-                            description: Some("Allow all traffic from VPC".to_string()),
-                        }]),
-                        ipv6_ranges: None,
-                        user_id_group_pairs: None,
-                    }])
+                    .ip_permissions(vec![IpPermission::builder()
+                        .ip_protocol("-1") // All protocols
+                        .ip_ranges(
+                            IpRange::builder()
+                                .cidr_ip(cidr_block.clone())
+                                .description("Allow all traffic from VPC")
+                                .build(),
+                        )
+                        .build()])
                     .build(),
             )
             .await
@@ -1537,17 +1524,15 @@ impl AwsNetworkController {
             .authorize_security_group_egress(
                 AuthorizeSecurityGroupEgressRequest::builder()
                     .group_id(sg_id.clone())
-                    .ip_permissions(vec![IpPermission {
-                        ip_protocol: "-1".to_string(),
-                        from_port: None,
-                        to_port: None,
-                        ip_ranges: Some(vec![IpRange {
-                            cidr_ip: "0.0.0.0/0".to_string(),
-                            description: Some("Allow all outbound traffic".to_string()),
-                        }]),
-                        ipv6_ranges: None,
-                        user_id_group_pairs: None,
-                    }])
+                    .ip_permissions(vec![IpPermission::builder()
+                        .ip_protocol("-1")
+                        .ip_ranges(
+                            IpRange::builder()
+                                .cidr_ip("0.0.0.0/0")
+                                .description("Allow all outbound traffic")
+                                .build(),
+                        )
+                        .build()])
                     .build(),
             )
             .await

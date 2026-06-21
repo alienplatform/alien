@@ -3650,10 +3650,10 @@ impl AwsWorkerController {
         let result = client
             .describe_network_interfaces(
                 DescribeNetworkInterfacesRequest::builder()
-                    .filters(vec![Filter {
-                        name: "description".to_string(),
-                        values: vec![format!("AWS Lambda VPC ENI-{}*", aws_worker_name)],
-                    }])
+                    .filters(vec![Filter::builder()
+                        .name("description")
+                        .values(format!("AWS Lambda VPC ENI-{}*", aws_worker_name))
+                        .build()])
                     .build(),
             )
             .await

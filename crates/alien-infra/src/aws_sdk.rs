@@ -24,9 +24,7 @@ use aws_sdk_ec2::{
     types::{
         AttributeBooleanValue as AwsEc2AttributeBooleanValue,
         ConnectivityType as AwsEc2ConnectivityType, DomainType as AwsEc2DomainType,
-        Filter as AwsEc2Filter, IpPermission as AwsEc2IpPermission, IpRange as AwsEc2IpRange,
-        ResourceType as AwsEc2ResourceType, Tag as AwsEc2Tag,
-        TagSpecification as AwsEc2TagSpecification,
+        IpPermission as AwsEc2IpPermission,
     },
     Client as Ec2Client,
 };
@@ -132,6 +130,10 @@ pub use aws_sdk_codebuild::{
 
 pub use aws_sdk_dynamodb::types::{
     TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
+};
+
+pub use aws_sdk_ec2::types::{
+    Filter, IpPermission, IpRange, ResourceType as Ec2ResourceType, Tag as Ec2Tag, TagSpecification,
 };
 
 pub use aws_sdk_eventbridge::{
@@ -244,33 +246,6 @@ pub struct FunctionConfiguration {
     pub last_update_status: Option<String>,
     /// KMS key ARN.
     pub kms_key_arn: Option<String>,
-}
-
-/// EC2 filter used in describe requests.
-#[derive(Debug, Clone, Builder)]
-pub struct Filter {
-    /// Filter name.
-    pub name: String,
-    /// Filter values.
-    pub values: Vec<String>,
-}
-
-/// EC2 resource tag.
-#[derive(Debug, Clone, Builder)]
-pub struct Ec2Tag {
-    /// Tag key.
-    pub key: String,
-    /// Tag value.
-    pub value: String,
-}
-
-/// EC2 tag specification used for create calls.
-#[derive(Debug, Clone, Builder)]
-pub struct TagSpecification {
-    /// EC2 resource type, such as vpc or subnet.
-    pub resource_type: String,
-    /// Tags to apply.
-    pub tags: Vec<Ec2Tag>,
 }
 
 /// Request to describe VPCs.
@@ -682,32 +657,6 @@ pub struct IpRangeSet {
 pub struct IpRangeResponse {
     /// CIDR block.
     pub cidr_ip: Option<String>,
-    /// Description.
-    pub description: Option<String>,
-}
-
-/// Security group permission used in authorize requests.
-#[derive(Debug, Clone)]
-pub struct IpPermission {
-    /// IP protocol.
-    pub ip_protocol: String,
-    /// From port.
-    pub from_port: Option<i32>,
-    /// To port.
-    pub to_port: Option<i32>,
-    /// IPv4 ranges.
-    pub ip_ranges: Option<Vec<IpRange>>,
-    /// IPv6 ranges are not used by current infra code.
-    pub ipv6_ranges: Option<Vec<()>>,
-    /// User/group pairs are not used by current infra code.
-    pub user_id_group_pairs: Option<Vec<()>>,
-}
-
-/// IPv4 range used in authorize requests.
-#[derive(Debug, Clone)]
-pub struct IpRange {
-    /// CIDR block.
-    pub cidr_ip: String,
     /// Description.
     pub description: Option<String>,
 }
@@ -3447,7 +3396,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.describe_vpcs()
                 .set_vpc_ids(request.vpc_ids)
-                .set_filters(aws_ec2_filters(request.filters))
+                .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3470,7 +3419,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.create_vpc()
                 .cidr_block(cidr_block.clone())
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateVpc",
@@ -3522,7 +3471,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.describe_subnets()
                 .set_subnet_ids(request.subnet_ids)
-                .set_filters(aws_ec2_filters(request.filters))
+                .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3547,7 +3496,7 @@ impl Ec2Api for Ec2Client {
                 .vpc_id(request.vpc_id)
                 .cidr_block(&cidr_block)
                 .set_availability_zone(request.availability_zone)
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateSubnet",
@@ -3576,7 +3525,7 @@ impl Ec2Api for Ec2Client {
     ) -> Result<CreateInternetGatewayResponse> {
         let response = ec2_result(
             self.create_internet_gateway()
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateInternetGateway",
@@ -3649,7 +3598,7 @@ impl Ec2Api for Ec2Client {
                         .as_deref()
                         .map(AwsEc2ConnectivityType::from),
                 )
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateNatGateway",
@@ -3685,7 +3634,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.describe_nat_gateways()
                 .set_nat_gateway_ids(request.nat_gateway_ids)
-                .set_filter(aws_ec2_filters(request.filters))
+                .set_filter(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3714,7 +3663,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.allocate_address()
                 .set_domain(request.domain.as_deref().map(AwsEc2DomainType::from))
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "AllocateAddress",
@@ -3748,7 +3697,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.create_route_table()
                 .vpc_id(&vpc_id)
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateRouteTable",
@@ -3835,7 +3784,7 @@ impl Ec2Api for Ec2Client {
             self.describe_security_groups()
                 .set_group_ids(request.group_ids)
                 .set_group_names(request.group_names)
-                .set_filters(aws_ec2_filters(request.filters))
+                .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3864,7 +3813,7 @@ impl Ec2Api for Ec2Client {
         let response = ec2_result(
             self.describe_network_interfaces()
                 .set_network_interface_ids(request.network_interface_ids)
-                .set_filters(aws_ec2_filters(request.filters))
+                .set_filters(request.filters)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3900,7 +3849,7 @@ impl Ec2Api for Ec2Client {
                 .group_name(&group_name)
                 .description(request.description)
                 .vpc_id(request.vpc_id)
-                .set_tag_specifications(aws_ec2_tag_specifications(request.tag_specifications))
+                .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateSecurityGroup",
@@ -3931,7 +3880,7 @@ impl Ec2Api for Ec2Client {
         ec2_result(
             self.authorize_security_group_ingress()
                 .group_id(&group_id)
-                .set_ip_permissions(Some(aws_ec2_ip_permissions(request.ip_permissions)))
+                .set_ip_permissions(Some(request.ip_permissions))
                 .send()
                 .await,
             "AuthorizeSecurityGroupIngress",
@@ -3949,7 +3898,7 @@ impl Ec2Api for Ec2Client {
         ec2_result(
             self.authorize_security_group_egress()
                 .group_id(&group_id)
-                .set_ip_permissions(Some(aws_ec2_ip_permissions(request.ip_permissions)))
+                .set_ip_permissions(Some(request.ip_permissions))
                 .send()
                 .await,
             "AuthorizeSecurityGroupEgress",
@@ -3967,7 +3916,7 @@ impl Ec2Api for Ec2Client {
             self.describe_availability_zones()
                 .set_zone_names(request.zone_names)
                 .set_zone_ids(request.zone_ids)
-                .set_filters(aws_ec2_filters(request.filters))
+                .set_filters(request.filters)
                 .set_all_availability_zones(request.all_availability_zones)
                 .send()
                 .await,
@@ -4622,68 +4571,6 @@ fn nonempty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
     } else {
         Some(values)
     }
-}
-
-fn aws_ec2_filters(filters: Option<Vec<Filter>>) -> Option<Vec<AwsEc2Filter>> {
-    nonempty_vec(
-        filters?
-            .into_iter()
-            .map(|filter| {
-                AwsEc2Filter::builder()
-                    .name(filter.name)
-                    .set_values(nonempty_vec(filter.values))
-                    .build()
-            })
-            .collect(),
-    )
-}
-
-fn aws_ec2_tags(tags: Vec<Ec2Tag>) -> Vec<AwsEc2Tag> {
-    tags.into_iter()
-        .map(|tag| AwsEc2Tag::builder().key(tag.key).value(tag.value).build())
-        .collect()
-}
-
-fn aws_ec2_tag_specifications(
-    tag_specifications: Option<Vec<TagSpecification>>,
-) -> Option<Vec<AwsEc2TagSpecification>> {
-    nonempty_vec(
-        tag_specifications?
-            .into_iter()
-            .map(|specification| {
-                AwsEc2TagSpecification::builder()
-                    .resource_type(AwsEc2ResourceType::from(
-                        specification.resource_type.as_str(),
-                    ))
-                    .set_tags(nonempty_vec(aws_ec2_tags(specification.tags)))
-                    .build()
-            })
-            .collect(),
-    )
-}
-
-fn aws_ec2_ip_permissions(permissions: Vec<IpPermission>) -> Vec<AwsEc2IpPermission> {
-    permissions
-        .into_iter()
-        .map(|permission| {
-            AwsEc2IpPermission::builder()
-                .ip_protocol(permission.ip_protocol)
-                .set_from_port(permission.from_port)
-                .set_to_port(permission.to_port)
-                .set_ip_ranges(permission.ip_ranges.map(|ranges| {
-                    ranges
-                        .into_iter()
-                        .map(|range| {
-                            AwsEc2IpRange::builder()
-                                .cidr_ip(range.cidr_ip)
-                                .set_description(range.description)
-                                .build()
-                        })
-                        .collect()
-                }))
-                .build()
-        })
-        .collect()
 }
 
 fn ec2_vpc(vpc: &aws_sdk_ec2::types::Vpc) -> Vpc {
