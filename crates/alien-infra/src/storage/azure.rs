@@ -3,7 +3,7 @@
 use crate::{
     core::{
         AzureBlobContainer, AzureBlobContainerProperties, AzureBlobServiceProperties,
-        AzureStorageAccountArmResource, ResourceControllerContext,
+        ResourceControllerContext, StorageAccount,
     },
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
@@ -442,7 +442,7 @@ fn emit_azure_storage_heartbeat(
     resource_group_name: &str,
     storage_account_name: &str,
     container: AzureBlobContainer,
-    storage_account: AzureStorageAccountArmResource,
+    storage_account: StorageAccount,
     blob_service: AzureBlobServiceProperties,
 ) {
     let container_name = container

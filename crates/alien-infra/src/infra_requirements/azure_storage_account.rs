@@ -4,9 +4,9 @@ use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::{
-    AzureStorageAccountArmResource, AzureStorageAccountEndpoints as AzureStorageArmEndpoints,
-    AzureStorageSku, AzureStorageSkuName, ResourceControllerContext,
-    StorageAccountCreateParameters, StorageAccountPropertiesCreateParameters,
+    AzureStorageAccountEndpoints as AzureStorageArmEndpoints, AzureStorageSku, AzureStorageSkuName,
+    ResourceControllerContext, StorageAccount, StorageAccountCreateParameters,
+    StorageAccountPropertiesCreateParameters,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -453,7 +453,7 @@ fn emit_azure_storage_account_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    account: &AzureStorageAccountArmResource,
+    account: &StorageAccount,
 ) {
     let properties = account.properties.as_ref();
     let provisioning_state = properties

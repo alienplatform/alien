@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use tracing::info;
 
 use crate::azure_utils::get_resource_group_name;
-use crate::core::{AzureStorageAccountArmResource, ResourceControllerContext};
+use crate::core::{ResourceControllerContext, StorageAccount};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureStorageAccountOutputs, AzureTableKvHeartbeatData, HeartbeatBackend,
@@ -435,7 +435,7 @@ fn emit_azure_table_kv_heartbeat(
     storage_outputs: &AzureStorageAccountOutputs,
     resource_group_name: &str,
     signed_identifier_count: usize,
-    storage_account: Option<AzureStorageAccountArmResource>,
+    storage_account: Option<StorageAccount>,
     storage_account_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let collection_issues = storage_account_issue.into_iter().collect::<Vec<_>>();

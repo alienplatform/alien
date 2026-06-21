@@ -80,10 +80,9 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
     ContainerProperties as AzureBlobContainerProperties, Endpoints as AzureStorageAccountEndpoints,
     Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
-    StorageAccount as AzureStorageAccountArmResource, StorageAccountCreateParameters,
-    StorageAccountProperties, StorageAccountPropertiesCreateParameters,
-    Table as AzureTableArmResource, TableProperties as AzureTableArmProperties,
-    TrackedResource as AzureStorageTrackedResource,
+    StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
+    StorageAccountPropertiesCreateParameters, Table as AzureTableArmResource,
+    TableProperties as AzureTableArmProperties, TrackedResource as AzureStorageTrackedResource,
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
@@ -4654,7 +4653,7 @@ pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
         &self,
         resource_group_name: &str,
         account_name: &str,
-    ) -> Result<AzureStorageAccountArmResource>;
+    ) -> Result<StorageAccount>;
 }
 
 struct OfficialAzureStorageAccountsClient {
@@ -4811,7 +4810,7 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
         &self,
         resource_group_name: &str,
         account_name: &str,
-    ) -> Result<AzureStorageAccountArmResource> {
+    ) -> Result<StorageAccount> {
         let response = self
             .request(
                 Method::GET,
