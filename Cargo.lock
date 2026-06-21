@@ -561,6 +561,7 @@ dependencies = [
  "azure_mgmt_authorization",
  "azure_mgmt_containerregistry",
  "azure_mgmt_keyvault",
+ "azure_mgmt_msi",
  "azure_mgmt_network",
  "azure_mgmt_resources",
  "azure_mgmt_servicebus",
@@ -2333,6 +2334,22 @@ name = "azure_mgmt_keyvault"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "213e848c45a920e0dd7fd0283ce00f7197fd53f48ca48c7f93485cde5d823e77"
+dependencies = [
+ "azure_core 0.21.0",
+ "bytes",
+ "futures",
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
+name = "azure_mgmt_msi"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c85adbe25b00edbbdd4034bc917f73d3eb647d5f6872185f6e1dcdf13950c91e"
 dependencies = [
  "azure_core 0.21.0",
  "bytes",

@@ -53,6 +53,11 @@ pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
     VaultProperties as AzureKeyVaultProperties,
 };
+pub use azure_mgmt_msi::package_2023_01_31::models::{
+    FederatedIdentityCredential,
+    FederatedIdentityCredentialProperties as FederatedCredentialProperties, Identity,
+    TrackedResource as AzureManagedIdentityTrackedResource, UserAssignedIdentityProperties,
+};
 pub use azure_mgmt_network::package_2024_03::models::{
     nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
     IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku,
@@ -3745,99 +3750,6 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
             self.config.subscription_id, resource_group_name, resource_name
         )
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Identity {
-    /// Fully qualified Azure resource ID for the managed identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Azure region where the managed identity lives.
-    pub location: String,
-    /// Managed identity resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// User-assigned identity properties returned by ARM.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<UserAssignedIdentityProperties>,
-    /// ARM system metadata returned for the identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_data: Option<SystemData>,
-    /// Resource tags attached to the managed identity.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    /// Azure resource type.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UserAssignedIdentityProperties {
-    /// Client ID of the user-assigned managed identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    /// Isolation scope returned by ARM.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolation_scope: Option<String>,
-    /// Principal/object ID of the user-assigned managed identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub principal_id: Option<String>,
-    /// Tenant ID associated with the managed identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SystemData {
-    /// Timestamp when ARM created the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    /// Identity that created the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<String>,
-    /// Type of identity that created the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by_type: Option<String>,
-    /// Timestamp when ARM last modified the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_modified_at: Option<String>,
-    /// Identity that last modified the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_modified_by: Option<String>,
-    /// Type of identity that last modified the resource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_modified_by_type: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FederatedIdentityCredential {
-    /// Fully qualified Azure resource ID for the federated credential.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Federated credential resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Azure resource type.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-    /// Federated credential properties.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<FederatedCredentialProperties>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FederatedCredentialProperties {
-    /// The audiences that can appear in the issued token.
-    pub audiences: Vec<String>,
-    /// Issuer URL trusted for the federated credential.
-    pub issuer: String,
-    /// External identity subject trusted for the federated credential.
-    pub subject: String,
 }
 
 #[derive(Debug)]

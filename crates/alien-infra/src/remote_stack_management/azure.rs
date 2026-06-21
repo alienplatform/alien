@@ -3,10 +3,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::core::{
-    AuthorizationApi, FederatedCredentialProperties, FederatedIdentityCredential, Identity,
-    Permission, ResourceControllerContext, ResourcePermissionsHelper, RoleAssignment,
-    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
-    RoleDefinitionProperties, Scope,
+    AuthorizationApi, AzureManagedIdentityTrackedResource, FederatedCredentialProperties,
+    FederatedIdentityCredential, Identity, Permission, ResourceControllerContext,
+    ResourcePermissionsHelper, RoleAssignment, RoleAssignmentProperties,
+    RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
 };
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -27,7 +27,7 @@ use alien_permissions::{
     get_permission_set, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 #[cfg(not(test))]
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
@@ -191,15 +191,9 @@ impl AzureRemoteStackManagementController {
         let azure_cfg = ctx.get_azure_config()?;
         let location = azure_cfg.region.as_deref().unwrap_or("eastus");
 
-        let identity = Identity {
-            id: None,
-            location: location.to_string(),
-            name: None,
-            properties: None,
-            system_data: None,
-            tags: HashMap::new(),
-            type_: None,
-        };
+        let identity = Identity::new(AzureManagedIdentityTrackedResource::new(
+            location.to_string(),
+        ));
 
         let client = ctx
             .service_provider
@@ -217,7 +211,7 @@ impl AzureRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let identity_id = created.id.ok_or_else(|| {
+        let identity_id = created.tracked_resource.resource.id.ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Created management identity missing ID".to_string(),
                 operation: Some("create_management_identity".to_string()),
@@ -294,16 +288,12 @@ impl AzureRemoteStackManagementController {
         let identity_name = get_management_identity_name(ctx.resource_prefix);
         let fic_name = get_fic_name(ctx.resource_prefix);
 
-        let credential = FederatedIdentityCredential {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(FederatedCredentialProperties {
-                issuer: oidc_issuer.clone(),
-                subject: oidc_subject.clone(),
-                audiences: vec!["api://AzureADTokenExchange".to_string()],
-            }),
-        };
+        let mut credential = FederatedIdentityCredential::new();
+        credential.properties = Some(FederatedCredentialProperties::new(
+            oidc_issuer.clone(),
+            oidc_subject.clone(),
+            vec!["api://AzureADTokenExchange".to_string()],
+        ));
 
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
@@ -589,7 +579,7 @@ impl AzureRemoteStackManagementController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(fetched_id) = &identity.id {
+            if let Some(fetched_id) = &identity.tracked_resource.resource.id {
                 if !azure_utils::azure_resource_ids_equal(uami_resource_id, fetched_id) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
@@ -694,16 +684,12 @@ impl AzureRemoteStackManagementController {
         let identity_name = get_management_identity_name(ctx.resource_prefix);
         let fic_name = get_fic_name(ctx.resource_prefix);
 
-        let credential = FederatedIdentityCredential {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(FederatedCredentialProperties {
-                issuer: oidc_issuer.clone(),
-                subject: oidc_subject.clone(),
-                audiences: vec!["api://AzureADTokenExchange".to_string()],
-            }),
-        };
+        let mut credential = FederatedIdentityCredential::new();
+        credential.properties = Some(FederatedCredentialProperties::new(
+            oidc_issuer.clone(),
+            oidc_subject.clone(),
+            vec!["api://AzureADTokenExchange".to_string()],
+        ));
 
         let mi_client = ctx
             .service_provider

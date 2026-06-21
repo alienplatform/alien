@@ -3,8 +3,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::core::{
-    Identity, Permission, ResourceControllerContext, RoleAssignment, RoleAssignmentProperties,
-    RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
+    AzureManagedIdentityTrackedResource, Identity, Permission, ResourceControllerContext,
+    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
+    RoleDefinition, RoleDefinitionProperties, Scope,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -173,15 +174,9 @@ impl AzureServiceAccountController {
         let azure_cfg = ctx.get_azure_config()?;
         let location = azure_cfg.region.as_deref().unwrap_or("eastus");
 
-        let identity = Identity {
-            id: None,
-            location: location.to_string(),
-            name: None,
-            properties: None,
-            system_data: None,
-            tags: HashMap::new(),
-            type_: None,
-        };
+        let identity = Identity::new(AzureManagedIdentityTrackedResource::new(
+            location.to_string(),
+        ));
 
         let client = ctx
             .service_provider
@@ -198,13 +193,17 @@ impl AzureServiceAccountController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let identity_id = created_identity.id.ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Created managed identity missing ID".to_string(),
-                operation: Some("create_managed_identity".to_string()),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        let identity_id = created_identity
+            .tracked_resource
+            .resource
+            .id
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Created managed identity missing ID".to_string(),
+                    operation: Some("create_managed_identity".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
         let properties = created_identity.properties.ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -613,7 +612,7 @@ impl AzureServiceAccountController {
                 })?;
 
             // Check if identity ID matches what we expect
-            if let Some(fetched_id) = &identity.id {
+            if let Some(fetched_id) = &identity.tracked_resource.resource.id {
                 if !crate::infra_requirements::azure_utils::azure_resource_ids_equal(
                     identity_id,
                     fetched_id,
@@ -1089,11 +1088,14 @@ fn emit_azure_service_account_heartbeat(
     stack_permissions_applied: bool,
 ) {
     let managed_tag_count = identity
+        .tracked_resource
         .tags
-        .keys()
-        .filter(|key| key.starts_with("alien"))
-        .count() as u32;
+        .as_ref()
+        .and_then(|tags| tags.as_object())
+        .map(|tags| tags.keys().filter(|key| key.starts_with("alien")).count() as u32)
+        .unwrap_or(0);
     let properties = identity.properties.as_ref();
+    let resource = &identity.tracked_resource.resource;
     let message = format!("Azure managed identity '{identity_name}' is reachable");
 
     ctx.emit_heartbeat(ResourceHeartbeat {
@@ -1115,16 +1117,18 @@ fn emit_azure_service_account_heartbeat(
                         collection_issues: vec![],
                     },
                     name: identity
+                        .tracked_resource
+                        .resource
                         .name
                         .clone()
                         .unwrap_or_else(|| identity_name.to_string()),
-                    resource_id: identity
+                    resource_id: resource
                         .id
                         .clone()
                         .unwrap_or_else(|| expected_identity_id.to_string()),
                     resource_group: resource_group_name.to_string(),
-                    location: identity.location.clone(),
-                    type_: identity.type_.clone(),
+                    location: identity.tracked_resource.location.clone(),
+                    type_: resource.type_.clone(),
                     client_id: properties
                         .and_then(|properties| properties.client_id.as_ref())
                         .map(ToString::to_string),
@@ -1134,9 +1138,7 @@ fn emit_azure_service_account_heartbeat(
                     tenant_id: properties
                         .and_then(|properties| properties.tenant_id.as_ref())
                         .map(ToString::to_string),
-                    isolation_scope: properties
-                        .and_then(|properties| properties.isolation_scope.as_ref())
-                        .map(ToString::to_string),
+                    isolation_scope: None,
                     managed_tag_count,
                     role_assignment_count: role_assignment_ids.len() as u32,
                     role_assignment_ids: role_assignment_ids.to_vec(),

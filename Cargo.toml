@@ -107,6 +107,7 @@ azure_mgmt_app = { version = "0.21.0", default-features = false, features = ["pa
 azure_mgmt_authorization = { version = "0.21.0", default-features = false, features = ["package-2022-04-01"] }
 azure_mgmt_containerregistry = { version = "0.21.0", default-features = false, features = ["package-2023-11-preview"] }
 azure_mgmt_keyvault = { version = "0.21.0", default-features = false, features = ["package-preview-2022-02"] }
+azure_mgmt_msi = { version = "0.21.0", default-features = false, features = ["package-2023-01-31"] }
 azure_mgmt_network = { version = "0.21.0", default-features = false, features = ["package-2024-03"] }
 azure_mgmt_resources = { version = "0.21.0", default-features = false, features = ["package-resources-2021-04"] }
 azure_mgmt_servicebus = { version = "0.21.0", default-features = false, features = ["package-2024-01"] }
