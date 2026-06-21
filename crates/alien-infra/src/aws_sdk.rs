@@ -20,9 +20,7 @@ use aws_sdk_dynamodb::{
     },
     Client as DynamoDbClient,
 };
-use aws_sdk_ec2::{
-    types::AttributeBooleanValue as AwsEc2AttributeBooleanValue, Client as Ec2Client,
-};
+use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
@@ -189,11 +187,13 @@ pub use aws_sdk_ec2::{
             DescribeVpcsInput as DescribeVpcsRequest, DescribeVpcsOutput as DescribeVpcsResponse,
         },
         detach_internet_gateway::DetachInternetGatewayInput as DetachInternetGatewayRequest,
+        modify_vpc_attribute::ModifyVpcAttributeInput as ModifyVpcAttributeRequest,
     },
     types::{
-        AvailabilityZone, ConnectivityType, DomainType, Filter, InternetGateway, IpPermission,
-        IpRange, NatGateway, NetworkInterface, ResourceType as Ec2ResourceType, RouteTable,
-        SecurityGroup, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
+        AttributeBooleanValue, AvailabilityZone, ConnectivityType, DomainType, Filter,
+        InternetGateway, IpPermission, IpRange, NatGateway, NetworkInterface,
+        ResourceType as Ec2ResourceType, RouteTable, SecurityGroup, Subnet, Tag as Ec2Tag,
+        TagSpecification, Vpc,
     },
 };
 
@@ -307,17 +307,6 @@ pub struct FunctionConfiguration {
     pub last_update_status: Option<String>,
     /// KMS key ARN.
     pub kms_key_arn: Option<String>,
-}
-
-/// Request to modify VPC attributes.
-#[derive(Debug, Clone, Builder)]
-pub struct ModifyVpcAttributeRequest {
-    /// VPC ID.
-    pub vpc_id: String,
-    /// Enable DNS support.
-    pub enable_dns_support: Option<bool>,
-    /// Enable DNS hostnames.
-    pub enable_dns_hostnames: Option<bool>,
 }
 
 /// S3 bucket metadata used for storage heartbeats.
@@ -3036,24 +3025,22 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn modify_vpc_attribute(&self, request: ModifyVpcAttributeRequest) -> Result<()> {
-        let vpc_id = request.vpc_id.clone();
-        let mut operation = self.modify_vpc_attribute().vpc_id(&vpc_id);
-        if let Some(enable_dns_support) = request.enable_dns_support {
-            operation = operation.enable_dns_support(
-                AwsEc2AttributeBooleanValue::builder()
-                    .value(enable_dns_support)
-                    .build(),
-            );
-        }
-        if let Some(enable_dns_hostnames) = request.enable_dns_hostnames {
-            operation = operation.enable_dns_hostnames(
-                AwsEc2AttributeBooleanValue::builder()
-                    .value(enable_dns_hostnames)
-                    .build(),
-            );
-        }
+        let vpc_id = request.vpc_id().unwrap_or("<unknown>").to_string();
 
-        ec2_result(operation.send().await, "ModifyVpcAttribute", "VPC", &vpc_id)?;
+        ec2_result(
+            self.modify_vpc_attribute()
+                .set_enable_dns_hostnames(request.enable_dns_hostnames)
+                .set_enable_dns_support(request.enable_dns_support)
+                .set_vpc_id(request.vpc_id)
+                .set_enable_network_address_usage_metrics(
+                    request.enable_network_address_usage_metrics,
+                )
+                .send()
+                .await,
+            "ModifyVpcAttribute",
+            "VPC",
+            &vpc_id,
+        )?;
         Ok(())
     }
 

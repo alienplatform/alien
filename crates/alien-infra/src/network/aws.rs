@@ -23,13 +23,14 @@
 
 use crate::aws_sdk::{
     AllocateAddressRequest, AssociateRouteTableRequest, AttachInternetGatewayRequest,
-    AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest, ConnectivityType,
-    CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
-    CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DeleteNatGatewayRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
-    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
-    DetachInternetGatewayRequest, DomainType, Ec2ResourceType, Ec2Tag as Tag, Filter, IpPermission,
-    IpRange, ModifyVpcAttributeRequest, SecurityGroup, TagSpecification,
+    AttributeBooleanValue, AuthorizeSecurityGroupEgressRequest,
+    AuthorizeSecurityGroupIngressRequest, ConnectivityType, CreateInternetGatewayRequest,
+    CreateNatGatewayRequest, CreateRouteRequest, CreateRouteTableRequest,
+    CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest, DeleteNatGatewayRequest,
+    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, DomainType,
+    Ec2ResourceType, Ec2Tag as Tag, Filter, IpPermission, IpRange, ModifyVpcAttributeRequest,
+    SecurityGroup, TagSpecification,
 };
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
@@ -692,8 +693,13 @@ impl AwsNetworkController {
             .modify_vpc_attribute(
                 ModifyVpcAttributeRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .enable_dns_support(true)
-                    .build(),
+                    .enable_dns_support(AttributeBooleanValue::builder().value(true).build())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build DNS support modify request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -706,8 +712,13 @@ impl AwsNetworkController {
             .modify_vpc_attribute(
                 ModifyVpcAttributeRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .enable_dns_hostnames(true)
-                    .build(),
+                    .enable_dns_hostnames(AttributeBooleanValue::builder().value(true).build())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build DNS hostnames modify request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
