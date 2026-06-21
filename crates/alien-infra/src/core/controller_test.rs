@@ -78,8 +78,11 @@
 //! mock_iam
 //!     .expect_create_role()
 //!     .withf(|request| {
-//!         request.role_name == "test-role" &&
-//!         request.assume_role_policy_document.contains("sts:AssumeRole")
+//!         request.role_name() == Some("test-role") &&
+//!         request
+//!             .assume_role_policy_document()
+//!             .map(|document| document.contains("sts:AssumeRole"))
+//!             .unwrap_or(false)
 //!     })
 //!     .returning(|_| Ok(create_successful_response()));
 //! ```
@@ -221,8 +224,13 @@
 //!     mock_iam
 //!         .expect_create_role()
 //!         .withf(|request| {
-//!             request.assume_role_policy_document.contains("123456789012") &&
-//!             request.assume_role_policy_document.contains("sts:AssumeRole")
+//!             request
+//!                 .assume_role_policy_document()
+//!                 .map(|document| {
+//!                     document.contains("123456789012") &&
+//!                     document.contains("sts:AssumeRole")
+//!                 })
+//!                 .unwrap_or(false)
 //!         })
 //!         .returning(|_| Ok(success_response()));
 //!     

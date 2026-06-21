@@ -5,9 +5,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::aws_sdk::{
-    CreateRoleRequest, CreateRoleTag, DescribeEcrRepositoriesRequest, EcrApi,
-    EcrReplicationConfiguration, EcrReplicationDestination, EcrReplicationRule, EcrRepository,
-    IamApi,
+    CreateRoleInput, DescribeEcrRepositoriesRequest, EcrApi, EcrReplicationConfiguration,
+    EcrReplicationDestination, EcrReplicationRule, EcrRepository, IamApi, IamTag,
 };
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -114,17 +113,37 @@ impl AwsArtifactRegistryController {
         // Create assume role policy that allows service account roles to assume this role
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        let request = CreateRoleRequest::builder()
+        let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
+            .into_iter()
+            .map(|(key, value)| {
+                IamTag::builder()
+                    .key(key)
+                    .value(value)
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to build IAM tag for pull role '{}'",
+                            pull_role_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let request = CreateRoleInput::builder()
             .role_name(pull_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
             .description(format!("Runtime ECR pull role for registry {}", config.id))
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
-            .build();
+            .set_tags(Some(tags))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to build CreateRole request for '{}'",
+                    pull_role_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let response =
             iam_client
@@ -219,17 +238,37 @@ impl AwsArtifactRegistryController {
         // Create assume role policy that allows service account roles to assume this role
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        let request = CreateRoleRequest::builder()
+        let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
+            .into_iter()
+            .map(|(key, value)| {
+                IamTag::builder()
+                    .key(key)
+                    .value(value)
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to build IAM tag for push role '{}'",
+                            push_role_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let request = CreateRoleInput::builder()
             .role_name(push_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
             .description(format!("Runtime ECR push role for registry {}", config.id))
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
-            .build();
+            .set_tags(Some(tags))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to build CreateRole request for '{}'",
+                    push_role_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let response =
             iam_client
@@ -1450,9 +1489,13 @@ mod tests {
         let mut mock_iam = MockIamApi::new();
 
         // Mock successful pull role creation
-        mock_iam
-            .expect_create_role()
-            .returning(|request| Ok(create_successful_role_response(&request.role_name)));
+        mock_iam.expect_create_role().returning(|request| {
+            Ok(create_successful_role_response(
+                request
+                    .role_name()
+                    .expect("create role request should include role name"),
+            ))
+        });
 
         // Mock successful policy attachment
         mock_iam
@@ -1499,9 +1542,13 @@ mod tests {
         let mut mock_iam = MockIamApi::new();
 
         // Mock successful pull role creation
-        mock_iam
-            .expect_create_role()
-            .returning(|request| Ok(create_successful_role_response(&request.role_name)));
+        mock_iam.expect_create_role().returning(|request| {
+            Ok(create_successful_role_response(
+                request
+                    .role_name()
+                    .expect("create role request should include role name"),
+            ))
+        });
 
         // Mock successful policy attachment (for both create and update)
         mock_iam

@@ -23,7 +23,7 @@ use aws_sdk_dynamodb::{
 use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
-use aws_sdk_iam::{types::Tag as AwsIamTag, Client as IamClient};
+use aws_sdk_iam::Client as IamClient;
 use aws_sdk_lambda::{
     types::{Architecture as AwsLambdaArchitecture, PackageType},
     Client as LambdaClient,
@@ -211,14 +211,14 @@ pub use aws_sdk_iam::{
     operation::{
         create_policy::CreatePolicyOutput as CreatePolicyResponse,
         create_policy_version::CreatePolicyVersionOutput as CreatePolicyVersionResponse,
-        create_role::CreateRoleOutput as CreateRoleResponse,
+        create_role::{CreateRoleInput, CreateRoleOutput as CreateRoleResponse},
         get_role::GetRoleOutput as GetRoleResponse,
         get_role_policy::GetRolePolicyOutput as GetRolePolicyResponse,
         list_attached_role_policies::ListAttachedRolePoliciesOutput as ListAttachedRolePoliciesResponse,
         list_policy_versions::ListPolicyVersionsOutput as ListPolicyVersionsResponse,
         list_role_policies::ListRolePoliciesOutput as ListRolePoliciesResponse,
     },
-    types::{AttachedPolicy, Policy, PolicyVersion, Role},
+    types::{AttachedPolicy, Policy, PolicyVersion, Role, Tag as IamTag},
 };
 pub use aws_sdk_s3::types::{
     BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, BucketVersioningStatus,
@@ -334,32 +334,6 @@ pub struct S3BucketMetadata {
     pub bucket_acl_present: Option<bool>,
 }
 
-/// IAM role creation request used by infra controllers.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateRoleRequest {
-    /// IAM role name.
-    pub role_name: String,
-    /// Assume-role trust policy document.
-    pub assume_role_policy_document: String,
-    /// Optional IAM path.
-    pub path: Option<String>,
-    /// Optional role description.
-    pub description: Option<String>,
-    /// Optional max session duration in seconds.
-    pub max_session_duration: Option<i32>,
-    /// Tags to attach to the role.
-    pub tags: Option<Vec<CreateRoleTag>>,
-}
-
-/// IAM tag used when creating roles and instance profiles.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateRoleTag {
-    /// Tag key.
-    pub key: String,
-    /// Tag value.
-    pub value: String,
-}
-
 /// Trust policy principal.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -415,7 +389,7 @@ pub struct TrustPolicyDocument {
 #[async_trait]
 pub trait IamApi: Send + Sync {
     /// Create an IAM role.
-    async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse>;
+    async fn create_role(&self, request: CreateRoleInput) -> Result<CreateRoleResponse>;
     /// Get an IAM role.
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
     /// Delete an IAM role.
@@ -878,17 +852,34 @@ pub trait S3Api: Send + Sync {
 
 #[async_trait]
 impl IamApi for IamClient {
-    async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse> {
-        let role_name = request.role_name.clone();
-        let tags = iam_tags(request.tags.unwrap_or_default(), &role_name)?;
+    async fn create_role(&self, request: CreateRoleInput) -> Result<CreateRoleResponse> {
+        let role_name = request
+            .role_name()
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "CreateRole request did not include roleName".to_string(),
+                    resource_id: None,
+                })
+            })?;
+        if request.assume_role_policy_document().is_none() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "CreateRole request for '{role_name}' did not include assumeRolePolicyDocument"
+                ),
+                resource_id: None,
+            }));
+        }
+
         let response = iam_result(
             self.create_role()
-                .role_name(&role_name)
-                .assume_role_policy_document(request.assume_role_policy_document)
+                .set_role_name(request.role_name)
+                .set_assume_role_policy_document(request.assume_role_policy_document)
                 .set_path(request.path)
                 .set_description(request.description)
                 .set_max_session_duration(request.max_session_duration)
-                .set_tags(nonempty_vec(tags))
+                .set_permissions_boundary(request.permissions_boundary)
+                .set_tags(request.tags)
                 .send()
                 .await,
             "CreateRole",
@@ -3486,14 +3477,6 @@ fn is_dynamodb_delete_table_not_found(
         .is_some_and(DeleteTableError::is_resource_not_found_exception)
 }
 
-fn nonempty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
-    if values.is_empty() {
-        None
-    } else {
-        Some(values)
-    }
-}
-
 fn ec2_result<T, E>(
     result: std::result::Result<T, aws_sdk_ec2::error::SdkError<E>>,
     operation: &str,
@@ -3573,22 +3556,6 @@ fn ec2_error_data(
         }),
         _ => None,
     }
-}
-
-fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamTag>> {
-    tags.into_iter()
-        .map(|tag| {
-            AwsIamTag::builder()
-                .key(tag.key)
-                .value(tag.value)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to build IAM tag for '{resource_name}'"),
-                    resource_id: None,
-                })
-        })
-        .collect()
 }
 
 fn iam_result<T, E>(

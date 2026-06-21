@@ -2,7 +2,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::aws_sdk::{
-    CreateRoleRequest, CreateRoleTag, Role, TrustPolicyDocument, TrustPolicyPrincipal,
+    CreateRoleInput, IamTag, Role, TrustPolicyDocument, TrustPolicyPrincipal,
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use crate::core::ResourceControllerContext;
@@ -67,7 +67,21 @@ impl AwsServiceAccountController {
             "Creating IAM role for ServiceAccount"
         );
 
-        let role_request = CreateRoleRequest::builder()
+        let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
+            .into_iter()
+            .map(|(key, value)| {
+                IamTag::builder()
+                    .key(key)
+                    .value(value)
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to build IAM tag for role '{}'", role_name),
+                        resource_id: Some(config.id.clone()),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let role_request = CreateRoleInput::builder()
             .role_name(role_name.clone())
             .assume_role_policy_document(assume_role_policy)
             .description(match ctx.deployment_name_for_metadata() {
@@ -80,13 +94,13 @@ impl AwsServiceAccountController {
                     ctx.resource_prefix, config.id
                 ),
             })
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
-            .build();
+            .set_tags(Some(tags))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to build CreateRole request for '{}'", role_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let created_role =
             client
