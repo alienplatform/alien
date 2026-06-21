@@ -46,6 +46,7 @@ fn aws_implicit_management_sets_do_not_grant_sensitive_content() {
 fn is_implicit_management_set(permission_set_id: &str) -> bool {
     permission_set_id.ends_with("/heartbeat")
         || permission_set_id.ends_with("/management")
+        || permission_set_id.ends_with("-management")
         || permission_set_id.ends_with("/provision")
 }
 

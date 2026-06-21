@@ -31,6 +31,13 @@ fn find_free_port() -> u16 {
     port
 }
 
+fn derive_response_signing_key(admin_token: &str) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(admin_token.as_bytes());
+    hasher.update(b":commands-response-signing");
+    hasher.finalize().to_vec()
+}
+
 struct LocalAzureTargetCredentialResolver {
     target: AzureConfig,
     management_config: Option<ManagementConfig>,
@@ -276,6 +283,7 @@ impl TestManager {
         // or sets differently for production use.
         manager_config.targets = targets;
         manager_config.disable_heartbeat_loop = true;
+        manager_config.response_signing_key = derive_response_signing_key(&raw_token);
 
         // 7. Build the server (reuses the pre-created token store).
         //    with_standalone_defaults() reads typed bindings from toml_config
@@ -731,6 +739,21 @@ impl TestManager {
             Some(value) => std::env::set_var(name, value),
             None => std::env::remove_var(name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_response_signing_key;
+
+    #[test]
+    fn response_signing_key_is_derived_from_admin_token() {
+        let key = derive_response_signing_key("ax_admin_test");
+
+        assert_eq!(key.len(), 32);
+        assert!(!key.is_empty());
+        assert_eq!(key, derive_response_signing_key("ax_admin_test"));
+        assert_ne!(key, derive_response_signing_key("ax_admin_other"));
     }
 }
 

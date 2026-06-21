@@ -90,6 +90,8 @@ pub trait IamApi: Send + Sync + Debug {
 
     async fn delete_role(&self, role_name: String) -> Result<Role>;
 
+    async fn undelete_role(&self, role_name: String) -> Result<Role>;
+
     async fn get_role(&self, role_name: String) -> Result<Role>;
 
     async fn list_roles(
@@ -317,6 +319,22 @@ impl IamApi for IamClient {
             .await
     }
 
+    /// Undeletes a custom role.
+    /// See: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/undelete
+    async fn undelete_role(&self, role_name: String) -> Result<Role> {
+        let path = format!("{}:undelete", self.build_role_path(role_name.clone()));
+
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(UndeleteRoleRequest {}),
+                &role_name,
+            )
+            .await
+    }
+
     /// Gets a role.
     /// See: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/get
     async fn get_role(&self, role_name: String) -> Result<Role> {
@@ -521,6 +539,12 @@ pub struct PatchServiceAccountRequest {
     /// The update mask for the service account.
     pub update_mask: Option<String>,
 }
+
+/// Request to undelete a custom IAM role.
+/// Based on: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/undelete
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct UndeleteRoleRequest {}
 
 /// Represents the launch stage of a role.
 /// Based on: https://cloud.google.com/iam/docs/reference/rest/v1/organizations.roles#Role.RoleLaunchStage

@@ -2052,6 +2052,9 @@ impl StackExecutor {
                 .resource_matches_deletion_scope(res_id, view)
                 .unwrap_or(false)
             {
+                if view.status == ResourceStatus::Running {
+                    return true;
+                }
                 return !self.should_step_out_of_scope_resource(res_id, view);
             }
 

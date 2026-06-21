@@ -116,6 +116,15 @@ fn critical_e2e_provider_operations_are_declared() {
             azure_predefined_roles: &["Reader"],
         },
         OperationCoverage {
+            permission_set_id: "storage/trigger-management",
+            aws_actions: &["s3:GetBucketNotification", "s3:PutBucketNotification"],
+            gcp_permissions: &["storage.buckets.get", "storage.buckets.update"],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
             permission_set_id: "queue/heartbeat",
             aws_actions: &["sqs:GetQueueAttributes", "sqs:ListQueueTags"],
             gcp_permissions: &[],

@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# Clean up AWS resources created by OSS cloud E2E runs.
+#
+# Usage:
+#   ALIEN_E2E_SLOT=03 ./scripts/cleanup-aws-e2e-resources.sh
+#   ALIEN_E2E_RESOURCE_PREFIX=e2e-03-tfeks ./scripts/cleanup-aws-e2e-resources.sh
+#
+# Requires AWS CLI credentials for the target account and region. This script is
+# intentionally prefix-scoped; do not run it without checking the selected slot
+# or resource prefix first.
 set -uo pipefail
 
 resource_prefix="${ALIEN_E2E_RESOURCE_PREFIX:-}"

@@ -1232,13 +1232,35 @@ fn advanced_settings_default_json(
         }
     }
 
-    serde_json::to_string(&value)
+    serde_json::to_string(&sort_json_object_keys(value))
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
                 reason: format!("failed to serialize advanced settings default: {err}"),
             })
         })
+}
+
+fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sort_json_object_keys)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, sort_json_object_keys(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
 }
 
 fn remove_kubernetes_exposure_default(object: &mut serde_json::Map<String, serde_json::Value>) {

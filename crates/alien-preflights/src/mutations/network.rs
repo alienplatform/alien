@@ -10,7 +10,6 @@
 
 use crate::compile_time::stack_requires_network;
 use crate::error::Result;
-use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, Stack,
@@ -48,14 +47,9 @@ impl StackMutation for NetworkMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
-        let target_platform = if stack_state.platform == Platform::Aws {
-            Platform::Aws
-        } else if runs_on_platform_or_base(stack_state, config, Platform::Gcp) {
-            Platform::Gcp
-        } else if runs_on_platform_or_base(stack_state, config, Platform::Azure) {
-            Platform::Azure
-        } else {
-            return false;
+        let target_platform = match stack_state.platform {
+            Platform::Aws | Platform::Gcp | Platform::Azure => stack_state.platform,
+            _ => return false,
         };
 
         // Don't create a duplicate if network already exists
@@ -197,6 +191,26 @@ mod tests {
             })
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    fn create_deployment_config_with_base(
+        network: Option<NetworkSettings>,
+        base_platform: Platform,
+    ) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                network,
+                ..Default::default()
+            })
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .base_platform(base_platform)
             .build()
     }
 
@@ -369,6 +383,16 @@ mod tests {
         let stack = create_stack_with_container();
         let stack_state = create_stack_state(Platform::Kubernetes);
         let config = create_deployment_config(None);
+
+        let mutation = NetworkMutation;
+        assert!(!mutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[test]
+    fn test_should_not_auto_create_on_kubernetes_with_cloud_base_platform() {
+        let stack = create_stack_with_container();
+        let stack_state = create_stack_state(Platform::Kubernetes);
+        let config = create_deployment_config_with_base(None, Platform::Gcp);
 
         let mutation = NetworkMutation;
         assert!(!mutation.should_run(&stack, &stack_state, &config));

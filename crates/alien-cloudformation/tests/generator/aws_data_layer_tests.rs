@@ -4,7 +4,7 @@ use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
     Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -95,6 +95,37 @@ fn storage_only_template_omits_custom_domain_inputs() {
     let stack_settings =
         &template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"];
     assert!(stack_settings.get("domains").is_none());
+}
+
+#[test]
+fn frozen_storage_with_live_worker_trigger_omits_setup_notification_wiring() {
+    let storage = Storage::new("data".to_string()).build();
+    let worker = Worker::new("processor".to_string())
+        .code(WorkerCode::Image {
+            image: "processor:latest".to_string(),
+        })
+        .permissions("execution".to_string())
+        .trigger(WorkerTrigger::storage(
+            &storage,
+            vec!["created".to_string()],
+        ))
+        .build();
+    let stack = Stack::new("storage-trigger".to_string())
+        .add(storage, ResourceLifecycle::Frozen)
+        .add(worker, ResourceLifecycle::Live)
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws frozen storage live worker trigger",
+    );
+
+    assert!(yaml.contains("Data:"));
+    assert!(!yaml.contains("NotificationConfiguration"));
+    assert!(!yaml.contains("ProcessorWorker"));
+    assert!(!yaml.contains("StoragePermission"));
 }
 
 #[test]

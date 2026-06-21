@@ -10,7 +10,7 @@ use alien_core::{
     Container, ContainerCode, Daemon, DaemonCode, Ingress, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
-    Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
+    Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde_json::{json, Value};
@@ -185,6 +185,62 @@ fn chart_role_rbac_allows_every_cleanup_route_resource() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered route RBAC")
+        }
+    }
+}
+
+#[test]
+fn workload_vault_permissions_render_runtime_secret_rbac() {
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "registry.example.com/api:1".to_string(),
+        })
+        .permissions("runtime".to_string())
+        .build();
+    let stack = Stack::new("vault-rbac".to_string())
+        .permission(
+            "runtime",
+            PermissionProfile::new()
+                .resource("alien-vault", ["vault/data-read", "vault/data-write"]),
+        )
+        .add(
+            Vault::new("alien-vault".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(worker, ResourceLifecycle::Live)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let values_yaml = chart.files.get("values.yaml").expect("values.yaml");
+    let values: Value = serde_yaml::from_str(values_yaml).expect("values.yaml should parse");
+    let rule = values
+        .pointer("/serviceAccounts/runtime/rbac/rules/0")
+        .expect("runtime service account should get a secret RBAC rule");
+
+    assert_eq!(rule.pointer("/apiGroups/0"), Some(&json!("")));
+    assert_eq!(rule.pointer("/resources/0"), Some(&json!("secrets")));
+    for verb in [
+        "get", "list", "watch", "create", "update", "patch", "delete",
+    ] {
+        assert!(
+            rule.get("verbs")
+                .and_then(Value::as_array)
+                .expect("verbs should be an array")
+                .iter()
+                .any(|value| value == &json!(verb)),
+            "expected generated RBAC verbs to include {verb}"
+        );
+    }
+
+    let rendered = test_utils::helm_template(&chart.files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("kind: RoleBinding"));
+            assert!(rendered.stdout.contains("runtime-sa"));
+            assert!(rendered.stdout.contains("- secrets"));
+            assert!(rendered.stdout.contains("- delete"));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("rendered workload vault RBAC")
         }
     }
 }

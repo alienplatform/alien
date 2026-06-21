@@ -869,7 +869,7 @@ mod tests {
         let bindings = generator
             .generate_bindings(
                 permission_set,
-                BindingTarget::Stack,
+                BindingTarget::Resource,
                 &test_permission_context(),
             )
             .unwrap();

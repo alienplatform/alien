@@ -30,6 +30,7 @@ fn gcp_custom_role_matches(
         && existing.description == desired.description
         && existing.stage == desired.stage
         && existing_permissions == desired_permissions
+        && !existing.deleted.unwrap_or(false)
 }
 
 /// Helper for applying resource-scoped permissions across all platforms
@@ -335,7 +336,32 @@ impl ResourcePermissionsHelper {
 
             match iam_client.get_role(custom_role.name.clone()).await {
                 Ok(existing_role) => {
-                    if gcp_custom_role_matches(&existing_role, &updated_role) {
+                    if existing_role.deleted.unwrap_or(false) {
+                        iam_client
+                            .undelete_role(custom_role.name.clone())
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to undelete existing custom role '{}'",
+                                    role_id
+                                ),
+                                resource_id: Some(permission_set_id.to_string()),
+                            })?;
+                        iam_client
+                            .patch_role(
+                                custom_role.name.clone(),
+                                updated_role,
+                                Some("includedPermissions,title,description,stage".to_string()),
+                            )
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to update undeleted custom role '{}'",
+                                    role_id
+                                ),
+                                resource_id: Some(permission_set_id.to_string()),
+                            })?;
+                    } else if gcp_custom_role_matches(&existing_role, &updated_role) {
                         info!(
                             role_id = %role_id,
                             permission_set = %permission_set_id,
@@ -1913,5 +1939,22 @@ mod tests {
                     .members
                     .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
         }));
+    }
+
+    #[test]
+    fn gcp_deleted_custom_role_does_not_match_desired_role() {
+        let desired = alien_gcp_clients::iam::Role::builder()
+            .title("Role".to_string())
+            .description("Test role".to_string())
+            .included_permissions(vec!["storage.objects.get".to_string()])
+            .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
+            .build();
+        let mut deleted_existing = desired.clone();
+        deleted_existing.deleted = Some(true);
+
+        assert!(
+            !gcp_custom_role_matches(&deleted_existing, &desired),
+            "soft-deleted custom roles cannot be treated as grantable"
+        );
     }
 }
