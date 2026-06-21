@@ -101,7 +101,7 @@ fn gcp_remote_stack_management_function_provision_role() {
 
     assert!(rendered.contains("\"run.services.create\""));
     assert!(rendered.contains("\"pubsub.topics.create\""));
-    assert!(rendered.contains("\"storage.buckets.update\""));
+    assert!(!rendered.contains("\"storage.buckets.update\""));
     assert!(rendered
         .contains("google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""));
     assert!(rendered.contains(

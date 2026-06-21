@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{GetPolicyOptions, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
@@ -249,7 +249,7 @@ impl GcpRemoteStackManagementController {
             .get_gcp_resource_manager_client(gcp_config)?;
 
         let current_policy = rm_client
-            .get_project_iam_policy(project_id.clone(), Some(alien_gcp_clients::resource_manager::GetPolicyOptions { requested_policy_version: Some(3) }))
+            .get_project_iam_policy(project_id.clone(), Some(GetPolicyOptions { requested_policy_version: Some(3) }))
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
@@ -499,7 +499,7 @@ impl GcpRemoteStackManagementController {
             match rm_client
                 .get_project_iam_policy(
                     project_id.clone(),
-                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                    Some(GetPolicyOptions {
                         requested_policy_version: Some(3),
                     }),
                 )
@@ -869,7 +869,7 @@ mod tests {
         let bindings = generator
             .generate_bindings(
                 permission_set,
-                BindingTarget::Stack,
+                BindingTarget::Resource,
                 &test_permission_context(),
             )
             .unwrap();

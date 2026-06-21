@@ -2,9 +2,8 @@ use crate::error::{ErrorData, Result};
 use crate::traits::{
     AzureServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
-use alien_azure_clients::AzureClientConfig;
 use alien_core::bindings::AzureServiceAccountBinding;
-use alien_core::{AzureClientConfig as CoreAzureClientConfig, AzureCredentials, ClientConfig};
+use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig};
 use alien_error::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -115,7 +114,7 @@ impl ServiceAccount for AzureManagedIdentityServiceAccount {
                 }));
         };
 
-        let impersonated_config = CoreAzureClientConfig {
+        let impersonated_config = AzureClientConfig {
             subscription_id: self.config.subscription_id.clone(),
             tenant_id,
             region: self.config.region.clone(),

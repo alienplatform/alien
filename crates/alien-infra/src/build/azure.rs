@@ -345,7 +345,7 @@ impl AzureBuildController {
         build_id: &str,
     ) -> Result<()> {
         use crate::core::AzurePermissionsHelper;
-        use alien_azure_clients::authorization::Scope;
+        use crate::core::Scope;
         use alien_permissions::PermissionContext;
 
         let config = ctx.desired_resource_config::<Build>()?;
@@ -480,7 +480,7 @@ mod tests {
         mock_provider
             .expect_get_azure_authorization_client()
             .returning(|_| {
-                use alien_azure_clients::authorization::MockAuthorizationApi;
+                use crate::core::MockAuthorizationApi;
                 Ok(Arc::new(MockAuthorizationApi::new()))
             });
 

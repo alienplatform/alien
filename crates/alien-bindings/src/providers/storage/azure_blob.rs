@@ -48,7 +48,7 @@ impl BlobStorage {
         )?;
 
         // Build the store with credentials bridged from AzureClientConfig
-        let credentials = AzureCredentialBridge::new(azure_config.clone());
+        let credentials = AzureCredentialBridge::new(azure_config.clone())?;
         let store = object_store::azure::MicrosoftAzureBuilder::new()
             .with_container_name(&container_name)
             .with_account(&account_name)

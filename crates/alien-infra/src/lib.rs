@@ -103,12 +103,12 @@ pub use core::controller_test;
 #[cfg(any(feature = "test-utils", doc, test))]
 pub use core::MockPlatformServiceProvider;
 
-#[cfg(feature = "azure")]
-pub use alien_azure_clients::AzureClientConfig;
 #[cfg(feature = "aws")]
 pub use alien_core::AwsClientConfig;
+#[cfg(feature = "azure")]
+pub use alien_core::AzureClientConfig;
 #[cfg(feature = "gcp")]
-pub use alien_gcp_clients::GcpClientConfig;
+pub use alien_core::GcpClientConfig;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

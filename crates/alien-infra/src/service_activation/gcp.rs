@@ -10,10 +10,9 @@ use alien_core::{
     ServiceActivationHeartbeatStatus, ServiceActivationOutputs,
 };
 use alien_error::{AlienError, Context, ContextError as _};
-use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::service_usage::{Service, State};
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_api_serviceusage_v1::model::{Service, State};
 
 #[controller]
 pub struct GcpServiceActivationController {
@@ -49,13 +48,7 @@ impl GcpServiceActivationController {
 
         // Check if the service is already enabled (reading before command is allowed)
         let already_enabled = match client.get_service(config.service_name.clone()).await {
-            Ok(service) => {
-                if let Some(state) = service.state {
-                    state == State::Enabled
-                } else {
-                    false
-                }
-            }
+            Ok(service) => service.state == State::Enabled,
             Err(e) => {
                 let msg = format!("Failed to get GCP service '{}': {}", config.service_name, e);
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -121,14 +114,15 @@ impl GcpServiceActivationController {
         // Service is not enabled, proceed to enable it
         match client.enable_service(config.service_name.clone()).await {
             Ok(operation) => {
+                let operation_name = operation.name;
                 info!(
                     service_id = %config.id,
                     service_name = %config.service_name,
-                    operation_name = ?operation.name,
+                    operation_name = %operation_name,
                     "Service enablement operation started"
                 );
 
-                self.operation_name = operation.name;
+                self.operation_name = Some(operation_name);
                 Ok(HandlerAction::Continue {
                     state: WaitingForServiceEnabled,
                     suggested_delay: Some(Duration::from_secs(5)), // Wait before checking operation status
@@ -196,41 +190,32 @@ impl GcpServiceActivationController {
             } else {
                 match client.get_operation(op_name.to_string()).await {
                     Ok(operation) => {
-                        if let Some(done) = operation.done {
-                            if done {
-                                if let Some(result) = operation.result {
-                                    match result {
-                                        OperationResult::Error { error } => {
-                                            return Err(AlienError::new(
-                                                ErrorData::CloudPlatformError {
-                                                    message: format!(
-                                                        "Service enablement operation failed: {}",
-                                                        error.message
-                                                    ),
-                                                    resource_id: Some(config.id.clone()),
-                                                },
-                                            ));
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                info!(
-                                    service_id = %config.id,
-                                    service_name = %config.service_name,
-                                    "Service enablement operation completed successfully"
-                                );
-                            } else {
-                                // Operation still in progress
-                                debug!(
-                                    service_id = %config.id,
-                                    service_name = %config.service_name,
-                                    "Service enablement operation still in progress"
-                                );
-                                return Ok(HandlerAction::Stay {
-                                    max_times: 60,
-                                    suggested_delay: Some(Duration::from_secs(10)),
-                                });
+                        if operation.done {
+                            if let Some(error) = operation.error() {
+                                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Service enablement operation failed: {}",
+                                        error.message
+                                    ),
+                                    resource_id: Some(config.id.clone()),
+                                }));
                             }
+                            info!(
+                                service_id = %config.id,
+                                service_name = %config.service_name,
+                                "Service enablement operation completed successfully"
+                            );
+                        } else {
+                            // Operation still in progress
+                            debug!(
+                                service_id = %config.id,
+                                service_name = %config.service_name,
+                                "Service enablement operation still in progress"
+                            );
+                            return Ok(HandlerAction::Stay {
+                                max_times: 60,
+                                suggested_delay: Some(Duration::from_secs(10)),
+                            });
                         }
                     }
                     Err(e) => {
@@ -250,31 +235,23 @@ impl GcpServiceActivationController {
         // Check the actual service status
         match client.get_service(config.service_name.clone()).await {
             Ok(service) => {
-                if let Some(state) = service.state {
-                    if state == State::Enabled {
-                        info!(
-                            service_id = %config.id,
-                            service_name = %config.service_name,
-                            "Service is now enabled"
-                        );
-                        self.service_activated = true;
-                        return Ok(HandlerAction::Continue {
-                            state: Ready,
-                            suggested_delay: None,
-                        });
-                    } else {
-                        debug!(
-                            service_id = %config.id,
-                            service_name = %config.service_name,
-                            current_state = ?state,
-                            "Service not yet enabled"
-                        );
-                    }
+                if service.state == State::Enabled {
+                    info!(
+                        service_id = %config.id,
+                        service_name = %config.service_name,
+                        "Service is now enabled"
+                    );
+                    self.service_activated = true;
+                    return Ok(HandlerAction::Continue {
+                        state: Ready,
+                        suggested_delay: None,
+                    });
                 } else {
                     debug!(
                         service_id = %config.id,
                         service_name = %config.service_name,
-                        "Service state not available"
+                        current_state = ?service.state,
+                        "Service not yet enabled"
                     );
                 }
             }
@@ -326,13 +303,11 @@ impl GcpServiceActivationController {
                 &service,
             );
 
-            if let Some(state) = service.state {
-                if state != State::Enabled {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!("Service state changed from Enabled to {:?}", state),
-                    }));
-                }
+            if service.state != State::Enabled {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!("Service state changed from Enabled to {:?}", service.state),
+                }));
             }
         }
 
@@ -421,8 +396,8 @@ fn emit_gcp_service_activation_heartbeat(
     last_operation_name: &Option<String>,
     service: &Service,
 ) {
-    let state = service.state.as_ref().map(|state| format!("{:?}", state));
-    let enabled = service.state.as_ref() == Some(&State::Enabled);
+    let state = Some(format!("{:?}", service.state));
+    let enabled = service.state == State::Enabled;
     let health = if enabled {
         ObservedHealth::Healthy
     } else {
@@ -458,11 +433,12 @@ fn emit_gcp_service_activation_heartbeat(
                     },
                     project_id: project_id.to_string(),
                     service_name: service_name.to_string(),
-                    service_resource_name: service.name.clone(),
+                    service_resource_name: Some(service.name.clone()),
                     title: service
                         .config
                         .as_ref()
-                        .and_then(|config| config.title.clone()),
+                        .map(|config| config.title.clone())
+                        .filter(|title| !title.is_empty()),
                     state,
                     enabled,
                     last_operation_name: last_operation_name.clone(),

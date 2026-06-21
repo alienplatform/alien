@@ -1,15 +1,31 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
     },
 };
-use alien_azure_clients::{AzureClientConfig, AzureTokenCache};
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use alien_core::bindings::ArtifactRegistryBinding;
+use alien_core::{AzureClientConfig, AzureCredentials};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
+use azure_core::{
+    cloud::{CloudConfiguration, CustomConfiguration},
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
+    http::ClientOptions,
+    time::{Duration as AzureDuration, OffsetDateTime},
+};
+use azure_identity::{
+    ClientAssertionCredentialOptions, ClientSecretCredential, ClientSecretCredentialOptions,
+    ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
+    WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
+};
 use tracing::info;
+
+const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 
 /// Azure Container Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
@@ -18,7 +34,7 @@ pub struct AcrArtifactRegistry {
     registry_endpoint: String,
     repository_prefix: String,
     /// Azure credentials for direct registry access (AAD token exchange).
-    azure_token_cache: AzureTokenCache,
+    credential: Arc<dyn TokenCredential>,
     http_client: reqwest::Client,
 }
 
@@ -68,7 +84,7 @@ impl AcrArtifactRegistry {
         // Derive registry endpoint from registry name
         let registry_endpoint = format!("{}.azurecr.io", registry_name);
         let client = crate::http_client::create_http_client();
-        let azure_token_cache = AzureTokenCache::new(azure_config.clone());
+        let credential = azure_credential_from_config(azure_config)?;
 
         let repository_prefix = match config.repository_prefix {
             Some(bv) => bv
@@ -81,7 +97,7 @@ impl AcrArtifactRegistry {
             registry_name,
             registry_endpoint,
             repository_prefix,
-            azure_token_cache,
+            credential,
             http_client: client,
         })
     }
@@ -190,11 +206,13 @@ impl ArtifactRegistry for AcrArtifactRegistry {
 
         // Step 1: Get an AAD access token for the management API.
         let aad_token = self
-            .azure_token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .credential
+            .get_token(&[MANAGEMENT_SCOPE], None)
             .await
-            .map_err(|e| {
-                map_cloud_client_error(e, "Failed to get AAD token for ACR".to_string(), None)
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.acr".to_string(),
+                reason: "Failed to get Azure management bearer token for ACR".to_string(),
             })?;
 
         // Step 2: Exchange AAD token for an ACR refresh token.
@@ -206,7 +224,7 @@ impl ArtifactRegistry for AcrArtifactRegistry {
             .form(&[
                 ("grant_type", "access_token"),
                 ("service", &self.registry_endpoint),
-                ("access_token", &aad_token),
+                ("access_token", aad_token.token.secret()),
             ])
             .send()
             .await
@@ -312,5 +330,125 @@ impl ArtifactRegistry for AcrArtifactRegistry {
     async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
         // ACR repositories are implicit (created on push). Nothing to delete.
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct StaticAzureAccessTokenCredential {
+    token: String,
+}
+
+#[async_trait]
+impl TokenCredential for StaticAzureAccessTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        if scopes.is_empty() {
+            return Err(azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Credential,
+                "no scopes specified",
+            ));
+        }
+
+        Ok(AccessToken::new(
+            self.token.clone(),
+            OffsetDateTime::now_utc() + AzureDuration::days(365),
+        ))
+    }
+}
+
+fn azure_credential_from_config(config: &AzureClientConfig) -> Result<Arc<dyn TokenCredential>> {
+    match &config.credentials {
+        AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
+            token: token.clone(),
+        })),
+        AzureCredentials::ServicePrincipal {
+            client_id,
+            client_secret,
+        } => ClientSecretCredential::new(
+            &config.tenant_id,
+            client_id.clone(),
+            Secret::new(client_secret.clone()),
+            Some(ClientSecretCredentialOptions {
+                client_options: azure_client_options(None),
+            }),
+        )
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.acr".to_string(),
+            reason: "Failed to build official Azure service principal credentials".to_string(),
+        }),
+        AzureCredentials::WorkloadIdentity {
+            client_id,
+            tenant_id,
+            federated_token_file,
+            authority_host,
+        } => WorkloadIdentityCredential::new(Some(WorkloadIdentityCredentialOptions {
+            credential_options: ClientAssertionCredentialOptions {
+                client_options: azure_client_options(Some(authority_host)),
+            },
+            client_id: Some(client_id.clone()),
+            tenant_id: Some(tenant_id.clone()),
+            token_file_path: Some(PathBuf::from(federated_token_file)),
+        }))
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.acr".to_string(),
+            reason: "Failed to build official Azure workload identity credentials".to_string(),
+        }),
+        AzureCredentials::VmManagedIdentity {
+            client_id,
+            identity_endpoint,
+        } => {
+            if let Some(identity_endpoint) = identity_endpoint {
+                return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.acr".to_string(),
+                    reason: format!(
+                        "Official Azure ManagedIdentityCredential does not support per-config IMDS endpoint override '{}'; use the standard IMDS endpoint or provide an access token",
+                        identity_endpoint
+                    ),
+                }));
+            }
+
+            ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
+                user_assigned_id: Some(UserAssignedId::ClientId(client_id.clone())),
+                client_options: azure_client_options(None),
+            }))
+            .map(|credential| credential as Arc<dyn TokenCredential>)
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.acr".to_string(),
+                reason: "Failed to build official Azure VM managed identity credentials"
+                    .to_string(),
+            })
+        }
+        AzureCredentials::ManagedIdentity {
+            client_id,
+            identity_endpoint,
+            ..
+        } => Err(AlienError::new(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.acr".to_string(),
+            reason: format!(
+                "Official Azure ManagedIdentityCredential cannot be constructed from explicit App Service identity endpoint '{}' for client '{}'; use workload identity, VM managed identity, or provide an access token",
+                identity_endpoint, client_id
+            ),
+        })),
+    }
+}
+
+fn azure_client_options(authority_host: Option<&str>) -> ClientOptions {
+    let cloud = authority_host.map(|authority_host| {
+        let mut custom = CustomConfiguration::default();
+        custom.authority_host = authority_host.to_string();
+        Arc::new(CloudConfiguration::Custom(custom))
+    });
+
+    ClientOptions {
+        cloud,
+        ..Default::default()
     }
 }

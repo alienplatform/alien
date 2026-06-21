@@ -17,8 +17,10 @@ server = [
     "object_store",
     "bytes",
     "aws-sdk-lambda",
-    "alien-gcp-clients",
-    "alien-azure-clients",
+    "google-cloud-auth",
+    "google-cloud-pubsub",
+    "azure_core",
+    "azure_identity",
     "tokio",
     "hmac",
     "sha2",
@@ -34,8 +36,11 @@ dispatchers = [
     "alien-bindings",
     "alien-bindings/aws",
     "aws-sdk-lambda",
-    "alien-gcp-clients",
-    "alien-azure-clients",
+    "google-cloud-auth",
+    "google-cloud-pubsub",
+    "azure_core",
+    "azure_identity",
+    "http",
     "reqwest",
 ]
 openapi = ["utoipa", "alien-error/openapi", "alien-bindings/openapi", "alien-core/openapi"]
@@ -63,10 +68,12 @@ hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 alien-bindings = { workspace = true, optional = true }
-alien-gcp-clients = { workspace = true, optional = true }
-alien-azure-clients = { workspace = true, optional = true }
 alien-client-core = { workspace = true, optional = true }
 aws-sdk-lambda = { workspace = true, optional = true }
+google-cloud-auth = { workspace = true, optional = true }
+google-cloud-pubsub = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
 axum = { workspace = true, features = ["macros", "json", "tokio", "http1"], optional = true }
 uuid = { workspace = true, features = ["v4", "serde"], optional = true }
 http = { workspace = true, optional = true }

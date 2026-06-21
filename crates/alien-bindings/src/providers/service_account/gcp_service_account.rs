@@ -3,9 +3,8 @@ use crate::traits::{
     Binding, GcpServiceAccountInfo, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
 use alien_core::bindings::GcpServiceAccountBinding;
-use alien_core::{ClientConfig, GcpClientConfig as CoreGcpClientConfig, GcpCredentials};
+use alien_core::{ClientConfig, GcpClientConfig, GcpCredentials, GcpImpersonationConfig};
 use alien_error::Context;
-use alien_gcp_clients::{GcpClientConfig, GcpImpersonationConfig};
 use async_trait::async_trait;
 use reqwest::Client;
 
@@ -71,7 +70,7 @@ impl ServiceAccount for GcpServiceAccount {
             .scopes
             .unwrap_or_else(|| vec!["https://www.googleapis.com/auth/cloud-platform".to_string()]);
 
-        let impersonated_config = CoreGcpClientConfig {
+        let impersonated_config = GcpClientConfig {
             project_id: self.config.project_id.clone(),
             region: self.config.region.clone(),
             credentials: GcpCredentials::ImpersonatedServiceAccount {

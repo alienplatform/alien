@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{GetPolicyOptions, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
@@ -204,7 +204,7 @@ impl GcpServiceAccountController {
             let project_policy = rm_client
                 .get_project_iam_policy(
                     gcp_config.project_id.clone(),
-                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                    Some(GetPolicyOptions {
                         requested_policy_version: Some(3),
                     }),
                 )
@@ -482,7 +482,7 @@ impl GcpServiceAccountController {
         let current_policy = rm_client
             .get_project_iam_policy(
                 project_id.clone(),
-                Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                Some(GetPolicyOptions {
                     requested_policy_version: Some(3),
                 }),
             )
@@ -672,7 +672,7 @@ impl GcpServiceAccountController {
         let mut current_policy = rm_client
             .get_project_iam_policy(
                 project_id.clone(),
-                Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                Some(GetPolicyOptions {
                     requested_policy_version: Some(3),
                 }),
             )

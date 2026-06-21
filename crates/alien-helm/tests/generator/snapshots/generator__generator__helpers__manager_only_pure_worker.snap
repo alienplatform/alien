@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 37
 expression: buf
 ---
 === Chart.yaml ===
@@ -407,7 +408,35 @@ ephemeralStorage:
         "type": "object",
         "properties": {
           "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-          "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+          "rbac": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "apiGroups": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "resources": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    },
+                    "verbs": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "required": ["apiGroups", "resources", "verbs"]
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -784,6 +813,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "deployment.fullname" . }}
+---
+{{- range $name, $account := .Values.serviceAccounts }}
+{{- $rbac := default dict $account.rbac }}
+{{- $rules := default list $rbac.rules }}
+{{- if $rules }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+rules:
+{{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+---
+{{- end }}
+{{- end }}
 
 === templates/clusterrole.yaml ===
 {{- $nodeCollectionEnabled := dig "collection" "nodes" "enabled" true (default dict .Values.heartbeat) -}}
@@ -1658,6 +1717,16 @@ See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / 
 === files/stack.json ===
 {
   "id": "pure-fn",
+  "permissions": {
+    "management": "auto",
+    "profiles": {
+      "runtime": {
+        "*": [
+          "worker/management"
+        ]
+      }
+    }
+  },
   "resources": {
     "api": {
       "config": {
@@ -1678,20 +1747,10 @@ See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / 
         "triggers": [],
         "type": "worker"
       },
-      "lifecycle": "live",
       "dependencies": [],
+      "lifecycle": "live",
       "remoteAccess": false
     }
-  },
-  "permissions": {
-    "profiles": {
-      "runtime": {
-        "*": [
-          "worker/management"
-        ]
-      }
-    },
-    "management": "auto"
   }
 }
 

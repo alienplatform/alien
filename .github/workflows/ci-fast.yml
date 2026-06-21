@@ -76,6 +76,24 @@ jobs:
       - name: Install CloudFormation linter
         run: pipx install cfn-lint
 
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.3
+          terraform_wrapper: false
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install kubeconform
+        run: |
+          case "$(uname -m)" in
+            x86_64) KUBECONFORM_ARCH=amd64 ;;
+            aarch64|arm64) KUBECONFORM_ARCH=arm64 ;;
+            *) echo "Unsupported kubeconform architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -L "https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-${KUBECONFORM_ARCH}.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
       - name: Install zig (needed by cargo-zigbuild for example builds)
         run: pip3 install ziglang
 
@@ -108,7 +126,7 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
       - name: Build all CLIs
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
@@ -123,6 +141,7 @@ jobs:
       - name: Run examples
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
+          ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
           RUST_LOG: info
           VERBOSE: "true"

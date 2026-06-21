@@ -5,15 +5,12 @@
 
 use crate::error::{ErrorData, Result};
 use crate::ClientConfigExt as _;
-#[cfg(feature = "aws")]
-use alien_core::AwsImpersonationConfig;
 use alien_core::{
-    ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteStackManagement,
+    AwsImpersonationConfig, AzureClientConfig, AzureCredentials, ClientConfig, EnvironmentInfo,
+    GcpImpersonationConfig, ImpersonationConfig, Platform, RemoteStackManagement,
     RemoteStackManagementOutputs, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::GcpImpersonationConfig;
 use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
@@ -268,20 +265,18 @@ impl RemoteAccessResolver {
             .cloned()
             .unwrap_or_else(|| "https://login.microsoftonline.com/".to_string());
 
-        Ok(ClientConfig::Azure(Box::new(
-            alien_azure_clients::AzureClientConfig {
-                subscription_id: target_subscription,
+        Ok(ClientConfig::Azure(Box::new(AzureClientConfig {
+            subscription_id: target_subscription,
+            tenant_id: customer_tenant_id.to_string(),
+            region: target_region,
+            credentials: AzureCredentials::WorkloadIdentity {
+                client_id: uami_client_id.to_string(),
                 tenant_id: customer_tenant_id.to_string(),
-                region: target_region,
-                credentials: alien_azure_clients::AzureCredentials::WorkloadIdentity {
-                    client_id: uami_client_id.to_string(),
-                    tenant_id: customer_tenant_id.to_string(),
-                    federated_token_file: token_file.clone(),
-                    authority_host,
-                },
-                service_overrides: None,
+                federated_token_file: token_file.clone(),
+                authority_host,
             },
-        )))
+            service_overrides: None,
+        })))
     }
 
     /// Create a base client configuration for the specified platform

@@ -11,13 +11,6 @@ use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindin
 use alien_core::bindings::{self, WorkerBinding};
 
 // Import cloud clients for creating test resources
-#[cfg(feature = "aws")]
-use alien_core::{AwsClientConfig, AwsCredentials};
-#[cfg(feature = "aws")]
-use aws_sdk_lambda::{
-    types::{Architecture, Cors, FunctionCode, FunctionUrlAuthType, InvokeMode, PackageType},
-    Client as LambdaClient,
-};
 #[cfg(feature = "azure")]
 use alien_azure_clients::authorization::{AuthorizationApi, AzureAuthorizationClient, Scope};
 #[cfg(feature = "azure")]
@@ -39,10 +32,17 @@ use alien_azure_clients::models::container_apps::{
 #[cfg(feature = "azure")]
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_azure_clients::AzureTokenCache;
+#[cfg(feature = "aws")]
+use alien_core::{AwsClientConfig, AwsCredentials};
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::cloudrun::{
     CloudRunApi, CloudRunClient, Container, ContainerPort, RevisionTemplate, Service,
     TrafficTarget, TrafficTargetAllocationType,
+};
+#[cfg(feature = "aws")]
+use aws_sdk_lambda::{
+    types::{Architecture, Cors, FunctionCode, FunctionUrlAuthType, InvokeMode, PackageType},
+    Client as LambdaClient,
 };
 
 use alien_client_core::ErrorData;
@@ -238,11 +238,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             .create_function()
             .function_name(&function_name)
             .role(&role_arn)
-            .code(
-                FunctionCode::builder()
-                    .image_uri(&image_uri)
-                    .build(),
-            )
+            .code(FunctionCode::builder().image_uri(&image_uri).build())
             .package_type(PackageType::Image)
             .description("Test function created by alien-bindings tests")
             .timeout(30)
@@ -312,10 +308,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             .await
             .expect("Failed to create worker URL");
 
-        info!(
-            "✅ Created worker URL: {}",
-            url_response.function_url()
-        );
+        info!("✅ Created worker URL: {}", url_response.function_url());
 
         // Public Worker URLs require two resource-based policy statements:
         // 1. lambda:InvokeFunctionUrl with FunctionUrlAuthType=NONE

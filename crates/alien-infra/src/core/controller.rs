@@ -551,19 +551,14 @@ use crate::{
     core::ResourceRegistry,
     error::{ErrorData, Result},
 };
-#[cfg(feature = "azure")]
-use alien_azure_clients::AzureClientConfig;
-#[cfg(feature = "aws")]
-use alien_core::AwsClientConfig;
 use alien_core::ClientConfig;
 use alien_core::{
-    AwsManagementConfig, AzureManagementConfig, GcpManagementConfig, KubernetesClientConfig,
-    Platform, Resource, ResourceDefinition, ResourceHeartbeat, ResourceOutputs, ResourceRef,
-    ResourceStatus, StackState,
+    AwsClientConfig, AwsManagementConfig, AzureClientConfig, AzureManagementConfig,
+    GcpClientConfig, GcpManagementConfig, KubernetesClientConfig, Platform, Resource,
+    ResourceDefinition, ResourceHeartbeat, ResourceOutputs, ResourceRef, ResourceStatus,
+    StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::GcpClientConfig;
 use async_trait::async_trait;
 use serde::de::{DeserializeOwned, Error as DeError};
 use std::sync::{Arc, Mutex};

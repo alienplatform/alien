@@ -677,7 +677,7 @@ resource "aws_iam_role" "execution_sa" {
 resource "aws_iam_role_policy" "execution_sa_set_0" {
   name   = "storage-data-read-0"
   role   = aws_iam_role.execution_sa.id
-  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "ReadS3Objects" }], Version = "2012-10-17" })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadS3Objects", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"] }] })
 }
 
 === registration.tf ===

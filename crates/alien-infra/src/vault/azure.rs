@@ -1,23 +1,20 @@
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::core::ResourceControllerContext;
-use crate::error::{ErrorData, Result};
-use alien_azure_clients::keyvault::KeyVaultManagementApi;
-use alien_azure_clients::models::keyvault::{
-    Sku, SkuFamily, SkuName, Vault as AzureVaultModel, VaultCreateOrUpdateParameters,
-    VaultProperties,
+use crate::core::{
+    AzureKeyVault, AzureKeyVaultCreateOrUpdateParameters, AzureKeyVaultManagementApi,
+    AzureKeyVaultProperties, AzureKeyVaultSku, ResourceControllerContext,
 };
+use crate::error::{ErrorData, Result};
 use alien_core::{
-    AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, Vault,
-    VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+    AzureClientConfig, AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
 use chrono::Utc;
 
@@ -35,7 +32,7 @@ pub struct AzureVaultController {
     pub(crate) vault_uri: Option<String>,
     /// Key Vault management client for Azure operations
     #[serde(skip)]
-    pub(crate) vault_client: Option<Arc<dyn KeyVaultManagementApi>>,
+    pub(crate) vault_client: Option<Arc<dyn AzureKeyVaultManagementApi>>,
 }
 
 impl AzureVaultController {
@@ -129,7 +126,7 @@ impl AzureVaultController {
             (&self.vault_name, &self.resource_group_name)
         {
             use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
+            use crate::core::Scope;
 
             // Build Azure resource scope for the Key Vault
             let resource_scope = Scope::Resource {
@@ -326,7 +323,7 @@ fn emit_azure_key_vault_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    vault: AzureVaultModel,
+    vault: AzureKeyVault,
 ) {
     let provisioning_state = vault
         .properties
@@ -370,8 +367,8 @@ fn emit_azure_key_vault_heartbeat(
                 location: vault.location,
                 vault_uri: vault.properties.vault_uri,
                 provisioning_state,
-                sku_family: Some(vault.properties.sku.family.to_string()),
-                sku_name: Some(vault.properties.sku.name.to_string()),
+                sku_family: Some(vault.properties.sku.family),
+                sku_name: Some(vault.properties.sku.name),
                 soft_delete_enabled: vault.properties.enable_soft_delete,
                 soft_delete_retention_days: vault.properties.soft_delete_retention_in_days,
                 purge_protection_enabled: vault.properties.enable_purge_protection,
@@ -391,10 +388,7 @@ fn emit_azure_key_vault_heartbeat(
 
 impl AzureVaultController {
     /// Create an Azure Key Vault with proper access policies
-    async fn create_azure_key_vault(
-        &self,
-        azure_config: &alien_azure_clients::AzureClientConfig,
-    ) -> Result<()> {
+    async fn create_azure_key_vault(&self, azure_config: &AzureClientConfig) -> Result<()> {
         let vault_name = self.vault_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Vault name not set".to_string(),
@@ -433,7 +427,7 @@ impl AzureVaultController {
 
         // Use RBAC authorization — permissions are managed via Azure role assignments
         // created by the service account controller, not vault access policies.
-        let vault_properties = VaultProperties {
+        let vault_properties = AzureKeyVaultProperties {
             access_policies: vec![],
             create_mode: None,
             enable_purge_protection: None,
@@ -447,9 +441,9 @@ impl AzureVaultController {
             private_endpoint_connections: vec![],
             provisioning_state: None,
             public_network_access: "Enabled".to_string(),
-            sku: Sku {
-                name: SkuName::Standard,
-                family: SkuFamily::A,
+            sku: AzureKeyVaultSku {
+                name: "standard".to_string(),
+                family: "A".to_string(),
             },
             soft_delete_retention_in_days: 7, // Minimum retention period
             tenant_id,
@@ -460,7 +454,7 @@ impl AzureVaultController {
         tags.insert("ManagedBy".to_string(), "Alien".to_string());
         tags.insert("Environment".to_string(), "Production".to_string());
 
-        let vault_params = VaultCreateOrUpdateParameters {
+        let vault_params = AzureKeyVaultCreateOrUpdateParameters {
             location: location.to_string(),
             properties: vault_properties,
             tags,

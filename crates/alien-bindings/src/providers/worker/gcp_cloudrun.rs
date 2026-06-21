@@ -1,29 +1,56 @@
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::time::Duration;
+
+use alien_core::bindings::CloudRunWorkerBinding;
+use alien_core::{GcpClientConfig, GcpCredentials, GcpImpersonationConfig};
+use alien_error::{AlienError, Context, IntoAlienError};
+use async_trait::async_trait;
+use google_cloud_auth::credentials::{
+    self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
+};
+use google_cloud_auth::errors::CredentialsError;
+use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
+use reqwest::{Client, Method, Url};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
 use crate::error::{ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
-use alien_core::bindings::CloudRunWorkerBinding;
-use alien_error::{AlienError, Context, IntoAlienError};
-use alien_gcp_clients::cloudrun::{CloudRunApi, CloudRunClient};
-use alien_gcp_clients::GcpClientConfig;
-use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::BTreeMap;
+
+const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const CLOUD_RUN_REST_BASE_URL: &str = "https://run.googleapis.com/v2";
 
 /// GCP Cloud Run worker binding implementation
 #[derive(Debug)]
 pub struct CloudRunWorker {
     client: Client,
-    cloudrun_client: CloudRunClient,
+    project_id: String,
+    endpoint: String,
+    credentials: Credentials,
     binding: CloudRunWorkerBinding,
 }
 
 impl CloudRunWorker {
-    pub fn new(client: Client, config: GcpClientConfig, binding: CloudRunWorkerBinding) -> Self {
-        let cloudrun_client = CloudRunClient::new(client.clone(), config);
-        Self {
+    pub fn new(
+        client: Client,
+        config: GcpClientConfig,
+        binding: CloudRunWorkerBinding,
+    ) -> Result<Self> {
+        let endpoint = config
+            .service_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.endpoints.get("cloudrun"))
+            .cloned()
+            .unwrap_or_else(|| CLOUD_RUN_REST_BASE_URL.to_string());
+
+        Ok(Self {
             client,
-            cloudrun_client,
+            project_id: config.project_id.clone(),
+            endpoint,
+            credentials: credentials_from_gcp_config(&config)?,
             binding,
-        }
+        })
     }
 
     /// Get the private URL from the binding, resolving template expressions if needed
@@ -53,6 +80,43 @@ impl CloudRunWorker {
             // Use the private URL from binding
             self.get_private_url()
         }
+    }
+
+    fn build_url(&self, location: &str, service_name: &str) -> Result<Url> {
+        Url::parse(&format!(
+            "{}/projects/{}/locations/{}/services/{}",
+            self.endpoint.trim_end_matches('/'),
+            self.project_id,
+            location,
+            service_name
+        ))
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.cloudRun".to_string(),
+            reason: "Invalid Cloud Run service URL".to_string(),
+        })
+    }
+
+    async fn authed_request(&self, method: Method, url: Url) -> Result<reqwest::RequestBuilder> {
+        let headers = match self
+            .credentials
+            .headers(Extensions::new())
+            .await
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.cloudRun".to_string(),
+                reason: "Failed to get Google auth headers".to_string(),
+            })? {
+            CacheableResource::New { data, .. } => data,
+            CacheableResource::NotModified => {
+                return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "worker.cloudRun".to_string(),
+                    reason: "Google auth returned NotModified without cached headers".to_string(),
+                }));
+            }
+        };
+
+        Ok(self.client.request(method, url).headers(headers))
     }
 }
 
@@ -176,20 +240,249 @@ impl Worker for CloudRunWorker {
                 reason: "Failed to resolve location from binding".to_string(),
             })?;
 
-        match self
-            .cloudrun_client
-            .get_service(location, service_name)
+        let url = self.build_url(&location, &service_name)?;
+        let response = self
+            .authed_request(Method::GET, url.clone())
+            .await?
+            .send()
             .await
-        {
-            Ok(service) => {
-                // Return the first URL if available
-                Ok(service.urls.first().cloned())
-            }
-            Err(_) => Ok(None), // Service doesn't exist or no public URL
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                url: url.to_string(),
+                method: "GET".to_string(),
+            })?;
+
+        if response.status().as_u16() == 404 {
+            return Ok(None);
         }
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let service = response
+            .json::<CloudRunService>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.cloudRun".to_string(),
+                reason: "Failed to parse Cloud Run service response".to_string(),
+            })?;
+
+        Ok(service.urls.into_iter().next())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudRunService {
+    #[serde(default)]
+    urls: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StaticAccessTokenCredentials {
+    token: String,
+    entity_tag: EntityTag,
+}
+
+impl StaticAccessTokenCredentials {
+    fn new(token: String) -> Self {
+        Self {
+            token,
+            entity_tag: EntityTag::new(),
+        }
+    }
+}
+
+impl CredentialsProvider for StaticAccessTokenCredentials {
+    fn headers(
+        &self,
+        _extensions: Extensions,
+    ) -> impl Future<Output = std::result::Result<CacheableResource<HeaderMap>, CredentialsError>> + Send
+    {
+        let token = self.token.clone();
+        let entity_tag = self.entity_tag.clone();
+        async move {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|error| CredentialsError::from_source(false, error))?;
+            value.set_sensitive(true);
+
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, value);
+
+            Ok(CacheableResource::New {
+                entity_tag,
+                data: headers,
+            })
+        }
+    }
+
+    fn universe_domain(&self) -> impl Future<Output = Option<String>> + Send {
+        async { None }
+    }
+}
+
+fn credentials_from_gcp_config(config: &GcpClientConfig) -> Result<Credentials> {
+    credentials_from_gcp_credentials(&config.credentials)
+}
+
+fn credentials_from_gcp_credentials(credentials: &GcpCredentials) -> Result<Credentials> {
+    match credentials {
+        GcpCredentials::AccessToken { token } => {
+            Ok(Credentials::from(StaticAccessTokenCredentials::new(token.clone())))
+        }
+        GcpCredentials::ServiceAccountKey { json } => {
+            let key = serde_json::from_str::<Value>(json).into_alien_error().context(
+                ErrorData::BindingSetupFailed {
+                    binding_type: "worker.cloudRun".to_string(),
+                    reason: "Failed to parse GCP service account key JSON".to_string(),
+                },
+            )?;
+            credentials::service_account::Builder::new(key)
+                .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                    [CLOUD_PLATFORM_SCOPE],
+                ))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "worker.cloudRun".to_string(),
+                    reason: "Failed to build official GCP service account credentials".to_string(),
+                })
+        }
+        GcpCredentials::ServiceMetadata => credentials::mds::Builder::default()
+            .with_scopes([CLOUD_PLATFORM_SCOPE])
+            .build()
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.cloudRun".to_string(),
+                reason: "Failed to build official GCP metadata credentials".to_string(),
+            }),
+        GcpCredentials::ExternalAccount {
+            audience,
+            subject_token_type,
+            token_url,
+            credential_source_file,
+            service_account_impersonation_url,
+        } => {
+            let external_account = external_account_json(
+                audience,
+                subject_token_type,
+                token_url,
+                credential_source_file,
+                service_account_impersonation_url.as_deref(),
+            );
+            credentials::external_account::Builder::new(external_account)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "worker.cloudRun".to_string(),
+                    reason: "Failed to build official GCP external account credentials".to_string(),
+                })
+        }
+        GcpCredentials::AuthorizedUser {
+            client_id,
+            client_secret,
+            refresh_token,
+        } => {
+            let authorized_user = json!({
+                "type": "authorized_user",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            });
+            credentials::user_account::Builder::new(authorized_user)
+                .with_scopes([CLOUD_PLATFORM_SCOPE])
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "worker.cloudRun".to_string(),
+                    reason: "Failed to build official GCP authorized user credentials".to_string(),
+                })
+        }
+        GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+            impersonated_credentials_from_gcp_config(source, config)
+        }
+        GcpCredentials::ProjectedServiceAccount { .. } => Err(AlienError::new(
+            ErrorData::BindingSetupFailed {
+                binding_type: "worker.cloudRun".to_string(),
+                reason: "Projected service account token files are not a complete official Google auth credential configuration; use external_account credentials with an audience and credential source instead".to_string(),
+            },
+        )),
+    }
+}
+
+fn impersonated_credentials_from_gcp_config(
+    source: &GcpClientConfig,
+    config: &GcpImpersonationConfig,
+) -> Result<Credentials> {
+    let source_credentials = credentials_from_gcp_config(source)?;
+    let mut builder =
+        credentials::impersonated::Builder::from_source_credentials(source_credentials)
+            .with_target_principal(config.service_account_email.clone())
+            .with_scopes(config.scopes.clone());
+
+    if let Some(delegates) = &config.delegates {
+        builder = builder.with_delegates(delegates.clone());
+    }
+
+    if let Some(lifetime) = &config.lifetime {
+        builder = builder.with_lifetime(parse_google_duration(lifetime)?);
+    }
+
+    builder
+        .build()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.cloudRun".to_string(),
+            reason: "Failed to build official GCP impersonated credentials".to_string(),
+        })
+}
+
+fn external_account_json(
+    audience: &str,
+    subject_token_type: &str,
+    token_url: &str,
+    credential_source_file: &str,
+    service_account_impersonation_url: Option<&str>,
+) -> Value {
+    let mut value = json!({
+        "type": "external_account",
+        "audience": audience,
+        "subject_token_type": subject_token_type,
+        "token_url": token_url,
+        "credential_source": {
+            "file": credential_source_file,
+        },
+        "scopes": [CLOUD_PLATFORM_SCOPE],
+    });
+
+    if let Some(url) = service_account_impersonation_url {
+        value["service_account_impersonation_url"] = Value::String(url.to_string());
+    }
+
+    value
+}
+
+fn parse_google_duration(value: &str) -> Result<Duration> {
+    let seconds = value
+        .strip_suffix('s')
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "worker.cloudRun".to_string(),
+                reason: format!("Invalid Google duration '{}': missing 's' suffix", value),
+            })
+        })?
+        .parse::<u64>()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.cloudRun".to_string(),
+            reason: format!("Invalid Google duration '{}'", value),
+        })?;
+
+    Ok(Duration::from_secs(seconds))
 }

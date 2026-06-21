@@ -6,8 +6,8 @@ use google_cloud_auth::credentials::{
 };
 use google_cloud_auth::errors::CredentialsError;
 use google_cloud_resourcemanager_v3::client::Projects;
-use http::{Extensions, HeaderMap, HeaderValue, header::AUTHORIZATION};
-use serde_json::{Value, json};
+use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
+use serde_json::{json, Value};
 use std::future::Future;
 use std::time::Duration;
 
@@ -74,15 +74,19 @@ pub async fn get_project_number(config: &GcpClientConfig) -> Result<String> {
             reason: "ResourceManager projects.get failed".to_string(),
         })?;
 
-    project.name.strip_prefix("projects/").map(str::to_string).ok_or_else(|| {
-        AlienError::new(ErrorData::EnvironmentInfoCollectionFailed {
-            platform: "GCP".to_string(),
-            reason: format!(
-                "ResourceManager returned project name '{}' without projects/ prefix",
-                project.name
-            ),
+    project
+        .name
+        .strip_prefix("projects/")
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::EnvironmentInfoCollectionFailed {
+                platform: "GCP".to_string(),
+                reason: format!(
+                    "ResourceManager returned project name '{}' without projects/ prefix",
+                    project.name
+                ),
+            })
         })
-    })
 }
 
 async fn resource_manager_projects_client_from_alien_config(
@@ -203,11 +207,10 @@ fn impersonated_credentials_from_alien_config(
     config: &GcpImpersonationConfig,
 ) -> Result<Credentials> {
     let source_credentials = credentials_from_alien_config(source)?;
-    let mut builder = credentials::impersonated::Builder::from_source_credentials(
-        source_credentials,
-    )
-    .with_target_principal(config.service_account_email.clone())
-    .with_scopes(config.scopes.clone());
+    let mut builder =
+        credentials::impersonated::Builder::from_source_credentials(source_credentials)
+            .with_target_principal(config.service_account_email.clone())
+            .with_scopes(config.scopes.clone());
 
     if let Some(delegates) = &config.delegates {
         builder = builder.with_delegates(delegates.clone());

@@ -2,24 +2,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    AuthorizationApi, FederatedCredentialProperties, FederatedIdentityCredential, Identity,
+    Permission, ResourceControllerContext, ResourcePermissionsHelper, RoleAssignment,
+    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
+    RoleDefinitionProperties, Scope,
+};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
-use alien_azure_clients::authorization::Scope;
-use alien_azure_clients::managed_identity::{
-    FederatedCredentialProperties, FederatedIdentityCredential,
-};
-use alien_azure_clients::models::authorization_role_assignments::{
-    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-};
-use alien_azure_clients::models::authorization_role_definitions::{
-    Permission, RoleDefinition, RoleDefinitionProperties,
-};
-use alien_azure_clients::models::managed_identity::Identity;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, NetworkSettings,
-    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    ObservedHealth, PermissionProfile, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
@@ -42,7 +35,10 @@ const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
-const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+// The absolute wait deadline controls Azure RBAC propagation. Terraform-imported
+// setup can drive this state quickly, so keep the Stay guard comfortably above
+// the number of reconciles that can happen inside the deadline.
+const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
 
 fn get_management_identity_name(prefix: &str) -> String {
     format!("{}-management-identity", prefix)
@@ -103,6 +99,55 @@ fn wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
             remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
         ))
     }
+}
+
+fn management_role_assignment_key(
+    resource_prefix: &str,
+    principal_id: &str,
+    role_definition_id: &str,
+    scope: &str,
+) -> String {
+    format!(
+        "deployment:azure:mgmt-role-assign:{resource_prefix}:uami:{principal_id}:{role_definition_id}:{scope}"
+    )
+}
+
+fn existing_role_assignment_id_from_conflict(
+    scope: &str,
+    err: &AlienError<ErrorData>,
+) -> Option<String> {
+    let ErrorData::CloudResourceConflict { message, .. } = err.error.as_ref()? else {
+        return None;
+    };
+
+    let lower_message = message.to_ascii_lowercase();
+    if !lower_message.contains("role assignment already exists")
+        || !lower_message.contains("role assignment")
+    {
+        return None;
+    }
+
+    let normalized = message
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_hexdigit() || ch == '-' {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+
+    normalized
+        .split_whitespace()
+        .rev()
+        .find_map(|candidate| Uuid::parse_str(candidate).ok())
+        .map(|assignment_uuid| {
+            format!(
+                "{}/providers/Microsoft.Authorization/roleAssignments/{}",
+                scope, assignment_uuid
+            )
+        })
 }
 
 #[controller]
@@ -403,7 +448,7 @@ impl AzureRemoteStackManagementController {
         })?;
 
         let grant_plan = self.generate_management_grant_plan(ctx)?;
-        for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+        for binding in &grant_plan.bindings {
             let role_definition_id = match &binding.role_definition {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
                     role_definition_id.clone()
@@ -418,9 +463,11 @@ impl AzureRemoteStackManagementController {
             };
             let assignment_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
-                format!(
-                    "deployment:azure:mgmt-role-assign:{}:uami:{}:{}",
-                    ctx.resource_prefix, binding.role_name, binding_index
+                management_role_assignment_key(
+                    ctx.resource_prefix,
+                    &uami_principal_id,
+                    &role_definition_id,
+                    &binding.scope,
                 )
                 .as_bytes(),
             )
@@ -431,7 +478,10 @@ impl AzureRemoteStackManagementController {
                 &uami_principal_id,
                 &role_definition_id,
                 &binding.scope,
-                &format!("management uami {}", binding.role_name),
+                &format!(
+                    "management uami {} ({})",
+                    binding.role_name, ctx.resource_prefix
+                ),
                 &config.id,
             )
             .await?;
@@ -459,7 +509,10 @@ impl AzureRemoteStackManagementController {
                 &uami_principal_id,
                 &role_definition_id,
                 &vnet_resource_id,
-                "management uami existing VNet reader",
+                &format!(
+                    "management uami existing VNet reader ({})",
+                    ctx.resource_prefix
+                ),
                 &config.id,
             )
             .await?;
@@ -584,12 +637,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Management role assignment deleted for update");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(assignment_id = %assignment_id, "Management role assignment already absent for update");
                 }
                 Err(e) => {
@@ -616,12 +664,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(role_definition_id = %role_def_id, "Management role definition deleted for update");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(role_definition_id = %role_def_id, "Management role definition already absent for update");
                 }
                 Err(e) => {
@@ -714,12 +757,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(assignment_id = %assignment_id, "Role assignment already deleted");
                 }
                 Err(e) => {
@@ -767,12 +805,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(role_definition_id = %role_def_id, "Role definition deleted");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(role_definition_id = %role_def_id, "Role definition already deleted");
                 }
                 Err(e) => {
@@ -818,12 +851,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(fic_name = %fic_name, "Federated credential deleted");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(fic_name = %fic_name, "Federated credential already deleted");
                 }
                 Err(e) => {
@@ -869,12 +897,7 @@ impl AzureRemoteStackManagementController {
                 Ok(_) => {
                     info!(identity_name = %identity_name, "Management identity deleted");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(identity_name = %identity_name, "Management identity already deleted");
                 }
                 Err(e) => {
@@ -931,6 +954,160 @@ impl AzureRemoteStackManagementController {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{PermissionProfile, PermissionSetReference};
+
+    fn permission_context() -> PermissionContext {
+        PermissionContext::new()
+            .with_subscription_id("sub-123".to_string())
+            .with_resource_group("rg-123".to_string())
+            .with_stack_prefix("e2e-01-azcr".to_string())
+            .with_managing_subscription_id("sub-123".to_string())
+            .with_managing_resource_group("rg-123".to_string())
+    }
+
+    #[test]
+    fn role_assignment_conflict_parser_extracts_existing_assignment_id() {
+        let err = AlienError::new(ErrorData::CloudResourceConflict {
+            resource_type: "Resource".to_string(),
+            resource_name: "roleAssignments/requested".to_string(),
+            message: "The role assignment already exists. The ID of the conflicting role assignment is 593d47719b195096804b7b96d6e5a5ac.".to_string(),
+        });
+
+        let existing_assignment_id = existing_role_assignment_id_from_conflict(
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            &err,
+        )
+        .expect("conflict should include an existing role assignment id");
+
+        assert_eq!(
+            existing_assignment_id,
+            "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/593d4771-9b19-5096-804b-7b96d6e5a5ac"
+        );
+    }
+
+    #[test]
+    fn management_role_assignment_key_includes_azure_immutable_fields() {
+        let prefix = "e2e-03-azcr";
+        let principal_id = "principal-a";
+        let role_definition_id = "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7";
+        let scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let base_key =
+            management_role_assignment_key(prefix, principal_id, role_definition_id, scope);
+
+        assert_ne!(
+            base_key,
+            management_role_assignment_key(prefix, "principal-b", role_definition_id, scope),
+            "Azure rejects updating principalId on an existing role assignment ID"
+        );
+        assert_ne!(
+            base_key,
+            management_role_assignment_key(
+                prefix,
+                principal_id,
+                "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/custom-role",
+                scope,
+            ),
+            "Azure rejects updating roleDefinitionId on an existing role assignment ID"
+        );
+        assert_ne!(
+            base_key,
+            management_role_assignment_key(
+                prefix,
+                principal_id,
+                role_definition_id,
+                "/subscriptions/sub-123",
+            ),
+            "Azure rejects updating scope on an existing role assignment ID"
+        );
+    }
+
+    #[test]
+    fn stack_management_grant_plan_includes_global_heartbeat_reader_grants() {
+        let profile = PermissionProfile::new().global([
+            PermissionSetReference::from_name("worker/provision"),
+            PermissionSetReference::from_name("storage/provision"),
+            PermissionSetReference::from_name("artifact-registry/provision"),
+            PermissionSetReference::from_name("azure-resource-group/heartbeat"),
+            PermissionSetReference::from_name("service-account/heartbeat"),
+        ]);
+
+        let grant_plan =
+            generate_stack_management_grant_plan(&profile, &permission_context()).unwrap();
+
+        assert!(
+            grant_plan.custom_roles.iter().any(|role| role
+                .role_definition
+                .actions
+                .iter()
+                .any(|action| { action == "Microsoft.App/containerApps/write" })),
+            "worker/provision should still contribute residual Azure management actions"
+        );
+        assert_eq!(
+            grant_plan
+                .bindings
+                .iter()
+                .filter(|binding| matches!(
+                    binding.role_definition,
+                    AzureRoleDefinitionRef::Custom { .. }
+                ))
+                .count(),
+            1,
+            "all residual custom management actions share one combined custom role assignment"
+        );
+
+        let reader_bindings: Vec<_> = grant_plan
+            .bindings
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    &binding.role_definition,
+                    AzureRoleDefinitionRef::Predefined { role_definition_id }
+                        if role_definition_id.ends_with("/acdd72a7-3385-48ef-bd42-f606fba81ae7")
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            reader_bindings.len(),
+            1,
+            "resource-group and service-account heartbeats should share one deduped Reader assignment"
+        );
+        assert_eq!(
+            reader_bindings[0].scope,
+            "/subscriptions/sub-123/resourceGroups/rg-123"
+        );
+    }
+
+    #[test]
+    fn stack_management_grant_plan_includes_worker_dispatch_command_once() {
+        let profile = PermissionProfile::new()
+            .resource(
+                "api",
+                [PermissionSetReference::from_name("worker/dispatch-command")],
+            )
+            .resource(
+                "jobs",
+                [PermissionSetReference::from_name("worker/dispatch-command")],
+            );
+
+        let grant_plan =
+            generate_stack_management_grant_plan(&profile, &permission_context()).unwrap();
+
+        assert_eq!(
+            grant_plan
+                .bindings
+                .iter()
+                .filter(|binding| binding.permission_set_id == "worker/dispatch-command")
+                .count(),
+            1,
+            "worker dispatch is a stack management transport grant and should be deduped"
+        );
     }
 }
 
@@ -995,6 +1172,112 @@ fn existing_azure_vnet_resource_id(ctx: &ResourceControllerContext<'_>) -> Optio
         } => Some(vnet_resource_id.clone()),
         _ => None,
     }
+}
+
+fn generate_stack_management_grant_plan(
+    management_profile: &PermissionProfile,
+    permission_context: &PermissionContext,
+) -> Result<AzureGrantPlan> {
+    let mut custom_roles = Vec::new();
+    let mut bindings = Vec::new();
+    let generator = AzureRuntimePermissionsGenerator::new();
+
+    if let Some(global_refs) = management_profile.0.get("*") {
+        for permission_set_ref in global_refs {
+            let Some(permission_set) =
+                permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+            else {
+                tracing::warn!(
+                    permission_set_id = %permission_set_ref.id(),
+                    "Management permission set not found, skipping"
+                );
+                continue;
+            };
+            if permission_set.platforms.azure.is_none() {
+                continue;
+            }
+
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Stack, permission_context)
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate Azure role definition for permission set '{}'",
+                        permission_set.id
+                    ),
+                    operation: Some("generate_management_grant_plan".to_string()),
+                    resource_id: Some("management".to_string()),
+                })?;
+
+            custom_roles.extend(grant_plan.custom_roles);
+            bindings.extend(grant_plan.bindings);
+        }
+    }
+
+    let mut seen_stack_management_refs = BTreeSet::new();
+    for permission_set_ref in management_profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(_, refs)| refs.iter())
+        .filter(|reference| reference.id() == "worker/dispatch-command")
+    {
+        let Some(permission_set) =
+            permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+        else {
+            tracing::warn!(
+                permission_set_id = %permission_set_ref.id(),
+                "Management permission set not found, skipping"
+            );
+            continue;
+        };
+        if !seen_stack_management_refs.insert(permission_set.id.clone()) {
+            continue;
+        }
+        if permission_set.platforms.azure.is_none() {
+            continue;
+        }
+
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Stack, permission_context)
+            .context(ErrorData::InfrastructureError {
+                message: format!(
+                    "Failed to generate Azure role definition for permission set '{}'",
+                    permission_set.id
+                ),
+                operation: Some("generate_management_grant_plan".to_string()),
+                resource_id: Some("management".to_string()),
+            })?;
+
+        custom_roles.extend(grant_plan.custom_roles);
+        bindings.extend(grant_plan.bindings);
+    }
+
+    Ok(AzureGrantPlan {
+        custom_roles,
+        bindings: dedupe_management_role_bindings(bindings),
+    })
+}
+
+fn dedupe_management_role_bindings(
+    bindings: Vec<alien_permissions::generators::AzureRoleBinding>,
+) -> Vec<alien_permissions::generators::AzureRoleBinding> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+
+    for binding in bindings {
+        let role_key = match &binding.role_definition {
+            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                format!("predefined:{role_definition_id}")
+            }
+            AzureRoleDefinitionRef::Custom { .. } => "combined-custom-management-role".to_string(),
+        };
+
+        if seen.insert((binding.scope.clone(), role_key)) {
+            deduped.push(binding);
+        }
+    }
+
+    deduped
 }
 
 impl AzureRemoteStackManagementController {
@@ -1084,75 +1367,10 @@ impl AzureRemoteStackManagementController {
         };
 
         let generator = AzureRuntimePermissionsGenerator::new();
-        if let Some(global_refs) = management_profile.0.get("*") {
-            for permission_set_ref in global_refs {
-                let Some(permission_set) =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                else {
-                    tracing::warn!(
-                        permission_set_id = %permission_set_ref.id(),
-                        "Management permission set not found, skipping"
-                    );
-                    continue;
-                };
-
-                if !permission_set.id.ends_with("/provision") {
-                    continue;
-                }
-
-                let grant_plan = generator
-                    .generate_grant_plan(&permission_set, BindingTarget::Stack, &permission_context)
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Failed to generate Azure role definition for permission set '{}'",
-                            permission_set.id
-                        ),
-                        operation: Some("generate_management_grant_plan".to_string()),
-                        resource_id: Some("management".to_string()),
-                    })?;
-
-                custom_roles.extend(grant_plan.custom_roles);
-                bindings.extend(grant_plan.bindings);
-            }
-        }
-
-        let mut seen_stack_management_refs = BTreeSet::new();
-        for permission_set_ref in management_profile
-            .0
-            .iter()
-            .filter(|(scope, _)| scope.as_str() != "*")
-            .flat_map(|(_, refs)| refs.iter())
-        {
-            if permission_set_ref.id() != "worker/dispatch-command" {
-                continue;
-            }
-            let Some(permission_set) =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-            else {
-                tracing::warn!(
-                    permission_set_id = %permission_set_ref.id(),
-                    "Management permission set not found, skipping"
-                );
-                continue;
-            };
-            if !seen_stack_management_refs.insert(permission_set.id.clone()) {
-                continue;
-            }
-
-            let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Stack, &permission_context)
-                .context(ErrorData::InfrastructureError {
-                    message: format!(
-                        "Failed to generate Azure role definition for permission set '{}'",
-                        permission_set.id
-                    ),
-                    operation: Some("generate_management_grant_plan".to_string()),
-                    resource_id: Some("management".to_string()),
-                })?;
-
-            custom_roles.extend(grant_plan.custom_roles);
-            bindings.extend(grant_plan.bindings);
-        }
+        let grant_plan =
+            generate_stack_management_grant_plan(management_profile, &permission_context)?;
+        custom_roles.extend(grant_plan.custom_roles);
+        bindings.extend(grant_plan.bindings);
 
         for (resource_id, permission_set_refs) in management_profile
             .0
@@ -1212,7 +1430,7 @@ impl AzureRemoteStackManagementController {
 
     async fn create_role_assignment_by_scope(
         &mut self,
-        client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
+        client: &std::sync::Arc<dyn AuthorizationApi>,
         assignment_uuid: &str,
         principal_id: &str,
         role_definition_id: &str,
@@ -1245,13 +1463,30 @@ impl AzureRemoteStackManagementController {
             }),
         };
 
-        client
+        let create_result = client
             .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
-            .await
-            .context(ErrorData::CloudPlatformError {
+            .await;
+
+        if let Err(err) = create_result {
+            if let Some(existing_assignment_id) =
+                existing_role_assignment_id_from_conflict(scope, &err)
+            {
+                info!(
+                    assignment_id = %existing_assignment_id,
+                    requested_assignment_id = %full_assignment_id,
+                    principal_id = %principal_id,
+                    role_definition_id = %role_definition_id,
+                    "Role assignment already exists"
+                );
+                self.role_assignment_ids.push(existing_assignment_id);
+                return Ok(());
+            }
+
+            return Err(err.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create role assignment for {}", description),
                 resource_id: Some(config_id.to_string()),
-            })?;
+            }));
+        }
 
         info!(
             assignment_id = %full_assignment_id,

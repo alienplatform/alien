@@ -1,4 +1,4 @@
-use crate::{ErrorData, Result, gcp_sdk};
+use crate::{gcp_sdk, ErrorData, Result};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
@@ -82,12 +82,12 @@ async fn collect_gcp_env_info(client_config: &ClientConfig) -> Result<Environmen
         })
     })?;
 
-    let project_number = gcp_sdk::get_project_number(gcp_config)
-        .await
-        .context(ErrorData::EnvironmentInfoCollectionFailed {
+    let project_number = gcp_sdk::get_project_number(gcp_config).await.context(
+        ErrorData::EnvironmentInfoCollectionFailed {
             platform: "GCP".to_string(),
             reason: "ResourceManager projects.get failed".to_string(),
-        })?;
+        },
+    )?;
 
     Ok(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
         project_number,

@@ -1,15 +1,13 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    core::ResourceControllerContext,
+    core::{
+        AzureBlobContainer, AzureBlobContainerProperties, AzureBlobServiceProperties,
+        AzureStorageAccountArmResource, ResourceControllerContext,
+    },
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
-use alien_azure_clients::azure::models::blob::{
-    BlobContainer, BlobServiceProperties, ContainerProperties, ContainerPropertiesPublicAccess,
-};
-use alien_azure_clients::azure::models::storage::StorageAccount;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureBlobStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -77,14 +75,16 @@ impl AzureStorageController {
         self.storage_account_name = Some(storage_account_name.clone());
 
         // Build container configuration
-        let mut properties = ContainerProperties::default();
-        properties.public_access = if config.public_read {
-            Some(ContainerPropertiesPublicAccess::Blob)
-        } else {
-            Some(ContainerPropertiesPublicAccess::None)
+        let properties = AzureBlobContainerProperties {
+            public_access: if config.public_read {
+                Some("Blob".to_string())
+            } else {
+                Some("None".to_string())
+            },
+            ..Default::default()
         };
 
-        let container_body = BlobContainer {
+        let container_body = AzureBlobContainer {
             properties: Some(properties),
             ..Default::default()
         };
@@ -141,7 +141,7 @@ impl AzureStorageController {
         // Apply resource-scoped permissions from the stack
         if let Some(container_name) = &self.container_name {
             use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
+            use crate::core::Scope;
 
             let config = ctx.desired_resource_config::<Storage>()?;
 
@@ -271,13 +271,15 @@ impl AzureStorageController {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let storage_account_name = azure_utils::get_storage_account_name(ctx.state)?;
 
-            let mut properties = ContainerProperties::default();
-            properties.public_access = if config.public_read {
-                Some(ContainerPropertiesPublicAccess::Blob)
-            } else {
-                Some(ContainerPropertiesPublicAccess::None)
+            let properties = AzureBlobContainerProperties {
+                public_access: if config.public_read {
+                    Some("Blob".to_string())
+                } else {
+                    Some("None".to_string())
+                },
+                ..Default::default()
             };
-            let container_body = BlobContainer {
+            let container_body = AzureBlobContainer {
                 properties: Some(properties),
                 ..Default::default()
             };
@@ -357,12 +359,7 @@ impl AzureStorageController {
                         container_name
                     );
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(
                         "Azure Storage Container '{}' was already deleted.",
                         container_name
@@ -442,9 +439,9 @@ fn emit_azure_storage_heartbeat(
     resource_id: &str,
     resource_group_name: &str,
     storage_account_name: &str,
-    container: BlobContainer,
-    storage_account: StorageAccount,
-    blob_service: BlobServiceProperties,
+    container: AzureBlobContainer,
+    storage_account: AzureStorageAccountArmResource,
+    blob_service: AzureBlobServiceProperties,
 ) {
     let container_name = container
         .name
@@ -453,20 +450,16 @@ fn emit_azure_storage_heartbeat(
     let container_public_access = container
         .properties
         .as_ref()
-        .and_then(|properties| properties.public_access.as_ref())
-        .map(ToString::to_string);
+        .and_then(|properties| properties.public_access.clone());
     let account_properties = storage_account.properties.as_ref();
     let blob_service_properties = blob_service.properties.as_ref();
     let location = storage_account.location.clone();
-    let sku_name = storage_account.sku.as_ref().map(|sku| sku.name.to_string());
+    let sku_name = storage_account.sku.as_ref().map(|sku| sku.name.clone());
     let sku_tier = storage_account
         .sku
         .as_ref()
-        .and_then(|sku| sku.tier.as_ref())
-        .map(ToString::to_string);
-    let access_tier = account_properties
-        .and_then(|properties| properties.access_tier.as_ref())
-        .map(ToString::to_string);
+        .and_then(|sku| sku.tier.clone());
+    let access_tier = account_properties.and_then(|properties| properties.access_tier.clone());
     let encryption = account_properties.and_then(|properties| properties.encryption.as_ref());
     let encryption_services = encryption.and_then(|encryption| encryption.services.as_ref());
     let blob_delete_retention =
@@ -475,14 +468,12 @@ fn emit_azure_storage_heartbeat(
         .and_then(|properties| properties.container_delete_retention_policy.as_ref());
     let change_feed =
         blob_service_properties.and_then(|properties| properties.change_feed.as_ref());
-    let public_network_access = account_properties
-        .and_then(|properties| properties.public_network_access.as_ref())
-        .map(ToString::to_string);
+    let public_network_access =
+        account_properties.and_then(|properties| properties.public_network_access.clone());
     let allow_blob_public_access =
         account_properties.and_then(|properties| properties.allow_blob_public_access);
-    let provisioning_state = account_properties
-        .and_then(|properties| properties.provisioning_state.as_ref())
-        .map(ToString::to_string);
+    let provisioning_state =
+        account_properties.and_then(|properties| properties.provisioning_state.clone());
     let health = match provisioning_state.as_deref() {
         Some("Succeeded") => ObservedHealth::Healthy,
         Some("Failed") => ObservedHealth::Unhealthy,
@@ -513,7 +504,7 @@ fn emit_azure_storage_heartbeat(
                 storage_account_name: Some(storage_account_name.to_string()),
                 resource_group: Some(resource_group_name.to_string()),
                 location: Some(location),
-                account_kind: storage_account.kind.as_ref().map(ToString::to_string),
+                account_kind: storage_account.kind.clone(),
                 sku_name,
                 sku_tier,
                 access_tier,
@@ -523,15 +514,13 @@ fn emit_azure_storage_heartbeat(
                 secondary_location: account_properties
                     .and_then(|properties| properties.secondary_location.clone()),
                 status_of_primary: account_properties
-                    .and_then(|properties| properties.status_of_primary.as_ref())
-                    .map(ToString::to_string),
+                    .and_then(|properties| properties.status_of_primary.clone()),
                 status_of_secondary: account_properties
-                    .and_then(|properties| properties.status_of_secondary.as_ref())
-                    .map(ToString::to_string),
+                    .and_then(|properties| properties.status_of_secondary.clone()),
                 public_network_access,
                 allow_blob_public_access,
                 encryption_key_source: encryption
-                    .map(|encryption| encryption.key_source.to_string()),
+                    .and_then(|encryption| encryption.key_source.clone()),
                 blob_encryption_enabled: encryption_services
                     .and_then(|services| services.blob.as_ref())
                     .and_then(|service| service.enabled),
@@ -550,16 +539,16 @@ fn emit_azure_storage_heartbeat(
                     .and_then(|policy| policy.enabled),
                 blob_delete_retention_days: blob_delete_retention
                     .and_then(|policy| policy.days)
-                    .map(|days| days.get()),
+                    .map(|days| days as u64),
                 container_delete_retention_enabled: container_delete_retention
                     .and_then(|policy| policy.enabled),
                 container_delete_retention_days: container_delete_retention
                     .and_then(|policy| policy.days)
-                    .map(|days| days.get()),
+                    .map(|days| days as u64),
                 change_feed_enabled: change_feed.and_then(|feed| feed.enabled),
                 change_feed_retention_days: change_feed
                     .and_then(|feed| feed.retention_in_days)
-                    .map(|days| u64::from(days.get())),
+                    .map(u64::from),
                 container_public_access,
             },
         )),
@@ -588,28 +577,24 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_azure_clients::blob_containers::{BlobContainerApi, MockBlobContainerApi};
-    use alien_azure_clients::models::blob::{
-        BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
-    };
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{LifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs};
     use alien_error::AlienError;
     use rstest::{fixture, rstest};
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
+        AzureBlobContainer, AzureBlobContainerProperties, MockBlobContainerApi,
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
     use crate::storage::{fixtures::*, AzureStorageController};
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
-    fn create_successful_container_response(container_name: &str) -> BlobContainer {
-        BlobContainer {
+    fn create_successful_container_response(container_name: &str) -> AzureBlobContainer {
+        AzureBlobContainer {
             name: Some(container_name.to_string()),
-            properties: Some(ContainerProperties {
-                public_access: Some(ContainerPropertiesPublicAccess::None),
+            properties: Some(AzureBlobContainerProperties {
+                public_access: Some("None".to_string()),
                 last_modified_time: Some("2023-01-01T00:00:00Z".to_string()),
                 ..Default::default()
             }),
@@ -662,12 +647,10 @@ mod tests {
         mock_blob
             .expect_delete_blob_container()
             .returning(|_, _, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Azure Blob Container".to_string(),
-                        resource_name: "test-container".to_string(),
-                    },
-                ))
+                Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Azure Blob Container".to_string(),
+                    resource_name: "test-container".to_string(),
+                }))
             });
 
         Arc::new(mock_blob)
@@ -686,7 +669,7 @@ mod tests {
         mock_provider
             .expect_get_azure_authorization_client()
             .returning(|_| {
-                use alien_azure_clients::authorization::MockAuthorizationApi;
+                use crate::core::MockAuthorizationApi;
                 Ok(Arc::new(MockAuthorizationApi::new()))
             });
 
@@ -916,7 +899,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        *public_access == ContainerPropertiesPublicAccess::Blob
+                        public_access == "Blob"
                     } else {
                         false
                     }
@@ -927,7 +910,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(ContainerPropertiesPublicAccess::Blob);
+                    properties.public_access = Some("Blob".to_string());
                 }
                 Ok(response)
             });
@@ -961,7 +944,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        *public_access == ContainerPropertiesPublicAccess::None
+                        public_access == "None"
                     } else {
                         false
                     }
@@ -1004,7 +987,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        *public_access == ContainerPropertiesPublicAccess::Blob
+                        public_access == "Blob"
                     } else {
                         false
                     }
@@ -1015,7 +998,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(ContainerPropertiesPublicAccess::Blob);
+                    properties.public_access = Some("Blob".to_string());
                 }
                 Ok(response)
             });
@@ -1101,7 +1084,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        *public_access == ContainerPropertiesPublicAccess::Blob
+                        public_access == "Blob"
                     } else {
                         false
                     }
@@ -1112,7 +1095,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(ContainerPropertiesPublicAccess::Blob);
+                    properties.public_access = Some("Blob".to_string());
                 }
                 Ok(response)
             });

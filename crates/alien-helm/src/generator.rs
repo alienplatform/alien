@@ -18,7 +18,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
-use std::collections::BTreeSet;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Generated Helm chart files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,16 +59,14 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
 
-    let stack_json = serde_json::to_string_pretty(stack)
-        .into_alien_error()
-        .context(ErrorData::JsonSerializationFailed {
-            reason: "failed to serialize stack into chart metadata".to_string(),
-        })?;
-    let stack_settings_json = serde_json::to_string_pretty(&options.stack_settings)
-        .into_alien_error()
-        .context(ErrorData::JsonSerializationFailed {
+    let stack_json = to_stable_pretty_json(stack).context(ErrorData::JsonSerializationFailed {
+        reason: "failed to serialize stack into chart metadata".to_string(),
+    })?;
+    let stack_settings_json = to_stable_pretty_json(&options.stack_settings).context(
+        ErrorData::JsonSerializationFailed {
             reason: "failed to serialize stack settings into chart metadata".to_string(),
-        })?;
+        },
+    )?;
 
     let mut files = IndexMap::new();
     files.insert("Chart.yaml".to_string(), chart_yaml(&chart_name, stack));
@@ -270,9 +269,17 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
 #[derive(Debug, Default)]
 struct ChartAnalysis {
     service_accounts: BTreeSet<String>,
+    service_account_rbac: BTreeMap<String, Vec<KubernetesRoleRule>>,
     infrastructure: Vec<InfrastructureValue>,
     services: Vec<ServiceValue>,
     extra_templates: IndexMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KubernetesRoleRule {
+    api_groups: Vec<&'static str>,
+    resources: Vec<&'static str>,
+    verbs: Vec<&'static str>,
 }
 
 impl ChartAnalysis {
@@ -284,6 +291,14 @@ impl ChartAnalysis {
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let service_account_rbac = stack
+            .permission_profiles()
+            .iter()
+            .filter_map(|(name, profile)| {
+                let rules = kubernetes_rbac_rules_for_permission_profile(profile);
+                (!rules.is_empty()).then(|| (name.clone(), rules))
+            })
+            .collect::<BTreeMap<_, _>>();
 
         let names = IndexMap::new();
         let stack_settings = StackSettings::default();
@@ -353,8 +368,51 @@ impl ChartAnalysis {
         }
 
         analysis.service_accounts = service_accounts;
+        analysis.service_account_rbac = service_account_rbac;
         Ok(analysis)
     }
+}
+
+fn kubernetes_rbac_rules_for_permission_profile(
+    profile: &alien_core::PermissionProfile,
+) -> Vec<KubernetesRoleRule> {
+    let mut secret_verbs = BTreeSet::new();
+    let mut needs_jobs = false;
+
+    for permission in profile.0.values().flatten() {
+        match permission.id() {
+            "vault/data-read" => {
+                secret_verbs.extend(["get", "list", "watch"]);
+            }
+            "vault/data-write" => {
+                secret_verbs.extend([
+                    "get", "list", "watch", "create", "update", "patch", "delete",
+                ]);
+            }
+            "build/execute" => {
+                needs_jobs = true;
+            }
+            _ => {}
+        }
+    }
+
+    let mut rules = Vec::new();
+    if !secret_verbs.is_empty() {
+        rules.push(KubernetesRoleRule {
+            api_groups: vec![""],
+            resources: vec!["secrets"],
+            verbs: secret_verbs.into_iter().collect(),
+        });
+    }
+    if needs_jobs {
+        rules.push(KubernetesRoleRule {
+            api_groups: vec!["batch"],
+            resources: vec!["jobs"],
+            verbs: vec!["get", "list", "watch", "create", "delete"],
+        });
+    }
+
+    rules
 }
 
 fn fail_if_worker_source_remains(resource_id: &str, worker: &Worker) -> Result<()> {
@@ -395,6 +453,33 @@ struct ServiceValue {
     id: String,
     component: String,
     target_port: u16,
+}
+
+fn to_stable_pretty_json<T: Serialize>(value: &T) -> alien_error::Result<String> {
+    let value = serde_json::to_value(value).into_alien_error()?;
+    serde_json::to_string_pretty(&sort_json_object_keys(value)).into_alien_error()
+}
+
+fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sort_json_object_keys)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, sort_json_object_keys(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
 }
 
 fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
@@ -619,6 +704,7 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
                 "  {}:\n    annotations: {{}}\n    labels: {{}}\n",
                 yaml_key(name)
             ));
+            append_service_account_rbac(yaml, analysis.service_account_rbac.get(name));
         }
     }
 }
@@ -649,7 +735,39 @@ fn append_registered_service_accounts(
             None => yaml.push_str("    annotations: {}\n"),
         }
         yaml.push_str("    labels: {}\n");
+        append_service_account_rbac(yaml, analysis.service_account_rbac.get(name));
     }
+}
+
+fn append_service_account_rbac(yaml: &mut String, rules: Option<&Vec<KubernetesRoleRule>>) {
+    let Some(rules) = rules.filter(|rules| !rules.is_empty()) else {
+        return;
+    };
+
+    yaml.push_str("    rbac:\n");
+    yaml.push_str("      rules:\n");
+    for rule in rules {
+        yaml.push_str("        - apiGroups: ");
+        append_yaml_inline_string_list(yaml, &rule.api_groups);
+        yaml.push('\n');
+        yaml.push_str("          resources: ");
+        append_yaml_inline_string_list(yaml, &rule.resources);
+        yaml.push('\n');
+        yaml.push_str("          verbs: ");
+        append_yaml_inline_string_list(yaml, &rule.verbs);
+        yaml.push('\n');
+    }
+}
+
+fn append_yaml_inline_string_list(yaml: &mut String, values: &[&str]) {
+    yaml.push('[');
+    for (idx, value) in values.iter().enumerate() {
+        if idx > 0 {
+            yaml.push_str(", ");
+        }
+        yaml.push_str(&yaml_string(value));
+    }
+    yaml.push(']');
 }
 
 fn append_manager_service_account(
@@ -1214,7 +1332,35 @@ fn values_schema_json() -> String {
         "type": "object",
         "properties": {
           "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-          "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+          "rbac": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "apiGroups": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "resources": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    },
+                    "verbs": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "required": ["apiGroups", "resources", "verbs"]
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1603,6 +1749,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "deployment.fullname" . }}
+---
+{{- range $name, $account := .Values.serviceAccounts }}
+{{- $rbac := default dict $account.rbac }}
+{{- $rules := default list $rbac.rules }}
+{{- if $rules }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+rules:
+{{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+---
+{{- end }}
+{{- end }}
 "#
     .to_string()
 }

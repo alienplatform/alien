@@ -50,7 +50,7 @@ impl GcsStorage {
         // Build the store with credentials bridged from GcpClientConfig.
         // For presigned URLs, object_store needs signing credentials (private key), so
         // provide the service account key directly when that credential mode is used.
-        let credentials = GcpCredentialBridge::new(gcp_config.clone());
+        let credentials = GcpCredentialBridge::new(gcp_config.clone())?;
         let mut builder = object_store::gcp::GoogleCloudStorageBuilder::new()
             .with_bucket_name(&bucket_name)
             .with_credentials(Arc::new(credentials));

@@ -5,15 +5,13 @@
 
 use std::sync::Arc;
 
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    AuthorizationApi, Permission, ResourceControllerContext, RoleAssignment,
+    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
+    RoleDefinitionProperties, Scope,
+};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::authorization::{AuthorizationApi, Scope};
-use alien_azure_clients::models::authorization_role_assignments::{
-    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-};
-use alien_azure_clients::models::authorization_role_definitions::{
-    Permission, RoleDefinition, RoleDefinitionProperties,
-};
+use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{
@@ -274,7 +272,7 @@ impl AzurePermissionsHelper {
         profile_name: &str,
         binding: &AzureRoleBinding,
         role_definition_scope: &Scope,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
     ) -> String {
         match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => role_definition_id.clone(),
@@ -300,7 +298,7 @@ impl AzurePermissionsHelper {
         profile_name: &str,
         custom_roles: Vec<(String, AzureCustomRole)>,
         role_definition_scope: &Scope,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
     ) -> Result<()> {
         for (permission_set_id, custom_role) in custom_roles {
             let role_definition_id = Self::resource_custom_role_definition_uuid(
@@ -334,7 +332,7 @@ impl AzurePermissionsHelper {
         authorization_client: &Arc<dyn AuthorizationApi>,
         custom_roles: Vec<(String, AzureCustomRole)>,
         role_definition_scope: &Scope,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
     ) -> Result<()> {
         for (permission_set_id, custom_role) in custom_roles {
             let role_definition_id = Self::management_resource_custom_role_definition_uuid(
@@ -364,7 +362,7 @@ impl AzurePermissionsHelper {
 
     async fn create_or_update_custom_role_definition(
         authorization_client: &Arc<dyn AuthorizationApi>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
         role_definition_scope: &Scope,
         role_definition_id: &str,
         role_name: String,
@@ -450,7 +448,7 @@ impl AzurePermissionsHelper {
     /// Create an Azure role assignment
     pub async fn create_role_assignment(
         authorization_client: &Arc<dyn AuthorizationApi>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
         scope: &Scope,
         role_assignment_id: &str,
         principal_id: &str,

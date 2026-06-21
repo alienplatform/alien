@@ -4,14 +4,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{OperationResult, Registry, RegistryProperties, ResourceControllerContext, Sku};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::long_running_operation::OperationResult;
-use alien_azure_clients::models::containerregistry::{
-    Registry, RegistryProperties, RegistryPropertiesNetworkRuleBypassOptions,
-    RegistryPropertiesPublicNetworkAccess, RegistryPropertiesZoneRedundancy, Sku, SkuName,
-};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
     ArtifactRegistryOutputs, AzureContainerRegistryHeartbeatData, HeartbeatBackend, ObservedHealth,
@@ -97,13 +91,12 @@ impl AzureArtifactRegistryController {
                 data_endpoint_enabled: None,
                 data_endpoint_host_names: Vec::new(),
                 private_endpoint_connections: Vec::new(),
-                public_network_access: RegistryPropertiesPublicNetworkAccess::Enabled,
-                zone_redundancy: RegistryPropertiesZoneRedundancy::Disabled,
-                network_rule_bypass_options:
-                    RegistryPropertiesNetworkRuleBypassOptions::AzureServices,
+                public_network_access: "Enabled".to_string(),
+                zone_redundancy: "Disabled".to_string(),
+                network_rule_bypass_options: "AzureServices".to_string(),
             }),
             sku: Sku {
-                name: SkuName::Basic,
+                name: "Basic".to_string(),
                 tier: None,
             },
             identity: None,
@@ -246,12 +239,7 @@ impl AzureArtifactRegistryController {
                     suggested_delay: None,
                 })
             }
-            Err(e)
-                if matches!(
-                    &e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 // Registry not yet provisioned — retry with backoff.
                 warn!(
                     registry_name = %registry_name,
@@ -379,19 +367,14 @@ impl AzureArtifactRegistryController {
                     "Azure Container Registry deleted successfully"
                 );
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(
                     registry_name = %registry_name,
                     "Azure Container Registry already deleted"
                 );
             }
             Err(e) => {
-                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
+                return Err(e.context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to delete Azure Container Registry '{}'",
                         registry_name
@@ -555,7 +538,7 @@ impl AzureArtifactRegistryController {
         registry_name: &str,
     ) -> Result<()> {
         use crate::core::AzurePermissionsHelper;
-        use alien_azure_clients::authorization::Scope;
+        use crate::core::Scope;
         use alien_permissions::PermissionContext;
 
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
@@ -726,8 +709,8 @@ fn emit_azure_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockContainerRegistryApi;
     use crate::MockPlatformServiceProvider;
-    use alien_azure_clients::containerregistry::MockContainerRegistryApi;
     use alien_core::Platform;
     use std::sync::Arc;
 

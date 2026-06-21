@@ -46,7 +46,6 @@ Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cl
 | [alien-client-config](./alien-client-config/) | Credential loading and configuration across AWS, GCP, Azure, Kubernetes |
 | [alien-gcp-clients](./alien-gcp-clients/) | GCP — Cloud Run, GCS, Firestore, Pub/Sub, IAM, Artifact Registry, Compute, and more |
 | [alien-azure-clients](./alien-azure-clients/) | Azure — Container Apps, Blob, Service Bus, Key Vault, VMSS, Managed Identity, and more |
-| [alien-k8s-clients](./alien-k8s-clients/) | Kubernetes — Deployments, Jobs, Pods, Secrets, Services |
 
 ## CLI
 

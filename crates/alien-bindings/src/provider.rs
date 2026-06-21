@@ -811,8 +811,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "azure")]
             VaultBinding::KeyVault(config) => {
                 use crate::providers::vault::azure_key_vault::AzureKeyVault;
-                use alien_azure_clients::keyvault::AzureKeyVaultSecretsClient;
-                use alien_azure_clients::AzureTokenCache;
 
                 let azure_config = self.client_config.azure_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -821,12 +819,6 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
-                let client = Arc::new(AzureKeyVaultSecretsClient::new(
-                    crate::http_client::create_http_client(),
-                    AzureTokenCache::new(azure_config.clone()),
-                ));
-
-                // Extract the vault name from the binding configuration
                 let vault_name = config
                     .vault_name
                     .into_value(&binding_name, "vault_name")
@@ -835,11 +827,7 @@ impl BindingsProviderApi for BindingsProvider {
                         reason: "Failed to extract vault_name from KeyVault binding".to_string(),
                     })?;
 
-                // Construct the vault base URL
-                // Azure Key Vault URLs typically follow: https://{vault-name}.vault.azure.net/
-                let vault_base_url = format!("https://{}.vault.azure.net", vault_name);
-
-                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(client, vault_base_url));
+                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(azure_config, vault_name)?);
                 Ok(vault)
             }
             #[cfg(not(feature = "azure"))]
@@ -850,7 +838,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "gcp")]
             VaultBinding::SecretManager(config) => {
                 use crate::providers::vault::gcp_secret_manager::GcpSecretManagerVault;
-                use alien_gcp_clients::secret_manager::SecretManagerClient;
 
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -859,12 +846,6 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
-                let client = Arc::new(SecretManagerClient::new(
-                    crate::http_client::create_http_client(),
-                    gcp_config.clone(),
-                ));
-
-                // Extract the vault prefix from the binding configuration
                 let vault_prefix = config
                     .vault_prefix
                     .into_value(&binding_name, "vault_prefix")
@@ -874,11 +855,8 @@ impl BindingsProviderApi for BindingsProvider {
                             .to_string(),
                     })?;
 
-                let vault: Arc<dyn Vault> = Arc::new(GcpSecretManagerVault::new(
-                    client,
-                    vault_prefix,
-                    gcp_config.project_id.clone(),
-                ));
+                let vault: Arc<dyn Vault> =
+                    Arc::new(GcpSecretManagerVault::new(gcp_config.clone(), vault_prefix).await?);
                 Ok(vault)
             }
             #[cfg(not(feature = "gcp"))]
@@ -1021,7 +999,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "gcp")]
             KvBinding::Firestore(config) => {
                 use crate::providers::kv::gcp_firestore::GcpFirestoreKv;
-                use alien_gcp_clients::firestore::FirestoreClient;
 
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1029,11 +1006,6 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "GCP config not available".to_string(),
                     })
                 })?;
-
-                let client = FirestoreClient::new(
-                    crate::http_client::create_http_client(),
-                    gcp_config.clone(),
-                );
 
                 let project_id = config
                     .project_id
@@ -1061,7 +1033,7 @@ impl BindingsProviderApi for BindingsProvider {
                     })?;
 
                 let kv: Arc<dyn Kv> = Arc::new(GcpFirestoreKv::new(
-                    client,
+                    gcp_config.clone(),
                     project_id,
                     database_id,
                     collection_name,
@@ -1076,8 +1048,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "azure")]
             KvBinding::TableStorage(config) => {
                 use crate::providers::kv::azure_table_storage::AzureTableStorageKv;
-                use alien_azure_clients::tables::AzureTableStorageClient;
-                use alien_azure_clients::AzureTokenCache;
 
                 let azure_config = self.client_config.azure_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1113,13 +1083,12 @@ impl BindingsProviderApi for BindingsProvider {
                             .to_string(),
                     })?;
 
-                let client = AzureTableStorageClient::new(
-                    crate::http_client::create_http_client(),
-                    AzureTokenCache::new(azure_config.clone()),
-                );
-
-                let kv_impl =
-                    AzureTableStorageKv::new(client, resource_group_name, account_name, table_name);
+                let kv_impl = AzureTableStorageKv::new(
+                    azure_config,
+                    resource_group_name,
+                    account_name,
+                    table_name,
+                )?;
                 let kv: Arc<dyn Kv> = Arc::new(kv_impl);
                 Ok(kv)
             }
@@ -1371,7 +1340,7 @@ impl BindingsProviderApi for BindingsProvider {
                 let client = crate::http_client::create_http_client();
 
                 let function_impl =
-                    CloudRunWorker::new(client, gcp_config.clone(), cloudrun_binding);
+                    CloudRunWorker::new(client, gcp_config.clone(), cloudrun_binding)?;
                 let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
@@ -1393,7 +1362,7 @@ impl BindingsProviderApi for BindingsProvider {
                 let client = crate::http_client::create_http_client();
 
                 let function_impl =
-                    ContainerAppWorker::new(client, azure_config.clone(), container_app_binding);
+                    ContainerAppWorker::new(client, azure_config.clone(), container_app_binding)?;
                 let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }

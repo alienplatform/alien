@@ -7,29 +7,15 @@
 //! - Public IP addresses for NAT
 //! - Network Security Groups (NSGs) for traffic control
 
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    AddressSpace, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku, NetworkSecurityGroup,
+    NetworkSecurityGroupPropertiesFormat, OperationResult, PublicIpAddress,
+    PublicIpAddressPropertiesFormat, PublicIpAddressSku, ResourceControllerContext, SecurityRule,
+    SecurityRulePropertiesFormat, SubResource, Subnet, SubnetPropertiesFormat, VirtualNetwork,
+    VirtualNetworkPropertiesFormat,
+};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
-use alien_azure_clients::azure::models::{
-    nat_gateway::{
-        NatGateway, NatGatewayPropertiesFormat, NatGatewaySku, NatGatewaySkuName,
-        SubResource as NatSubResource,
-    },
-    network_security_group::{
-        NetworkSecurityGroup, NetworkSecurityGroupPropertiesFormat, SecurityRule,
-        SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat,
-        SecurityRulePropertiesFormatProtocol,
-    },
-    public_ip_address::{
-        IpAllocationMethod, PublicIpAddress, PublicIpAddressPropertiesFormat, PublicIpAddressSku,
-        PublicIpAddressSkuName,
-    },
-    virtual_network::{
-        AddressSpace, SubResource as VnetSubResource, Subnet, SubnetPropertiesFormat,
-        VirtualNetwork, VirtualNetworkPropertiesFormat,
-    },
-};
-use alien_azure_clients::long_running_operation::OperationResult;
 use alien_core::{
     AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
     NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
@@ -822,11 +808,11 @@ impl AzureNetworkController {
         let public_ip = PublicIpAddress {
             location: Some(location),
             sku: Some(PublicIpAddressSku {
-                name: Some(PublicIpAddressSkuName::Standard),
+                name: Some("Standard".to_string()),
                 tier: None,
             }),
             properties: Some(PublicIpAddressPropertiesFormat {
-                public_ip_allocation_method: Some(IpAllocationMethod::Static),
+                public_ip_allocation_method: Some("Static".to_string()),
                 ..Default::default()
             }),
             tags: [("managed-by".to_string(), "runtime".to_string())]
@@ -922,10 +908,10 @@ impl AzureNetworkController {
         let nat_gateway = NatGateway {
             location: Some(location),
             sku: Some(NatGatewaySku {
-                name: Some(NatGatewaySkuName::Standard),
+                name: Some("Standard".to_string()),
             }),
             properties: Some(NatGatewayPropertiesFormat {
-                public_ip_addresses: vec![NatSubResource {
+                public_ip_addresses: vec![SubResource {
                     id: Some(public_ip_id),
                 }],
                 idle_timeout_in_minutes: Some(4),
@@ -1025,7 +1011,7 @@ impl AzureNetworkController {
         let subnet = Subnet {
             properties: Some(SubnetPropertiesFormat {
                 address_prefix: Some(Self::calculate_private_subnet_cidr(&cidr_block)),
-                nat_gateway: Some(VnetSubResource {
+                nat_gateway: Some(SubResource {
                     id: Some(nat_gateway_id),
                 }),
                 ..Default::default()
@@ -1128,9 +1114,9 @@ impl AzureNetworkController {
                     name: Some("AllowVNetInBound".to_string()),
                     properties: Some(SecurityRulePropertiesFormat {
                         priority: 100,
-                        direction: SecurityRuleDirection::Inbound,
-                        access: SecurityRuleAccess::Allow,
-                        protocol: SecurityRulePropertiesFormatProtocol::X,
+                        direction: "Inbound".to_string(),
+                        access: "Allow".to_string(),
+                        protocol: "*".to_string(),
                         source_address_prefix: Some(cidr_block),
                         source_port_range: Some("*".to_string()),
                         destination_address_prefix: Some("*".to_string()),

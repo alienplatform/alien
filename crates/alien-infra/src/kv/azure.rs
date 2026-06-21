@@ -2,10 +2,8 @@ use std::fmt::Debug;
 use tracing::info;
 
 use crate::azure_utils::get_resource_group_name;
-use crate::core::ResourceControllerContext;
+use crate::core::{AzureStorageAccountArmResource, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::azure::models::storage::StorageAccount;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureStorageAccountOutputs, AzureTableKvHeartbeatData, HeartbeatBackend,
     HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, Kv,
@@ -139,7 +137,7 @@ impl AzureKvController {
             &self.resource_group_name,
         ) {
             use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
+            use crate::core::Scope;
 
             // Build Azure resource scope for the Table Storage table
             let resource_scope = Scope::Resource {
@@ -200,16 +198,16 @@ impl AzureKvController {
             })
         })?;
 
-        // Heartbeat check: verify table still exists by trying to get ACL
+        // Heartbeat check: verify table still exists by reading signed identifier metadata
         match management_client
-            .get_table_acl(
+            .get_table_signed_identifier_count(
                 &resource_group_name,
                 &storage_outputs.account_name,
                 table_name,
             )
             .await
         {
-            Ok(signed_identifiers) => {
+            Ok(signed_identifier_count) => {
                 let storage_client = ctx
                     .service_provider
                     .get_azure_storage_accounts_client(azure_config)?;
@@ -241,7 +239,7 @@ impl AzureKvController {
                     table_name,
                     storage_outputs,
                     &resource_group_name,
-                    signed_identifiers.len(),
+                    signed_identifier_count,
                     storage_account,
                     storage_account_issue,
                 );
@@ -251,12 +249,7 @@ impl AzureKvController {
                     suggested_delay: Some(std::time::Duration::from_secs(30)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: "Table no longer exists".to_string(),
@@ -327,12 +320,7 @@ impl AzureKvController {
                     suggested_delay: None,
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(table_name=%table_name, "Azure Table Storage table already deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -446,7 +434,7 @@ fn emit_azure_table_kv_heartbeat(
     storage_outputs: &AzureStorageAccountOutputs,
     resource_group_name: &str,
     signed_identifier_count: usize,
-    storage_account: Option<StorageAccount>,
+    storage_account: Option<AzureStorageAccountArmResource>,
     storage_account_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let collection_issues = storage_account_issue.into_iter().collect::<Vec<_>>();
@@ -464,14 +452,14 @@ fn emit_azure_table_kv_heartbeat(
             (
                 account.id,
                 Some(account.location),
-                account.kind.map(|kind| format!("{kind:?}")),
+                account.kind,
                 properties
                     .as_ref()
                     .and_then(|properties| properties.provisioning_state.as_ref())
-                    .map(|state| format!("{state:?}")),
+                    .cloned(),
                 properties
                     .and_then(|properties| properties.status_of_primary)
-                    .map(|status| format!("{status:?}")),
+                    .clone(),
             )
         })
         .unwrap_or((None, None, None, None, None));

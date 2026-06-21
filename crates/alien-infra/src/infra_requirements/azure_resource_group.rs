@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{AzureArmResourceGroup, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
-use alien_azure_clients::models::resources::ResourceGroup;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureResourceGroup, AzureResourceGroupHeartbeatData, AzureResourceGroupHeartbeatStatus,
     AzureResourceGroupOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
@@ -47,7 +45,7 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        let resource_group = ResourceGroup {
+        let resource_group = AzureArmResourceGroup {
             id: None,
             location: azure_config
                 .region
@@ -151,12 +149,7 @@ impl AzureResourceGroupController {
                 }
                 debug!(group_name=%group_name, "Provisioning state not available, continuing to wait");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 debug!(group_name=%group_name, "Resource group not yet available, continuing to wait");
             }
             Err(e) => {
@@ -246,12 +239,7 @@ impl AzureResourceGroupController {
             Ok(_) => {
                 info!(group_name=%group_name, "Resource group deletion initiated");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(group_name=%group_name, "Resource group already deleted");
 
                 self.resource_group_name = None;
@@ -305,12 +293,7 @@ impl AzureResourceGroupController {
             Ok(_) => {
                 debug!(group_name=%group_name, "Resource group still exists, continuing to wait");
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(group_name=%group_name, "Resource group successfully deleted");
 
                 self.resource_group_name = None;
@@ -370,7 +353,7 @@ impl AzureResourceGroupController {
 fn emit_azure_resource_group_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    rg: &ResourceGroup,
+    rg: &AzureArmResourceGroup,
 ) {
     let provisioning_state = rg
         .properties

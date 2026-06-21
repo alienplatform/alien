@@ -2,17 +2,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    Identity, Permission, ResourceControllerContext, RoleAssignment, RoleAssignmentProperties,
+    RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
+};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::authorization::Scope;
-use alien_azure_clients::models::authorization_role_assignments::{
-    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-};
-use alien_azure_clients::models::authorization_role_definitions::{
-    Permission, RoleDefinition, RoleDefinitionProperties,
-};
-use alien_azure_clients::models::managed_identity::Identity;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureManagedIdentityServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -74,7 +68,10 @@ const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
-const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+// The absolute wait deadline controls Azure RBAC propagation. Terraform-imported
+// setup can drive this state quickly, so keep the Stay guard comfortably above
+// the number of reconciles that can happen inside the deadline.
+const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
 
 fn current_unix_timestamp_secs() -> u64 {
     SystemTime::now()
@@ -679,12 +676,7 @@ impl AzureServiceAccountController {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted for update");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(assignment_id = %assignment_id, "Role assignment already absent for update");
                 }
                 Err(e) => {
@@ -714,12 +706,7 @@ impl AzureServiceAccountController {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted for update");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(role_definition_id = %role_definition_id, "Role definition already absent for update");
                 }
                 Err(e) => {
@@ -808,12 +795,7 @@ impl AzureServiceAccountController {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(assignment_id = %assignment_id, "Role assignment already deleted");
                 }
                 Err(e) => {
@@ -872,12 +854,7 @@ impl AzureServiceAccountController {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(role_definition_id = %role_definition_id, "Role definition already deleted");
                 }
                 Err(e) => {
@@ -933,12 +910,7 @@ impl AzureServiceAccountController {
             Ok(_) => {
                 info!(config_id = %config.id, identity_name = %identity_name, "Managed identity deleted successfully");
             }
-            Err(e)
-                if matches!(
-                    &e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(&e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(config_id = %config.id, identity_name = %identity_name, "Managed identity already deleted");
             }
             Err(e) => {

@@ -1,6 +1,7 @@
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    AzureServiceBusQueue, AzureServiceBusQueueProperties, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::models::queue::SbQueue;
 use alien_core::{
     AzureServiceBusQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
@@ -64,30 +65,7 @@ impl AzureQueueController {
             resource_group,
             namespace_name.clone(),
             queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties {
-                accessed_at: None,
-                auto_delete_on_idle: None,
-                count_details: None,
-                created_at: None,
-                dead_lettering_on_message_expiration: None,
-                default_message_time_to_live: None,
-                duplicate_detection_history_time_window: None,
-                enable_batched_operations: None,
-                enable_express: None,
-                enable_partitioning: None,
-                forward_dead_lettered_messages_to: None,
-                forward_to: None,
-                lock_duration: None,
-                max_delivery_count: None,
-                max_message_size_in_kilobytes: None,
-                max_size_in_megabytes: None,
-                message_count: None,
-                requires_duplicate_detection: None,
-                requires_session: None,
-                size_in_bytes: None,
-                status: None,
-                updated_at: None,
-            },
+            AzureServiceBusQueueProperties::default(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -120,7 +98,7 @@ impl AzureQueueController {
         // Apply resource-scoped permissions from the stack
         if let (Some(namespace_name), Some(queue_name)) = (&self.namespace_name, &self.queue_name) {
             use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
+            use crate::core::Scope;
 
             // Build Azure resource scope for the Service Bus queue
             let resource_scope = Scope::Resource {
@@ -287,7 +265,7 @@ fn emit_azure_service_bus_queue_heartbeat(
     namespace_name: &str,
     queue_name: &str,
     resource_group: &str,
-    queue: SbQueue,
+    queue: AzureServiceBusQueue,
 ) {
     let properties = queue.properties.unwrap_or_default();
     let count_details = properties.count_details.clone().unwrap_or_default();
@@ -324,7 +302,7 @@ fn emit_azure_service_bus_queue_heartbeat(
                 resource_group: Some(resource_group.to_string()),
                 resource_id: queue.id,
                 endpoint: Some(format!("{}/{}", namespace_name, queue_name)),
-                queue_status: properties.status.map(|status| status.to_string()),
+                queue_status: properties.status,
                 lock_duration: properties.lock_duration,
                 max_delivery_count: nonnegative_i32_to_u32(properties.max_delivery_count),
                 requires_duplicate_detection: properties.requires_duplicate_detection,
@@ -372,38 +350,31 @@ fn nonnegative_i32_to_u32(value: Option<i32>) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockAuthorizationApi;
+    use crate::core::MockAzureServiceBusManagementApi;
     use crate::core::MockPlatformServiceProvider;
-    use alien_azure_clients::authorization::MockAuthorizationApi;
-    use alien_azure_clients::service_bus::MockServiceBusManagementApi;
     use alien_core::{Platform, Queue, ResourceStatus};
     use std::sync::Arc;
 
-    fn setup_mock_mgmt() -> Arc<MockServiceBusManagementApi> {
-        let mut mock = MockServiceBusManagementApi::new();
+    fn setup_mock_mgmt() -> Arc<MockAzureServiceBusManagementApi> {
+        let mut mock = MockAzureServiceBusManagementApi::new();
         mock.expect_create_or_update_namespace()
             .returning(|_, _, _| {
-                Ok(alien_azure_clients::models::queue_namespace::SbNamespace {
+                Ok(crate::core::AzureServiceBusNamespace {
                     location: "eastus".to_string(),
-                    tags: std::collections::HashMap::new(),
-                    id: None,
-                    name: None,
-                    type_: None,
-                    properties: None,
-                    sku: None,
-                    system_data: None,
-                    identity: None,
+                    ..Default::default()
                 })
             });
         mock.expect_create_or_update_queue()
-            .returning(|_, _, _, _| Ok(alien_azure_clients::models::queue::SbQueue::default()));
+            .returning(|_, _, _, _| Ok(AzureServiceBusQueue::default()));
         mock.expect_get_queue()
-            .returning(|_, _, _| Ok(alien_azure_clients::models::queue::SbQueue::default()));
+            .returning(|_, _, _| Ok(AzureServiceBusQueue::default()));
         mock.expect_delete_queue().returning(|_, _, _| Ok(()));
         Arc::new(mock)
     }
 
     fn setup_mock_provider(
-        mock_mgmt: Arc<MockServiceBusManagementApi>,
+        mock_mgmt: Arc<MockAzureServiceBusManagementApi>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut provider = MockPlatformServiceProvider::new();
         provider

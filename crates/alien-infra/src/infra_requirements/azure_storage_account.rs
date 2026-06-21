@@ -3,19 +3,16 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
-use crate::error::{ErrorData, Result};
-use alien_azure_clients::models::storage::{
-    Endpoints, StorageAccount, StorageAccountCreateParameters,
-    StorageAccountPropertiesProvisioningState,
+use crate::core::{
+    AzureStorageAccountArmResource, AzureStorageAccountEndpoints as AzureStorageArmEndpoints,
+    AzureStorageAccountProperties, AzureStorageSku, ResourceControllerContext,
 };
-use alien_azure_clients::AzureClientConfig;
-use alien_client_core::ErrorData as CloudClientErrorData;
+use crate::error::{ErrorData, Result};
 use alien_core::{
-    AzureStorageAccount, AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData,
-    AzureStorageAccountOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
-    StorageHeartbeatStatus,
+    AzureClientConfig, AzureStorageAccount, AzureStorageAccountEndpoints,
+    AzureStorageAccountHeartbeatData, AzureStorageAccountOutputs, HeartbeatBackend, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, StorageHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
@@ -109,16 +106,16 @@ impl AzureStorageAccountController {
             Ok(account_info) => {
                 // Extract properties once to avoid multiple moves
                 let properties = account_info.properties.clone();
-                if let Some(provisioning_state) =
-                    properties.as_ref().and_then(|p| p.provisioning_state)
+                if let Some(provisioning_state) = properties
+                    .as_ref()
+                    .and_then(|p| p.provisioning_state.as_deref())
                 {
-                    use alien_azure_clients::models::storage::StorageAccountPropertiesProvisioningState;
                     match provisioning_state {
-                        StorageAccountPropertiesProvisioningState::Succeeded => {
+                        "Succeeded" => {
                             info!(account_name=%account_name, "Storage account creation completed, retrieving details");
 
                             // Extract details from the response
-                            self.resource_id = account_info.id.or_else(|| {
+                            self.resource_id = account_info.id.clone().or_else(|| {
                                 Some(azure_storage_account_resource_id(
                                     &azure_config.subscription_id,
                                     &resource_group_name,
@@ -150,9 +147,20 @@ impl AzureStorageAccountController {
                                 suggested_delay: None,
                             })
                         }
-                        StorageAccountPropertiesProvisioningState::Creating
-                        | StorageAccountPropertiesProvisioningState::ResolvingDns => {
+                        "Creating" | "ResolvingDns" => {
                             debug!(account_name=%account_name, "Storage account still being created");
+                            Ok(HandlerAction::Continue {
+                                state: CreatingStorageAccount,
+                                suggested_delay: Some(Duration::from_secs(15)),
+                            })
+                        }
+                        "Failed" => Err(AlienError::new(ErrorData::CloudPlatformError {
+                            message: "Storage account creation failed with status: Failed"
+                                .to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })),
+                        other => {
+                            debug!(account_name=%account_name, state=%other, "Storage account is not ready yet");
                             Ok(HandlerAction::Continue {
                                 state: CreatingStorageAccount,
                                 suggested_delay: Some(Duration::from_secs(15)),
@@ -167,12 +175,7 @@ impl AzureStorageAccountController {
                     })
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 debug!(account_name=%account_name, "Storage account not yet available, continuing to wait");
                 Ok(HandlerAction::Continue {
                     state: CreatingStorageAccount,
@@ -255,9 +258,7 @@ impl AzureStorageAccountController {
             );
 
             if let Some(properties) = &storage_account.properties {
-                if properties.provisioning_state
-                    != Some(StorageAccountPropertiesProvisioningState::Succeeded)
-                {
+                if properties.provisioning_state.as_deref() != Some("Succeeded") {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(
@@ -310,12 +311,7 @@ impl AzureStorageAccountController {
                     suggested_delay: Some(Duration::from_secs(10)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(account_name=%account_name, "Storage account already deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -369,12 +365,7 @@ impl AzureStorageAccountController {
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(account_name=%account_name, "Storage account successfully deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -449,14 +440,12 @@ fn emit_azure_storage_account_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    account: &StorageAccount,
+    account: &AzureStorageAccountArmResource,
 ) {
     let properties = account.properties.as_ref();
-    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_ref());
+    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_deref());
     let (health, lifecycle) = match provisioning_state {
-        Some(StorageAccountPropertiesProvisioningState::Succeeded) => {
-            (ObservedHealth::Healthy, ProviderLifecycleState::Running)
-        }
+        Some("Succeeded") => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
         Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
         None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
     };
@@ -492,40 +481,33 @@ fn emit_azure_storage_account_heartbeat(
             resource_id: account.id.clone(),
             resource_group: Some(resource_group_name.to_string()),
             location: Some(account.location.clone()),
-            kind: account.kind.as_ref().map(ToString::to_string),
-            sku_name: account.sku.as_ref().map(|sku| sku.name.to_string()),
-            sku_tier: account
-                .sku
-                .as_ref()
-                .and_then(|sku| sku.tier.as_ref().map(ToString::to_string)),
-            provisioning_state: provisioning_state.map(ToString::to_string),
+            kind: account.kind.clone(),
+            sku_name: account.sku.as_ref().map(|sku| sku.name.clone()),
+            sku_tier: account.sku.as_ref().and_then(|sku| sku.tier.clone()),
+            provisioning_state: provisioning_state.map(str::to_string),
             primary_endpoints: storage_account_endpoints(
                 properties.and_then(|p| p.primary_endpoints.as_ref()),
             ),
             secondary_endpoints: storage_account_endpoints(
                 properties.and_then(|p| p.secondary_endpoints.as_ref()),
             ),
-            public_network_access: properties
-                .and_then(|p| p.public_network_access.as_ref())
-                .map(ToString::to_string),
+            public_network_access: properties.and_then(|p| p.public_network_access.clone()),
             allow_blob_public_access: properties.and_then(|p| p.allow_blob_public_access),
             allow_shared_key_access: properties.and_then(|p| p.allow_shared_key_access),
-            minimum_tls_version: properties
-                .and_then(|p| p.minimum_tls_version.as_ref())
-                .map(ToString::to_string),
+            minimum_tls_version: properties.and_then(|p| p.minimum_tls_version.clone()),
             supports_https_traffic_only: properties.and_then(|p| p.supports_https_traffic_only),
             encryption_key_source: properties
                 .and_then(|p| p.encryption.as_ref())
-                .map(|encryption| encryption.key_source.to_string()),
+                .and_then(|encryption| encryption.key_source.clone()),
             require_infrastructure_encryption: properties
                 .and_then(|p| p.encryption.as_ref())
                 .and_then(|encryption| encryption.require_infrastructure_encryption),
             network_default_action: properties
                 .and_then(|p| p.network_acls.as_ref())
-                .map(|rules| rules.default_action.to_string()),
+                .and_then(|rules| rules.default_action.clone()),
             network_bypass: properties
                 .and_then(|p| p.network_acls.as_ref())
-                .map(|rules| rules.bypass.to_string()),
+                .and_then(|rules| rules.bypass.clone()),
             network_ip_rule_count: properties
                 .and_then(|p| p.network_acls.as_ref())
                 .map(|rules| rules.ip_rules.len() as u32),
@@ -540,7 +522,9 @@ fn emit_azure_storage_account_heartbeat(
     });
 }
 
-fn storage_account_endpoints(endpoints: Option<&Endpoints>) -> AzureStorageAccountEndpoints {
+fn storage_account_endpoints(
+    endpoints: Option<&AzureStorageArmEndpoints>,
+) -> AzureStorageAccountEndpoints {
     endpoints
         .map(|endpoints| AzureStorageAccountEndpoints {
             blob: endpoints.blob.clone(),
@@ -559,9 +543,7 @@ impl AzureStorageAccountController {
         &self,
         azure_config: &AzureClientConfig,
         ctx: &ResourceControllerContext,
-    ) -> StorageAccountCreateParameters {
-        use alien_azure_clients::models::storage::*;
-
+    ) -> AzureStorageAccountArmResource {
         let location = azure_config.region.as_deref().unwrap_or("East US");
 
         let mut tags = HashMap::new();
@@ -569,42 +551,21 @@ impl AzureStorageAccountController {
         tags.insert("resource".to_string(), ctx.desired_config.id().to_string());
         tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
-        StorageAccountCreateParameters {
-            extended_location: None,
-            identity: None,
-            kind: StorageAccountCreateParametersKind::StorageV2,
+        AzureStorageAccountArmResource {
+            id: None,
+            kind: Some("StorageV2".to_string()),
             location: location.to_string(),
-            properties: Some(StorageAccountPropertiesCreateParameters {
-                access_tier: None,
-                allow_blob_public_access: None,
-                allow_cross_tenant_replication: None,
-                allow_shared_key_access: None,
-                allowed_copy_scope: None,
-                azure_files_identity_based_authentication: None,
-                custom_domain: None,
-                default_to_o_auth_authentication: None,
-                dns_endpoint_type: None,
-                enable_extended_groups: None,
-                encryption: None,
-                immutable_storage_with_versioning: None,
-                is_hns_enabled: None,
-                is_local_user_enabled: None,
-                is_nfs_v3_enabled: None,
-                is_sftp_enabled: None,
-                key_policy: None,
-                large_file_shares_state: None,
-                minimum_tls_version: None,
-                public_network_access: None,
-                routing_preference: None,
-                sas_policy: None,
+            name: None,
+            properties: Some(AzureStorageAccountProperties {
                 supports_https_traffic_only: Some(true),
-                network_acls: None,
+                ..Default::default()
             }),
-            sku: Sku {
-                name: SkuName::StandardLrs,
+            sku: Some(AzureStorageSku {
+                name: "Standard_LRS".to_string(),
                 tier: None,
-            },
+            }),
             tags,
+            type_: None,
         }
     }
 
@@ -624,7 +585,7 @@ impl AzureStorageAccountController {
         account_name: &str,
     ) -> Result<()> {
         use crate::core::AzurePermissionsHelper;
-        use alien_azure_clients::authorization::Scope;
+        use crate::core::Scope;
         use alien_permissions::PermissionContext;
 
         let config = ctx.desired_resource_config::<AzureStorageAccount>()?;

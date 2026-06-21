@@ -1,19 +1,49 @@
-use crate::error::{ErrorData, Result};
-use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
-use alien_azure_clients::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
-use alien_azure_clients::{AzureClientConfig, AzureTokenCache};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use alien_core::bindings::ContainerAppWorkerBinding;
+use alien_core::{AzureClientConfig, AzureCredentials};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::BTreeMap;
+use azure_core::{
+    cloud::{CloudConfiguration, CustomConfiguration},
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
+    http::ClientOptions,
+    time::{Duration as AzureDuration, OffsetDateTime},
+};
+use azure_identity::{
+    ClientAssertionCredentialOptions, ClientSecretCredential, ClientSecretCredentialOptions,
+    ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
+    WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
+};
+use reqwest::{Client, Method, Url};
+use serde::Deserialize;
 
-/// Azure Container Apps worker binding implementation
-#[derive(Debug)]
+use crate::error::{ErrorData, Result};
+use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
+
+const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
+const MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
+const CONTAINER_APPS_API_VERSION: &str = "2025-01-01";
+
+/// Azure Container Apps worker binding implementation.
 pub struct ContainerAppWorker {
     client: Client,
-    container_apps_client: AzureContainerAppsClient,
+    subscription_id: String,
+    management_endpoint: String,
+    credential: Arc<dyn TokenCredential>,
     binding: ContainerAppWorkerBinding,
+}
+
+impl Debug for ContainerAppWorker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerAppWorker")
+            .field("subscription_id", &self.subscription_id)
+            .field("management_endpoint", &self.management_endpoint)
+            .finish()
+    }
 }
 
 impl ContainerAppWorker {
@@ -21,17 +51,24 @@ impl ContainerAppWorker {
         client: Client,
         config: AzureClientConfig,
         binding: ContainerAppWorkerBinding,
-    ) -> Self {
-        let container_apps_client =
-            AzureContainerAppsClient::new(client.clone(), AzureTokenCache::new(config));
-        Self {
+    ) -> Result<Self> {
+        let management_endpoint = config
+            .service_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.endpoints.get("management"))
+            .cloned()
+            .unwrap_or_else(|| MANAGEMENT_ENDPOINT.to_string());
+
+        Ok(Self {
             client,
-            container_apps_client,
+            subscription_id: config.subscription_id.clone(),
+            management_endpoint,
+            credential: azure_credential_from_config(&config)?,
             binding,
-        }
+        })
     }
 
-    /// Get the private URL from the binding, resolving template expressions if needed
+    /// Get the private URL from the binding, resolving template expressions if needed.
     fn get_private_url(&self) -> Result<String> {
         self.binding
             .private_url
@@ -43,9 +80,12 @@ impl ContainerAppWorker {
             })
     }
 
-    /// Get the public URL from the binding if available
+    /// Get the public URL from the binding if available.
     pub async fn get_worker_url(&self) -> Result<Option<String>> {
-        // First check if we have it in the binding
+        self.resolve_worker_url().await
+    }
+
+    async fn resolve_worker_url(&self) -> Result<Option<String>> {
         if let Some(url_binding) = &self.binding.public_url {
             let url = url_binding
                 .clone()
@@ -57,7 +97,6 @@ impl ContainerAppWorker {
             return Ok(Some(url));
         }
 
-        // If not in binding, try to fetch it from Azure
         let resource_group_name = self
             .binding
             .resource_group_name
@@ -78,49 +117,92 @@ impl ContainerAppWorker {
                 reason: "Failed to resolve container_app_name from binding".to_string(),
             })?;
 
-        match self
-            .container_apps_client
-            .get_container_app(&resource_group_name, &container_app_name)
+        let token = self.bearer_token().await?;
+        let url = self.build_container_app_url(&resource_group_name, &container_app_name)?;
+        let response = self
+            .client
+            .request(Method::GET, url.clone())
+            .bearer_auth(token.token.secret())
+            .header("Content-Length", "0")
+            .send()
             .await
-        {
-            Ok(container_app) => {
-                // Check if there's a public ingress configuration
-                if let Some(configuration) = &container_app.properties {
-                    if let Some(ingress) = &configuration
-                        .configuration
-                        .as_ref()
-                        .and_then(|c| c.ingress.as_ref())
-                    {
-                        if ingress.external {
-                            // Return the FQDN if available
-                            return Ok(ingress
-                                .fqdn
-                                .clone()
-                                .map(|fqdn| format!("https://{}", fqdn)));
-                        }
-                    }
-                }
-                Ok(None)
-            }
-            Err(_) => Ok(None), // Container App doesn't exist or no public URL
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                url: url.to_string(),
+                method: "GET".to_string(),
+            })?;
+
+        if response.status().as_u16() == 404 || !response.status().is_success() {
+            return Ok(None);
         }
+
+        let container_app = response
+            .json::<ContainerApp>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.containerApp".to_string(),
+                reason: "Failed to parse Azure Container App response".to_string(),
+            })?;
+
+        let ingress = container_app
+            .properties
+            .and_then(|properties| properties.configuration)
+            .and_then(|configuration| configuration.ingress);
+
+        if let Some(ingress) = ingress {
+            if ingress.external.unwrap_or(false) {
+                return Ok(ingress.fqdn.map(|fqdn| format!("https://{}", fqdn)));
+            }
+        }
+
+        Ok(None)
     }
 
-    /// Resolve the target URL for invocation
+    /// Resolve the target URL for invocation.
     async fn resolve_target_url(&self, target_worker: &str) -> Result<String> {
         if !target_worker.is_empty() {
-            // Check if target_worker looks like a URL (starts with http)
             if target_worker.starts_with("http://") || target_worker.starts_with("https://") {
-                // Use the provided target worker as URL
                 Ok(target_worker.to_string())
             } else {
-                // target_worker is likely a path/identifier, use binding URL
                 self.get_private_url()
             }
         } else {
-            // Use the private URL from binding
             self.get_private_url()
         }
+    }
+
+    fn build_container_app_url(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+    ) -> Result<Url> {
+        let mut url = Url::parse(&format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
+            self.management_endpoint.trim_end_matches('/'),
+            self.subscription_id,
+            resource_group_name,
+            container_app_name
+        ))
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.containerApp".to_string(),
+            reason: "Invalid Azure Container App URL".to_string(),
+        })?;
+        url.query_pairs_mut()
+            .append_pair("api-version", CONTAINER_APPS_API_VERSION);
+        Ok(url)
+    }
+
+    async fn bearer_token(&self) -> Result<AccessToken> {
+        self.credential
+            .get_token(&[MANAGEMENT_SCOPE], None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.containerApp".to_string(),
+                reason: "Failed to get Azure management bearer token".to_string(),
+            })
     }
 }
 
@@ -131,14 +213,12 @@ impl Worker for ContainerAppWorker {
     async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse> {
         let target_url = self.resolve_target_url(&request.target_worker).await?;
 
-        // Construct the full URL with path
         let url = if request.path.starts_with('/') {
             format!("{}{}", target_url.trim_end_matches('/'), request.path)
         } else {
             format!("{}/{}", target_url.trim_end_matches('/'), request.path)
         };
 
-        // Build the HTTP request
         let method = match request.method.to_uppercase().as_str() {
             "GET" => reqwest::Method::GET,
             "POST" => reqwest::Method::POST,
@@ -158,22 +238,18 @@ impl Worker for ContainerAppWorker {
 
         let mut req_builder = self.client.request(method, &url);
 
-        // Add headers
         for (key, value) in &request.headers {
             req_builder = req_builder.header(key, value);
         }
 
-        // Add body if present
         if !request.body.is_empty() {
             req_builder = req_builder.body(request.body.clone());
         }
 
-        // Set timeout if specified
         if let Some(timeout) = request.timeout {
             req_builder = req_builder.timeout(timeout);
         }
 
-        // Send the request
         let response =
             req_builder
                 .send()
@@ -184,15 +260,12 @@ impl Worker for ContainerAppWorker {
                     method: request.method.clone(),
                 })?;
 
-        // Extract response components
         let status = response.status().as_u16();
-
         let headers = response
             .headers()
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .map(|(key, value)| (key.to_string(), value.to_str().unwrap_or("").to_string()))
             .collect::<BTreeMap<String, String>>();
-
         let body = response
             .bytes()
             .await
@@ -211,62 +284,155 @@ impl Worker for ContainerAppWorker {
     }
 
     async fn get_worker_url(&self) -> Result<Option<String>> {
-        // First check if we have it in the binding
-        if let Some(url_binding) = &self.binding.public_url {
-            let url = url_binding
-                .clone()
-                .into_value("worker", "public_url")
-                .context(ErrorData::BindingConfigInvalid {
-                    binding_name: "worker".to_string(),
-                    reason: "Failed to resolve public_url from binding".to_string(),
-                })?;
-            return Ok(Some(url));
-        }
-
-        // If not in binding, try to fetch it from Azure
-        let resource_group_name = self
-            .binding
-            .resource_group_name
-            .clone()
-            .into_value("worker", "resource_group_name")
-            .context(ErrorData::BindingConfigInvalid {
-                binding_name: "worker".to_string(),
-                reason: "Failed to resolve resource_group_name from binding".to_string(),
-            })?;
-
-        let container_app_name = self
-            .binding
-            .container_app_name
-            .clone()
-            .into_value("worker", "container_app_name")
-            .context(ErrorData::BindingConfigInvalid {
-                binding_name: "worker".to_string(),
-                reason: "Failed to resolve container_app_name from binding".to_string(),
-            })?;
-
-        match self
-            .container_apps_client
-            .get_container_app(&resource_group_name, &container_app_name)
-            .await
-        {
-            Ok(container_app) => {
-                // Extract the URL from the container app configuration
-                if let Some(properties) = &container_app.properties {
-                    if let Some(configuration) = &properties.configuration {
-                        if let Some(ingress) = &configuration.ingress {
-                            if let Some(fqdn) = &ingress.fqdn {
-                                return Ok(Some(format!("https://{}", fqdn)));
-                            }
-                        }
-                    }
-                }
-                Ok(None)
-            }
-            Err(_) => Ok(None), // Container app doesn't exist or no public URL
-        }
+        self.resolve_worker_url().await
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerApp {
+    properties: Option<ContainerAppProperties>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerAppProperties {
+    configuration: Option<ContainerAppConfiguration>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerAppConfiguration {
+    ingress: Option<ContainerAppIngress>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerAppIngress {
+    external: Option<bool>,
+    fqdn: Option<String>,
+}
+
+#[derive(Debug)]
+struct StaticAzureAccessTokenCredential {
+    token: String,
+}
+
+#[async_trait]
+impl TokenCredential for StaticAzureAccessTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        if scopes.is_empty() {
+            return Err(azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Credential,
+                "no scopes specified",
+            ));
+        }
+
+        Ok(AccessToken::new(
+            self.token.clone(),
+            OffsetDateTime::now_utc() + AzureDuration::days(365),
+        ))
+    }
+}
+
+fn azure_credential_from_config(config: &AzureClientConfig) -> Result<Arc<dyn TokenCredential>> {
+    match &config.credentials {
+        AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
+            token: token.clone(),
+        })),
+        AzureCredentials::ServicePrincipal {
+            client_id,
+            client_secret,
+        } => ClientSecretCredential::new(
+            &config.tenant_id,
+            client_id.clone(),
+            Secret::new(client_secret.clone()),
+            Some(ClientSecretCredentialOptions {
+                client_options: azure_client_options(None),
+            }),
+        )
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.containerApp".to_string(),
+            reason: "Failed to build official Azure service principal credentials".to_string(),
+        }),
+        AzureCredentials::WorkloadIdentity {
+            client_id,
+            tenant_id,
+            federated_token_file,
+            authority_host,
+        } => WorkloadIdentityCredential::new(Some(WorkloadIdentityCredentialOptions {
+            credential_options: ClientAssertionCredentialOptions {
+                client_options: azure_client_options(Some(authority_host)),
+            },
+            client_id: Some(client_id.clone()),
+            tenant_id: Some(tenant_id.clone()),
+            token_file_path: Some(PathBuf::from(federated_token_file)),
+        }))
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "worker.containerApp".to_string(),
+            reason: "Failed to build official Azure workload identity credentials".to_string(),
+        }),
+        AzureCredentials::VmManagedIdentity {
+            client_id,
+            identity_endpoint,
+        } => {
+            if let Some(identity_endpoint) = identity_endpoint {
+                return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "worker.containerApp".to_string(),
+                    reason: format!(
+                        "Official Azure ManagedIdentityCredential does not support per-config IMDS endpoint override '{}'; use the standard IMDS endpoint or provide an access token",
+                        identity_endpoint
+                    ),
+                }));
+            }
+
+            ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
+                user_assigned_id: Some(UserAssignedId::ClientId(client_id.clone())),
+                client_options: azure_client_options(None),
+            }))
+            .map(|credential| credential as Arc<dyn TokenCredential>)
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "worker.containerApp".to_string(),
+                reason: "Failed to build official Azure VM managed identity credentials"
+                    .to_string(),
+            })
+        }
+        AzureCredentials::ManagedIdentity {
+            client_id,
+            identity_endpoint,
+            ..
+        } => Err(AlienError::new(ErrorData::BindingSetupFailed {
+            binding_type: "worker.containerApp".to_string(),
+            reason: format!(
+                "Official Azure ManagedIdentityCredential cannot be constructed from explicit App Service identity endpoint '{}' for client '{}'; use workload identity, VM managed identity, or provide an access token",
+                identity_endpoint, client_id
+            ),
+        })),
+    }
+}
+
+fn azure_client_options(authority_host: Option<&str>) -> ClientOptions {
+    let cloud = authority_host.map(|authority_host| {
+        let mut custom = CustomConfiguration::default();
+        custom.authority_host = authority_host.to_string();
+        Arc::new(CloudConfiguration::Custom(custom))
+    });
+
+    ClientOptions {
+        cloud,
+        ..Default::default()
     }
 }

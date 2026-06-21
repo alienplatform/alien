@@ -28,8 +28,26 @@ aws = [
     "dep:aws-types",
     "alien-client-config/aws"
 ]  # TODO: Remove preflights from here, necessary because of CF
-gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
-azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
+gcp = [
+    "dep:alien-gcp-clients",
+    "alien-client-config/gcp",
+    "dep:base64",
+    "dep:google-cloud-api-serviceusage-v1",
+    "dep:google-cloud-auth",
+    "dep:google-cloud-firestore-admin-v1",
+    "dep:google-cloud-gax",
+    "dep:google-cloud-iam-v1",
+    "dep:google-cloud-longrunning",
+    "dep:google-cloud-resourcemanager-v3",
+    "dep:google-cloud-type",
+]
+azure = [
+    "dep:alien-azure-clients",
+    "alien-client-config/azure",
+    "dep:azure_core",
+    "dep:azure_identity",
+    "dep:base64",
+]
 kubernetes = ["dep:kube", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
 local = ["dep:alien-local"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
@@ -53,6 +71,16 @@ alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
+google-cloud-api-serviceusage-v1 = { workspace = true, optional = true }
+google-cloud-auth = { workspace = true, optional = true }
+google-cloud-firestore-admin-v1 = { workspace = true, optional = true }
+google-cloud-gax = { workspace = true, optional = true }
+google-cloud-iam-v1 = { workspace = true, optional = true }
+google-cloud-longrunning = { workspace = true, optional = true }
+google-cloud-resourcemanager-v3 = { workspace = true, optional = true }
+google-cloud-type = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sdk-acm = { workspace = true, optional = true }

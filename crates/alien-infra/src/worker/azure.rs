@@ -10,13 +10,12 @@ use alien_azure_clients::models::container_apps::{
     IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
     TrafficWeight,
 };
-use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
-    Ingress, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
+    HeartbeatBackend, Ingress, ObservedHealth, Platform, ProviderLifecycleState,
+    RemoteStackManagement, RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -26,8 +25,8 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
-use crate::core::EnvironmentVariableBuilder;
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
+use crate::core::{AzureServiceBusQueueProperties, EnvironmentVariableBuilder};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -1550,30 +1549,7 @@ impl AzureWorkerController {
             service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties {
-                accessed_at: None,
-                auto_delete_on_idle: None,
-                count_details: None,
-                created_at: None,
-                dead_lettering_on_message_expiration: None,
-                default_message_time_to_live: None,
-                duplicate_detection_history_time_window: None,
-                enable_batched_operations: None,
-                enable_express: None,
-                enable_partitioning: None,
-                forward_dead_lettered_messages_to: None,
-                forward_to: None,
-                lock_duration: None,
-                max_delivery_count: None,
-                max_message_size_in_kilobytes: None,
-                max_size_in_megabytes: None,
-                message_count: None,
-                requires_duplicate_detection: None,
-                requires_session: None,
-                size_in_bytes: None,
-                status: None,
-                updated_at: None,
-            },
+            AzureServiceBusQueueProperties::default(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -1864,7 +1840,7 @@ impl AzureWorkerController {
         // Apply resource-scoped permissions from the stack
         if let Some(container_app_name) = &self.container_app_name {
             use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
+            use crate::core::Scope;
 
             let config = ctx.desired_resource_config::<Worker>()?;
             let deployment_rg = azure_utils::get_resource_group_name(ctx.state)?;
@@ -3316,7 +3292,7 @@ impl AzureWorkerController {
     async fn setup_commands_infrastructure(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
         func_cfg: &alien_core::Worker,
         container_app_name: &str,
     ) -> Result<DaprComponentOperation> {
@@ -3359,7 +3335,7 @@ impl AzureWorkerController {
             service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties::default(),
+            AzureServiceBusQueueProperties::default(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -3494,7 +3470,7 @@ impl AzureWorkerController {
     async fn assign_commands_sender_role(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
+        azure_config: &AzureClientConfig,
         resource_group_name: &str,
         namespace_name: &str,
         func_cfg: &alien_core::Worker,
@@ -3529,7 +3505,7 @@ impl AzureWorkerController {
                     message: "Failed to resolve Azure command sender principal".to_string(),
                     resource_id: Some(func_cfg.id.clone()),
                 })?;
-            let queue_scope = alien_azure_clients::authorization::Scope::Resource {
+            let queue_scope = crate::core::Scope::Resource {
                 resource_group_name: resource_group_name.to_string(),
                 resource_provider: "Microsoft.ServiceBus".to_string(),
                 parent_resource_path: Some(format!("namespaces/{namespace_name}")),
@@ -4958,7 +4934,7 @@ mod tests {
         mock_provider
             .expect_get_azure_authorization_client()
             .returning(|_| {
-                use alien_azure_clients::authorization::MockAuthorizationApi;
+                use crate::core::MockAuthorizationApi;
                 let mut mock_auth = MockAuthorizationApi::new();
                 mock_auth
                     .expect_create_or_update_role_definition()

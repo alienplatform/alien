@@ -1,4 +1,3 @@
-use alien_azure_clients::AzureClientConfig;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -14,7 +13,7 @@ use alien_azure_clients::models::managed_environments::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
+    AzureClientConfig, AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
     AzureContainerAppsEnvironmentHeartbeatStatus, AzureContainerAppsEnvironmentOutputs,
     AzureContainerAppsEnvironmentWorkloadProfile, HeartbeatBackend, Network, ObservedHealth,
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -912,7 +911,7 @@ impl AzureContainerAppsEnvironmentController {
         environment_name: &str,
     ) -> Result<()> {
         use crate::core::ResourcePermissionsHelper;
-        use alien_azure_clients::authorization::Scope;
+        use crate::core::Scope;
 
         let config = ctx.desired_resource_config::<AzureContainerAppsEnvironment>()?;
 

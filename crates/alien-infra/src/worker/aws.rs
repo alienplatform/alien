@@ -177,6 +177,17 @@ impl AwsWorkerController {
             None => Ok(false),
         }
     }
+
+    fn unexpected_update_wrapper_state(
+        resource_id: &str,
+        handler: &str,
+        state: AwsWorkerState,
+    ) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: resource_id.to_string(),
+            message: format!("{handler} returned unexpected state during update: {state:?}"),
+        })
+    }
 }
 
 #[controller]
@@ -1765,12 +1776,12 @@ impl AwsWorkerController {
             });
         }
 
-        let certificate_arn = self.certificate_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: worker_config.id.clone(),
-                message: "Certificate ARN missing for certificate renewal".to_string(),
-            })
-        })?;
+        let Some(certificate_arn) = self.certificate_arn.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateCodeStart,
+                suggested_delay: None,
+            });
+        };
         let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Certificate chain missing (certificate not issued)".to_string(),
@@ -2058,9 +2069,8 @@ impl AwsWorkerController {
         let is_successful = result.last_update_status.as_deref() == Some("Successful");
 
         if is_active && is_successful {
-            // Always proceed to readiness probe phase - linear flow
             Ok(HandlerAction::Continue {
-                state: UpdateRunningReadinessProbe,
+                state: UpdateEnsuringPublicExposure,
                 suggested_delay: None,
             })
         } else if result.state.as_deref() == Some("Pending")
@@ -2078,6 +2088,407 @@ impl AwsWorkerController {
                 ),
                 resource_id: Some(aws_worker_name),
             }))
+        }
+    }
+
+    #[handler(
+        state = UpdateEnsuringPublicExposure,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_ensuring_public_exposure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let current_config = ctx.desired_resource_config::<Worker>()?;
+        let previous_config = ctx.previous_resource_config::<Worker>()?;
+
+        if current_config.ingress != Ingress::Public {
+            return Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
+        if previous_config.ingress != Ingress::Public && self.api_id.is_none() {
+            self.url = None;
+        }
+
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        if self.api_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
+        let next_state = if has_domain_info {
+            UpdateWaitingForCertificate
+        } else {
+            UpdateCreatingApiGateway
+        };
+
+        Ok(HandlerAction::Continue {
+            state: next_state,
+            suggested_delay: Some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(
+        state = UpdateWaitingForCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: ImportingCertificate,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateImportingInitialCertificate,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingApiGateway,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiGateway,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_certificate",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateImportingInitialCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_importing_initial_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.importing_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiGateway,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiGateway,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "importing_certificate",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiGateway,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_gateway(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_gateway(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiIntegration,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiIntegration,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_gateway",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiIntegration,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_integration(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_integration(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiRoute,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiRoute,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_integration",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiRoute,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_route(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_route(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiStage,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiStage,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_route",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiStage,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_stage(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_stage(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiDomain,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateAddingApiGatewayPermission,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_stage",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiDomain,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_domain(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_domain(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingApiMapping,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiMapping,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_domain",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingApiMapping,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_api_mapping(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_api_mapping(ctx).await? {
+            HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateAddingApiGatewayPermission,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_api_mapping",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateAddingApiGatewayPermission,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_adding_api_gateway_permission(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.adding_api_gateway_permission(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForDns,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForDns,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: RunningReadinessProbe,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: ApplyingResourcePermissions,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateApplyingResourcePermissions,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "adding_api_gateway_permission",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForDns,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_dns(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_dns(ctx).await? {
+            HandlerAction::Continue {
+                state: RunningReadinessProbe,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_dns",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
         }
     }
 
@@ -2116,11 +2527,77 @@ impl AwsWorkerController {
             }
         }
 
-        // Either no readiness probe needed, or probe succeeded - proceed to UpdateEventSourceMappings
+        // Either no readiness probe needed, or probe succeeded.
         Ok(HandlerAction::Continue {
-            state: UpdateEventSourceMappings,
+            state: UpdateApplyingResourcePermissions,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = UpdateApplyingResourcePermissions,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.applying_resource_permissions(ctx).await? {
+            HandlerAction::Continue {
+                state: UpdatingEnvVarsWithSelfBinding,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateEnvVarsWithSelfBinding,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "applying_resource_permissions",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateEnvVarsWithSelfBinding,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_env_vars_with_self_binding(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.updating_env_vars_with_self_binding(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingEventSourceMappings,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateEventSourceMappings,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "updating_env_vars_with_self_binding",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
     }
 
     #[handler(
@@ -4031,11 +4508,20 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
 
         // Update to the new worker
+        let target_is_public = to_function.ingress == Ingress::Public;
         executor.update(to_function).unwrap();
 
         // Run the update flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let outputs = executor.outputs().unwrap();
+        let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        if target_is_public {
+            let url = function_outputs.url.as_deref().unwrap();
+            assert!(url.starts_with("http://") || url.starts_with("https://"));
+            assert!(!url.contains("lambda-url"));
+        }
     }
 
     // ─────────────── BEST EFFORT DELETION TESTS ───────────────────────

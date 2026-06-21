@@ -246,7 +246,9 @@ async fn create_dispatcher(
         }
         ClientConfig::Gcp(gcp_config) => {
             let dispatcher =
-                PubSubCommandDispatcher::new(http_client, *gcp_config, push_target.to_string());
+                PubSubCommandDispatcher::new(http_client, *gcp_config, push_target.to_string())
+                    .await
+                    .map_err(|e| format!("Failed to create Pub/Sub dispatcher: {}", e))?;
             Ok(Box::new(dispatcher))
         }
         ClientConfig::Azure(azure_config) => {
@@ -261,7 +263,8 @@ async fn create_dispatcher(
                 *azure_config,
                 namespace.to_string(),
                 queue.to_string(),
-            );
+            )
+            .map_err(|e| format!("Failed to create Service Bus dispatcher: {}", e))?;
             Ok(Box::new(dispatcher))
         }
         _ => Err(format!(

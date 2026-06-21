@@ -486,34 +486,17 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{Build, BuildOutputs, Platform, ResourceStatus};
-    use alien_error::AlienError;
-    use alien_gcp_clients::cloudbuild::{
-        Build as CloudBuild, BuildStep, CloudBuildApi, MockCloudBuildApi,
-    };
-    use alien_gcp_clients::longrunning::Operation;
     use rstest::rstest;
 
     use crate::build::{fixtures::*, GcpBuildController};
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
+        MockPlatformServiceProvider,
     };
 
     fn setup_mock_service_provider() -> Arc<MockPlatformServiceProvider> {
-        let mut mock_provider = MockPlatformServiceProvider::new();
-
-        // For GCP Cloud Build, we don't need to mock any client calls during the controller lifecycle
-        // since builds are created on-demand, not as persistent projects
-        mock_provider
-            .expect_get_gcp_cloudbuild_client()
-            .returning(|_| {
-                let mock_client = MockCloudBuildApi::new();
-                Ok(Arc::new(mock_client))
-            });
-
-        Arc::new(mock_provider)
+        Arc::new(MockPlatformServiceProvider::new())
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────

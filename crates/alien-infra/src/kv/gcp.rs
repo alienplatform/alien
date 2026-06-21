@@ -3,17 +3,15 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpFirestoreKvHeartbeatData, HeartbeatBackend, Kv, KvHeartbeatData, KvHeartbeatStatus,
     KvOutputs, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
-use alien_gcp_clients::firestore::{Database, DatabaseType};
-use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_firestore_admin_v1::model::{database, Database};
 
 /// Generates the Firestore database name for the KV store.
 ///
@@ -79,12 +77,7 @@ impl GcpKvController {
                 info!(database=%database_name, "Firestore database already exists");
                 self.operation_name = None;
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(
                     database=%database_name,
                     region=%gcp_config.region,
@@ -93,10 +86,9 @@ impl GcpKvController {
 
                 // Enabling the Firestore API does NOT create a default database.
                 // We must explicitly create it via the databases API.
-                let database = Database::builder()
-                    .location_id(gcp_config.region.clone())
-                    .r#type(DatabaseType::FirestoreNative)
-                    .build();
+                let database = Database::new()
+                    .set_location_id(gcp_config.region.clone())
+                    .set_type(database::DatabaseType::FirestoreNative);
 
                 let operation = client
                     .create_database(database_name.clone(), database)
@@ -108,11 +100,11 @@ impl GcpKvController {
 
                 info!(
                     database=%database_name,
-                    operation_name=?operation.name,
+                    operation_name=%operation.name,
                     "Firestore database creation started"
                 );
 
-                self.operation_name = operation.name;
+                self.operation_name = Some(operation.name);
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -170,7 +162,7 @@ impl GcpKvController {
             },
         )?;
 
-        if !operation.done.unwrap_or(false) {
+        if !operation.done {
             debug!(database=%database_name, operation=%op_name, "Database creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -179,7 +171,7 @@ impl GcpKvController {
         }
 
         // Operation completed — check for errors
-        if let Some(OperationResult::Error { error }) = &operation.result {
+        if let Some(error) = operation.error() {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
                     "Firestore database creation failed: {} (code: {})",
@@ -247,12 +239,7 @@ impl GcpKvController {
                     suggested_delay: Some(Duration::from_secs(30)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: "Firestore database no longer exists".to_string(),
@@ -374,10 +361,11 @@ fn emit_gcp_firestore_kv_heartbeat(
     database: Database,
     project_id: &Option<String>,
 ) {
-    let database_name = database
-        .name
-        .clone()
-        .unwrap_or_else(|| configured_database_name.to_string());
+    let database_name = if database.name.is_empty() {
+        configured_database_name.to_string()
+    } else {
+        database.name.clone()
+    };
     let lifecycle = if database.delete_time.is_some() {
         ProviderLifecycleState::Deleted
     } else {
@@ -388,18 +376,17 @@ fn emit_gcp_firestore_kv_heartbeat(
     } else {
         ObservedHealth::Healthy
     };
-    let message = Some(match (&database.r#type, &database.location_id) {
-        (Some(database_type), Some(location_id)) => format!(
-            "Firestore database type is {} in {}",
-            serialize_enum(database_type).unwrap_or_else(|| "unknown".to_string()),
-            location_id
-        ),
-        (Some(database_type), None) => format!(
+    let message = Some(if database.location_id.is_empty() {
+        format!(
             "Firestore database type is {}",
-            serialize_enum(database_type).unwrap_or_else(|| "unknown".to_string())
-        ),
-        (None, Some(location_id)) => format!("Firestore database is in {}", location_id),
-        (None, None) => "Firestore database metadata is available".to_string(),
+            serialize_enum(&database.r#type).unwrap_or_else(|| "unknown".to_string())
+        )
+    } else {
+        format!(
+            "Firestore database type is {} in {}",
+            serialize_enum(&database.r#type).unwrap_or_else(|| "unknown".to_string()),
+            database.location_id
+        )
     });
 
     ctx.emit_heartbeat(ResourceHeartbeat {
@@ -427,22 +414,39 @@ fn emit_gcp_firestore_kv_heartbeat(
                         project_id, configured_database_name
                     )
                 }),
-                location_id: database.location_id,
-                database_type: serialize_enum_opt(database.r#type),
-                concurrency_mode: serialize_enum_opt(database.concurrency_mode),
-                app_engine_integration_mode: serialize_enum_opt(
-                    database.app_engine_integration_mode,
+                location_id: if database.location_id.is_empty() {
+                    None
+                } else {
+                    Some(database.location_id)
+                },
+                database_type: serialize_enum(&database.r#type),
+                concurrency_mode: serialize_enum(&database.concurrency_mode),
+                app_engine_integration_mode: serialize_enum(&database.app_engine_integration_mode),
+                delete_protection_state: serialize_enum(&database.delete_protection_state),
+                point_in_time_recovery_enablement: serialize_enum(
+                    &database.point_in_time_recovery_enablement,
                 ),
-                delete_protection_state: serialize_enum_opt(database.delete_protection_state),
-                point_in_time_recovery_enablement: serialize_enum_opt(
-                    database.point_in_time_recovery_enablement,
-                ),
-                version_retention_period: database.version_retention_period,
-                earliest_version_time: database.earliest_version_time,
-                create_time: database.create_time,
-                update_time: database.update_time,
-                delete_time: database.delete_time,
-                database_edition: serialize_enum_opt(database.database_edition),
+                version_retention_period: database
+                    .version_retention_period
+                    .as_ref()
+                    .map(|value| format!("{value:?}")),
+                earliest_version_time: database
+                    .earliest_version_time
+                    .as_ref()
+                    .map(|value| format!("{value:?}")),
+                create_time: database
+                    .create_time
+                    .as_ref()
+                    .map(|value| format!("{value:?}")),
+                update_time: database
+                    .update_time
+                    .as_ref()
+                    .map(|value| format!("{value:?}")),
+                delete_time: database
+                    .delete_time
+                    .as_ref()
+                    .map(|value| format!("{value:?}")),
+                database_edition: serialize_enum(&database.database_edition),
                 cmek_enabled: database.cmek_config.is_some(),
                 source_info_present: database.source_info.is_some(),
             },
@@ -455,10 +459,6 @@ fn serialize_enum<T: serde::Serialize>(value: &T) -> Option<String> {
     serde_json::to_value(value)
         .ok()
         .and_then(|value| value.as_str().map(ToString::to_string))
-}
-
-fn serialize_enum_opt<T: serde::Serialize>(value: Option<T>) -> Option<String> {
-    value.and_then(|value| serialize_enum(&value))
 }
 
 // Separate impl block for helper methods

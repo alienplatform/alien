@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         ComputeServiceType, CrossAccountAccess, CrossAccountPermissions, GcpCrossAccountAccess,
@@ -7,20 +7,32 @@ use crate::{
     },
 };
 use alien_core::bindings::ArtifactRegistryBinding;
-use alien_error::{AlienError, Context};
-use alien_gcp_clients::iam::IamPolicy;
-use alien_gcp_clients::{
-    artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
-    GcpClientConfig, GcpClientConfigExt as _,
-};
+use alien_core::{GcpClientConfig, GcpCredentials, GcpImpersonationConfig};
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use chrono;
+use google_cloud_auth::credentials::{
+    self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
+};
+use google_cloud_auth::errors::CredentialsError;
+use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
+use reqwest::{Client, Method, Response, Url};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::future::Future;
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const DEVSTORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_write";
+const ARTIFACT_REGISTRY_REST_BASE_URL: &str = "https://artifactregistry.googleapis.com/v1";
 
 /// GCP Artifact Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
 pub struct GarArtifactRegistry {
-    client: ArtifactRegistryClient,
+    client: Client,
+    credentials: Credentials,
+    endpoint: String,
     binding_name: String,
     project_id: String,
     location: String,
@@ -43,7 +55,13 @@ impl GarArtifactRegistry {
         );
 
         let client = crate::http_client::create_http_client();
-        let artifact_registry_client = ArtifactRegistryClient::new(client, gcp_config.clone());
+        let credentials = credentials_from_gcp_config(gcp_config)?;
+        let endpoint = gcp_config
+            .service_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.endpoints.get("artifactregistry"))
+            .cloned()
+            .unwrap_or_else(|| ARTIFACT_REGISTRY_REST_BASE_URL.to_string());
 
         // Get project_id and location from GCP config instead of binding
         let project_id = gcp_config.project_id.clone();
@@ -93,7 +111,9 @@ impl GarArtifactRegistry {
             .transpose()?;
 
         Ok(Self {
-            client: artifact_registry_client,
+            client,
+            credentials,
+            endpoint,
             binding_name,
             project_id,
             location,
@@ -119,6 +139,113 @@ impl GarArtifactRegistry {
                 reason: format!("Invalid repository ID format: {}", repo_id),
             }))
         }
+    }
+
+    fn repository_resource_name(&self, repo_name: &str) -> String {
+        format!(
+            "projects/{}/locations/{}/repositories/{}",
+            self.project_id, self.location, repo_name
+        )
+    }
+
+    fn build_url(&self, resource: &str, suffix: &str) -> Result<Url> {
+        Url::parse(&format!(
+            "{}/{}{}",
+            self.endpoint.trim_end_matches('/'),
+            resource,
+            suffix
+        ))
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.gar".to_string(),
+            reason: "Invalid Artifact Registry IAM URL".to_string(),
+        })
+    }
+
+    async fn authed_request(&self, method: Method, url: Url) -> Result<reqwest::RequestBuilder> {
+        let headers = match self
+            .credentials
+            .headers(Extensions::new())
+            .await
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Failed to get Google auth headers".to_string(),
+            })? {
+            CacheableResource::New { data, .. } => data,
+            CacheableResource::NotModified => {
+                return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.gar".to_string(),
+                    reason: "Google auth returned NotModified without cached headers".to_string(),
+                }));
+            }
+        };
+
+        Ok(self.client.request(method, url).headers(headers))
+    }
+
+    async fn get_repository_iam_policy(&self, repo_name: &str) -> Result<IamPolicy> {
+        let resource = self.repository_resource_name(repo_name);
+        let url = self.build_url(&resource, ":getIamPolicy")?;
+        let response = self
+            .authed_request(Method::GET, url.clone())
+            .await?
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: format!(
+                    "Failed to send Artifact Registry getIamPolicy request for '{}'",
+                    repo_name
+                ),
+            })?;
+
+        ensure_success(response, "getIamPolicy", repo_name, url)
+            .await?
+            .json::<IamPolicy>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::UnexpectedResponseFormat {
+                provider: "gcp".to_string(),
+                binding_name: self.binding_name.clone(),
+                field: "iamPolicy".to_string(),
+                response_json: String::new(),
+            })
+    }
+
+    async fn set_repository_iam_policy(
+        &self,
+        repo_name: &str,
+        policy: IamPolicy,
+    ) -> Result<IamPolicy> {
+        let resource = self.repository_resource_name(repo_name);
+        let url = self.build_url(&resource, ":setIamPolicy")?;
+        let request = SetIamPolicyRequest { policy };
+        let response = self
+            .authed_request(Method::POST, url.clone())
+            .await?
+            .json(&request)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: format!(
+                    "Failed to send Artifact Registry setIamPolicy request for '{}'",
+                    repo_name
+                ),
+            })?;
+
+        ensure_success(response, "setIamPolicy", repo_name, url)
+            .await?
+            .json::<IamPolicy>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::UnexpectedResponseFormat {
+                provider: "gcp".to_string(),
+                binding_name: self.binding_name.clone(),
+                field: "iamPolicy".to_string(),
+                response_json: String::new(),
+            })
     }
 
     /// Internal helper to add or remove members from IAM policy bindings
@@ -159,13 +286,11 @@ impl GarArtifactRegistry {
                 }
                 None => {
                     // Create new binding
-                    current_policy
-                        .bindings
-                        .push(alien_gcp_clients::iam::Binding {
-                            role: reader_role.to_string(),
-                            members,
-                            condition: None,
-                        });
+                    current_policy.bindings.push(IamBinding {
+                        role: reader_role.to_string(),
+                        members,
+                        condition: None,
+                    });
                 }
             }
         } else {
@@ -183,17 +308,8 @@ impl GarArtifactRegistry {
         }
 
         // Set the updated policy with the original etag for optimistic concurrency control
-        self.client.set_repository_iam_policy(
-            self.project_id.clone(),
-            self.location.clone(),
-            repo_name.to_string(),
-            current_policy,
-        ).await
-            .map_err(|e| map_cloud_client_error(
-                e,
-                format!("Failed to update cross-account access for GCP Artifact Registry repository '{}'", repo_name),
-                Some(repo_name.to_string()),
-            ))?;
+        self.set_repository_iam_policy(repo_name, current_policy)
+            .await?;
 
         let action = if add_members { "added" } else { "removed" };
         info!(
@@ -203,6 +319,316 @@ impl GarArtifactRegistry {
         );
         Ok(())
     }
+}
+
+async fn ensure_success(
+    response: Response,
+    operation: &str,
+    repo_name: &str,
+    url: Url,
+) -> Result<Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(AlienError::new(ErrorData::Other {
+        message: format!(
+            "Artifact Registry {operation} request for '{repo_name}' to {url} failed with status {status}: {body}"
+        ),
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct StaticAccessTokenCredentials {
+    token: String,
+    entity_tag: EntityTag,
+}
+
+impl StaticAccessTokenCredentials {
+    fn new(token: String) -> Self {
+        Self {
+            token,
+            entity_tag: EntityTag::new(),
+        }
+    }
+}
+
+impl CredentialsProvider for StaticAccessTokenCredentials {
+    fn headers(
+        &self,
+        _extensions: Extensions,
+    ) -> impl Future<Output = std::result::Result<CacheableResource<HeaderMap>, CredentialsError>> + Send
+    {
+        let token = self.token.clone();
+        let entity_tag = self.entity_tag.clone();
+        async move {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|error| CredentialsError::from_source(false, error))?;
+            value.set_sensitive(true);
+
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, value);
+
+            Ok(CacheableResource::New {
+                entity_tag,
+                data: headers,
+            })
+        }
+    }
+
+    fn universe_domain(&self) -> impl Future<Output = Option<String>> + Send {
+        async { None }
+    }
+}
+
+fn credentials_from_gcp_config(config: &GcpClientConfig) -> Result<Credentials> {
+    credentials_from_gcp_credentials(&config.credentials)
+}
+
+fn credentials_from_gcp_credentials(credentials: &GcpCredentials) -> Result<Credentials> {
+    match credentials {
+        GcpCredentials::AccessToken { token } => {
+            Ok(Credentials::from(StaticAccessTokenCredentials::new(token.clone())))
+        }
+        GcpCredentials::ServiceAccountKey { json } => {
+            let key = serde_json::from_str::<Value>(json).into_alien_error().context(
+                ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.gar".to_string(),
+                    reason: "Failed to parse GCP service account key JSON".to_string(),
+                },
+            )?;
+            credentials::service_account::Builder::new(key)
+                .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                    [CLOUD_PLATFORM_SCOPE],
+                ))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.gar".to_string(),
+                    reason: "Failed to build official GCP service account credentials".to_string(),
+                })
+        }
+        GcpCredentials::ServiceMetadata => credentials::mds::Builder::default()
+            .with_scopes([CLOUD_PLATFORM_SCOPE])
+            .build()
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Failed to build official GCP metadata credentials".to_string(),
+            }),
+        GcpCredentials::ExternalAccount {
+            audience,
+            subject_token_type,
+            token_url,
+            credential_source_file,
+            service_account_impersonation_url,
+        } => {
+            let external_account = external_account_json(
+                audience,
+                subject_token_type,
+                token_url,
+                credential_source_file,
+                service_account_impersonation_url.as_deref(),
+            );
+            credentials::external_account::Builder::new(external_account)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.gar".to_string(),
+                    reason: "Failed to build official GCP external account credentials".to_string(),
+                })
+        }
+        GcpCredentials::AuthorizedUser {
+            client_id,
+            client_secret,
+            refresh_token,
+        } => {
+            let authorized_user = json!({
+                "type": "authorized_user",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            });
+            credentials::user_account::Builder::new(authorized_user)
+                .with_scopes([CLOUD_PLATFORM_SCOPE])
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifactRegistry.gar".to_string(),
+                    reason: "Failed to build official GCP authorized user credentials".to_string(),
+                })
+        }
+        GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+            impersonated_credentials_from_gcp_config(source, config)
+        }
+        GcpCredentials::ProjectedServiceAccount { .. } => Err(AlienError::new(
+            ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Projected service account token files are not a complete official Google auth credential configuration; use external_account credentials with an audience and credential source instead".to_string(),
+            },
+        )),
+    }
+}
+
+fn impersonated_credentials_from_gcp_config(
+    source: &GcpClientConfig,
+    config: &GcpImpersonationConfig,
+) -> Result<Credentials> {
+    let source_credentials = credentials_from_gcp_config(source)?;
+    let mut builder =
+        credentials::impersonated::Builder::from_source_credentials(source_credentials)
+            .with_target_principal(config.service_account_email.clone())
+            .with_scopes(config.scopes.clone());
+
+    if let Some(delegates) = &config.delegates {
+        builder = builder.with_delegates(delegates.clone());
+    }
+
+    if let Some(lifetime) = &config.lifetime {
+        builder = builder.with_lifetime(parse_google_duration(lifetime)?);
+    }
+
+    builder
+        .build()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.gar".to_string(),
+            reason: "Failed to build official GCP impersonated credentials".to_string(),
+        })
+}
+
+async fn bearer_token_from_credentials(credentials: &Credentials) -> Result<String> {
+    let headers = match credentials
+        .headers(Extensions::new())
+        .await
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.gar".to_string(),
+            reason: "Failed to get Google auth headers".to_string(),
+        })? {
+        CacheableResource::New { data, .. } => data,
+        CacheableResource::NotModified => {
+            return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Google auth returned NotModified without cached headers".to_string(),
+            }));
+        }
+    };
+
+    let value = headers
+        .get(AUTHORIZATION)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Google auth headers missing Authorization".to_string(),
+            })
+        })?
+        .to_str()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.gar".to_string(),
+            reason: "Google auth Authorization header is not valid UTF-8".to_string(),
+        })?;
+
+    value
+        .strip_prefix("Bearer ")
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Google auth Authorization header is not a bearer token".to_string(),
+            })
+        })
+}
+
+fn external_account_json(
+    audience: &str,
+    subject_token_type: &str,
+    token_url: &str,
+    credential_source_file: &str,
+    service_account_impersonation_url: Option<&str>,
+) -> Value {
+    let mut value = json!({
+        "type": "external_account",
+        "audience": audience,
+        "subject_token_type": subject_token_type,
+        "token_url": token_url,
+        "credential_source": {
+            "file": credential_source_file,
+        },
+        "scopes": [CLOUD_PLATFORM_SCOPE],
+    });
+
+    if let Some(url) = service_account_impersonation_url {
+        value["service_account_impersonation_url"] = Value::String(url.to_string());
+    }
+
+    value
+}
+
+fn parse_google_duration(value: &str) -> Result<Duration> {
+    let seconds = value
+        .strip_suffix('s')
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: format!("Invalid Google duration '{}': missing 's' suffix", value),
+            })
+        })?
+        .parse::<u64>()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "artifactRegistry.gar".to_string(),
+            reason: format!("Invalid Google duration '{}'", value),
+        })?;
+
+    Ok(Duration::from_secs(seconds))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetIamPolicyRequest {
+    policy: IamPolicy,
+}
+
+/// Represents an IAM policy.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct IamPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bindings: Vec<IamBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct IamBinding {
+    role: String,
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    condition: Option<Expr>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Expr {
+    expression: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<String>,
 }
 
 impl Binding for GarArtifactRegistry {}
@@ -279,11 +705,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
         );
 
         // Get current policy with etag
-        let current_policy = self.client.get_repository_iam_policy(
-            self.project_id.clone(),
-            self.location.clone(),
-            repo_name.clone(),
-        ).await
+        let current_policy = self.get_repository_iam_policy(&repo_name).await
             .map_err(|e| {
                 warn!(
                     repo_name = %repo_name,
@@ -356,15 +778,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
         );
 
         // Get current policy with etag
-        let current_policy = match self
-            .client
-            .get_repository_iam_policy(
-                self.project_id.clone(),
-                self.location.clone(),
-                repo_name.clone(),
-            )
-            .await
-        {
+        let current_policy = match self.get_repository_iam_policy(&repo_name).await {
             Ok(policy) => policy,
             Err(_) => {
                 // No existing policy, nothing to remove
@@ -412,15 +826,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             "Getting GCP Artifact Registry repository cross-account access"
         );
 
-        let policy = match self
-            .client
-            .get_repository_iam_policy(
-                self.project_id.clone(),
-                self.location.clone(),
-                repo_name.clone(),
-            )
-            .await
-        {
+        let policy = match self.get_repository_iam_policy(&repo_name).await {
             Ok(policy) => policy,
             Err(e) => {
                 warn!(
@@ -543,16 +949,14 @@ impl ArtifactRegistry for GarArtifactRegistry {
         );
 
         // Use the stored GCP configuration for impersonation
-        let gcp_config = &self.gcp_config;
-
         let scopes = vec![
-            "https://www.googleapis.com/auth/cloud-platform".to_string(),
-            "https://www.googleapis.com/auth/devstorage.read_write".to_string(),
+            CLOUD_PLATFORM_SCOPE.to_string(),
+            DEVSTORAGE_SCOPE.to_string(),
         ];
 
         let lifetime = ttl_seconds.map(|ttl| format!("{}s", ttl.min(3600))); // Max 1 hour
 
-        let impersonation_config = alien_gcp_clients::GcpImpersonationConfig {
+        let impersonation_config = GcpImpersonationConfig {
             service_account_email: service_account_email.clone(),
             scopes,
             delegates: None,
@@ -561,30 +965,13 @@ impl ArtifactRegistry for GarArtifactRegistry {
             target_region: None,
         };
 
-        // Impersonate the service account
-        let impersonated_config =
-            gcp_config
-                .impersonate(impersonation_config)
-                .await
-                .map_err(|e| {
-                    map_cloud_client_error(
-                        e,
-                        "Failed to impersonate GCP service account for artifact registry access"
-                            .to_string(),
-                        Some(repo_id.to_string()),
-                    )
-                })?;
-
-        // Get the access token from the impersonated config
-        let access_token = impersonated_config
-            .get_bearer_token("https://www.googleapis.com/")
+        let impersonated_credentials =
+            impersonated_credentials_from_gcp_config(&self.gcp_config, &impersonation_config)?;
+        let access_token = bearer_token_from_credentials(&impersonated_credentials)
             .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    "Failed to get OAuth token from impersonated service account".to_string(),
-                    Some(repo_id.to_string()),
-                )
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "artifactRegistry.gar".to_string(),
+                reason: "Failed to get OAuth token from impersonated service account".to_string(),
             })?;
 
         // Calculate expiration time

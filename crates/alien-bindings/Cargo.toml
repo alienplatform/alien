@@ -26,8 +26,22 @@ aws = [
     "dep:aws-types",
     "alien-client-config/aws"
 ]
-gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
-azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
+gcp = [
+    "object_store/gcp",
+    "dep:base64",
+    "dep:google-cloud-auth",
+    "dep:google-cloud-secretmanager-v1",
+    "alien-client-config/gcp",
+]
+azure = [
+    "object_store/azure",
+    "dep:base64",
+    "dep:azure_core",
+    "dep:azure_identity",
+    "dep:azure_security_keyvault_secrets",
+    "dep:urlencoding",
+    "alien-client-config/azure",
+]
 kubernetes = ["dep:kube", "dep:k8s-openapi", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:oci-client", "dep:sled", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
@@ -44,8 +58,12 @@ alien-error = { workspace = true }
 alien-core = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
-alien-gcp-clients = { workspace = true, optional = true }
-alien-azure-clients = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
+azure_security_keyvault_secrets = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
+google-cloud-auth = { workspace = true, optional = true }
+google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sdk-codebuild = { workspace = true, optional = true }

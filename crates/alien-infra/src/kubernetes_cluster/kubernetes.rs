@@ -7,7 +7,6 @@ use crate::error::{ErrorData, Result};
 use crate::kubernetes_cluster_heartbeat::{
     emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,
 };
-use alien_azure_clients::long_running_operation::LongRunningOperation as AzureLongRunningOperation;
 use alien_core::{
     import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
     KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
@@ -15,6 +14,15 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AzureLongRunningOperation {
+    pub(crate) url: String,
+    pub(crate) retry_after: Option<Duration>,
+    #[serde(default)]
+    pub(crate) location_url: Option<String>,
+}
 
 /// Kubernetes cluster controller.
 ///

@@ -205,7 +205,11 @@ impl CommandDispatcher for DefaultCommandDispatcher {
                     self.http_client.clone(),
                     *gcp_config,
                     push_target.clone(),
-                );
+                )
+                .await
+                .context(CmdErrorData::Other {
+                    message: "Failed to create Pub/Sub dispatcher".to_string(),
+                })?;
                 dispatcher.dispatch(envelope).await
             }
             alien_core::ClientConfig::Azure(azure_config) => {
@@ -223,7 +227,10 @@ impl CommandDispatcher for DefaultCommandDispatcher {
                     *azure_config,
                     namespace.to_string(),
                     queue.to_string(),
-                );
+                )
+                .context(CmdErrorData::Other {
+                    message: "Failed to create Service Bus dispatcher".to_string(),
+                })?;
                 dispatcher.dispatch(envelope).await
             }
             _ => Err(AlienError::new(CmdErrorData::OperationNotSupported {

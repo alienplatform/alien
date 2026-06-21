@@ -1,9 +1,8 @@
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{AzureArmProvider, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::models::resources::Provider;
 use alien_core::{
     AzureResourceProviderActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -118,7 +117,7 @@ impl AzureServiceActivationController {
         }
 
         // Provider is not registered, proceed to register it
-        match client.register_provider(&config.service_name, None).await {
+        match client.register_provider(&config.service_name).await {
             Ok(provider) => {
                 info!(
                     service_id = %config.id,
@@ -350,7 +349,7 @@ fn emit_azure_service_activation_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     namespace: &str,
-    provider: &Provider,
+    provider: &AzureArmProvider,
 ) {
     let registration_state = provider.registration_state.clone();
     let registered = registration_state

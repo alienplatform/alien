@@ -1,14 +1,14 @@
-use alien_azure_clients::AzureClientConfig;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    AzureServiceBusNamespace as AzureServiceBusArmNamespace, AzureServiceBusNamespaceProperties,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::models::queue_namespace::*;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
+    AzureClientConfig, AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
     AzureServiceBusNamespaceOutputs, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, QueueHeartbeatStatus, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs, ResourceStatus,
@@ -158,7 +158,7 @@ impl AzureServiceBusNamespaceController {
                 }
             }
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 debug!(namespace_name=%namespace_name, "Namespace not yet available, continuing to wait");
@@ -307,7 +307,7 @@ impl AzureServiceBusNamespaceController {
                 })
             }
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 info!(namespace_name=%namespace_name, "Namespace already deleted");
@@ -364,7 +364,7 @@ impl AzureServiceBusNamespaceController {
                 })
             }
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 info!(namespace_name=%namespace_name, "Namespace successfully deleted");
@@ -419,7 +419,7 @@ fn emit_azure_service_bus_namespace_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    namespace: &SbNamespace,
+    namespace: &AzureServiceBusArmNamespace,
 ) {
     let properties = namespace.properties.as_ref();
     let namespace_status = properties.and_then(|p| p.status.clone());
@@ -492,7 +492,7 @@ impl AzureServiceBusNamespaceController {
     // ─────────────── HELPER METHODS ────────────────────────────
     fn handle_creation_completed(
         &mut self,
-        namespace: &SbNamespace,
+        namespace: &AzureServiceBusArmNamespace,
         azure_config: &AzureClientConfig,
         resource_group_name: &str,
     ) {
@@ -534,10 +534,10 @@ impl AzureServiceBusNamespaceController {
         &self,
         _azure_config: &AzureClientConfig,
         _ctx: &ResourceControllerContext,
-    ) -> SbNamespaceProperties {
-        SbNamespaceProperties {
+    ) -> AzureServiceBusNamespaceProperties {
+        AzureServiceBusNamespaceProperties {
             private_endpoint_connections: vec![],
-            public_network_access: SbNamespacePropertiesPublicNetworkAccess::Enabled,
+            public_network_access: "Enabled".to_string(),
             ..Default::default()
         }
     }
@@ -553,7 +553,7 @@ impl AzureServiceBusNamespaceController {
         namespace_name: &str,
     ) -> Result<()> {
         use crate::core::ResourcePermissionsHelper;
-        use alien_azure_clients::authorization::Scope;
+        use crate::core::Scope;
 
         let config = ctx.desired_resource_config::<AzureServiceBusNamespace>()?;
 

@@ -247,18 +247,17 @@ use crate::infra_requirements::AzureResourceGroupController;
 use crate::infra_requirements::AzureServiceBusNamespaceController;
 use crate::infra_requirements::AzureStorageAccountController;
 use crate::storage::{AwsStorageController, AzureStorageController, GcpStorageController};
-use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _};
 use alien_core::ClientConfig;
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureContainerAppsEnvironment, AzureResourceGroup,
-    AzureServiceBusNamespace, AzureStorageAccount, ComputeBackend, DeploymentConfig,
-    DomainMetadata, EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource,
-    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
+    AwsClientConfig, AwsCredentials, AwsManagementConfig, AzureClientConfig,
+    AzureContainerAppsEnvironment, AzureCredentials, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
+    EnvironmentVariablesSnapshot, GcpClientConfig, GcpCredentials, ManagementConfig, Platform,
+    Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
     ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage, Worker,
     WorkerCode,
 };
 use alien_error::{AlienError, Context};
-use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -274,6 +273,30 @@ fn mock_aws_client_config() -> AwsClientConfig {
             access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
             secret_access_key: "WJALRXUTNFEMI/K7MDENG/BPXRFICYEXAMPLEKEY".to_string(),
             session_token: None,
+        },
+        service_overrides: None,
+    }
+}
+
+fn mock_gcp_client_config() -> GcpClientConfig {
+    GcpClientConfig {
+        project_id: "test-project".to_string(),
+        region: "us-central1".to_string(),
+        credentials: GcpCredentials::AccessToken {
+            token: "test-token".to_string(),
+        },
+        service_overrides: None,
+        project_number: Some("123456789012".to_string()),
+    }
+}
+
+fn mock_azure_client_config() -> AzureClientConfig {
+    AzureClientConfig {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        region: Some("eastus".to_string()),
+        credentials: AzureCredentials::AccessToken {
+            token: "test-token".to_string(),
         },
         service_overrides: None,
     }
@@ -810,8 +833,8 @@ impl SingleControllerExecutorBuilder {
         // Create platform config with mock values
         let client_config = match platform {
             Platform::Aws => ClientConfig::Aws(Box::new(mock_aws_client_config())),
-            Platform::Gcp => ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
-            Platform::Azure => ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
+            Platform::Gcp => ClientConfig::Gcp(Box::new(mock_gcp_client_config())),
+            Platform::Azure => ClientConfig::Azure(Box::new(mock_azure_client_config())),
             Platform::Test => ClientConfig::Test,
             _ => panic!("Unsupported platform for testing: {:?}", platform),
         };
@@ -935,9 +958,16 @@ impl SingleControllerExecutorBuilder {
 
         // Apply mutations only (skip compile-time checks) to process the stack
         let preflight_runner = PreflightRunner::new();
+        let management_config = self.management_config.clone().or_else(|| match platform {
+            Platform::Aws => Some(ManagementConfig::Aws(AwsManagementConfig {
+                managing_role_arn: "arn:aws:iam::111122223333:role/alien-test-manager".to_string(),
+            })),
+            _ => None,
+        });
+
         let config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
-            .maybe_management_config(self.management_config.clone())
+            .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
             .external_bindings(alien_core::ExternalBindings::default())
@@ -1025,7 +1055,7 @@ impl SingleControllerExecutorBuilder {
             platform,
             client_config,
             stack_settings: self.stack_settings,
-            management_config: self.management_config,
+            management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
             domain_metadata: self.domain_metadata,
