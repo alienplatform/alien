@@ -232,17 +232,25 @@ pub use aws_sdk_lambda::operation::{
         CreateEventSourceMappingInput as CreateEventSourceMappingRequest,
         CreateEventSourceMappingOutput as CreateEventSourceMappingResponse,
     },
-    create_function::CreateFunctionInput,
+    create_function::{CreateFunctionInput, CreateFunctionOutput as CreateFunctionResponse},
     delete_event_source_mapping::DeleteEventSourceMappingOutput as DeleteEventSourceMappingResponse,
+    get_function_configuration::GetFunctionConfigurationOutput as GetFunctionConfigurationResponse,
     list_event_source_mappings::{
         ListEventSourceMappingsInput as ListEventSourceMappingsRequest,
         ListEventSourceMappingsOutput as ListEventSourceMappingsResponse,
     },
-    update_function_code::UpdateFunctionCodeInput as UpdateFunctionCodeRequest,
-    update_function_configuration::UpdateFunctionConfigurationInput as UpdateFunctionConfigurationRequest,
+    update_function_code::{
+        UpdateFunctionCodeInput as UpdateFunctionCodeRequest,
+        UpdateFunctionCodeOutput as UpdateFunctionCodeResponse,
+    },
+    update_function_configuration::{
+        UpdateFunctionConfigurationInput as UpdateFunctionConfigurationRequest,
+        UpdateFunctionConfigurationOutput as UpdateFunctionConfigurationResponse,
+    },
 };
 pub use aws_sdk_lambda::types::{
-    Architecture as LambdaArchitecture, Environment, FunctionCode, PackageType, VpcConfig,
+    Architecture as LambdaArchitecture, Environment, FunctionCode,
+    LastUpdateStatus as LambdaLastUpdateStatus, PackageType, State as LambdaState, VpcConfig,
 };
 
 /// Parameter metadata returned from SSM for vault heartbeat sampling.
@@ -265,21 +273,6 @@ pub struct DescribeSsmParametersResponse {
     pub parameters: Vec<SsmParameterMetadata>,
     /// Whether SSM returned a next token.
     pub has_more_parameters: bool,
-}
-
-/// Lambda function metadata used by worker controllers.
-#[derive(Debug, Clone)]
-pub struct FunctionConfiguration {
-    /// Function name.
-    pub function_name: Option<String>,
-    /// Function ARN.
-    pub function_arn: Option<String>,
-    /// Function lifecycle state.
-    pub state: Option<String>,
-    /// Last update status.
-    pub last_update_status: Option<String>,
-    /// KMS key ARN.
-    pub kms_key_arn: Option<String>,
 }
 
 /// S3 bucket metadata used for storage heartbeats.
@@ -434,25 +427,26 @@ pub trait AcmApi: Send + Sync {
 #[async_trait]
 pub trait LambdaApi: Send + Sync {
     /// Create a Lambda function.
-    async fn create_function(&self, request: CreateFunctionInput) -> Result<FunctionConfiguration>;
+    async fn create_function(&self, request: CreateFunctionInput)
+        -> Result<CreateFunctionResponse>;
     /// Add an invocation permission statement.
     async fn add_permission(&self, request: AddPermissionRequest) -> Result<AddPermissionResponse>;
     /// Update Lambda function code.
     async fn update_function_code(
         &self,
         request: UpdateFunctionCodeRequest,
-    ) -> Result<FunctionConfiguration>;
+    ) -> Result<UpdateFunctionCodeResponse>;
     /// Update Lambda function configuration.
     async fn update_function_configuration(
         &self,
         request: UpdateFunctionConfigurationRequest,
-    ) -> Result<FunctionConfiguration>;
+    ) -> Result<UpdateFunctionConfigurationResponse>;
     /// Get Lambda function configuration.
     async fn get_function_configuration(
         &self,
         function_name: &str,
         qualifier: Option<String>,
-    ) -> Result<FunctionConfiguration>;
+    ) -> Result<GetFunctionConfigurationResponse>;
     /// Delete a Lambda function.
     async fn delete_function(&self, function_name: &str, qualifier: Option<String>) -> Result<()>;
     /// Create an event-source mapping.
@@ -1205,7 +1199,10 @@ impl AcmApi for AcmClient {
 
 #[async_trait]
 impl LambdaApi for LambdaClient {
-    async fn create_function(&self, request: CreateFunctionInput) -> Result<FunctionConfiguration> {
+    async fn create_function(
+        &self,
+        request: CreateFunctionInput,
+    ) -> Result<CreateFunctionResponse> {
         let function_name = request.function_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: "CreateFunction request did not include functionName".to_string(),
@@ -1249,7 +1246,7 @@ impl LambdaApi for LambdaClient {
             &function_name,
         )?;
 
-        Ok(function_configuration_from_create_output(output))
+        Ok(output)
     }
 
     async fn add_permission(&self, request: AddPermissionRequest) -> Result<AddPermissionResponse> {
@@ -1286,7 +1283,7 @@ impl LambdaApi for LambdaClient {
     async fn update_function_code(
         &self,
         request: UpdateFunctionCodeRequest,
-    ) -> Result<FunctionConfiguration> {
+    ) -> Result<UpdateFunctionCodeResponse> {
         let function_name = request.function_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: "UpdateFunctionCode request did not include functionName".to_string(),
@@ -1314,13 +1311,13 @@ impl LambdaApi for LambdaClient {
             &function_name,
         )?;
 
-        Ok(function_configuration_from_update_code_output(output))
+        Ok(output)
     }
 
     async fn update_function_configuration(
         &self,
         request: UpdateFunctionConfigurationRequest,
-    ) -> Result<FunctionConfiguration> {
+    ) -> Result<UpdateFunctionConfigurationResponse> {
         let function_name = request.function_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: "UpdateFunctionConfiguration request did not include functionName"
@@ -1358,14 +1355,14 @@ impl LambdaApi for LambdaClient {
             &function_name,
         )?;
 
-        Ok(function_configuration_from_update_config_output(output))
+        Ok(output)
     }
 
     async fn get_function_configuration(
         &self,
         function_name: &str,
         qualifier: Option<String>,
-    ) -> Result<FunctionConfiguration> {
+    ) -> Result<GetFunctionConfigurationResponse> {
         let output = lambda_result(
             self.get_function_configuration()
                 .function_name(function_name)
@@ -1377,7 +1374,7 @@ impl LambdaApi for LambdaClient {
             function_name,
         )?;
 
-        Ok(function_configuration_from_get_output(output))
+        Ok(output)
     }
 
     async fn delete_function(&self, function_name: &str, qualifier: Option<String>) -> Result<()> {
@@ -3723,62 +3720,6 @@ where
                     resource_id: None,
                 }))
         }
-    }
-}
-
-fn function_configuration_from_create_output(
-    output: aws_sdk_lambda::operation::create_function::CreateFunctionOutput,
-) -> FunctionConfiguration {
-    FunctionConfiguration {
-        function_name: output.function_name,
-        function_arn: output.function_arn,
-        state: output.state.map(|state| state.as_str().to_string()),
-        last_update_status: output
-            .last_update_status
-            .map(|status| status.as_str().to_string()),
-        kms_key_arn: output.kms_key_arn,
-    }
-}
-
-fn function_configuration_from_update_code_output(
-    output: aws_sdk_lambda::operation::update_function_code::UpdateFunctionCodeOutput,
-) -> FunctionConfiguration {
-    FunctionConfiguration {
-        function_name: output.function_name,
-        function_arn: output.function_arn,
-        state: output.state.map(|state| state.as_str().to_string()),
-        last_update_status: output
-            .last_update_status
-            .map(|status| status.as_str().to_string()),
-        kms_key_arn: output.kms_key_arn,
-    }
-}
-
-fn function_configuration_from_update_config_output(
-    output: aws_sdk_lambda::operation::update_function_configuration::UpdateFunctionConfigurationOutput,
-) -> FunctionConfiguration {
-    FunctionConfiguration {
-        function_name: output.function_name,
-        function_arn: output.function_arn,
-        state: output.state.map(|state| state.as_str().to_string()),
-        last_update_status: output
-            .last_update_status
-            .map(|status| status.as_str().to_string()),
-        kms_key_arn: output.kms_key_arn,
-    }
-}
-
-fn function_configuration_from_get_output(
-    output: aws_sdk_lambda::operation::get_function_configuration::GetFunctionConfigurationOutput,
-) -> FunctionConfiguration {
-    FunctionConfiguration {
-        function_name: output.function_name,
-        function_arn: output.function_arn,
-        state: output.state.map(|state| state.as_str().to_string()),
-        last_update_status: output
-            .last_update_status
-            .map(|status| status.as_str().to_string()),
-        kms_key_arn: output.kms_key_arn,
     }
 }
 

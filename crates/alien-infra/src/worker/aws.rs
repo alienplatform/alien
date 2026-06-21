@@ -15,11 +15,11 @@ use crate::aws_sdk::{
     ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
     CreateEventSourceMappingRequest, CreateFunctionInput, DescribeNetworkInterfacesRequest,
     EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
-    FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaArchitecture,
-    LambdaFunctionConfiguration, ListEventSourceMappingsRequest, NotificationConfiguration,
-    PackageType, ProtocolType, PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest,
-    RuleState, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
-    UpdateFunctionConfigurationRequest, VpcConfig,
+    GetFunctionConfigurationResponse, ImportCertificateRequest, IntegrationType,
+    LambdaArchitecture, LambdaFunctionConfiguration, LambdaLastUpdateStatus, LambdaState,
+    ListEventSourceMappingsRequest, NotificationConfiguration, PackageType, ProtocolType,
+    PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest, RuleState, S3Event,
+    SecurityPolicy, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -293,11 +293,22 @@ struct DomainInfo {
     uses_custom_domain: bool,
 }
 
+fn lambda_state_as_str(state: &Option<LambdaState>) -> &str {
+    state.as_ref().map(LambdaState::as_str).unwrap_or("unknown")
+}
+
+fn lambda_last_update_status_as_str(status: &Option<LambdaLastUpdateStatus>) -> &str {
+    status
+        .as_ref()
+        .map(LambdaLastUpdateStatus::as_str)
+        .unwrap_or("unknown")
+}
+
 fn emit_aws_lambda_worker_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     worker_config: &Worker,
     aws_worker_name: &str,
-    function_info: &FunctionConfiguration,
+    function_info: &GetFunctionConfigurationResponse,
 ) {
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -327,10 +338,16 @@ fn emit_aws_lambda_worker_heartbeat(
                 version: None,
                 revision_id: None,
                 last_modified: None,
-                state: function_info.state.clone(),
+                state: function_info
+                    .state
+                    .as_ref()
+                    .map(|state| state.as_str().to_string()),
                 state_reason: None,
                 state_reason_code: None,
-                last_update_status: function_info.last_update_status.clone(),
+                last_update_status: function_info
+                    .last_update_status
+                    .as_ref()
+                    .map(|status| status.as_str().to_string()),
                 last_update_status_reason: None,
                 last_update_status_reason_code: None,
                 code_sha256: None,
@@ -539,8 +556,8 @@ impl AwsWorkerController {
             })?;
 
         // Check if worker is active based on state and last_update_status
-        let is_active = response.state.as_deref() == Some("Active")
-            && response.last_update_status.as_deref() == Some("Successful");
+        let is_active = response.state.as_ref() == Some(&LambdaState::Active)
+            && response.last_update_status.as_ref() == Some(&LambdaLastUpdateStatus::Successful);
 
         if is_active {
             if worker_config.ingress == Ingress::Public {
@@ -565,8 +582,8 @@ impl AwsWorkerController {
         } else {
             debug!(
                 name = %aws_worker_name,
-                state = %response.state.as_deref().unwrap_or("unknown"),
-                last_update_status = %response.last_update_status.as_deref().unwrap_or("unknown"),
+                state = %lambda_state_as_str(&response.state),
+                last_update_status = %lambda_last_update_status_as_str(&response.last_update_status),
                 "Worker not yet active, retrying"
             );
             Ok(HandlerAction::Stay {
@@ -1821,12 +1838,12 @@ impl AwsWorkerController {
             })?;
 
         // Verify worker is in active state - drift is non-retryable
-        if function_info.state.as_deref() != Some("Active") {
+        if function_info.state.as_ref() != Some(&LambdaState::Active) {
             return Err(AlienError::new(ErrorData::ResourceDrift {
                 resource_id: worker_config.id.clone(),
                 message: format!(
                     "Worker state is '{}', expected 'Active'",
-                    function_info.state.as_deref().unwrap_or("unknown")
+                    lambda_state_as_str(&function_info.state)
                 ),
             }));
         }
@@ -2056,8 +2073,9 @@ impl AwsWorkerController {
             },
         )?;
 
-        let is_active = result.state.as_deref() == Some("Active");
-        let is_successful = result.last_update_status.as_deref() == Some("Successful");
+        let is_active = result.state.as_ref() == Some(&LambdaState::Active);
+        let is_successful =
+            result.last_update_status.as_ref() == Some(&LambdaLastUpdateStatus::Successful);
 
         if is_active && is_successful {
             // Always proceed to config update phase - linear flow
@@ -2065,8 +2083,8 @@ impl AwsWorkerController {
                 state: UpdateConfigStart,
                 suggested_delay: None,
             })
-        } else if result.state.as_deref() == Some("Pending")
-            || result.last_update_status.as_deref() == Some("InProgress")
+        } else if result.state.as_ref() == Some(&LambdaState::Pending)
+            || result.last_update_status.as_ref() == Some(&LambdaLastUpdateStatus::InProgress)
         {
             Ok(HandlerAction::Stay {
                 max_times: 20,
@@ -2219,16 +2237,17 @@ impl AwsWorkerController {
             },
         )?;
 
-        let is_active = result.state.as_deref() == Some("Active");
-        let is_successful = result.last_update_status.as_deref() == Some("Successful");
+        let is_active = result.state.as_ref() == Some(&LambdaState::Active);
+        let is_successful =
+            result.last_update_status.as_ref() == Some(&LambdaLastUpdateStatus::Successful);
 
         if is_active && is_successful {
             Ok(HandlerAction::Continue {
                 state: UpdateEnsuringPublicExposure,
                 suggested_delay: None,
             })
-        } else if result.state.as_deref() == Some("Pending")
-            || result.last_update_status.as_deref() == Some("InProgress")
+        } else if result.state.as_ref() == Some(&LambdaState::Pending)
+            || result.last_update_status.as_ref() == Some(&LambdaLastUpdateStatus::InProgress)
         {
             Ok(HandlerAction::Stay {
                 max_times: 20,
@@ -3507,8 +3526,9 @@ impl AwsWorkerController {
             .await
         {
             Ok(result)
-                if result.state.as_deref() == Some("Active")
-                    && result.last_update_status.as_deref() == Some("Successful") =>
+                if result.state.as_ref() == Some(&LambdaState::Active)
+                    && result.last_update_status.as_ref()
+                        == Some(&LambdaLastUpdateStatus::Successful) =>
             {
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
@@ -3516,8 +3536,9 @@ impl AwsWorkerController {
                 })
             }
             Ok(result)
-                if result.state.as_deref() == Some("Pending")
-                    || result.last_update_status.as_deref() == Some("InProgress") =>
+                if result.state.as_ref() == Some(&LambdaState::Pending)
+                    || result.last_update_status.as_ref()
+                        == Some(&LambdaLastUpdateStatus::InProgress) =>
             {
                 Ok(HandlerAction::Stay {
                     max_times: 60,
@@ -4137,9 +4158,11 @@ mod tests {
         ApiGatewayV2CreateApiResponse as Api, ApiGatewayV2CreateDomainNameResponse as DomainName,
         ApiGatewayV2CreateIntegrationResponse as Integration,
         ApiGatewayV2CreateRouteResponse as Route, ApiGatewayV2CreateStageResponse as Stage,
-        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, EndpointType,
-        FunctionConfiguration, ImportCertificateResponse, LambdaArchitecture, MockAcmApi,
-        MockApiGatewayV2Api, MockIamApi, MockLambdaApi, PackageType, SecurityPolicy,
+        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, CreateFunctionResponse,
+        EndpointType, GetFunctionConfigurationResponse, ImportCertificateResponse,
+        LambdaArchitecture, LambdaLastUpdateStatus, LambdaState, MockAcmApi, MockApiGatewayV2Api,
+        MockIamApi, MockLambdaApi, PackageType, SecurityPolicy, UpdateFunctionCodeResponse,
+        UpdateFunctionConfigurationResponse,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -4148,17 +4171,56 @@ mod tests {
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
     };
 
-    fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
-        FunctionConfiguration {
-            function_name: Some(worker_name.to_string()),
-            function_arn: Some(format!(
+    fn create_successful_create_function_response(worker_name: &str) -> CreateFunctionResponse {
+        CreateFunctionResponse::builder()
+            .function_name(worker_name)
+            .function_arn(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
                 worker_name
-            )),
-            state: Some("Active".to_string()),
-            last_update_status: Some("Successful".to_string()),
-            kms_key_arn: None,
-        }
+            ))
+            .state(LambdaState::Active)
+            .last_update_status(LambdaLastUpdateStatus::Successful)
+            .build()
+    }
+
+    fn create_successful_get_function_response(
+        worker_name: &str,
+    ) -> GetFunctionConfigurationResponse {
+        GetFunctionConfigurationResponse::builder()
+            .function_name(worker_name)
+            .function_arn(format!(
+                "arn:aws:lambda:us-east-1:123456789012:function:{}",
+                worker_name
+            ))
+            .state(LambdaState::Active)
+            .last_update_status(LambdaLastUpdateStatus::Successful)
+            .build()
+    }
+
+    fn create_successful_update_code_response(worker_name: &str) -> UpdateFunctionCodeResponse {
+        UpdateFunctionCodeResponse::builder()
+            .function_name(worker_name)
+            .function_arn(format!(
+                "arn:aws:lambda:us-east-1:123456789012:function:{}",
+                worker_name
+            ))
+            .state(LambdaState::Active)
+            .last_update_status(LambdaLastUpdateStatus::Successful)
+            .build()
+    }
+
+    fn create_successful_update_config_response(
+        worker_name: &str,
+    ) -> UpdateFunctionConfigurationResponse {
+        UpdateFunctionConfigurationResponse::builder()
+            .function_name(worker_name)
+            .function_arn(format!(
+                "arn:aws:lambda:us-east-1:123456789012:function:{}",
+                worker_name
+            ))
+            .state(LambdaState::Active)
+            .last_update_status(LambdaLastUpdateStatus::Successful)
+            .build()
     }
 
     fn test_api_gateway_api(api_endpoint: Option<&str>) -> Api {
@@ -4321,15 +4383,21 @@ mod tests {
         // Mock successful worker creation
         let worker_name = worker_name.to_string();
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+        mock_lambda.expect_create_function().returning(move |_| {
+            Ok(create_successful_create_function_response(
+                &worker_name_for_create,
+            ))
+        });
 
         // Mock worker status checks - first pending, then active
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)));
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            });
 
         // Mock API Gateway permission and self-binding env var update if public ingress
         if has_url {
@@ -4341,7 +4409,7 @@ mod tests {
             mock_lambda
                 .expect_update_function_configuration()
                 .returning(move |_| {
-                    Ok(create_successful_function_response(
+                    Ok(create_successful_update_config_response(
                         &worker_name_for_self_binding,
                     ))
                 });
@@ -4360,7 +4428,7 @@ mod tests {
         mock_lambda
             .expect_update_function_code()
             .returning(move |_| {
-                Ok(create_successful_function_response(
+                Ok(create_successful_update_code_response(
                     &worker_name_for_code_update,
                 ))
             });
@@ -4370,7 +4438,7 @@ mod tests {
             mock_lambda
                 .expect_update_function_configuration()
                 .returning(move |_| {
-                    Ok(create_successful_function_response(
+                    Ok(create_successful_update_config_response(
                         &worker_name_for_config_update,
                     ))
                 });
@@ -4388,15 +4456,21 @@ mod tests {
         // Mock successful worker creation
         let worker_name = worker_name.to_string();
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+        mock_lambda.expect_create_function().returning(move |_| {
+            Ok(create_successful_create_function_response(
+                &worker_name_for_create,
+            ))
+        });
 
         // Mock worker status checks
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)))
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            })
             .times(1); // Only for creation flow
 
         // Mock API Gateway permission and self-binding env var update if public ingress
@@ -4410,7 +4484,7 @@ mod tests {
             mock_lambda
                 .expect_update_function_configuration()
                 .returning(move |_| {
-                    Ok(create_successful_function_response(
+                    Ok(create_successful_update_config_response(
                         &worker_name_for_config_update,
                     ))
                 });
@@ -4765,14 +4839,20 @@ mod tests {
 
         // Mock worker creation
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+        mock_lambda.expect_create_function().returning(move |_| {
+            Ok(create_successful_create_function_response(
+                &worker_name_for_create,
+            ))
+        });
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)))
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            })
             .times(1);
 
         // Validate API Gateway permission is added with the correct apigateway principal
@@ -4790,7 +4870,7 @@ mod tests {
         mock_lambda
             .expect_update_function_configuration()
             .returning(move |_| {
-                Ok(create_successful_function_response(
+                Ok(create_successful_update_config_response(
                     &worker_name_for_config_update,
                 ))
             });
@@ -4883,14 +4963,20 @@ mod tests {
 
         // Mock worker creation
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+        mock_lambda.expect_create_function().returning(move |_| {
+            Ok(create_successful_create_function_response(
+                &worker_name_for_create,
+            ))
+        });
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)))
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            })
             .times(1);
 
         // API Gateway and permission should NOT be called for private workers
@@ -4951,12 +5037,20 @@ mod tests {
                         .map(|a| a.contains(&LambdaArchitecture::Arm64))
                         .unwrap_or(false)
             })
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+            .returning(move |_| {
+                Ok(create_successful_create_function_response(
+                    &worker_name_for_create,
+                ))
+            });
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)))
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            })
             .times(1);
 
         mock_lambda
@@ -5012,12 +5106,20 @@ mod tests {
                     false
                 }
             })
-            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+            .returning(move |_| {
+                Ok(create_successful_create_function_response(
+                    &worker_name_for_create,
+                ))
+            });
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
             .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)))
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            })
             .times(1);
 
         mock_lambda
