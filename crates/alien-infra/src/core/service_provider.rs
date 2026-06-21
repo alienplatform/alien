@@ -38,6 +38,11 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
+pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
+    Sku as AzureKeyVaultSku, Vault as AzureKeyVault,
+    VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
+    VaultProperties as AzureKeyVaultProperties,
+};
 pub use azure_mgmt_resources::package_resources_2021_04::models::{
     Provider as AzureArmProvider, ResourceGroup as AzureArmResourceGroup,
 };
@@ -122,7 +127,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
@@ -6677,65 +6681,6 @@ impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
             },
         )
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureKeyVaultCreateOrUpdateParameters {
-    pub location: String,
-    pub properties: AzureKeyVaultProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureKeyVault {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub properties: AzureKeyVaultProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureKeyVaultProperties {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub access_policies: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub create_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_purge_protection: Option<bool>,
-    pub enable_rbac_authorization: bool,
-    pub enable_soft_delete: bool,
-    pub enabled_for_deployment: bool,
-    pub enabled_for_disk_encryption: bool,
-    pub enabled_for_template_deployment: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hsm_pool_resource_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_acls: Option<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub private_endpoint_connections: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioning_state: Option<String>,
-    pub public_network_access: String,
-    pub sku: AzureKeyVaultSku,
-    pub soft_delete_retention_in_days: i32,
-    pub tenant_id: Uuid,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vault_uri: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureKeyVaultSku {
-    pub family: String,
-    pub name: String,
 }
 
 /// Trait that provides methods to get platform service clients.

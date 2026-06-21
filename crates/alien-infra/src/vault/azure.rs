@@ -1,10 +1,8 @@
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
-use uuid::Uuid;
 
 use crate::core::{
     AzureKeyVault, AzureKeyVaultCreateOrUpdateParameters, AzureKeyVaultManagementApi,
@@ -16,7 +14,12 @@ use alien_core::{
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
+use azure_mgmt_keyvault::package_preview_2022_02::models::sku::{
+    Family as AzureKeyVaultSkuFamily, Name as AzureKeyVaultSkuName,
+};
 use chrono::Utc;
+use serde::Serialize;
+use serde_json::json;
 
 /// Azure Vault controller.
 ///
@@ -329,7 +332,7 @@ fn emit_azure_key_vault_heartbeat(
         .properties
         .provisioning_state
         .as_ref()
-        .map(ToString::to_string);
+        .and_then(azure_model_value);
     let health = match provisioning_state.as_deref() {
         Some("Succeeded") => ObservedHealth::Healthy,
         Some(_) => ObservedHealth::Degraded,
@@ -367,13 +370,22 @@ fn emit_azure_key_vault_heartbeat(
                 location: vault.location,
                 vault_uri: vault.properties.vault_uri,
                 provisioning_state,
-                sku_family: Some(vault.properties.sku.family),
-                sku_name: Some(vault.properties.sku.name),
-                soft_delete_enabled: vault.properties.enable_soft_delete,
-                soft_delete_retention_days: vault.properties.soft_delete_retention_in_days,
+                sku_family: azure_model_value(&vault.properties.sku.family),
+                sku_name: azure_model_value(&vault.properties.sku.name),
+                soft_delete_enabled: vault.properties.enable_soft_delete.unwrap_or_default(),
+                soft_delete_retention_days: vault
+                    .properties
+                    .soft_delete_retention_in_days
+                    .unwrap_or_default(),
                 purge_protection_enabled: vault.properties.enable_purge_protection,
-                rbac_authorization_enabled: vault.properties.enable_rbac_authorization,
-                public_network_access: vault.properties.public_network_access,
+                rbac_authorization_enabled: vault
+                    .properties
+                    .enable_rbac_authorization
+                    .unwrap_or_default(),
+                public_network_access: vault
+                    .properties
+                    .public_network_access
+                    .unwrap_or_else(|| "unknown".to_string()),
                 access_policy_count: vault.properties.access_policies.len() as u32,
                 private_endpoint_connection_count: vault
                     .properties
@@ -384,6 +396,16 @@ fn emit_azure_key_vault_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }
 
 impl AzureVaultController {
@@ -413,52 +435,29 @@ impl AzureVaultController {
             })
         })?;
 
-        // Parse tenant ID from Azure config
-        let tenant_id = Uuid::parse_str(&azure_config.tenant_id)
-            .into_alien_error()
-            .context(ErrorData::InfrastructureError {
-                message: format!("Invalid tenant ID format: {}", azure_config.tenant_id),
-                operation: Some("create_azure_key_vault".to_string()),
-                resource_id: Some(vault_name.clone()),
-            })?;
-
         // Get the region, defaulting to East US if not specified
         let location = azure_config.region.as_deref().unwrap_or("East US");
 
         // Use RBAC authorization — permissions are managed via Azure role assignments
         // created by the service account controller, not vault access policies.
-        let vault_properties = AzureKeyVaultProperties {
-            access_policies: vec![],
-            create_mode: None,
-            enable_purge_protection: None,
-            enable_rbac_authorization: true,
-            enable_soft_delete: true,
-            enabled_for_deployment: false,
-            enabled_for_disk_encryption: false,
-            enabled_for_template_deployment: false,
-            hsm_pool_resource_id: None,
-            network_acls: None,
-            private_endpoint_connections: vec![],
-            provisioning_state: None,
-            public_network_access: "Enabled".to_string(),
-            sku: AzureKeyVaultSku {
-                name: "standard".to_string(),
-                family: "A".to_string(),
-            },
-            soft_delete_retention_in_days: 7, // Minimum retention period
-            tenant_id,
-            vault_uri: None,
-        };
+        let mut vault_properties = AzureKeyVaultProperties::new(
+            azure_config.tenant_id.clone(),
+            AzureKeyVaultSku::new(AzureKeyVaultSkuFamily::A, AzureKeyVaultSkuName::Standard),
+        );
+        vault_properties.enable_rbac_authorization = Some(true);
+        vault_properties.enable_soft_delete = Some(true);
+        vault_properties.enabled_for_deployment = Some(false);
+        vault_properties.enabled_for_disk_encryption = Some(false);
+        vault_properties.enabled_for_template_deployment = Some(false);
+        vault_properties.public_network_access = Some("Enabled".to_string());
+        vault_properties.soft_delete_retention_in_days = Some(7);
 
-        let mut tags = HashMap::new();
-        tags.insert("ManagedBy".to_string(), "Alien".to_string());
-        tags.insert("Environment".to_string(), "Production".to_string());
-
-        let vault_params = AzureKeyVaultCreateOrUpdateParameters {
-            location: location.to_string(),
-            properties: vault_properties,
-            tags,
-        };
+        let mut vault_params =
+            AzureKeyVaultCreateOrUpdateParameters::new(location.to_string(), vault_properties);
+        vault_params.tags = Some(json!({
+            "ManagedBy": "Alien",
+            "Environment": "Production",
+        }));
 
         info!(
             vault_name = %vault_name,
