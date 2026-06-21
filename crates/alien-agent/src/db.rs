@@ -8,7 +8,7 @@
 //!
 //! Uses Turso with AEGIS-256 encryption for data at rest.
 
-use alien_core::{DeploymentConfig, DeploymentState, ReleaseInfo};
+use alien_core::{DeploymentConfig, DeploymentState, ReleaseInfo, ResourceHeartbeat};
 use alien_error::{Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -335,6 +335,69 @@ impl AgentDb {
         .into_alien_error()
         .context(ErrorData::DatabaseError {
             message: "Failed to set deployment_state".to_string(),
+        })?;
+
+        Ok(())
+    }
+
+    /// Get the latest resource heartbeat snapshot emitted by deployment steps.
+    pub async fn get_pending_heartbeats(&self) -> Result<Vec<ResourceHeartbeat>> {
+        let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'pending_heartbeats'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query pending_heartbeats".to_string(),
+            })?;
+
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch pending_heartbeats row".to_string(),
+            })? {
+            Some(row) => {
+                let json: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read pending_heartbeats value".to_string(),
+                        })?;
+                serde_json::from_str(&json)
+                    .into_alien_error()
+                    .context(ErrorData::DatabaseError {
+                        message: "Failed to parse pending_heartbeats".to_string(),
+                    })
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Set the latest non-empty resource heartbeat snapshot emitted by deployment steps.
+    pub async fn set_pending_heartbeats(&self, heartbeats: &[ResourceHeartbeat]) -> Result<()> {
+        let conn = self.conn.lock().await;
+
+        let json = serde_json::to_string(heartbeats)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize pending_heartbeats".to_string(),
+            })?;
+
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('pending_heartbeats', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (json,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set pending_heartbeats".to_string(),
         })?;
 
         Ok(())

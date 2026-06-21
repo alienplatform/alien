@@ -109,6 +109,9 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
+    /// Resource heartbeats emitted by pull-mode deployment steps.
+    #[serde(default)]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 #[derive(Debug, Serialize)]
@@ -422,7 +425,7 @@ mod tests {
     use super::{
         deployment_needs_target, deployment_state_from_record, management_platform,
         release_stack_platform, should_ignore_agent_state_report,
-        validate_initialize_base_platform, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, ReconcileRequest,
     };
 
     #[test]
@@ -508,6 +511,72 @@ mod tests {
             }]
         }))
         .expect("reconcile request should accept typed heartbeat envelopes");
+
+        assert_eq!(req.heartbeats.len(), 1);
+        assert_eq!(req.heartbeats[0].resource_id, "api");
+        assert!(matches!(
+            req.heartbeats[0].data,
+            ResourceHeartbeatData::Container(_)
+        ));
+    }
+
+    #[test]
+    fn agent_sync_request_defaults_missing_heartbeats_to_empty() {
+        let req: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "currentState": null
+        }))
+        .expect("agent sync request without heartbeats should remain compatible");
+
+        assert!(req.heartbeats.is_empty());
+    }
+
+    #[test]
+    fn agent_sync_request_accepts_typed_heartbeats() {
+        let req: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "currentState": null,
+            "heartbeats": [{
+                "deploymentId": "dep_test",
+                "resourceId": "api",
+                "resourceType": "container",
+                "controllerPlatform": "kubernetes",
+                "backend": "kubernetes",
+                "observedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "resourceType": "container",
+                    "data": {
+                        "backend": "kubernetes",
+                        "status": {
+                            "health": "healthy",
+                            "lifecycle": "running",
+                            "message": null,
+                            "stale": false,
+                            "partial": true,
+                            "collectionIssues": [{
+                                "source": "metrics",
+                                "reason": "not-installed",
+                                "severity": "warning",
+                                "message": "metrics API is not installed"
+                            }]
+                        },
+                        "namespace": "default",
+                        "name": "api",
+                        "workloadKind": "deployment",
+                        "replicas": { "desired": 2, "current": 2, "ready": 2, "available": 2, "updated": null, "misscheduled": null },
+                        "restarts": 0,
+                        "cpu": null,
+                        "memory": null,
+                        "workload": null,
+                        "pods": [],
+                        "instances": [],
+                        "events": []
+                    }
+                },
+                "raw": []
+            }]
+        }))
+        .expect("agent sync request should accept typed heartbeat envelopes");
 
         assert_eq!(req.heartbeats.len(), 1);
         assert_eq!(req.heartbeats[0].resource_id, "api");
@@ -735,7 +804,7 @@ async fn agent_sync(
                                 session: "agent-sync".to_string(),
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
-                                heartbeats: vec![],
+                                heartbeats: req.heartbeats.clone(),
                                 suggested_delay_ms: None,
                             },
                         )
@@ -925,14 +994,40 @@ async fn agent_sync(
         };
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
-            Some(deployment_state) => match serde_json::to_value(deployment_state) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!("Failed to serialize deployment state: {e}");
-                    return ErrorData::internal("Failed to serialize deployment state")
-                        .into_response();
+            Some(deployment_state) => {
+                if !req.heartbeats.is_empty() {
+                    if let Err(e) = state
+                        .deployment_store
+                        .reconcile(
+                            &subject,
+                            ReconcileData {
+                                deployment_id: req.deployment_id.clone(),
+                                session: "agent-sync".to_string(),
+                                state: deployment_state.clone(),
+                                update_heartbeat: true,
+                                heartbeats: req.heartbeats.clone(),
+                                suggested_delay_ms: None,
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            deployment_id = %req.deployment_id,
+                            error = %e,
+                            "Failed to reconcile agent-reported heartbeats"
+                        );
+                    }
                 }
-            },
+
+                match serde_json::to_value(deployment_state) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("Failed to serialize deployment state: {e}");
+                        return ErrorData::internal("Failed to serialize deployment state")
+                            .into_response();
+                    }
+                }
+            }
             None => None,
         }
     } else {
