@@ -156,6 +156,24 @@ pub async fn run_agent_with_cancel(
         None
     };
 
+    // Pull-mode `alien debug` tunnel loop. Polls the manager for pending
+    // debug sessions for this deployment and proxies kubectl traffic to the
+    // in-cluster apiserver. K8s/cloud-K8s only — other platforms either don't
+    // need a tunnel (push-mode K8s) or don't speak the kube apiserver
+    // protocol (cloud functions).
+    let debug_session_handle = if !config.is_airgapped()
+        && matches!(config.platform, Platform::Kubernetes)
+    {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::debug_session::run_debug_session_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
     // Wait for cancellation or any loop to exit unexpectedly
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -163,6 +181,15 @@ pub async fn run_agent_with_cancel(
         },
         _ = deployment_handle => {
             warn!("Deployment loop exited unexpectedly");
+        },
+        _ = async {
+            if let Some(h) = debug_session_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            warn!("Debug-session loop exited unexpectedly");
         },
         _ = async {
             if let Some(h) = sync_handle {

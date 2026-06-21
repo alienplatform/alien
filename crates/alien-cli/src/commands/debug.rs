@@ -81,7 +81,112 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     let deployment_id = resolve_deployment_id(&manager, &args.deployment, is_dev).await?;
 
     let session = get_or_create_debug_session(&manager, &deployment_id).await?;
+    // Pull-mode kubernetes sessions tunnel through the operator's WebSocket;
+    // that tunnel is alive only for as long as the operator + manager processes
+    // it dialed against. Caching across invocations breaks the moment either
+    // restarts, leaving the CLI pointed at a dead tunnel (404/502). For
+    // push-mode the cache still helps (STS round-trip), so cache only ready
+    // Push sessions; resolved Pull sessions are re-created on every run.
+    let session = resolve_pending_session(&manager, session).await?;
+    if matches!(session, DebugSessionResponse::Push(_)) {
+        if let Err(e) = session_cache::save(&deployment_id, &session) {
+            tracing::debug!("Failed to cache resolved debug session: {e}");
+        }
+    }
     exec_with_session(session, &args.cmd).await
+}
+
+/// If the manager returned a `Pending` session (pull-mode kubernetes async
+/// flow), long-poll `poll_url` until it resolves to a ready `Pull`/`Push`
+/// payload or the deadline passes. All other variants pass through unchanged.
+///
+/// The manager controls cadence via `poll_interval_ms` in the initial reply;
+/// we honour that as the floor and back off linearly up to 5s on repeated
+/// `Pending` responses. Errors during polling bubble up — there's no point
+/// retrying when the manager is telling us the session is broken.
+async fn resolve_pending_session(
+    manager: &ManagerContext,
+    session: DebugSessionResponse,
+) -> Result<DebugSessionResponse> {
+    let pending = match session {
+        DebugSessionResponse::Pending(p) => p,
+        other => return Ok(other),
+    };
+
+    let deadline = chrono::DateTime::parse_from_rfc3339(&pending.deadline)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Manager returned an invalid Pending deadline '{}'",
+                pending.deadline
+            ),
+            url: Some(pending.poll_url.clone()),
+        })?
+        .with_timezone(&chrono::Utc);
+
+    let min_interval = std::time::Duration::from_millis(pending.poll_interval_ms.max(250) as u64);
+    let max_interval = std::time::Duration::from_secs(5);
+    let mut interval = min_interval;
+
+    eprintln!(
+        "[alien debug] waiting for cluster-side agent to dial back (session {}, deadline {})",
+        pending.session_id, pending.deadline
+    );
+
+    loop {
+        if chrono::Utc::now() >= deadline {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Debug session '{}' did not become ready before deadline {}",
+                    pending.session_id, pending.deadline
+                ),
+                url: Some(pending.poll_url.clone()),
+            }));
+        }
+
+        let response = manager
+            .http_client
+            .get(&pending.poll_url)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to poll debug session".to_string(),
+                url: Some(pending.poll_url.clone()),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Manager rejected debug session poll (HTTP {}): {}",
+                    status.as_u16(),
+                    body.trim()
+                ),
+                url: Some(pending.poll_url.clone()),
+            }));
+        }
+
+        let next: DebugSessionResponse =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Manager returned a malformed debug session poll response"
+                        .to_string(),
+                    url: Some(pending.poll_url.clone()),
+                })?;
+
+        match next {
+            DebugSessionResponse::Pending(_) => {
+                tokio::time::sleep(interval).await;
+                interval = (interval + std::time::Duration::from_millis(500)).min(max_interval);
+            }
+            ready => return Ok(ready),
+        }
+    }
 }
 
 /// Return a cached session for this deployment if one exists and isn't about
@@ -211,6 +316,17 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                 kubeconfig_path.display().to_string(),
             );
             ("pull/kubernetes".to_string(), env, None, pull.expires_at)
+        }
+        DebugSessionResponse::Pending(_) => {
+            // `resolve_pending_session` runs before this point and is supposed
+            // to long-poll until the manager hands back a ready Push or Pull.
+            // Reaching this arm means a programming error in the caller chain.
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: "BUG: exec_with_session received an unresolved Pending session — \
+                          resolve_pending_session must run first"
+                    .to_string(),
+                url: None,
+            }));
         }
     };
 

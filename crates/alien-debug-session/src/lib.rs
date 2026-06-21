@@ -74,6 +74,12 @@ pub enum DebugSessionResponse {
     /// `KUBECONFIG`. Used by pull-mode on-prem clusters where the agent mints
     /// a ServiceAccount token locally.
     Pull(PullDebugSession),
+    /// Session creation is async. Returned for pull-mode Kubernetes deployments
+    /// where the cluster is unreachable from the manager — the agent must first
+    /// open an outbound tunnel back to the manager before the kubeconfig can
+    /// resolve. The CLI long-polls `poll_url` until the session resolves to
+    /// `Pull` (kubeconfig ready) or returns a 4xx/5xx with an error.
+    Pending(PendingDebugSession),
 }
 
 impl DebugSessionResponse {
@@ -84,6 +90,7 @@ impl DebugSessionResponse {
         match self {
             Self::Push(p) => p.expires_at.as_deref(),
             Self::Pull(p) => p.expires_at.as_deref(),
+            Self::Pending(_) => None,
         }
     }
 }
@@ -121,6 +128,28 @@ pub struct DebugCredFile {
     /// If set, the CLI binds this env var to the file's absolute path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_var: Option<String>,
+}
+
+/// Async-session handle. The CLI polls `poll_url` until the manager has
+/// received the agent's tunnel-ready signal and can return a `Pull` payload
+/// whose kubeconfig points at the per-session HTTPS proxy on the manager.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDebugSession {
+    /// Server-assigned session id. Embedded in URLs and command channel
+    /// messages so all parties (CLI, manager, agent) reference the same row.
+    pub session_id: String,
+    /// Absolute URL the CLI should GET to poll for readiness. Same auth as
+    /// `POST /v1/debug/sessions`.
+    pub poll_url: String,
+    /// Suggested initial poll interval in milliseconds. The CLI should back
+    /// off on repeated `pending` responses but never poll faster than this.
+    #[serde(default)]
+    pub poll_interval_ms: u32,
+    /// RFC3339 absolute deadline. The CLI should give up after this and
+    /// surface the most recent status. Bounded server-side; defaults to
+    /// the session TTL.
+    pub deadline: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

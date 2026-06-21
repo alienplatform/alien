@@ -126,8 +126,11 @@ pub(crate) fn executable_format_error(
     path: &Path,
     target: BinaryTarget,
 ) -> std::result::Result<Option<String>, std::io::Error> {
+    // We need enough bytes for the ELF `e_machine` field at offset 18-19. The
+    // shorter formats (PE, Mach-O) are still distinguishable from the first
+    // four bytes, so a 20-byte read is the right floor for everyone.
     let mut file = File::open(path)?;
-    let mut header = [0_u8; 4];
+    let mut header = [0_u8; 20];
     let bytes_read = file.read(&mut header)?;
 
     if bytes_read < 4 {
@@ -137,29 +140,86 @@ pub(crate) fn executable_format_error(
         )));
     }
 
-    let is_valid = match target {
-        BinaryTarget::LinuxX64 | BinaryTarget::LinuxArm64 => &header == b"\x7fELF",
-        BinaryTarget::WindowsX64 => header[0] == b'M' && header[1] == b'Z',
-        BinaryTarget::DarwinArm64 => matches!(
-            header,
-            [0xca, 0xfe, 0xba, 0xbe]
-                | [0xbe, 0xba, 0xfe, 0xca]
-                | [0xfe, 0xed, 0xfa, 0xcf]
-                | [0xcf, 0xfa, 0xed, 0xfe]
-        ),
-    };
-
-    if is_valid {
-        Ok(None)
-    } else {
-        Ok(Some(format!(
-            "compiled binary has invalid executable format for {} (first bytes: {:02x} {:02x} {:02x} {:02x})",
+    let invalid_format = |format_desc: &str| {
+        format!(
+            "compiled binary has invalid executable format for {} ({}; first bytes: {:02x} {:02x} {:02x} {:02x})",
             target.runtime_platform_id(),
+            format_desc,
             header[0],
             header[1],
             header[2],
             header[3]
-        )))
+        )
+    };
+
+    match target {
+        BinaryTarget::LinuxX64 | BinaryTarget::LinuxArm64 => {
+            if &header[..4] != b"\x7fELF" {
+                return Ok(Some(invalid_format("not an ELF binary")));
+            }
+            // The validator used to stop here, which let the toolchain ship an
+            // amd64 binary in a slot labelled arm64 (and vice versa). bun has
+            // had cross-compile regressions where `--target bun-linux-arm64`
+            // silently emits a host-arch binary — without checking `e_machine`
+            // the resulting multi-arch image index lies about its arm64
+            // platform and pods on arm64 nodes die with `Exec format error`.
+            if bytes_read < 20 {
+                return Ok(Some(format!(
+                    "ELF header truncated; cannot verify architecture for {}",
+                    target.runtime_platform_id()
+                )));
+            }
+            // e_machine is a little-endian u16 at offset 18 (ELF spec).
+            let e_machine = u16::from_le_bytes([header[18], header[19]]);
+            let expected_machine = match target {
+                BinaryTarget::LinuxX64 => 0x3E,    // EM_X86_64
+                BinaryTarget::LinuxArm64 => 0xB7,  // EM_AARCH64
+                _ => unreachable!(),
+            };
+            if e_machine != expected_machine {
+                let observed = match e_machine {
+                    0x3E => "EM_X86_64 (amd64)".to_string(),
+                    0xB7 => "EM_AARCH64 (arm64)".to_string(),
+                    0xF3 => "EM_RISCV (riscv)".to_string(),
+                    0x28 => "EM_ARM (arm32)".to_string(),
+                    other => format!("e_machine=0x{other:04x}"),
+                };
+                let want = match target {
+                    BinaryTarget::LinuxX64 => "EM_X86_64 (amd64)",
+                    BinaryTarget::LinuxArm64 => "EM_AARCH64 (arm64)",
+                    _ => unreachable!(),
+                };
+                return Ok(Some(format!(
+                    "ELF e_machine mismatch: target {} expects {}, found {}",
+                    target.runtime_platform_id(),
+                    want,
+                    observed
+                )));
+            }
+            Ok(None)
+        }
+        BinaryTarget::WindowsX64 => {
+            if header[0] == b'M' && header[1] == b'Z' {
+                Ok(None)
+            } else {
+                Ok(Some(invalid_format("not a PE/MZ binary")))
+            }
+        }
+        BinaryTarget::DarwinArm64 => {
+            let head4: [u8; 4] = [header[0], header[1], header[2], header[3]];
+            let mach_o = matches!(
+                head4,
+                [0xca, 0xfe, 0xba, 0xbe]
+                    | [0xbe, 0xba, 0xfe, 0xca]
+                    | [0xfe, 0xed, 0xfa, 0xcf]
+                    | [0xcf, 0xfa, 0xed, 0xfe]
+            );
+            if mach_o {
+                Ok(None)
+            } else {
+                Ok(Some(invalid_format("not a Mach-O binary")))
+            }
+        }
     }
 }
 
@@ -195,13 +255,58 @@ mod tests {
         file
     }
 
+    /// Build an ELF prefix with `e_machine` at offset 18 set to `machine`.
+    /// 20 bytes is the minimum the validator reads.
+    fn elf_header_with_machine(machine: u16) -> [u8; 20] {
+        let mut buf = [0u8; 20];
+        buf[0..4].copy_from_slice(b"\x7fELF");
+        buf[4] = 2; // EI_CLASS = ELFCLASS64
+        buf[5] = 1; // EI_DATA  = ELFDATA2LSB (little-endian)
+        buf[6] = 1; // EI_VERSION
+        let machine_le = machine.to_le_bytes();
+        buf[18] = machine_le[0];
+        buf[19] = machine_le[1];
+        buf
+    }
+
     #[test]
-    fn validates_linux_elf_headers() {
-        let file = write_header(b"\x7fELFrest");
+    fn accepts_amd64_elf_for_linux_x64_target() {
+        let file = write_header(&elf_header_with_machine(0x3E));
         assert_eq!(
             executable_format_error(file.path(), BinaryTarget::LinuxX64).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn accepts_arm64_elf_for_linux_arm64_target() {
+        let file = write_header(&elf_header_with_machine(0xB7));
+        assert_eq!(
+            executable_format_error(file.path(), BinaryTarget::LinuxArm64).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_amd64_elf_for_linux_arm64_target() {
+        let file = write_header(&elf_header_with_machine(0x3E));
+        let error = executable_format_error(file.path(), BinaryTarget::LinuxArm64)
+            .unwrap()
+            .expect("expected arch mismatch");
+        assert!(error.contains("e_machine mismatch"));
+        assert!(error.contains("EM_X86_64"));
+        assert!(error.contains("EM_AARCH64"));
+    }
+
+    #[test]
+    fn rejects_arm64_elf_for_linux_x64_target() {
+        let file = write_header(&elf_header_with_machine(0xB7));
+        let error = executable_format_error(file.path(), BinaryTarget::LinuxX64)
+            .unwrap()
+            .expect("expected arch mismatch");
+        assert!(error.contains("e_machine mismatch"));
+        assert!(error.contains("EM_AARCH64"));
+        assert!(error.contains("EM_X86_64"));
     }
 
     #[test]
@@ -210,7 +315,7 @@ mod tests {
         let error = executable_format_error(file.path(), BinaryTarget::LinuxX64)
             .unwrap()
             .expect("expected invalid format");
-        assert!(error.contains("invalid executable format"));
+        assert!(error.contains("not an ELF binary"));
         assert!(error.contains("00 00 00 00"));
     }
 

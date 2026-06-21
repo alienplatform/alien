@@ -594,8 +594,8 @@ runtime:
       enabled: true
       deletePersistentVolumeClaims: false
       image:
-        repository: bitnami/kubectl
-        tag: "1.32"
+        repository: alpine/k8s
+        tag: "1.32.0"
         pullPolicy: IfNotPresent
 
 heartbeat:
@@ -1894,7 +1894,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "bitnami/kubectl" $cleanup }}:{{ dig "image" "tag" "1.32" $cleanup }}"
+          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           command:
             - /bin/sh

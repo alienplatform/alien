@@ -56,6 +56,11 @@ url = { workspace = true }
 hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 
+# Debug-session tunnel (kubectl forwarding for pull-mode K8s `alien debug`)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures = { workspace = true }
+base64 = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
