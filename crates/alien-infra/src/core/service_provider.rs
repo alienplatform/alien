@@ -112,7 +112,8 @@ use google_cloud_pubsub::client::{
     SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
 };
 pub use google_cloud_pubsub::model::{push_config::OidcToken, PushConfig, Subscription, Topic};
-use google_cloud_resourcemanager_v3::{client::Projects, model::Project as OfficialGcpProject};
+use google_cloud_resourcemanager_v3::client::Projects;
+pub use google_cloud_resourcemanager_v3::model::Project;
 use google_cloud_scheduler_v1::client::CloudScheduler as OfficialCloudScheduler;
 pub use google_cloud_scheduler_v1::model::{
     HttpMethod as SchedulerHttpMethod, HttpTarget, Job as SchedulerJob,
@@ -2486,23 +2487,6 @@ pub struct GetPolicyOptions {
     pub requested_policy_version: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Project {
-    /// User-assigned Google Cloud project ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    /// Numeric Google Cloud project number.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_number: Option<String>,
-    /// Google Cloud project resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Project lifecycle state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle_state: Option<String>,
-}
-
 struct OfficialGcpResourceManagerClient {
     config: GcpClientConfig,
     client: OnceCell<Projects>,
@@ -2609,7 +2593,6 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
             .set_name(format!("projects/{project_id}"))
             .send()
             .await
-            .map(project_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Resource Manager get_project request failed".to_string(),
@@ -7307,29 +7290,6 @@ fn gcp_iam_policy_to_official(policy: GcpIamPolicy) -> Result<google_cloud_iam_v
             official_binding
         }))
         .set_etag(etag))
-}
-
-fn project_from_official(project: OfficialGcpProject) -> Project {
-    let project_number = project
-        .name
-        .strip_prefix("projects/")
-        .filter(|number| number.chars().all(|ch| ch.is_ascii_digit()))
-        .map(ToString::to_string);
-
-    Project {
-        project_id: if project.project_id.is_empty() {
-            None
-        } else {
-            Some(project.project_id)
-        },
-        project_number,
-        name: if project.name.is_empty() {
-            None
-        } else {
-            Some(project.name)
-        },
-        lifecycle_state: Some(format!("{:?}", project.state)),
-    }
 }
 
 fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
