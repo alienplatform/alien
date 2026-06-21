@@ -359,36 +359,6 @@ pub struct CreateRoleTag {
     pub value: String,
 }
 
-/// Create an IAM OIDC provider.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateOpenIdConnectProviderRequest {
-    /// Provider URL.
-    pub url: String,
-    /// Client IDs trusted by the provider.
-    #[builder(default)]
-    pub client_id_list: Vec<String>,
-    /// Certificate thumbprints.
-    #[builder(default)]
-    pub thumbprint_list: Vec<String>,
-    /// Provider tags.
-    #[builder(default)]
-    pub tags: Vec<CreateRoleTag>,
-}
-
-/// IAM OIDC provider creation response.
-#[derive(Debug, Clone)]
-pub struct CreateOpenIdConnectProviderResponse {
-    /// Operation result.
-    pub create_open_id_connect_provider_result: CreateOpenIdConnectProviderResult,
-}
-
-/// IAM OIDC provider creation result.
-#[derive(Debug, Clone)]
-pub struct CreateOpenIdConnectProviderResult {
-    /// Provider ARN.
-    pub open_id_connect_provider_arn: String,
-}
-
 /// IAM inline role policy response.
 #[derive(Debug, Clone)]
 pub struct GetRolePolicyResponse {
@@ -485,13 +455,6 @@ pub trait IamApi: Send + Sync {
     /// Update a role trust policy.
     async fn update_assume_role_policy(&self, role_name: &str, policy_document: &str)
         -> Result<()>;
-    /// Create an IAM OIDC provider.
-    async fn create_open_id_connect_provider(
-        &self,
-        request: CreateOpenIdConnectProviderRequest,
-    ) -> Result<CreateOpenIdConnectProviderResponse>;
-    /// Delete an IAM OIDC provider.
-    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()>;
     /// List managed policies attached to a role.
     async fn list_attached_role_policies(
         &self,
@@ -1066,54 +1029,6 @@ impl IamApi for IamClient {
             "UpdateAssumeRolePolicy",
             "IAM Role",
             role_name,
-        )?;
-        Ok(())
-    }
-
-    async fn create_open_id_connect_provider(
-        &self,
-        request: CreateOpenIdConnectProviderRequest,
-    ) -> Result<CreateOpenIdConnectProviderResponse> {
-        let url = request.url.clone();
-        let tags = iam_tags(request.tags, &url)?;
-        let response = iam_result(
-            self.create_open_id_connect_provider()
-                .url(&url)
-                .set_client_id_list(nonempty_vec(request.client_id_list))
-                .set_thumbprint_list(nonempty_vec(request.thumbprint_list))
-                .set_tags(nonempty_vec(tags))
-                .send()
-                .await,
-            "CreateOpenIDConnectProvider",
-            "IAM OpenIDConnectProvider",
-            &url,
-        )?;
-
-        let arn = response.open_id_connect_provider_arn().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "IAM CreateOpenIDConnectProvider response for '{url}' did not include an ARN"
-                ),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(CreateOpenIdConnectProviderResponse {
-            create_open_id_connect_provider_result: CreateOpenIdConnectProviderResult {
-                open_id_connect_provider_arn: arn.to_string(),
-            },
-        })
-    }
-
-    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()> {
-        iam_result(
-            self.delete_open_id_connect_provider()
-                .open_id_connect_provider_arn(arn)
-                .send()
-                .await,
-            "DeleteOpenIDConnectProvider",
-            "IAM OpenIDConnectProvider",
-            arn,
         )?;
         Ok(())
     }
