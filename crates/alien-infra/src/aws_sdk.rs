@@ -66,11 +66,8 @@ use aws_sdk_s3::{
         list_object_versions::ListObjectVersionsError, list_objects_v2::ListObjectsV2Error,
     },
     types::{
-        BucketLifecycleConfiguration as AwsBucketLifecycleConfiguration, BucketLocationConstraint,
-        BucketVersioningStatus, CreateBucketConfiguration, Delete, ExpirationStatus,
-        LifecycleExpiration as AwsLifecycleExpiration, LifecycleRule as AwsLifecycleRule,
-        LifecycleRuleFilter as AwsLifecycleRuleFilter, ObjectIdentifier, Tag as S3Tag, Tagging,
-        VersioningConfiguration,
+        BucketLocationConstraint, BucketVersioningStatus, CreateBucketConfiguration, Delete,
+        ObjectIdentifier, Tag as S3Tag, Tagging, VersioningConfiguration,
     },
     Client as S3Client,
 };
@@ -151,7 +148,10 @@ pub use aws_sdk_ecr::types::{
     Repository as EcrRepository,
 };
 pub use aws_sdk_s3::types::{
-    Event as S3Event, LambdaFunctionConfiguration, NotificationConfiguration,
+    BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, Event as S3Event,
+    ExpirationStatus as S3ExpirationStatus, LambdaFunctionConfiguration,
+    LifecycleExpiration as S3LifecycleExpiration, LifecycleRule as S3LifecycleRule,
+    LifecycleRuleFilter as S3LifecycleRuleFilter, NotificationConfiguration,
     PublicAccessBlockConfiguration as S3PublicAccessBlock,
 };
 
@@ -914,17 +914,6 @@ pub enum S3VersioningStatus {
     Enabled,
     /// Bucket versioning is suspended.
     Suspended,
-}
-
-/// S3 lifecycle rule configuration used by infra controllers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct S3LifecycleRuleConfig {
-    /// Rule ID.
-    pub id: String,
-    /// Optional key prefix filter.
-    pub prefix: Option<String>,
-    /// Expiration age in days.
-    pub days: i32,
 }
 
 /// S3 bucket metadata used for storage heartbeats.
@@ -1878,7 +1867,7 @@ pub trait S3Api: Send + Sync {
     async fn put_bucket_lifecycle_configuration(
         &self,
         bucket_name: &str,
-        rules: Vec<S3LifecycleRuleConfig>,
+        rules: Vec<S3LifecycleRule>,
     ) -> Result<()>;
 
     /// Delete lifecycle configuration. Missing lifecycle configuration is treated as success.
@@ -4258,33 +4247,9 @@ impl S3Api for S3Client {
     async fn put_bucket_lifecycle_configuration(
         &self,
         bucket_name: &str,
-        rules: Vec<S3LifecycleRuleConfig>,
+        rules: Vec<S3LifecycleRule>,
     ) -> Result<()> {
-        let rules = rules
-            .into_iter()
-            .map(|rule| {
-                let expiration = AwsLifecycleExpiration::builder().days(rule.days).build();
-                let filter = AwsLifecycleRuleFilter::builder()
-                    .set_prefix(rule.prefix)
-                    .build();
-
-                AwsLifecycleRule::builder()
-                    .id(rule.id)
-                    .status(ExpirationStatus::Enabled)
-                    .filter(filter)
-                    .expiration(expiration)
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to build S3 lifecycle rule for bucket '{bucket_name}'"
-                        ),
-                        resource_id: None,
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let configuration = AwsBucketLifecycleConfiguration::builder()
+        let configuration = S3BucketLifecycleConfiguration::builder()
             .set_rules(Some(rules))
             .build()
             .into_alien_error()

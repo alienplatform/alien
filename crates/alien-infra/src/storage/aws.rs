@@ -3,7 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::aws_sdk::{
-    S3BucketMetadata, S3LifecycleRuleConfig, S3PublicAccessBlock, S3VersioningStatus,
+    S3BucketMetadata, S3ExpirationStatus, S3LifecycleExpiration, S3LifecycleRule,
+    S3LifecycleRuleFilter, S3PublicAccessBlock, S3VersioningStatus,
 };
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -253,7 +254,7 @@ impl AwsStorageController {
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Configuring lifecycle rules");
 
             client
-                .put_bucket_lifecycle_configuration(bucket_name, lifecycle_rule_configs(config))
+                .put_bucket_lifecycle_configuration(bucket_name, lifecycle_rule_configs(config)?)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -573,7 +574,10 @@ impl AwsStorageController {
                 info!(bucket=%bucket_name, "Lifecycle rules removed successfully");
             } else {
                 client
-                    .put_bucket_lifecycle_configuration(bucket_name, lifecycle_rule_configs(config))
+                    .put_bucket_lifecycle_configuration(
+                        bucket_name,
+                        lifecycle_rule_configs(config)?,
+                    )
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -819,15 +823,39 @@ fn public_access_block_config(blocked: bool) -> S3PublicAccessBlock {
         .build()
 }
 
-fn lifecycle_rule_configs(config: &Storage) -> Vec<S3LifecycleRuleConfig> {
+fn lifecycle_rule_configs(config: &Storage) -> Result<Vec<S3LifecycleRule>> {
     config
         .lifecycle_rules
         .iter()
         .enumerate()
-        .map(|(index, rule)| S3LifecycleRuleConfig {
-            id: format!("Rule{}", index + 1),
-            prefix: rule.prefix.clone(),
-            days: rule.days as i32,
+        .map(|(index, rule)| {
+            let rule_id = format!("Rule{}", index + 1);
+            let days = i32::try_from(rule.days).map_err(|_| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Lifecycle rule '{}' expiration days exceeds the S3 API limit",
+                        rule_id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+
+            let expiration = S3LifecycleExpiration::builder().days(days).build();
+            let filter = S3LifecycleRuleFilter::builder()
+                .set_prefix(rule.prefix.clone())
+                .build();
+
+            S3LifecycleRule::builder()
+                .id(rule_id)
+                .status(S3ExpirationStatus::Enabled)
+                .filter(filter)
+                .expiration(expiration)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build S3 lifecycle rule".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
         })
         .collect()
 }
@@ -865,11 +893,8 @@ mod tests {
     use alien_error::AlienError;
     use rstest::{fixture, rstest};
 
-    use crate::aws_sdk::MockS3Api;
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
-    };
+    use crate::aws_sdk::{MockS3Api, S3ExpirationStatus};
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
     use crate::storage::AwsStorageController;
     use crate::AwsStorageState;
@@ -1140,7 +1165,6 @@ mod tests {
     #[tokio::test]
     async fn test_best_effort_deletion_when_bucket_delete_fails() {
         let storage = basic_storage();
-        let bucket_name = format!("test-{}", storage.id);
 
         let mut mock_s3 = MockS3Api::new();
 
@@ -1270,33 +1294,43 @@ mod tests {
                     return false;
                 }
 
-                // Check first rule (with prefix)
                 let rule1 = &lifecycle_rules[0];
-                if rule1.id != "Rule1" {
-                    eprintln!("Expected rule ID 'Rule1', got {:?}", rule1.id);
+                if rule1.id() != Some("Rule1") {
+                    eprintln!("Expected rule ID 'Rule1', got {:?}", rule1.id());
                     return false;
                 }
-                if rule1.prefix.as_ref().unwrap() != "logs/" {
-                    eprintln!("Expected prefix 'logs/', got {:?}", rule1.prefix);
+                let rule1_prefix = rule1.filter().and_then(|filter| filter.prefix());
+                if rule1_prefix != Some("logs/") {
+                    eprintln!("Expected prefix 'logs/', got {:?}", rule1_prefix);
                     return false;
                 }
-                if rule1.days != 30 {
-                    eprintln!("Expected 30 days, got {:?}", rule1.days);
+                let rule1_days = rule1.expiration().and_then(|expiration| expiration.days());
+                if rule1_days != Some(30) {
+                    eprintln!("Expected 30 days, got {:?}", rule1_days);
+                    return false;
+                }
+                if rule1.status() != &S3ExpirationStatus::Enabled {
+                    eprintln!("Expected enabled status, got {:?}", rule1.status());
                     return false;
                 }
 
-                // Check second rule (no prefix)
                 let rule2 = &lifecycle_rules[1];
-                if rule2.id != "Rule2" {
-                    eprintln!("Expected rule ID 'Rule2', got {:?}", rule2.id);
+                if rule2.id() != Some("Rule2") {
+                    eprintln!("Expected rule ID 'Rule2', got {:?}", rule2.id());
                     return false;
                 }
-                if rule2.prefix.is_some() {
-                    eprintln!("Expected no prefix, got {:?}", rule2.prefix);
+                let rule2_prefix = rule2.filter().and_then(|filter| filter.prefix());
+                if rule2_prefix.is_some() {
+                    eprintln!("Expected no prefix, got {:?}", rule2_prefix);
                     return false;
                 }
-                if rule2.days != 365 {
-                    eprintln!("Expected 365 days, got {:?}", rule2.days);
+                let rule2_days = rule2.expiration().and_then(|expiration| expiration.days());
+                if rule2_days != Some(365) {
+                    eprintln!("Expected 365 days, got {:?}", rule2_days);
+                    return false;
+                }
+                if rule2.status() != &S3ExpirationStatus::Enabled {
+                    eprintln!("Expected enabled status, got {:?}", rule2.status());
                     return false;
                 }
 
