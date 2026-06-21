@@ -859,7 +859,20 @@ impl AwsRemoteStackManagementController {
                 .await
             {
                 Ok(response) => {
-                    policy_arns.push(response.create_policy_result.policy.arn);
+                    let policy_arn = response
+                        .policy()
+                        .and_then(|policy| policy.arn())
+                        .map(ToString::to_string)
+                        .ok_or_else(|| {
+                            AlienError::new(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "CreatePolicy response for '{}' did not include a policy ARN",
+                                    policy_name
+                                ),
+                                resource_id: Some("remote-stack-management".to_string()),
+                            })
+                        })?;
+                    policy_arns.push(policy_arn);
                 }
                 Err(e) if is_remote_conflict(&e) => {
                     self.create_default_policy_version(client, &policy_arn, policy_document)
@@ -912,11 +925,7 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some("remote-stack-management".to_string()),
             },
         )?;
-        let versions = versions
-            .list_policy_versions_result
-            .versions
-            .map(|versions| versions.member)
-            .unwrap_or_default();
+        let versions = versions.versions();
 
         if versions.len() < 5 {
             return Ok(());
@@ -924,19 +933,28 @@ impl AwsRemoteStackManagementController {
 
         let Some(version_to_delete) = versions
             .iter()
-            .filter(|version| !version.is_default_version)
-            .min_by_key(|version| version.create_date.as_deref().unwrap_or(""))
+            .filter(|version| !version.is_default_version())
+            .min_by_key(|version| format!("{:?}", version.create_date()))
         else {
             return Ok(());
         };
+        let version_id = version_to_delete.version_id().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "ListPolicyVersions response for '{}' included a non-default version without a version ID",
+                    policy_arn
+                ),
+                resource_id: Some("remote-stack-management".to_string()),
+            })
+        })?;
 
         client
-            .delete_policy_version(policy_arn, &version_to_delete.version_id)
+            .delete_policy_version(policy_arn, version_id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to delete old policy version '{}' for '{}'",
-                    version_to_delete.version_id, policy_arn
+                    version_id, policy_arn
                 ),
                 resource_id: Some("remote-stack-management".to_string()),
             })?;
@@ -1015,11 +1033,7 @@ impl AwsRemoteStackManagementController {
 
     async fn delete_owned_policy(&self, client: &dyn IamApi, policy_arn: &str) -> Result<()> {
         let versions = match client.list_policy_versions(policy_arn).await {
-            Ok(response) => response
-                .list_policy_versions_result
-                .versions
-                .map(|versions| versions.member)
-                .unwrap_or_default(),
+            Ok(response) => response.versions().to_vec(),
             Err(e) if is_remote_not_found(&e) => return Ok(()),
             Err(e) => {
                 return Err(e
@@ -1032,13 +1046,19 @@ impl AwsRemoteStackManagementController {
         };
 
         for version in versions {
-            if version.is_default_version {
+            if version.is_default_version() {
                 continue;
             }
-            match client
-                .delete_policy_version(policy_arn, &version.version_id)
-                .await
-            {
+            let version_id = version.version_id().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "ListPolicyVersions response for '{}' included a non-default version without a version ID",
+                        policy_arn
+                    ),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })
+            })?;
+            match client.delete_policy_version(policy_arn, version_id).await {
                 Ok(_) => {}
                 Err(e) if is_remote_not_found(&e) => {}
                 Err(e) => {
@@ -1046,7 +1066,7 @@ impl AwsRemoteStackManagementController {
                         .context(ErrorData::CloudPlatformError {
                             message: format!(
                                 "Failed to delete policy version '{}' for '{}'",
-                                version.version_id, policy_arn
+                                version_id, policy_arn
                             ),
                             resource_id: Some("remote-stack-management".to_string()),
                         })

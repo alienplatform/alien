@@ -26,7 +26,7 @@ use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
     types::{
         AttachedPolicy as AwsIamAttachedPolicy, InstanceProfile as AwsIamInstanceProfile,
-        Policy as AwsIamPolicy, PolicyVersion as AwsIamPolicyVersion, Tag as AwsIamTag,
+        Tag as AwsIamTag,
     },
     Client as IamClient,
 };
@@ -215,10 +215,13 @@ pub use aws_sdk_ecr::types::{
 };
 pub use aws_sdk_iam::{
     operation::{
+        create_policy::CreatePolicyOutput as CreatePolicyResponse,
+        create_policy_version::CreatePolicyVersionOutput as CreatePolicyVersionResponse,
         create_role::CreateRoleOutput as CreateRoleResponse,
         get_role::GetRoleOutput as GetRoleResponse,
+        list_policy_versions::ListPolicyVersionsOutput as ListPolicyVersionsResponse,
     },
-    types::Role,
+    types::{Policy, PolicyVersion, Role},
 };
 pub use aws_sdk_s3::types::{
     BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, BucketVersioningStatus,
@@ -422,95 +425,6 @@ pub struct GetRolePolicyResult {
     pub policy_name: String,
     /// Policy document.
     pub policy_document: String,
-}
-
-/// IAM managed policy creation response.
-#[derive(Debug, Clone)]
-pub struct CreatePolicyResponse {
-    /// Operation result.
-    pub create_policy_result: CreatePolicyResult,
-}
-
-/// IAM managed policy creation result.
-#[derive(Debug, Clone)]
-pub struct CreatePolicyResult {
-    /// Created policy.
-    pub policy: Policy,
-}
-
-/// IAM managed policy metadata.
-#[derive(Debug, Clone)]
-pub struct Policy {
-    /// Policy name.
-    pub policy_name: Option<String>,
-    /// Policy ID.
-    pub policy_id: Option<String>,
-    /// Policy ARN.
-    pub arn: String,
-    /// IAM path.
-    pub path: Option<String>,
-    /// Default version ID.
-    pub default_version_id: Option<String>,
-    /// Attachment count.
-    pub attachment_count: Option<i32>,
-    /// Whether the policy is attachable.
-    pub is_attachable: Option<bool>,
-    /// Create timestamp.
-    pub create_date: Option<String>,
-    /// Update timestamp.
-    pub update_date: Option<String>,
-}
-
-/// IAM policy version creation response.
-#[derive(Debug, Clone)]
-pub struct CreatePolicyVersionResponse {
-    /// Operation result.
-    pub create_policy_version_result: CreatePolicyVersionResult,
-}
-
-/// IAM policy version creation result.
-#[derive(Debug, Clone)]
-pub struct CreatePolicyVersionResult {
-    /// Created policy version.
-    pub policy_version: PolicyVersion,
-}
-
-/// IAM list policy versions response.
-#[derive(Debug, Clone)]
-pub struct ListPolicyVersionsResponse {
-    /// Operation result.
-    pub list_policy_versions_result: ListPolicyVersionsResult,
-}
-
-/// IAM list policy versions result.
-#[derive(Debug, Clone)]
-pub struct ListPolicyVersionsResult {
-    /// Versions wrapper.
-    pub versions: Option<PolicyVersions>,
-    /// Whether the result is truncated.
-    pub is_truncated: Option<bool>,
-    /// Pagination marker.
-    pub marker: Option<String>,
-}
-
-/// IAM policy version collection wrapper.
-#[derive(Debug, Clone)]
-pub struct PolicyVersions {
-    /// Version members.
-    pub member: Vec<PolicyVersion>,
-}
-
-/// IAM policy version metadata.
-#[derive(Debug, Clone)]
-pub struct PolicyVersion {
-    /// Policy document.
-    pub document: Option<String>,
-    /// Version ID.
-    pub version_id: String,
-    /// Whether this is the default version.
-    pub is_default_version: bool,
-    /// Create timestamp.
-    pub create_date: Option<String>,
 }
 
 /// IAM list attached role policies response.
@@ -1460,7 +1374,7 @@ impl IamApi for IamClient {
             policy_name,
         )?;
 
-        let policy = response.policy().ok_or_else(|| {
+        response.policy().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
                     "IAM CreatePolicy response for '{policy_name}' did not include a policy"
@@ -1469,11 +1383,7 @@ impl IamApi for IamClient {
             })
         })?;
 
-        Ok(CreatePolicyResponse {
-            create_policy_result: CreatePolicyResult {
-                policy: iam_policy(policy)?,
-            },
-        })
+        Ok(response)
     }
 
     async fn delete_policy(&self, policy_arn: &str) -> Result<()> {
@@ -1504,7 +1414,7 @@ impl IamApi for IamClient {
             policy_arn,
         )?;
 
-        let version = response.policy_version().ok_or_else(|| {
+        response.policy_version().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
                     "IAM CreatePolicyVersion response for '{policy_arn}' did not include a version"
@@ -1513,11 +1423,7 @@ impl IamApi for IamClient {
             })
         })?;
 
-        Ok(CreatePolicyVersionResponse {
-            create_policy_version_result: CreatePolicyVersionResult {
-                policy_version: iam_policy_version(version),
-            },
-        })
+        Ok(response)
     }
 
     async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()> {
@@ -1546,15 +1452,7 @@ impl IamApi for IamClient {
             policy_arn,
         )?;
 
-        Ok(ListPolicyVersionsResponse {
-            list_policy_versions_result: ListPolicyVersionsResult {
-                versions: Some(PolicyVersions {
-                    member: response.versions().iter().map(iam_policy_version).collect(),
-                }),
-                is_truncated: Some(response.is_truncated()),
-                marker: response.marker().map(ToString::to_string),
-            },
-        })
+        Ok(response)
     }
 
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
@@ -4163,36 +4061,6 @@ fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamT
                 })
         })
         .collect()
-}
-
-fn iam_policy(policy: &AwsIamPolicy) -> Result<Policy> {
-    let arn = policy.arn().ok_or_else(|| {
-        AlienError::new(ErrorData::CloudPlatformError {
-            message: "IAM policy metadata did not include an ARN".to_string(),
-            resource_id: None,
-        })
-    })?;
-
-    Ok(Policy {
-        policy_name: policy.policy_name().map(ToString::to_string),
-        policy_id: policy.policy_id().map(ToString::to_string),
-        arn: arn.to_string(),
-        path: policy.path().map(ToString::to_string),
-        default_version_id: policy.default_version_id().map(ToString::to_string),
-        attachment_count: policy.attachment_count(),
-        is_attachable: Some(policy.is_attachable()),
-        create_date: policy.create_date().map(smithy_datetime_debug),
-        update_date: policy.update_date().map(smithy_datetime_debug),
-    })
-}
-
-fn iam_policy_version(version: &AwsIamPolicyVersion) -> PolicyVersion {
-    PolicyVersion {
-        document: version.document().map(ToString::to_string),
-        version_id: version.version_id().unwrap_or_default().to_string(),
-        is_default_version: version.is_default_version(),
-        create_date: version.create_date().map(smithy_datetime_debug),
-    }
 }
 
 fn iam_attached_policy(policy: &AwsIamAttachedPolicy) -> AttachedPolicy {
