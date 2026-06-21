@@ -109,7 +109,11 @@ secrecy = { workspace = true }
 http = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 aws-sdk-iam = { workspace = true }
+google-cloud-firestore-admin-v1 = { workspace = true }
+google-cloud-gax = { workspace = true }
+google-cloud-longrunning = { workspace = true }
 dotenvy = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

@@ -29,15 +29,6 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::{artifactregistry::ArtifactRegistryClient, GcpClientConfig};
-
-#[cfg(feature = "azure")]
-use alien_azure_clients::{
-    containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
-    AzureClientConfig,
-};
-
 const GRPC_BINDING_NAME: &str = "test-grpc-artifact-registry-binding";
 
 fn load_test_env() {

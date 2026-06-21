@@ -10,29 +10,37 @@ use alien_bindings::{
 use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, KvBinding};
 
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::firestore::{
-    ConcurrencyMode, Database, DatabaseType, FirestoreApi, FirestoreClient,
-};
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::longrunning::OperationResult;
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::{GcpClientConfig, GcpCredentials};
-#[cfg(any(feature = "gcp", feature = "aws"))]
-use reqwest::Client;
-
 #[cfg(feature = "aws")]
 use alien_core::{AwsClientConfig, AwsCredentials};
+#[cfg(feature = "gcp")]
+use alien_core::{GcpClientConfig, GcpCredentials};
 #[cfg(feature = "aws")]
 use aws_sdk_dynamodb::{
     types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType},
     Client as DynamoDbClient,
 };
+#[cfg(feature = "gcp")]
+use google_cloud_auth::credentials::{self, Credentials};
+#[cfg(feature = "gcp")]
+use google_cloud_firestore_admin_v1::{
+    client::FirestoreAdmin,
+    model::{
+        database::{ConcurrencyMode, DatabaseType},
+        Database,
+    },
+};
 
 #[cfg(feature = "azure")]
-use alien_azure_clients::tables::{AzureTableManagementClient, TableManagementApi};
+use alien_core::{AzureClientConfig, AzureCredentials};
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
+use azure_core::{
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
+    time::{Duration as AzureDuration, OffsetDateTime},
+};
+#[cfg(feature = "azure")]
+use azure_identity::{ClientSecretCredential, ClientSecretCredentialOptions};
+#[cfg(feature = "azure")]
+use reqwest::{Method, StatusCode};
 
 use async_trait::async_trait;
 use rstest::rstest;
@@ -548,7 +556,7 @@ impl AwsProviderTestContext {
 #[cfg(feature = "gcp")]
 struct GcpProviderTestContext {
     kv: Arc<dyn Kv>,
-    firestore_client: FirestoreClient,
+    firestore_client: FirestoreAdmin,
     project_id: String,
     database_id: String,
     collection_name: String,
@@ -589,7 +597,9 @@ impl AsyncTestContext for GcpProviderTestContext {
             project_number: None,
         };
 
-        let firestore_client = FirestoreClient::new(Client::new(), firestore_config);
+        let firestore_client = firestore_admin_client_from_alien_config(&firestore_config)
+            .await
+            .expect("Failed to create official Firestore Admin client for KV test");
 
         // Generate unique database and collection names
         let database_id = format!(
@@ -607,22 +617,25 @@ impl AsyncTestContext for GcpProviderTestContext {
         );
 
         // Create the database
-        let database = Database::builder()
-            .location_id(gcp_region.clone())
-            .r#type(DatabaseType::FirestoreNative)
-            .concurrency_mode(ConcurrencyMode::Optimistic)
-            .build();
+        let database = Database::new()
+            .set_location_id(gcp_region.clone())
+            .set_type(DatabaseType::FirestoreNative)
+            .set_concurrency_mode(ConcurrencyMode::Optimistic);
 
         let create_operation = firestore_client
-            .create_database(database_id.clone(), database)
+            .create_database()
+            .set_parent(format!("projects/{project_id}"))
+            .set_database_id(database_id.clone())
+            .set_database(database)
+            .send()
             .await
             .expect("Failed to create test database for KV test");
 
         info!("✅ Database creation initiated, waiting for completion...");
 
-        // Wait for database creation to complete
-        if let Some(operation_name) = create_operation.name {
-            let result = Self::wait_for_operation(&firestore_client, &operation_name, 180).await;
+        if !create_operation.name.is_empty() {
+            let result =
+                Self::wait_for_operation(&firestore_client, &create_operation.name, 180).await;
             if let Err(e) = result {
                 panic!("Database creation failed: {}", e);
             }
@@ -710,7 +723,7 @@ impl KvTestContext for GcpProviderTestContext {
 #[cfg(feature = "gcp")]
 impl GcpProviderTestContext {
     async fn wait_for_operation(
-        firestore_client: &FirestoreClient,
+        firestore_client: &FirestoreAdmin,
         operation_name: &str,
         timeout_seconds: u64,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -731,24 +744,22 @@ impl GcpProviderTestContext {
             }
 
             match firestore_client
-                .get_operation(operation_name.to_string())
+                .get_operation()
+                .set_name(operation_name)
+                .send()
                 .await
             {
                 Ok(operation) => {
-                    if operation.done == Some(true) {
-                        // Check if operation succeeded
-                        match operation.result {
-                            Some(OperationResult::Error { error }) => {
-                                return Err(format!("Operation failed: {}", error.message).into());
-                            }
-                            Some(OperationResult::Response { .. }) | None => {
-                                info!(
-                                    "✅ Operation {} completed successfully after {} checks!",
-                                    operation_name, check_count
-                                );
-                                return Ok(());
-                            }
+                    if operation.done {
+                        if let Some(error) = operation.error() {
+                            return Err(format!("Operation failed: {}", error.message).into());
                         }
+
+                        info!(
+                            "✅ Operation {} completed successfully after {} checks!",
+                            operation_name, check_count
+                        );
+                        return Ok(());
                     }
 
                     // Log progress every 10 checks to avoid spam
@@ -764,10 +775,7 @@ impl GcpProviderTestContext {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
                 Err(e) => {
-                    // Check if this is a "operation not found" error, which often means it completed
-                    if let Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) =
-                        &e.error
-                    {
+                    if official_gcp_error_is_not_found(&e) {
                         info!("✅ Operation {} appears to have completed (operation not found after {} checks)", operation_name, check_count);
                         return Ok(());
                     } else {
@@ -795,15 +803,21 @@ impl GcpProviderTestContext {
 
         match self
             .firestore_client
-            .delete_database(self.database_id.clone(), None)
+            .delete_database()
+            .set_name(format!(
+                "projects/{}/databases/{}",
+                self.project_id, self.database_id
+            ))
+            .send()
             .await
         {
             Ok(operation) => {
                 info!("✅ Database {} deletion initiated", self.database_id);
 
-                // Wait for deletion to complete, but with a shorter timeout for cleanup
-                if let Some(op_name) = operation.name {
-                    match Self::wait_for_operation(&self.firestore_client, &op_name, 120).await {
+                if !operation.name.is_empty() {
+                    match Self::wait_for_operation(&self.firestore_client, &operation.name, 120)
+                        .await
+                    {
                         Ok(_) => {
                             info!("✅ Database {} deletion completed", self.database_id);
                         }
@@ -818,20 +832,17 @@ impl GcpProviderTestContext {
                 }
             }
             Err(e) => {
-                match &e.error {
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) => {
-                        info!(
-                            "Database {} already doesn't exist (skipping cleanup)",
-                            self.database_id
-                        );
-                    }
-                    _ => {
-                        warn!(
-                            "Failed to delete database {} during cleanup: {:?}",
-                            self.database_id, e
-                        );
-                        // Still continue cleanup to avoid retry loops
-                    }
+                if official_gcp_error_is_not_found(&e) {
+                    info!(
+                        "Database {} already doesn't exist (skipping cleanup)",
+                        self.database_id
+                    );
+                } else {
+                    warn!(
+                        "Failed to delete database {} during cleanup: {:?}",
+                        self.database_id, e
+                    );
+                    // Still continue cleanup to avoid retry loops
                 }
             }
         }
@@ -849,11 +860,59 @@ impl GcpProviderTestContext {
     }
 }
 
+#[cfg(feature = "gcp")]
+async fn firestore_admin_client_from_alien_config(
+    config: &GcpClientConfig,
+) -> anyhow::Result<FirestoreAdmin> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = FirestoreAdmin::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("firestore"))
+    {
+        builder = builder.with_endpoint(endpoint.clone());
+    }
+
+    builder
+        .build()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to build Firestore Admin client: {error}"))
+}
+
+#[cfg(feature = "gcp")]
+fn gcp_credentials_from_alien_config(config: &GcpClientConfig) -> anyhow::Result<Credentials> {
+    match &config.credentials {
+        GcpCredentials::ServiceAccountKey { json } => {
+            let key = serde_json::from_str::<serde_json::Value>(json)
+                .map_err(|error| anyhow::anyhow!("Failed to parse GCP service account key JSON: {error}"))?;
+            credentials::service_account::Builder::new(key)
+                .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                    ["https://www.googleapis.com/auth/cloud-platform"],
+                ))
+                .build()
+                .map_err(|error| anyhow::anyhow!("Failed to build GCP service account credentials: {error}"))
+        }
+        other => anyhow::bail!(
+            "alien-bindings Firestore live test setup supports service-account-key credentials only, got {other:?}"
+        ),
+    }
+}
+
+#[cfg(feature = "gcp")]
+fn official_gcp_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == google_cloud_gax::error::rpc::Code::NotFound)
+        || error.http_status_code() == Some(404)
+}
+
 // --- Azure Provider Context ---
 #[cfg(feature = "azure")]
 struct AzureProviderTestContext {
     kv: Arc<dyn Kv>,
-    management_client: AzureTableManagementClient,
+    management_client: AzureTableManagementTestClient,
     resource_group_name: String,
     account_name: String,
     table_name: String,
@@ -898,10 +957,8 @@ impl AsyncTestContext for AzureProviderTestContext {
             service_overrides: None,
         };
 
-        let management_client = AzureTableManagementClient::new(
-            Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
+        let management_client = AzureTableManagementTestClient::new(client_config)
+            .expect("Failed to create Azure Table management test client");
 
         info!("🚀 Creating Azure table for KV test: {}", table_name);
 
@@ -1004,20 +1061,17 @@ impl AzureProviderTestContext {
                 info!("✅ Table {} deletion completed", self.table_name);
             }
             Err(e) => {
-                match &e.error {
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }) => {
-                        info!(
-                            "Table {} already doesn't exist (skipping cleanup)",
-                            self.table_name
-                        );
-                    }
-                    _ => {
-                        warn!(
-                            "Failed to delete table {} during cleanup: {:?}",
-                            self.table_name, e
-                        );
-                        // Still continue cleanup to avoid retry loops
-                    }
+                if e.status == Some(StatusCode::NOT_FOUND) {
+                    info!(
+                        "Table {} already doesn't exist (skipping cleanup)",
+                        self.table_name
+                    );
+                } else {
+                    warn!(
+                        "Failed to delete table {} during cleanup: {:?}",
+                        self.table_name, e
+                    );
+                    // Still continue cleanup to avoid retry loops
                 }
             }
         }
@@ -1032,6 +1086,208 @@ impl AzureProviderTestContext {
                 // Ignore cleanup errors - key might already be deleted
             }
         }
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Clone)]
+struct AzureTableManagementTestClient {
+    config: AzureClientConfig,
+    credential: Arc<dyn TokenCredential>,
+    http_client: reqwest::Client,
+}
+
+#[cfg(feature = "azure")]
+impl AzureTableManagementTestClient {
+    fn new(config: AzureClientConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            credential: azure_credential_from_config(&config)?,
+            config,
+            http_client: reqwest::Client::new(),
+        })
+    }
+
+    async fn create_table(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        table_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        let table = serde_json::json!({
+            "name": table_name,
+            "properties": {
+                "tableName": table_name,
+                "signedIdentifiers": [],
+            },
+        });
+        self.request(
+            Method::PUT,
+            self.table_url(resource_group_name, storage_account_name, table_name),
+            Some(table.to_string()),
+            table_name,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_table(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        table_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        self.request(
+            Method::DELETE,
+            self.table_url(resource_group_name, storage_account_name, table_name),
+            None,
+            table_name,
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn table_url(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        table_name: &str,
+    ) -> String {
+        format!(
+            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/tableServices/default/tables/{}?api-version=2024-01-01",
+            self.config.subscription_id, resource_group_name, storage_account_name, table_name
+        )
+    }
+
+    async fn bearer_token(&self) -> Result<AccessToken, AzureTestRestError> {
+        self.credential
+            .get_token(&["https://management.azure.com/.default"], None)
+            .await
+            .map_err(|error| {
+                AzureTestRestError::new(None, format!("Failed to get Azure ARM token: {error}"))
+            })
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        url: String,
+        body: Option<String>,
+        table_name: &str,
+    ) -> Result<String, AzureTestRestError> {
+        let token = self.bearer_token().await?;
+        let mut request = self
+            .http_client
+            .request(method, &url)
+            .bearer_auth(token.token.secret());
+
+        if let Some(body) = body {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
+        }
+
+        let response = request.send().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Azure Table ARM request failed for '{table_name}': {error}"),
+            )
+        })?;
+        let status = response.status();
+        let text = response.text().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Failed to read Azure Table ARM response for '{table_name}': {error}"),
+            )
+        })?;
+
+        if !status.is_success() {
+            return Err(AzureTestRestError::new(
+                Some(status),
+                format!(
+                    "Azure Table ARM request for '{table_name}' returned HTTP {}: {text}",
+                    status.as_u16()
+                ),
+            ));
+        }
+
+        Ok(text)
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct AzureTestRestError {
+    status: Option<StatusCode>,
+    message: String,
+}
+
+#[cfg(feature = "azure")]
+impl AzureTestRestError {
+    fn new(status: Option<StatusCode>, message: String) -> Self {
+        Self { status, message }
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::fmt::Display for AzureTestRestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::error::Error for AzureTestRestError {}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct StaticAzureAccessTokenCredential {
+    token: String,
+}
+
+#[cfg(feature = "azure")]
+#[async_trait]
+impl TokenCredential for StaticAzureAccessTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        if scopes.is_empty() {
+            return Err(azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Credential,
+                "no scopes specified",
+            ));
+        }
+
+        Ok(AccessToken::new(
+            self.token.clone(),
+            OffsetDateTime::now_utc() + AzureDuration::days(365),
+        ))
+    }
+}
+
+#[cfg(feature = "azure")]
+fn azure_credential_from_config(
+    config: &AzureClientConfig,
+) -> anyhow::Result<Arc<dyn TokenCredential>> {
+    match &config.credentials {
+        AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
+            token: token.clone(),
+        })),
+        AzureCredentials::ServicePrincipal {
+            client_id,
+            client_secret,
+        } => ClientSecretCredential::new(
+            &config.tenant_id,
+            client_id.clone(),
+            Secret::new(client_secret.clone()),
+            Some(ClientSecretCredentialOptions::default()),
+        )
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .map_err(|error| anyhow::anyhow!("Failed to build Azure service principal credentials: {error}")),
+        other => anyhow::bail!(
+            "alien-bindings Azure Table live test setup supports service principal/access-token credentials only, got {other:?}"
+        ),
     }
 }
 
