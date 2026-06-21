@@ -26,8 +26,7 @@ use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
     types::{
         AttachedPolicy as AwsIamAttachedPolicy, InstanceProfile as AwsIamInstanceProfile,
-        Policy as AwsIamPolicy, PolicyVersion as AwsIamPolicyVersion, Role as AwsIamRole,
-        Tag as AwsIamTag,
+        Policy as AwsIamPolicy, PolicyVersion as AwsIamPolicyVersion, Tag as AwsIamTag,
     },
     Client as IamClient,
 };
@@ -214,6 +213,13 @@ pub use aws_sdk_ecr::types::{
     ReplicationDestination as EcrReplicationDestination, ReplicationRule as EcrReplicationRule,
     Repository as EcrRepository,
 };
+pub use aws_sdk_iam::{
+    operation::{
+        create_role::CreateRoleOutput as CreateRoleResponse,
+        get_role::GetRoleOutput as GetRoleResponse,
+    },
+    types::Role,
+};
 pub use aws_sdk_s3::types::{
     BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, BucketVersioningStatus,
     Event as S3Event, ExpirationStatus as S3ExpirationStatus, LambdaFunctionConfiguration,
@@ -384,56 +390,6 @@ pub struct CreateOpenIdConnectProviderResult {
     pub open_id_connect_provider_arn: String,
 }
 
-/// IAM role creation response.
-#[derive(Debug, Clone)]
-pub struct CreateRoleResponse {
-    /// Operation result.
-    pub create_role_result: CreateRoleResult,
-}
-
-/// IAM role creation result.
-#[derive(Debug, Clone)]
-pub struct CreateRoleResult {
-    /// Created role.
-    pub role: Role,
-}
-
-/// IAM role metadata used by controllers.
-#[derive(Debug, Clone)]
-pub struct Role {
-    /// IAM path.
-    pub path: String,
-    /// Role name.
-    pub role_name: String,
-    /// Role ID.
-    pub role_id: String,
-    /// Role ARN.
-    pub arn: String,
-    /// Create timestamp.
-    pub create_date: String,
-    /// Assume-role trust policy document.
-    pub assume_role_policy_document: Option<String>,
-    /// Description.
-    pub description: Option<String>,
-    /// Max session duration in seconds.
-    pub max_session_duration: Option<i32>,
-    /// Permissions boundary metadata.
-    pub permissions_boundary: Option<AttachedPermissionsBoundary>,
-    /// Tags.
-    pub tags: Option<Tags>,
-    /// Last-used metadata.
-    pub role_last_used: Option<RoleLastUsed>,
-}
-
-/// IAM permissions boundary metadata.
-#[derive(Debug, Clone)]
-pub struct AttachedPermissionsBoundary {
-    /// Boundary type.
-    pub permissions_boundary_type: Option<String>,
-    /// Boundary ARN.
-    pub permissions_boundary_arn: Option<String>,
-}
-
 /// IAM tag collection wrapper matching existing controller test DTOs.
 #[derive(Debug, Clone)]
 pub struct Tags {
@@ -448,29 +404,6 @@ pub struct Tag {
     pub key: String,
     /// Tag value.
     pub value: String,
-}
-
-/// IAM role last-used metadata.
-#[derive(Debug, Clone)]
-pub struct RoleLastUsed {
-    /// Last-used timestamp.
-    pub last_used_date: Option<String>,
-    /// Last-used region.
-    pub region: Option<String>,
-}
-
-/// IAM get-role response.
-#[derive(Debug, Clone)]
-pub struct GetRoleResponse {
-    /// Operation result.
-    pub get_role_result: GetRoleResult,
-}
-
-/// IAM get-role result.
-#[derive(Debug, Clone)]
-pub struct GetRoleResult {
-    /// Role metadata.
-    pub role: Role,
 }
 
 /// IAM inline role policy response.
@@ -1312,7 +1245,7 @@ impl IamApi for IamClient {
             &role_name,
         )?;
 
-        let role = response.role().ok_or_else(|| {
+        response.role().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
                     "IAM CreateRole response for '{role_name}' did not include a role"
@@ -1321,11 +1254,7 @@ impl IamApi for IamClient {
             })
         })?;
 
-        Ok(CreateRoleResponse {
-            create_role_result: CreateRoleResult {
-                role: iam_role(role),
-            },
-        })
+        Ok(response)
     }
 
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse> {
@@ -1336,18 +1265,14 @@ impl IamApi for IamClient {
             role_name,
         )?;
 
-        let role = response.role().ok_or_else(|| {
+        response.role().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!("IAM GetRole response for '{role_name}' did not include a role"),
                 resource_id: None,
             })
         })?;
 
-        Ok(GetRoleResponse {
-            get_role_result: GetRoleResult {
-                role: iam_role(role),
-            },
-        })
+        Ok(response)
     }
 
     async fn delete_role(&self, role_name: &str) -> Result<()> {
@@ -4240,34 +4165,6 @@ fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamT
         .collect()
 }
 
-fn iam_role(role: &AwsIamRole) -> Role {
-    Role {
-        path: role.path().to_string(),
-        role_name: role.role_name().to_string(),
-        role_id: role.role_id().to_string(),
-        arn: role.arn().to_string(),
-        create_date: smithy_datetime_debug(role.create_date()),
-        assume_role_policy_document: role.assume_role_policy_document().map(ToString::to_string),
-        description: role.description().map(ToString::to_string),
-        max_session_duration: role.max_session_duration(),
-        permissions_boundary: role.permissions_boundary().map(|boundary| {
-            AttachedPermissionsBoundary {
-                permissions_boundary_type: boundary
-                    .permissions_boundary_type()
-                    .map(|boundary_type| boundary_type.as_str().to_string()),
-                permissions_boundary_arn: boundary
-                    .permissions_boundary_arn()
-                    .map(ToString::to_string),
-            }
-        }),
-        tags: optional_iam_tags(role.tags()),
-        role_last_used: role.role_last_used().map(|last_used| RoleLastUsed {
-            last_used_date: last_used.last_used_date().map(smithy_datetime_debug),
-            region: last_used.region().map(ToString::to_string),
-        }),
-    }
-}
-
 fn iam_policy(policy: &AwsIamPolicy) -> Result<Policy> {
     let arn = policy.arn().ok_or_else(|| {
         AlienError::new(ErrorData::CloudPlatformError {
@@ -4313,7 +4210,7 @@ fn iam_instance_profile(profile: &AwsIamInstanceProfile) -> InstanceProfile {
         arn: profile.arn().to_string(),
         create_date: smithy_datetime_debug(profile.create_date()),
         roles: Some(InstanceProfileRoles {
-            member: profile.roles().iter().map(iam_role).collect(),
+            member: profile.roles().to_vec(),
         }),
         tags: optional_iam_tags(profile.tags()),
     }

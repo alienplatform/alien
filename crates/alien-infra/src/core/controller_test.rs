@@ -53,26 +53,21 @@
 //! This makes it easy to simulate cloud API responses:
 //!
 //! ```rust
-//! use alien_infra::aws_sdk::{CreateRoleResponse, CreateRoleResult, MockIamApi, Role};
+//! use alien_infra::aws_sdk::{CreateRoleResponse, MockIamApi, Role};
 //!
 //! # fn create_successful_response() -> CreateRoleResponse {
-//! #     CreateRoleResponse {
-//! #         create_role_result: CreateRoleResult {
-//! #             role: Role {
-//! #                 path: "/".to_string(),
-//! #                 role_name: "test-role".to_string(),
-//! #                 role_id: "AROAEXAMPLE123".to_string(),
-//! #                 arn: "arn:aws:iam::123456789012:role/test-role".to_string(),
-//! #                 create_date: "2023-01-01T00:00:00Z".to_string(),
-//! #                 assume_role_policy_document: None,
-//! #                 description: None,
-//! #                 max_session_duration: None,
-//! #                 permissions_boundary: None,
-//! #                 tags: None,
-//! #                 role_last_used: None,
-//! #             },
-//! #         },
-//! #     }
+//! #     CreateRoleResponse::builder()
+//! #         .role(
+//! #             Role::builder()
+//! #                 .path("/")
+//! #                 .role_name("test-role")
+//! #                 .role_id("AROAEXAMPLE123")
+//! #                 .arn("arn:aws:iam::123456789012:role/test-role")
+//! #                 .create_date(aws_sdk_iam::primitives::DateTime::from_secs(0))
+//! #                 .build()
+//! #                 .expect("test role should build"),
+//! #         )
+//! #         .build()
 //! # }
 //! let mut mock_iam = MockIamApi::new();
 //! mock_iam

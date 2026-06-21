@@ -135,7 +135,16 @@ impl AwsArtifactRegistryController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        self.pull_role_arn = Some(response.create_role_result.role.arn);
+        let pull_role_arn = response
+            .role()
+            .map(|role| role.arn().to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "CreateRole response did not include pull role metadata".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+        self.pull_role_arn = Some(pull_role_arn);
 
         info!(
             role_name = %pull_role_name,
@@ -231,7 +240,16 @@ impl AwsArtifactRegistryController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        self.push_role_arn = Some(response.create_role_result.role.arn);
+        let push_role_arn = response
+            .role()
+            .map(|role| role.arn().to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "CreateRole response did not include push role metadata".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+        self.push_role_arn = Some(push_role_arn);
 
         info!(
             role_name = %push_role_name,
@@ -1407,7 +1425,7 @@ fn ecr_repository_required_string(
 mod tests {
     use super::*;
     use crate::aws_sdk::{
-        AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
+        AttachedPolicies, CreateRoleResponse, ListAttachedRolePoliciesResponse,
         ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
         MockIamApi, PolicyNames, Role,
     };
@@ -1421,23 +1439,18 @@ mod tests {
     }
 
     fn create_successful_role_response(role_name: &str) -> CreateRoleResponse {
-        CreateRoleResponse {
-            create_role_result: CreateRoleResult {
-                role: Role {
-                    path: "/".to_string(),
-                    role_name: role_name.to_string(),
-                    role_id: "AROAEXAMPLE123".to_string(),
-                    arn: format!("arn:aws:iam::123456789012:role/{}", role_name),
-                    create_date: "2023-01-01T00:00:00Z".to_string(),
-                    assume_role_policy_document: None,
-                    description: None,
-                    max_session_duration: None,
-                    permissions_boundary: None,
-                    tags: None,
-                    role_last_used: None,
-                },
-            },
-        }
+        CreateRoleResponse::builder()
+            .role(
+                Role::builder()
+                    .path("/")
+                    .role_name(role_name)
+                    .role_id("AROAEXAMPLE123")
+                    .arn(format!("arn:aws:iam::123456789012:role/{}", role_name))
+                    .create_date(aws_sdk_iam::primitives::DateTime::from_secs(0))
+                    .build()
+                    .expect("test role should build"),
+            )
+            .build()
     }
 
     fn setup_mock_client_for_creation_and_deletion() -> Arc<MockIamApi> {

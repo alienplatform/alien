@@ -109,7 +109,15 @@ impl AwsRemoteStackManagementController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        let role_arn = created_role.create_role_result.role.arn;
+        let role_arn = created_role
+            .role()
+            .map(|role| role.arn().to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "CreateRole response did not include role metadata".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
         info!(
             role_name = %role_name,
@@ -196,8 +204,19 @@ impl AwsRemoteStackManagementController {
             })?;
 
         // Check if role ARN matches what we expect
+        let resource_id = ctx
+            .desired_resource_config::<RemoteStackManagement>()?
+            .id
+            .clone();
+        let role_metadata = role.role().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "GetRole response did not include role metadata".to_string(),
+                resource_id: Some(resource_id.clone()),
+            })
+        })?;
+
         if let Some(expected_arn) = &self.role_arn {
-            if role.get_role_result.role.arn != *expected_arn {
+            if role_metadata.arn() != expected_arn {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: ctx
                         .desired_resource_config::<RemoteStackManagement>()?
@@ -205,7 +224,8 @@ impl AwsRemoteStackManagementController {
                         .clone(),
                     message: format!(
                         "Role ARN changed from {} to {}",
-                        expected_arn, role.get_role_result.role.arn
+                        expected_arn,
+                        role_metadata.arn()
                     ),
                 }));
             }

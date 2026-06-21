@@ -97,7 +97,15 @@ impl AwsServiceAccountController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        let role_arn = created_role.create_role_result.role.arn;
+        let role_arn = created_role
+            .role()
+            .map(|role| role.arn().to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "CreateRole response did not include role metadata".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
         info!(
             role_name = %role_name,
@@ -228,13 +236,21 @@ impl AwsServiceAccountController {
             })?;
 
         // Check if role ARN matches what we expect
+        let role_metadata = role.role().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "GetRole response did not include role metadata".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
         if let Some(expected_arn) = &self.role_arn {
-            if role.get_role_result.role.arn != *expected_arn {
+            if role_metadata.arn() != expected_arn {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: format!(
                         "Role ARN changed from {} to {}",
-                        expected_arn, role.get_role_result.role.arn
+                        expected_arn,
+                        role_metadata.arn()
                     ),
                 }));
             }
@@ -269,7 +285,7 @@ impl AwsServiceAccountController {
         emit_aws_service_account_heartbeat(
             ctx,
             &config.id,
-            &role.get_role_result.role,
+            role_metadata,
             attached_policies,
             inline_policy_names,
             self.stack_permissions_applied,
@@ -991,28 +1007,19 @@ fn emit_aws_service_account_heartbeat(
     inline_policy_names: Vec<String>,
     stack_permissions_applied: bool,
 ) {
-    let tag_count = role
-        .tags
-        .as_ref()
-        .map(|tags| tags.member.len() as u32)
-        .unwrap_or(0);
+    let tag_count = role.tags().len() as u32;
     let managed_tag_count = role
-        .tags
-        .as_ref()
-        .map(|tags| {
-            tags.member
-                .iter()
-                .filter(|tag| tag.key.starts_with("alien"))
-                .count() as u32
-        })
-        .unwrap_or(0);
+        .tags()
+        .iter()
+        .filter(|tag| tag.key().starts_with("alien"))
+        .count() as u32;
     let attached_policy_names = attached_policies
         .iter()
         .map(|policy| policy.policy_name.clone())
         .collect::<Vec<_>>();
     let attached_policy_count = attached_policy_names.len() as u32;
     let inline_policy_count = inline_policy_names.len() as u32;
-    let message = format!("AWS IAM role '{}' is reachable", role.role_name);
+    let message = format!("AWS IAM role '{}' is reachable", role.role_name());
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -1031,22 +1038,22 @@ fn emit_aws_service_account_heartbeat(
                     partial: false,
                     collection_issues: vec![],
                 },
-                role_name: role.role_name.clone(),
-                role_arn: role.arn.clone(),
-                role_id: role.role_id.clone(),
-                path: role.path.clone(),
-                create_date: role.create_date.clone(),
-                description: role.description.clone(),
-                max_session_duration: role.max_session_duration,
-                assume_role_policy_present: role.assume_role_policy_document.is_some(),
+                role_name: role.role_name().to_string(),
+                role_arn: role.arn().to_string(),
+                role_id: role.role_id().to_string(),
+                path: role.path().to_string(),
+                create_date: format!("{:?}", role.create_date()),
+                description: role.description().map(ToString::to_string),
+                max_session_duration: role.max_session_duration(),
+                assume_role_policy_present: role.assume_role_policy_document().is_some(),
                 permissions_boundary_type: role
-                    .permissions_boundary
-                    .as_ref()
-                    .and_then(|boundary| boundary.permissions_boundary_type.clone()),
+                    .permissions_boundary()
+                    .and_then(|boundary| boundary.permissions_boundary_type())
+                    .map(|boundary_type| boundary_type.as_str().to_string()),
                 permissions_boundary_arn: role
-                    .permissions_boundary
-                    .as_ref()
-                    .and_then(|boundary| boundary.permissions_boundary_arn.clone()),
+                    .permissions_boundary()
+                    .and_then(|boundary| boundary.permissions_boundary_arn())
+                    .map(ToString::to_string),
                 tag_count,
                 managed_tag_count,
                 attached_policy_count,
@@ -1055,13 +1062,13 @@ fn emit_aws_service_account_heartbeat(
                 inline_policy_names,
                 stack_permissions_applied,
                 last_used_date: role
-                    .role_last_used
-                    .as_ref()
-                    .and_then(|last_used| last_used.last_used_date.clone()),
+                    .role_last_used()
+                    .and_then(|last_used| last_used.last_used_date())
+                    .map(|last_used_date| format!("{last_used_date:?}")),
                 last_used_region: role
-                    .role_last_used
-                    .as_ref()
-                    .and_then(|last_used| last_used.region.clone()),
+                    .role_last_used()
+                    .and_then(|last_used| last_used.region())
+                    .map(ToString::to_string),
             },
         )),
         raw: vec![],
