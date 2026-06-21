@@ -15,7 +15,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use azure_mgmt_storage::package_2023_05::models::container_properties::PublicAccess as AzureBlobContainerPublicAccess;
 use chrono::Utc;
+use serde::Serialize;
 use std::{fmt::Debug, time::Duration};
 use tracing::{debug, info, warn};
 
@@ -77,9 +79,9 @@ impl AzureStorageController {
         // Build container configuration
         let properties = AzureBlobContainerProperties {
             public_access: if config.public_read {
-                Some("Blob".to_string())
+                Some(AzureBlobContainerPublicAccess::Blob)
             } else {
-                Some("None".to_string())
+                Some(AzureBlobContainerPublicAccess::None)
             },
             ..Default::default()
         };
@@ -273,9 +275,9 @@ impl AzureStorageController {
 
             let properties = AzureBlobContainerProperties {
                 public_access: if config.public_read {
-                    Some("Blob".to_string())
+                    Some(AzureBlobContainerPublicAccess::Blob)
                 } else {
-                    Some("None".to_string())
+                    Some(AzureBlobContainerPublicAccess::None)
                 },
                 ..Default::default()
             };
@@ -444,22 +446,31 @@ fn emit_azure_storage_heartbeat(
     blob_service: AzureBlobServiceProperties,
 ) {
     let container_name = container
+        .azure_entity_resource
+        .resource
         .name
         .clone()
         .unwrap_or_else(|| resource_id.to_string());
     let container_public_access = container
         .properties
         .as_ref()
-        .and_then(|properties| properties.public_access.clone());
+        .and_then(|properties| properties.public_access.as_ref())
+        .and_then(azure_model_value);
     let account_properties = storage_account.properties.as_ref();
     let blob_service_properties = blob_service.properties.as_ref();
-    let location = storage_account.location.clone();
-    let sku_name = storage_account.sku.as_ref().map(|sku| sku.name.clone());
+    let location = storage_account.tracked_resource.location.clone();
+    let sku_name = storage_account
+        .sku
+        .as_ref()
+        .and_then(|sku| azure_model_value(&sku.name));
     let sku_tier = storage_account
         .sku
         .as_ref()
-        .and_then(|sku| sku.tier.clone());
-    let access_tier = account_properties.and_then(|properties| properties.access_tier.clone());
+        .and_then(|sku| sku.tier.as_ref())
+        .and_then(azure_model_value);
+    let access_tier = account_properties
+        .and_then(|properties| properties.access_tier.as_ref())
+        .and_then(azure_model_value);
     let encryption = account_properties.and_then(|properties| properties.encryption.as_ref());
     let encryption_services = encryption.and_then(|encryption| encryption.services.as_ref());
     let blob_delete_retention =
@@ -468,12 +479,14 @@ fn emit_azure_storage_heartbeat(
         .and_then(|properties| properties.container_delete_retention_policy.as_ref());
     let change_feed =
         blob_service_properties.and_then(|properties| properties.change_feed.as_ref());
-    let public_network_access =
-        account_properties.and_then(|properties| properties.public_network_access.clone());
+    let public_network_access = account_properties
+        .and_then(|properties| properties.public_network_access.as_ref())
+        .and_then(azure_model_value);
     let allow_blob_public_access =
         account_properties.and_then(|properties| properties.allow_blob_public_access);
-    let provisioning_state =
-        account_properties.and_then(|properties| properties.provisioning_state.clone());
+    let provisioning_state = account_properties
+        .and_then(|properties| properties.provisioning_state.as_ref())
+        .and_then(azure_model_value);
     let health = match provisioning_state.as_deref() {
         Some("Succeeded") => ObservedHealth::Healthy,
         Some("Failed") => ObservedHealth::Unhealthy,
@@ -504,7 +517,7 @@ fn emit_azure_storage_heartbeat(
                 storage_account_name: Some(storage_account_name.to_string()),
                 resource_group: Some(resource_group_name.to_string()),
                 location: Some(location),
-                account_kind: storage_account.kind.clone(),
+                account_kind: storage_account.kind.as_ref().and_then(azure_model_value),
                 sku_name,
                 sku_tier,
                 access_tier,
@@ -514,13 +527,16 @@ fn emit_azure_storage_heartbeat(
                 secondary_location: account_properties
                     .and_then(|properties| properties.secondary_location.clone()),
                 status_of_primary: account_properties
-                    .and_then(|properties| properties.status_of_primary.clone()),
+                    .and_then(|properties| properties.status_of_primary.as_ref())
+                    .and_then(azure_model_value),
                 status_of_secondary: account_properties
-                    .and_then(|properties| properties.status_of_secondary.clone()),
+                    .and_then(|properties| properties.status_of_secondary.as_ref())
+                    .and_then(azure_model_value),
                 public_network_access,
                 allow_blob_public_access,
                 encryption_key_source: encryption
-                    .and_then(|encryption| encryption.key_source.clone()),
+                    .and_then(|encryption| encryption.key_source.as_ref())
+                    .and_then(azure_model_value),
                 blob_encryption_enabled: encryption_services
                     .and_then(|services| services.blob.as_ref())
                     .and_then(|service| service.enabled),
@@ -548,12 +564,22 @@ fn emit_azure_storage_heartbeat(
                 change_feed_enabled: change_feed.and_then(|feed| feed.enabled),
                 change_feed_retention_days: change_feed
                     .and_then(|feed| feed.retention_in_days)
-                    .map(u64::from),
+                    .and_then(|days| u64::try_from(days).ok()),
                 container_public_access,
             },
         )),
         raw: vec![],
     });
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }
 
 impl AzureStorageController {
@@ -583,23 +609,30 @@ mod tests {
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        AzureBlobContainer, AzureBlobContainerProperties, MockBlobContainerApi,
-        MockPlatformServiceProvider, PlatformServiceProvider,
+        AzureBlobContainer, AzureBlobContainerProperties, AzureStorageResource,
+        MockBlobContainerApi, MockPlatformServiceProvider, PlatformServiceProvider,
     };
     use crate::error::ErrorData;
     use crate::storage::{fixtures::*, AzureStorageController};
+    use azure_mgmt_storage::package_2023_05::models::container_properties::PublicAccess as AzureBlobContainerPublicAccess;
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
     fn create_successful_container_response(container_name: &str) -> AzureBlobContainer {
         AzureBlobContainer {
-            name: Some(container_name.to_string()),
+            azure_entity_resource:
+                azure_mgmt_storage::package_2023_05::models::AzureEntityResource {
+                    resource: AzureStorageResource {
+                        id: None,
+                        name: Some(container_name.to_string()),
+                        type_: None,
+                    },
+                    etag: None,
+                },
             properties: Some(AzureBlobContainerProperties {
-                public_access: Some("None".to_string()),
-                last_modified_time: Some("2023-01-01T00:00:00Z".to_string()),
+                public_access: Some(AzureBlobContainerPublicAccess::None),
                 ..Default::default()
             }),
-            ..Default::default()
         }
     }
 
@@ -900,7 +933,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == "Blob"
+                        public_access == &AzureBlobContainerPublicAccess::Blob
                     } else {
                         false
                     }
@@ -911,7 +944,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some("Blob".to_string());
+                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
                 }
                 Ok(response)
             });
@@ -945,7 +978,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == "None"
+                        public_access == &AzureBlobContainerPublicAccess::None
                     } else {
                         false
                     }
@@ -988,7 +1021,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == "Blob"
+                        public_access == &AzureBlobContainerPublicAccess::Blob
                     } else {
                         false
                     }
@@ -999,7 +1032,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some("Blob".to_string());
+                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
                 }
                 Ok(response)
             });
@@ -1085,7 +1118,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == "Blob"
+                        public_access == &AzureBlobContainerPublicAccess::Blob
                     } else {
                         false
                     }
@@ -1096,7 +1129,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some("Blob".to_string());
+                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
                 }
                 Ok(response)
             });

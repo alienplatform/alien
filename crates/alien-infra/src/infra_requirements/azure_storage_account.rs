@@ -5,7 +5,8 @@ use tracing::{debug, error, info};
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::{
     AzureStorageAccountArmResource, AzureStorageAccountEndpoints as AzureStorageArmEndpoints,
-    AzureStorageAccountProperties, AzureStorageSku, ResourceControllerContext,
+    AzureStorageSku, AzureStorageSkuName, ResourceControllerContext,
+    StorageAccountCreateParameters, StorageAccountPropertiesCreateParameters,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -17,6 +18,8 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde::Serialize;
+use serde_json::json;
 
 #[controller]
 pub struct AzureStorageAccountController {
@@ -108,20 +111,26 @@ impl AzureStorageAccountController {
                 let properties = account_info.properties.clone();
                 if let Some(provisioning_state) = properties
                     .as_ref()
-                    .and_then(|p| p.provisioning_state.as_deref())
+                    .and_then(|p| p.provisioning_state.as_ref())
                 {
-                    match provisioning_state {
-                        "Succeeded" => {
+                    let provisioning_state = azure_model_value(provisioning_state);
+                    match provisioning_state.as_deref() {
+                        Some("Succeeded") => {
                             info!(account_name=%account_name, "Storage account creation completed, retrieving details");
 
                             // Extract details from the response
-                            self.resource_id = account_info.id.clone().or_else(|| {
-                                Some(azure_storage_account_resource_id(
-                                    &azure_config.subscription_id,
-                                    &resource_group_name,
-                                    account_name,
-                                ))
-                            });
+                            self.resource_id = account_info
+                                .tracked_resource
+                                .resource
+                                .id
+                                .clone()
+                                .or_else(|| {
+                                    Some(azure_storage_account_resource_id(
+                                        &azure_config.subscription_id,
+                                        &resource_group_name,
+                                        account_name,
+                                    ))
+                                });
                             let primary_endpoints = properties.and_then(|p| p.primary_endpoints);
                             self.primary_blob_endpoint = primary_endpoints
                                 .as_ref()
@@ -147,20 +156,20 @@ impl AzureStorageAccountController {
                                 suggested_delay: None,
                             })
                         }
-                        "Creating" | "ResolvingDns" => {
+                        Some("Creating" | "ResolvingDns") => {
                             debug!(account_name=%account_name, "Storage account still being created");
                             Ok(HandlerAction::Continue {
                                 state: CreatingStorageAccount,
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
-                        "Failed" => Err(AlienError::new(ErrorData::CloudPlatformError {
+                        Some("Failed") => Err(AlienError::new(ErrorData::CloudPlatformError {
                             message: "Storage account creation failed with status: Failed"
                                 .to_string(),
                             resource_id: Some(config.id.clone()),
                         })),
                         other => {
-                            debug!(account_name=%account_name, state=%other, "Storage account is not ready yet");
+                            debug!(account_name=%account_name, state=?other, "Storage account is not ready yet");
                             Ok(HandlerAction::Continue {
                                 state: CreatingStorageAccount,
                                 suggested_delay: Some(Duration::from_secs(15)),
@@ -258,12 +267,16 @@ impl AzureStorageAccountController {
             );
 
             if let Some(properties) = &storage_account.properties {
-                if properties.provisioning_state.as_deref() != Some("Succeeded") {
+                let provisioning_state = properties
+                    .provisioning_state
+                    .as_ref()
+                    .and_then(azure_model_value);
+                if provisioning_state.as_deref() != Some("Succeeded") {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(
                             "Provisioning state changed from Succeeded to {:?}",
-                            properties.provisioning_state
+                            provisioning_state
                         ),
                     }));
                 }
@@ -443,13 +456,17 @@ fn emit_azure_storage_account_heartbeat(
     account: &AzureStorageAccountArmResource,
 ) {
     let properties = account.properties.as_ref();
-    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_deref());
-    let (health, lifecycle) = match provisioning_state {
+    let provisioning_state = properties
+        .and_then(|p| p.provisioning_state.as_ref())
+        .and_then(azure_model_value);
+    let (health, lifecycle) = match provisioning_state.as_deref() {
         Some("Succeeded") => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
         Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
         None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
     };
     let name = account
+        .tracked_resource
+        .resource
         .name
         .clone()
         .unwrap_or_else(|| resource_id.to_string());
@@ -468,46 +485,55 @@ fn emit_azure_storage_account_heartbeat(
                 message: Some(format!(
                     "Azure storage account '{}' provisioning state is {}",
                     name,
-                    provisioning_state
-                        .map(ToString::to_string)
-                        .as_deref()
-                        .unwrap_or("unknown")
+                    provisioning_state.as_deref().unwrap_or("unknown")
                 )),
                 stale: false,
                 partial: false,
                 collection_issues: vec![],
             },
             name,
-            resource_id: account.id.clone(),
+            resource_id: account.tracked_resource.resource.id.clone(),
             resource_group: Some(resource_group_name.to_string()),
-            location: Some(account.location.clone()),
-            kind: account.kind.clone(),
-            sku_name: account.sku.as_ref().map(|sku| sku.name.clone()),
-            sku_tier: account.sku.as_ref().and_then(|sku| sku.tier.clone()),
-            provisioning_state: provisioning_state.map(str::to_string),
+            location: Some(account.tracked_resource.location.clone()),
+            kind: account.kind.as_ref().and_then(azure_model_value),
+            sku_name: account
+                .sku
+                .as_ref()
+                .and_then(|sku| azure_model_value(&sku.name)),
+            sku_tier: account
+                .sku
+                .as_ref()
+                .and_then(|sku| azure_model_value(&sku.tier)),
+            provisioning_state,
             primary_endpoints: storage_account_endpoints(
                 properties.and_then(|p| p.primary_endpoints.as_ref()),
             ),
             secondary_endpoints: storage_account_endpoints(
                 properties.and_then(|p| p.secondary_endpoints.as_ref()),
             ),
-            public_network_access: properties.and_then(|p| p.public_network_access.clone()),
+            public_network_access: properties
+                .and_then(|p| p.public_network_access.as_ref())
+                .and_then(azure_model_value),
             allow_blob_public_access: properties.and_then(|p| p.allow_blob_public_access),
             allow_shared_key_access: properties.and_then(|p| p.allow_shared_key_access),
-            minimum_tls_version: properties.and_then(|p| p.minimum_tls_version.clone()),
+            minimum_tls_version: properties
+                .and_then(|p| p.minimum_tls_version.as_ref())
+                .and_then(azure_model_value),
             supports_https_traffic_only: properties.and_then(|p| p.supports_https_traffic_only),
             encryption_key_source: properties
                 .and_then(|p| p.encryption.as_ref())
-                .and_then(|encryption| encryption.key_source.clone()),
+                .and_then(|encryption| encryption.key_source.as_ref())
+                .and_then(azure_model_value),
             require_infrastructure_encryption: properties
                 .and_then(|p| p.encryption.as_ref())
                 .and_then(|encryption| encryption.require_infrastructure_encryption),
             network_default_action: properties
                 .and_then(|p| p.network_acls.as_ref())
-                .and_then(|rules| rules.default_action.clone()),
+                .and_then(|rules| azure_model_value(&rules.default_action)),
             network_bypass: properties
                 .and_then(|p| p.network_acls.as_ref())
-                .and_then(|rules| rules.bypass.clone()),
+                .and_then(|rules| rules.bypass.as_ref())
+                .and_then(azure_model_value),
             network_ip_rule_count: properties
                 .and_then(|p| p.network_acls.as_ref())
                 .map(|rules| rules.ip_rules.len() as u32),
@@ -543,7 +569,7 @@ impl AzureStorageAccountController {
         &self,
         azure_config: &AzureClientConfig,
         ctx: &ResourceControllerContext,
-    ) -> AzureStorageAccountArmResource {
+    ) -> StorageAccountCreateParameters {
         let location = azure_config.region.as_deref().unwrap_or("East US");
 
         let mut tags = HashMap::new();
@@ -551,22 +577,17 @@ impl AzureStorageAccountController {
         tags.insert("resource".to_string(), ctx.desired_config.id().to_string());
         tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
-        AzureStorageAccountArmResource {
-            id: None,
-            kind: Some("StorageV2".to_string()),
-            location: location.to_string(),
-            name: None,
-            properties: Some(AzureStorageAccountProperties {
-                supports_https_traffic_only: Some(true),
-                ..Default::default()
-            }),
-            sku: Some(AzureStorageSku {
-                name: "Standard_LRS".to_string(),
-                tier: None,
-            }),
-            tags,
-            type_: None,
-        }
+        let mut params = StorageAccountCreateParameters::new(
+            AzureStorageSku::new(AzureStorageSkuName::StandardLrs),
+            azure_mgmt_storage::package_2023_05::models::storage_account_create_parameters::Kind::StorageV2,
+            location.to_string(),
+        );
+        params.properties = Some(StorageAccountPropertiesCreateParameters {
+            supports_https_traffic_only: Some(true),
+            ..Default::default()
+        });
+        params.tags = Some(json!(tags));
+        params
     }
 
     fn clear_state(&mut self) {
@@ -640,6 +661,16 @@ impl AzureStorageAccountController {
                 _internal_stay_count: None,
             }
     }
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }
 
 /// Generates the full, prefixed Azure storage account name (pure function).

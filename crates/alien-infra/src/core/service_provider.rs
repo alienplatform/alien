@@ -38,6 +38,25 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
+pub use azure_mgmt_resources::package_resources_2021_04::models::{
+    Provider as AzureArmProvider, ResourceGroup as AzureArmResourceGroup,
+};
+pub use azure_mgmt_servicebus::package_2024_01::models::{
+    MessageCountDetails as AzureServiceBusMessageCountDetails, Resource as AzureServiceBusResource,
+    SbNamespace as AzureServiceBusNamespace,
+    SbNamespaceProperties as AzureServiceBusNamespaceProperties, SbQueue as AzureServiceBusQueue,
+    SbQueueProperties as AzureServiceBusQueueProperties, SbSku as AzureServiceBusSku,
+    TrackedResource as AzureServiceBusTrackedResource,
+};
+pub use azure_mgmt_storage::package_2023_05::models::{
+    BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
+    ContainerProperties as AzureBlobContainerProperties, Endpoints as AzureStorageAccountEndpoints,
+    Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
+    StorageAccount as AzureStorageAccountArmResource, StorageAccountCreateParameters,
+    StorageAccountProperties, StorageAccountPropertiesCreateParameters,
+    Table as AzureTableArmResource, TableProperties as AzureTableArmProperties,
+    TrackedResource as AzureStorageTrackedResource,
+};
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
 use google_cloud_artifactregistry_v1::{
@@ -5346,13 +5365,15 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         table_name: &str,
     ) -> Result<()> {
         let table = AzureTableArmResource {
-            id: None,
-            name: Some(table_name.to_string()),
+            resource: AzureStorageResource {
+                id: None,
+                name: Some(table_name.to_string()),
+                type_: None,
+            },
             properties: Some(AzureTableArmProperties {
                 signed_identifiers: vec![],
                 table_name: Some(table_name.to_string()),
             }),
-            type_: None,
         };
         let body = serde_json::to_string(&table).into_alien_error().context(
             crate::error::ErrorData::CloudPlatformError {
@@ -5658,47 +5679,6 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureArmResourceGroup {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub location: String,
-    #[serde(rename = "managedBy", skip_serializing_if = "Option::is_none")]
-    pub managed_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureArmResourceGroupProperties>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureArmResourceGroupProperties {
-    #[serde(rename = "provisioningState", skip_serializing_if = "Option::is_none")]
-    pub provisioning_state: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureArmProvider {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    #[serde(rename = "registrationPolicy", skip_serializing_if = "Option::is_none")]
-    pub registration_policy: Option<String>,
-    #[serde(rename = "registrationState", skip_serializing_if = "Option::is_none")]
-    pub registration_state: Option<String>,
-    #[serde(
-        rename = "resourceTypes",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub resource_types: Vec<Value>,
-}
-
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait AzureKeyVaultManagementApi: Send + Sync + std::fmt::Debug {
@@ -5725,7 +5705,7 @@ pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
         &self,
         resource_group_name: String,
         namespace_name: String,
-        parameters: AzureServiceBusNamespaceProperties,
+        parameters: AzureServiceBusNamespace,
     ) -> Result<AzureServiceBusNamespace>;
 
     async fn get_namespace(
@@ -5745,7 +5725,7 @@ pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
         resource_group_name: String,
         namespace_name: String,
         queue_name: String,
-        parameters: AzureServiceBusQueueProperties,
+        parameters: AzureServiceBusQueue,
     ) -> Result<AzureServiceBusQueue>;
 
     async fn get_queue(
@@ -5892,22 +5872,9 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         &self,
         resource_group_name: String,
         namespace_name: String,
-        parameters: AzureServiceBusNamespaceProperties,
+        parameters: AzureServiceBusNamespace,
     ) -> Result<AzureServiceBusNamespace> {
-        let namespace = AzureServiceBusNamespace {
-            id: None,
-            location: self
-                .config
-                .region
-                .clone()
-                .unwrap_or_else(|| "eastus".to_string()),
-            name: Some(namespace_name.clone()),
-            properties: Some(parameters),
-            sku: None,
-            tags: HashMap::new(),
-            type_: None,
-        };
-        let body = serde_json::to_string(&namespace)
+        let body = serde_json::to_string(&parameters)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: format!(
@@ -5979,23 +5946,16 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         resource_group_name: String,
         namespace_name: String,
         queue_name: String,
-        parameters: AzureServiceBusQueueProperties,
+        parameters: AzureServiceBusQueue,
     ) -> Result<AzureServiceBusQueue> {
-        let queue = AzureServiceBusQueue {
-            id: None,
-            location: None,
-            name: Some(queue_name.clone()),
-            properties: Some(parameters),
-            type_: None,
-        };
-        let body = serde_json::to_string(&queue).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
+        let body = serde_json::to_string(&parameters)
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to serialize Azure Service Bus queue '{queue_name}' request"
                 ),
                 resource_id: None,
-            },
-        )?;
+            })?;
         let response = self
             .request(
                 Method::PUT,
@@ -6054,141 +6014,6 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureServiceBusNamespace {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub location: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureServiceBusNamespaceProperties>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku: Option<AzureServiceBusSku>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureServiceBusNamespaceProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alternate_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disable_local_auth: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub minimum_tls_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub premium_messaging_partitions: Option<i32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub private_endpoint_connections: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioning_state: Option<String>,
-    pub public_network_access: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_bus_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub zone_redundant: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzureServiceBusSku {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capacity: Option<i32>,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tier: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureServiceBusQueue {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureServiceBusQueueProperties>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureServiceBusQueueProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accessed_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_delete_on_idle: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub count_details: Option<AzureServiceBusMessageCountDetails>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dead_lettering_on_message_expiration: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_message_time_to_live: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duplicate_detection_history_time_window: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_batched_operations: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_express: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_partitioning: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub forward_dead_lettered_messages_to: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub forward_to: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lock_duration: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_delivery_count: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_message_size_in_kilobytes: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_size_in_megabytes: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requires_duplicate_detection: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requires_session: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size_in_bytes: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureServiceBusMessageCountDetails {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_message_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dead_letter_message_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scheduled_message_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer_dead_letter_message_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer_message_count: Option<i64>,
-}
-
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
@@ -6196,7 +6021,7 @@ pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
         &self,
         resource_group_name: &str,
         account_name: &str,
-        parameters: &AzureStorageAccountArmResource,
+        parameters: &StorageAccountCreateParameters,
     ) -> Result<()>;
 
     async fn delete_storage_account(
@@ -6325,7 +6150,7 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
         &self,
         resource_group_name: &str,
         account_name: &str,
-        parameters: &AzureStorageAccountArmResource,
+        parameters: &StorageAccountCreateParameters,
     ) -> Result<()> {
         let body = serde_json::to_string(parameters)
             .into_alien_error()
@@ -6383,127 +6208,6 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
             },
         )
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureStorageAccountArmResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    pub location: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureStorageAccountProperties>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku: Option<AzureStorageSku>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureStorageAccountProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_blob_public_access: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_shared_key_access: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption: Option<AzureStorageEncryption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub minimum_tls_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_acls: Option<AzureStorageNetworkRuleSet>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_endpoints: Option<AzureStorageAccountEndpoints>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_location: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioning_state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_network_access: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secondary_endpoints: Option<AzureStorageAccountEndpoints>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secondary_location: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status_of_primary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status_of_secondary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_https_traffic_only: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureStorageSku {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tier: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureStorageAccountEndpoints {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blob: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dfs: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub queue: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub web: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureStorageEncryption {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub require_infrastructure_encryption: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub services: Option<AzureStorageEncryptionServices>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureStorageEncryptionServices {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blob: Option<AzureStorageEncryptionService>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<AzureStorageEncryptionService>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub queue: Option<AzureStorageEncryptionService>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table: Option<AzureStorageEncryptionService>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureStorageEncryptionService {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureStorageNetworkRuleSet {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bypass: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_action: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ip_rules: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resource_access_rules: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub virtual_network_rules: Vec<Value>,
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -6806,78 +6510,6 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureBlobContainer {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureBlobContainerProperties>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureBlobContainerProperties {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub metadata: HashMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_access: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_modified_time: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AzureBlobServiceProperties {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<AzureBlobServicePropertiesData>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku: Option<AzureStorageSku>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureBlobServicePropertiesData {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_feed: Option<AzureBlobChangeFeed>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub container_delete_retention_policy: Option<AzureBlobDeleteRetentionPolicy>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delete_retention_policy: Option<AzureBlobDeleteRetentionPolicy>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_versioning_enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureBlobChangeFeed {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_in_days: Option<u32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AzureBlobDeleteRetentionPolicy {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_permanent_delete: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub days: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-}
-
 struct OfficialAzureKeyVaultManagementClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
@@ -7104,46 +6736,6 @@ pub struct AzureKeyVaultProperties {
 pub struct AzureKeyVaultSku {
     pub family: String,
     pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AzureTableArmResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    properties: Option<AzureTableArmProperties>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AzureTableArmProperties {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    signed_identifiers: Vec<AzureTableSignedIdentifier>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    table_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AzureTableSignedIdentifier {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    access_policy: Option<AzureTableAccessPolicy>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AzureTableAccessPolicy {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    start_time: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expiry_time: Option<String>,
-    permission: String,
 }
 
 /// Trait that provides methods to get platform service clients.

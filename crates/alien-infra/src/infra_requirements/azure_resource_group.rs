@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -14,6 +14,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde_json::{json, Value};
 
 #[controller]
 pub struct AzureResourceGroupController {
@@ -45,18 +46,15 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        let resource_group = AzureArmResourceGroup {
-            id: None,
-            location: azure_config
+        let mut resource_group = AzureArmResourceGroup::new(
+            azure_config
                 .region
                 .clone()
                 .unwrap_or_else(|| "East US".to_string()),
-            managed_by: None,
-            name: Some(group_name.clone()),
-            properties: None,
-            tags: HashMap::new(),
-            type_: None,
-        };
+        );
+        resource_group.name = Some(group_name.clone());
+        resource_group.tags = Some(json!({}));
+        let resource_group = resource_group;
 
         let rg = client
             .create_or_update_resource_group(&group_name, &resource_group)
@@ -396,15 +394,18 @@ fn emit_azure_resource_group_heartbeat(
     });
 }
 
-fn managed_tags(tags: &HashMap<String, String>) -> BTreeMap<String, String> {
-    tags.iter()
+fn managed_tags(tags: &Option<Value>) -> BTreeMap<String, String> {
+    tags.as_ref()
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
         .filter(|(key, _)| {
             matches!(
                 key.as_str(),
                 ALIEN_STACK_TAG_KEY | ALIEN_RESOURCE_TAG_KEY | ALIEN_MANAGED_BY_TAG_KEY
             )
         })
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
         .collect()
 }
 

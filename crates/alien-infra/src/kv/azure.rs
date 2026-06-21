@@ -14,6 +14,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde::Serialize;
 
 /// Generates the Azure Table Storage table name
 fn get_azure_table_name(prefix: &str, name: &str) -> String {
@@ -450,16 +451,19 @@ fn emit_azure_table_kv_heartbeat(
         .map(|account| {
             let properties = account.properties;
             (
-                account.id,
-                Some(account.location),
-                account.kind,
+                account.tracked_resource.resource.id,
+                Some(account.tracked_resource.location),
+                account.kind.as_ref().and_then(azure_model_value),
                 properties
                     .as_ref()
                     .and_then(|properties| properties.provisioning_state.as_ref())
-                    .cloned(),
-                properties
-                    .and_then(|properties| properties.status_of_primary)
-                    .clone(),
+                    .and_then(azure_model_value),
+                properties.and_then(|properties| {
+                    properties
+                        .status_of_primary
+                        .as_ref()
+                        .and_then(azure_model_value)
+                }),
             )
         })
         .unwrap_or((None, None, None, None, None));
@@ -504,4 +508,14 @@ fn emit_azure_table_kv_heartbeat(
         })),
         raw: vec![],
     });
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }

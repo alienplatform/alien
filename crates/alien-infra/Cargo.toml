@@ -52,6 +52,13 @@ azure = [
     "alien-client-config/azure",
     "dep:azure_core",
     "dep:azure_identity",
+    "dep:azure_mgmt_app",
+    "dep:azure_mgmt_authorization",
+    "dep:azure_mgmt_keyvault",
+    "dep:azure_mgmt_network",
+    "dep:azure_mgmt_resources",
+    "dep:azure_mgmt_servicebus",
+    "dep:azure_mgmt_storage",
     "dep:base64",
 ]
 kubernetes = ["dep:kube", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
@@ -91,6 +98,13 @@ google-cloud-type = { workspace = true, optional = true }
 wkt = { workspace = true, optional = true }
 azure_core = { workspace = true, optional = true }
 azure_identity = { workspace = true, optional = true }
+azure_mgmt_app = { workspace = true, optional = true }
+azure_mgmt_authorization = { workspace = true, optional = true }
+azure_mgmt_keyvault = { workspace = true, optional = true }
+azure_mgmt_network = { workspace = true, optional = true }
+azure_mgmt_resources = { workspace = true, optional = true }
+azure_mgmt_servicebus = { workspace = true, optional = true }
+azure_mgmt_storage = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sdk-acm = { workspace = true, optional = true }

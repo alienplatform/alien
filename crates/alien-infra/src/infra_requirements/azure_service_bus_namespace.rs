@@ -4,7 +4,7 @@ use tracing::{debug, error, info};
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
 use crate::core::{
     AzureServiceBusNamespace as AzureServiceBusArmNamespace, AzureServiceBusNamespaceProperties,
-    ResourceControllerContext,
+    AzureServiceBusResource, AzureServiceBusTrackedResource, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -16,6 +16,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde::Serialize;
 
 #[controller]
 pub struct AzureServiceBusNamespaceController {
@@ -56,13 +57,13 @@ impl AzureServiceBusNamespaceController {
         let client = ctx
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
-        let namespace_props = self.build_namespace_properties(azure_config, ctx);
+        let namespace = self.build_namespace(azure_config, ctx);
 
         client
             .create_or_update_namespace(
                 resource_group_name.clone(),
                 self.namespace_name.as_ref().unwrap().clone(),
-                namespace_props,
+                namespace,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -429,6 +430,8 @@ fn emit_azure_service_bus_namespace_heartbeat(
         None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
     };
     let name = namespace
+        .tracked_resource
+        .resource
         .name
         .clone()
         .unwrap_or_else(|| resource_id.to_string());
@@ -455,32 +458,38 @@ fn emit_azure_service_bus_namespace_heartbeat(
                     collection_issues: vec![],
                 },
                 name,
-                resource_id: namespace.id.clone(),
+                resource_id: namespace.tracked_resource.resource.id.clone(),
                 resource_group: Some(resource_group_name.to_string()),
-                location: Some(namespace.location.clone()),
-                sku_name: namespace.sku.as_ref().map(|sku| sku.name.to_string()),
+                location: Some(namespace.tracked_resource.location.clone()),
+                sku_name: namespace
+                    .sku
+                    .as_ref()
+                    .and_then(|sku| azure_model_value(&sku.name)),
                 sku_tier: namespace
                     .sku
                     .as_ref()
-                    .and_then(|sku| sku.tier.as_ref().map(ToString::to_string)),
+                    .and_then(|sku| sku.tier.as_ref())
+                    .and_then(azure_model_value),
                 sku_capacity: namespace.sku.as_ref().and_then(|sku| sku.capacity),
                 namespace_status,
                 provisioning_state: properties.and_then(|p| p.provisioning_state.clone()),
                 service_bus_endpoint: properties.and_then(|p| p.service_bus_endpoint.clone()),
                 metric_id: properties.and_then(|p| p.metric_id.clone()),
-                public_network_access: properties.map(|p| p.public_network_access.to_string()),
+                public_network_access: properties
+                    .and_then(|p| p.public_network_access.as_ref())
+                    .and_then(azure_model_value),
                 disable_local_auth: properties.and_then(|p| p.disable_local_auth),
                 minimum_tls_version: properties
                     .and_then(|p| p.minimum_tls_version.as_ref())
-                    .map(ToString::to_string),
+                    .and_then(azure_model_value),
                 premium_messaging_partitions: properties
                     .and_then(|p| p.premium_messaging_partitions),
                 private_endpoint_connection_count: properties
                     .map(|p| p.private_endpoint_connections.len() as u32)
                     .unwrap_or(0),
                 zone_redundant: properties.and_then(|p| p.zone_redundant),
-                created_at: properties.and_then(|p| p.created_at.clone()),
-                updated_at: properties.and_then(|p| p.updated_at.clone()),
+                created_at: properties.and_then(|p| p.created_at.map(|time| time.to_string())),
+                updated_at: properties.and_then(|p| p.updated_at.map(|time| time.to_string())),
             },
         ),
         raw: vec![],
@@ -497,7 +506,7 @@ impl AzureServiceBusNamespaceController {
         resource_group_name: &str,
     ) {
         self.resource_group_name = Some(resource_group_name.to_string());
-        self.resource_id = namespace.id.clone().or_else(|| {
+        self.resource_id = namespace.tracked_resource.resource.id.clone().or_else(|| {
             let namespace_name = self.namespace_name.as_ref()?;
             Some(azure_service_bus_namespace_resource_id(
                 &azure_config.subscription_id,
@@ -530,16 +539,31 @@ impl AzureServiceBusNamespaceController {
             .unwrap_or_else(|| get_resource_group_name(ctx.state))
     }
 
-    fn build_namespace_properties(
+    fn build_namespace(
         &self,
-        _azure_config: &AzureClientConfig,
+        azure_config: &AzureClientConfig,
         _ctx: &ResourceControllerContext,
-    ) -> AzureServiceBusNamespaceProperties {
-        AzureServiceBusNamespaceProperties {
-            private_endpoint_connections: vec![],
-            public_network_access: "Enabled".to_string(),
+    ) -> AzureServiceBusArmNamespace {
+        let location = azure_config
+            .region
+            .clone()
+            .unwrap_or_else(|| "eastus".to_string());
+        let mut namespace = AzureServiceBusArmNamespace::new(AzureServiceBusTrackedResource {
+            resource: AzureServiceBusResource {
+                id: None,
+                name: self.namespace_name.clone(),
+                type_: None,
+            },
+            location,
+            tags: None,
+        });
+        namespace.properties = Some(AzureServiceBusNamespaceProperties {
+            public_network_access: Some(
+                azure_mgmt_servicebus::package_2024_01::models::sb_namespace_properties::PublicNetworkAccess::Enabled,
+            ),
             ..Default::default()
-        }
+        });
+        namespace
     }
 
     /// Applies resource-scoped permissions to the service bus namespace from stack permission profiles.
@@ -589,6 +613,16 @@ impl AzureServiceBusNamespaceController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }
 
 /// Generates the full, prefixed Azure Service Bus Namespace name (pure function).

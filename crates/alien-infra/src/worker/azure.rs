@@ -24,7 +24,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
-use crate::core::{AzureServiceBusQueueProperties, EnvironmentVariableBuilder};
+use crate::core::{
+    AzureServiceBusQueue, AzureServiceBusQueueProperties, EnvironmentVariableBuilder,
+};
 use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -38,6 +40,19 @@ use alien_macros::controller;
 /// Generates a deterministic Azure Container Apps name for a worker.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn service_bus_queue_request(queue_name: &str) -> AzureServiceBusQueue {
+    AzureServiceBusQueue {
+        proxy_resource: azure_mgmt_servicebus::package_2024_01::models::ProxyResource {
+            id: None,
+            name: Some(queue_name.to_string()),
+            type_: None,
+            location: None,
+        },
+        properties: Some(AzureServiceBusQueueProperties::default()),
+        system_data: None,
+    }
 }
 
 #[cfg(not(test))]
@@ -1548,7 +1563,7 @@ impl AzureWorkerController {
             service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
-            AzureServiceBusQueueProperties::default(),
+            service_bus_queue_request(&queue_name),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -3332,7 +3347,7 @@ impl AzureWorkerController {
             service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
-            AzureServiceBusQueueProperties::default(),
+            service_bus_queue_request(&queue_name),
         )
         .await
         .context(ErrorData::CloudPlatformError {

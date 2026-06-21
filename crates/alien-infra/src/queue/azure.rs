@@ -10,6 +10,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde::Serialize;
 use std::time::Duration;
 use tracing::info;
 
@@ -65,7 +66,7 @@ impl AzureQueueController {
             resource_group,
             namespace_name.clone(),
             queue_name.clone(),
-            AzureServiceBusQueueProperties::default(),
+            service_bus_queue_request(&queue_name),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -275,7 +276,10 @@ fn emit_azure_service_bus_queue_heartbeat(
     let transfer_message_count = nonnegative_i64_to_u64(count_details.transfer_message_count);
     let transfer_dead_letter_message_count =
         nonnegative_i64_to_u64(count_details.transfer_dead_letter_message_count);
-    let name = queue.name.unwrap_or_else(|| queue_name.to_string());
+    let name = queue
+        .proxy_resource
+        .name
+        .unwrap_or_else(|| queue_name.to_string());
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -300,9 +304,9 @@ fn emit_azure_service_bus_queue_heartbeat(
                 name,
                 namespace_name: namespace_name.to_string(),
                 resource_group: Some(resource_group.to_string()),
-                resource_id: queue.id,
+                resource_id: queue.proxy_resource.id,
                 endpoint: Some(format!("{}/{}", namespace_name, queue_name)),
-                queue_status: properties.status,
+                queue_status: properties.status.as_ref().and_then(azure_model_value),
                 lock_duration: properties.lock_duration,
                 max_delivery_count: nonnegative_i32_to_u32(properties.max_delivery_count),
                 requires_duplicate_detection: properties.requires_duplicate_detection,
@@ -329,13 +333,36 @@ fn emit_azure_service_bus_queue_heartbeat(
                 transfer_message_count,
                 transfer_dead_letter_message_count,
                 size_in_bytes: nonnegative_i64_to_u64(properties.size_in_bytes),
-                accessed_at: properties.accessed_at,
-                created_at: properties.created_at,
-                updated_at: properties.updated_at,
+                accessed_at: properties.accessed_at.map(|time| time.to_string()),
+                created_at: properties.created_at.map(|time| time.to_string()),
+                updated_at: properties.updated_at.map(|time| time.to_string()),
             },
         )),
         raw: vec![],
     });
+}
+
+fn service_bus_queue_request(queue_name: &str) -> AzureServiceBusQueue {
+    AzureServiceBusQueue {
+        proxy_resource: azure_mgmt_servicebus::package_2024_01::models::ProxyResource {
+            id: None,
+            name: Some(queue_name.to_string()),
+            type_: None,
+            location: None,
+        },
+        properties: Some(AzureServiceBusQueueProperties::default()),
+        system_data: None,
+    }
+}
+
+fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            value => Some(value.to_string()),
+        })
 }
 
 fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
@@ -360,10 +387,9 @@ mod tests {
         let mut mock = MockAzureServiceBusManagementApi::new();
         mock.expect_create_or_update_namespace()
             .returning(|_, _, _| {
-                Ok(crate::core::AzureServiceBusNamespace {
-                    location: "eastus".to_string(),
-                    ..Default::default()
-                })
+                Ok(crate::core::AzureServiceBusNamespace::new(
+                    crate::core::AzureServiceBusTrackedResource::new("eastus".to_string()),
+                ))
             });
         mock.expect_create_or_update_queue()
             .returning(|_, _, _, _| Ok(AzureServiceBusQueue::default()));
