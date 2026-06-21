@@ -13,7 +13,7 @@ let value: ListPackagesResponse = {
       id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       workspaceId: "ws_It13CUaGEhLLAB87simX0",
-      type: "agent-image",
+      type: "operator-image",
       status: "failed",
       version: "<value>",
       sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

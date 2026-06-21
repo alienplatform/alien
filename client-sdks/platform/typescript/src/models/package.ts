@@ -19,7 +19,7 @@ export const PackageTypeEnum = {
   Cli: "cli",
   Cloudformation: "cloudformation",
   Helm: "helm",
-  AgentImage: "agent-image",
+  OperatorImage: "operator-image",
   Terraform: "terraform",
 } as const;
 /**
@@ -60,16 +60,28 @@ export type ConfigTerraform = {
 /**
  * Branding configuration for the Operator image.
  */
-export type ConfigAgentImage = {
+export type ConfigOperatorImage = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
   /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
+  /**
    * Image name (e.g., "acme-operator")
    */
   name: string;
-  type: "agent-image";
+  type: "operator-image";
 };
 
 /**
@@ -111,7 +123,7 @@ export type ConfigCli = {
    */
   displayName: string;
   /**
-   * Binary name displayed in help and usage (e.g., "acmectl")
+   * Binary name displayed in help and usage (e.g., "acme-deploy")
    */
   name: string;
   type: "cli";
@@ -124,7 +136,7 @@ export type Config =
   | ConfigCli
   | ConfigCloudformation
   | ConfigHelm
-  | ConfigAgentImage
+  | ConfigOperatorImage
   | ConfigTerraform;
 
 /**
@@ -311,15 +323,17 @@ export type OutputsHelm = {
   type: OutputsTypeHelm;
 };
 
-export const OutputsTypeAgentImage = {
-  AgentImage: "agent-image",
+export const OutputsTypeOperatorImage = {
+  OperatorImage: "operator-image",
 } as const;
-export type OutputsTypeAgentImage = ClosedEnum<typeof OutputsTypeAgentImage>;
+export type OutputsTypeOperatorImage = ClosedEnum<
+  typeof OutputsTypeOperatorImage
+>;
 
 /**
  * Outputs from an Operator image package build
  */
-export type OutputsAgentImage = {
+export type OutputsOperatorImage = {
   /**
    * Image digest (e.g., "sha256:abc123...")
    */
@@ -328,7 +342,7 @@ export type OutputsAgentImage = {
    * Full image reference (e.g., "public.ecr.aws/acme/operators/project-id:1.2.3")
    */
   image: string;
-  type: OutputsTypeAgentImage;
+  type: OutputsTypeOperatorImage;
 };
 
 /**
@@ -349,32 +363,6 @@ export type PackageBinaries = {
   url: string;
 };
 
-/**
- * Source provenance for a generated CLI package.
- */
-export type PackageBuildInfo = {
-  /**
-   * Alien source commit used to build the source CLI and agent binaries.
-   */
-  alienSha: string;
-  /**
-   * Horizon source commit used by platform private extensions, if applicable.
-   */
-  horizonSha: string;
-  /**
-   * Platform source commit used to build packages-builder and private extensions.
-   */
-  platformSha: string;
-  /**
-   * SHA256 checksum of the source companion agent binary shipped with the CLI package.
-   */
-  sourceAgentBinarySha256: string;
-  /**
-   * SHA256 checksum of the source deploy CLI binary before white-label config is appended.
-   */
-  sourceCliBinarySha256: string;
-};
-
 export const OutputsTypeCli = {
   Cli: "cli",
 } as const;
@@ -388,10 +376,6 @@ export type OutputsCli = {
    * Binary information for each target platform
    */
   binaries: { [k: string]: PackageBinaries };
-  /**
-   * Source provenance for a generated CLI package.
-   */
-  buildInfo: PackageBuildInfo;
   type: OutputsTypeCli;
 };
 
@@ -399,10 +383,10 @@ export type OutputsCli = {
  * Package outputs (only when status is 'ready')
  */
 export type PackageOutputsUnion =
-  | OutputsCli
-  | OutputsAgentImage
+  | OutputsOperatorImage
   | OutputsHelm
   | OutputsTerraform
+  | OutputsCli
   | OutputsCloudformation
   | any;
 
@@ -450,16 +434,16 @@ export type Package = {
     | ConfigCli
     | ConfigCloudformation
     | ConfigHelm
-    | ConfigAgentImage
+    | ConfigOperatorImage
     | ConfigTerraform;
   /**
    * Package outputs (only when status is 'ready')
    */
   outputs?:
-    | OutputsCli
-    | OutputsAgentImage
+    | OutputsOperatorImage
     | OutputsHelm
     | OutputsTerraform
+    | OutputsCli
     | OutputsCloudformation
     | any
     | null
@@ -512,22 +496,25 @@ export function configTerraformFromJSON(
 }
 
 /** @internal */
-export const ConfigAgentImage$inboundSchema: z.ZodType<
-  ConfigAgentImage,
+export const ConfigOperatorImage$inboundSchema: z.ZodType<
+  ConfigOperatorImage,
   unknown
 > = z.object({
+  brand: z.nullable(z.string()).optional(),
   displayName: z.string(),
+  envPrefix: z.nullable(z.string()).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
   name: z.string(),
-  type: z.literal("agent-image"),
+  type: z.literal("operator-image"),
 });
 
-export function configAgentImageFromJSON(
+export function configOperatorImageFromJSON(
   jsonString: string,
-): SafeParseResult<ConfigAgentImage, SDKValidationError> {
+): SafeParseResult<ConfigOperatorImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ConfigAgentImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ConfigAgentImage' from JSON`,
+    (x) => ConfigOperatorImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigOperatorImage' from JSON`,
   );
 }
 
@@ -591,7 +578,7 @@ export const Config$inboundSchema: z.ZodType<Config, unknown> = z.union([
   z.lazy(() => ConfigCli$inboundSchema),
   z.lazy(() => ConfigCloudformation$inboundSchema),
   z.lazy(() => ConfigHelm$inboundSchema),
-  z.lazy(() => ConfigAgentImage$inboundSchema),
+  z.lazy(() => ConfigOperatorImage$inboundSchema),
   z.lazy(() => ConfigTerraform$inboundSchema),
 ]);
 
@@ -782,27 +769,27 @@ export function outputsHelmFromJSON(
 }
 
 /** @internal */
-export const OutputsTypeAgentImage$inboundSchema: z.ZodEnum<
-  typeof OutputsTypeAgentImage
-> = z.enum(OutputsTypeAgentImage);
+export const OutputsTypeOperatorImage$inboundSchema: z.ZodEnum<
+  typeof OutputsTypeOperatorImage
+> = z.enum(OutputsTypeOperatorImage);
 
 /** @internal */
-export const OutputsAgentImage$inboundSchema: z.ZodType<
-  OutputsAgentImage,
+export const OutputsOperatorImage$inboundSchema: z.ZodType<
+  OutputsOperatorImage,
   unknown
 > = z.object({
   digest: z.string(),
   image: z.string(),
-  type: OutputsTypeAgentImage$inboundSchema,
+  type: OutputsTypeOperatorImage$inboundSchema,
 });
 
-export function outputsAgentImageFromJSON(
+export function outputsOperatorImageFromJSON(
   jsonString: string,
-): SafeParseResult<OutputsAgentImage, SDKValidationError> {
+): SafeParseResult<OutputsOperatorImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => OutputsAgentImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OutputsAgentImage' from JSON`,
+    (x) => OutputsOperatorImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OutputsOperatorImage' from JSON`,
   );
 }
 
@@ -827,28 +814,6 @@ export function packageBinariesFromJSON(
 }
 
 /** @internal */
-export const PackageBuildInfo$inboundSchema: z.ZodType<
-  PackageBuildInfo,
-  unknown
-> = z.object({
-  alienSha: z.string(),
-  horizonSha: z.string(),
-  platformSha: z.string(),
-  sourceAgentBinarySha256: z.string(),
-  sourceCliBinarySha256: z.string(),
-});
-
-export function packageBuildInfoFromJSON(
-  jsonString: string,
-): SafeParseResult<PackageBuildInfo, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => PackageBuildInfo$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PackageBuildInfo' from JSON`,
-  );
-}
-
-/** @internal */
 export const OutputsTypeCli$inboundSchema: z.ZodEnum<typeof OutputsTypeCli> = z
   .enum(OutputsTypeCli);
 
@@ -856,7 +821,6 @@ export const OutputsTypeCli$inboundSchema: z.ZodEnum<typeof OutputsTypeCli> = z
 export const OutputsCli$inboundSchema: z.ZodType<OutputsCli, unknown> = z
   .object({
     binaries: z.record(z.string(), z.lazy(() => PackageBinaries$inboundSchema)),
-    buildInfo: z.lazy(() => PackageBuildInfo$inboundSchema),
     type: OutputsTypeCli$inboundSchema,
   });
 
@@ -875,10 +839,10 @@ export const PackageOutputsUnion$inboundSchema: z.ZodType<
   PackageOutputsUnion,
   unknown
 > = z.union([
-  z.lazy(() => OutputsCli$inboundSchema),
-  z.lazy(() => OutputsAgentImage$inboundSchema),
+  z.lazy(() => OutputsOperatorImage$inboundSchema),
   z.lazy(() => OutputsHelm$inboundSchema),
   z.lazy(() => OutputsTerraform$inboundSchema),
+  z.lazy(() => OutputsCli$inboundSchema),
   z.lazy(() => OutputsCloudformation$inboundSchema),
   z.any(),
 ]);
@@ -908,15 +872,15 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
     z.lazy(() => ConfigCli$inboundSchema),
     z.lazy(() => ConfigCloudformation$inboundSchema),
     z.lazy(() => ConfigHelm$inboundSchema),
-    z.lazy(() => ConfigAgentImage$inboundSchema),
+    z.lazy(() => ConfigOperatorImage$inboundSchema),
     z.lazy(() => ConfigTerraform$inboundSchema),
   ]),
   outputs: z.nullable(
     z.union([
-      z.lazy(() => OutputsCli$inboundSchema),
-      z.lazy(() => OutputsAgentImage$inboundSchema),
+      z.lazy(() => OutputsOperatorImage$inboundSchema),
       z.lazy(() => OutputsHelm$inboundSchema),
       z.lazy(() => OutputsTerraform$inboundSchema),
+      z.lazy(() => OutputsCli$inboundSchema),
       z.lazy(() => OutputsCloudformation$inboundSchema),
       z.any(),
     ]),

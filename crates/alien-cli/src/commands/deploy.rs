@@ -295,6 +295,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             deployment_group_id: None,
                             environment_info: None,
                             input_values: HashMap::new(),
+                            operator_scope: None,
+                            operator_permission: None,
                             setup_method: None,
                             setup_metadata: None,
                         })

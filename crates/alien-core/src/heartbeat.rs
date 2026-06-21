@@ -2258,10 +2258,7 @@ mod tests {
         ))
         .unwrap();
 
-        heartbeat_json
-            .as_object_mut()
-            .unwrap()
-            .remove("source");
+        heartbeat_json.as_object_mut().unwrap().remove("source");
         heartbeat_json
             .as_object_mut()
             .unwrap()

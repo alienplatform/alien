@@ -586,12 +586,12 @@ export type InvolvedObject9 = {
 
 export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type Source9 = {
+export type DataSource9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = Source9 | any;
+export type SourceUnion9 = DataSource9 | any;
 
 export type Event12 = {
   count?: number | null | undefined;
@@ -602,7 +602,7 @@ export type Event12 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source9 | any | null | undefined;
+  source?: DataSource9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3022,12 +3022,12 @@ export type InvolvedObject8 = {
 
 export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type Source8 = {
+export type DataSource8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = Source8 | any;
+export type SourceUnion8 = DataSource8 | any;
 
 export type Event11 = {
   count?: number | null | undefined;
@@ -3038,7 +3038,7 @@ export type Event11 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source8 | any | null | undefined;
+  source?: DataSource8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4070,12 +4070,12 @@ export type InvolvedObject7 = {
 
 export type InvolvedObjectUnion7 = InvolvedObject7 | any;
 
-export type Source7 = {
+export type DataSource7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = Source7 | any;
+export type SourceUnion7 = DataSource7 | any;
 
 export type Event9 = {
   count?: number | null | undefined;
@@ -4086,7 +4086,7 @@ export type Event9 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source7 | any | null | undefined;
+  source?: DataSource7 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4332,12 +4332,12 @@ export type InvolvedObject6 = {
 
 export type InvolvedObjectUnion6 = InvolvedObject6 | any;
 
-export type Source6 = {
+export type DataSource6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = Source6 | any;
+export type SourceUnion6 = DataSource6 | any;
 
 export type Event8 = {
   count?: number | null | undefined;
@@ -4350,7 +4350,7 @@ export type Event8 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source6 | any | null | undefined;
+  source?: DataSource6 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4497,12 +4497,12 @@ export type InvolvedObject5 = {
 
 export type InvolvedObjectUnion5 = InvolvedObject5 | any;
 
-export type Source5 = {
+export type DataSource5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = Source5 | any;
+export type SourceUnion5 = DataSource5 | any;
 
 export type Event7 = {
   count?: number | null | undefined;
@@ -4515,7 +4515,7 @@ export type Event7 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source5 | any | null | undefined;
+  source?: DataSource5 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4662,12 +4662,12 @@ export type InvolvedObject4 = {
 
 export type InvolvedObjectUnion4 = InvolvedObject4 | any;
 
-export type Source4 = {
+export type DataSource4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = Source4 | any;
+export type SourceUnion4 = DataSource4 | any;
 
 export type Event6 = {
   count?: number | null | undefined;
@@ -4680,7 +4680,7 @@ export type Event6 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source4 | any | null | undefined;
+  source?: DataSource4 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4989,12 +4989,12 @@ export type InvolvedObject3 = {
 
 export type InvolvedObjectUnion3 = InvolvedObject3 | any;
 
-export type Source3 = {
+export type DataSource3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = Source3 | any;
+export type SourceUnion3 = DataSource3 | any;
 
 export type Event4 = {
   count?: number | null | undefined;
@@ -5005,7 +5005,7 @@ export type Event4 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source3 | any | null | undefined;
+  source?: DataSource3 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -5220,12 +5220,12 @@ export type InvolvedObject2 = {
 
 export type InvolvedObjectUnion2 = InvolvedObject2 | any;
 
-export type Source2 = {
+export type DataSource2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = Source2 | any;
+export type SourceUnion2 = DataSource2 | any;
 
 export type Event3 = {
   count?: number | null | undefined;
@@ -5238,7 +5238,7 @@ export type Event3 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source2 | any | null | undefined;
+  source?: DataSource2 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -5619,12 +5619,12 @@ export type InvolvedObject1 = {
 
 export type InvolvedObjectUnion1 = InvolvedObject1 | any;
 
-export type Source1 = {
+export type DataSource1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = Source1 | any;
+export type SourceUnion1 = DataSource1 | any;
 
 export type Event1 = {
   count?: number | null | undefined;
@@ -5635,7 +5635,7 @@ export type Event1 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source1 | any | null | undefined;
+  source?: DataSource1 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -6424,7 +6424,14 @@ export type Raw = {
   truncated: boolean;
 };
 
+export const SourceEnum = {
+  Managed: "managed",
+  Observed: "observed",
+} as const;
+export type SourceEnum = ClosedEnum<typeof SourceEnum>;
+
 export type Heartbeat = {
+  alienResourceId?: string | null | undefined;
   backend: BackendEnum;
   /**
    * Represents the target cloud platform.
@@ -6453,11 +6460,18 @@ export type Heartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
+  /**
+   * For managed heartbeats this is the Alien resource id. For observed heartbeats this is the
+   *
+   * @remarks
+   * raw provider identity, such as a Kubernetes object identity.
+   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
    */
   resourceType: string;
+  source?: SourceEnum | undefined;
 };
 
 export type HeartbeatAvailable = {
@@ -7353,24 +7367,25 @@ export function involvedObjectUnion9FromJSON(
 }
 
 /** @internal */
-export const Source9$inboundSchema: z.ZodType<Source9, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource9$inboundSchema: z.ZodType<DataSource9, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source9FromJSON(
+export function dataSource9FromJSON(
   jsonString: string,
-): SafeParseResult<Source9, SDKValidationError> {
+): SafeParseResult<DataSource9, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source9' from JSON`,
+    (x) => DataSource9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource9' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion9$inboundSchema: z.ZodType<SourceUnion9, unknown> = z
-  .union([z.lazy(() => Source9$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource9$inboundSchema), z.any()]);
 
 export function sourceUnion9FromJSON(
   jsonString: string,
@@ -7400,8 +7415,9 @@ export const Event12$inboundSchema: z.ZodType<Event12, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source9$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource9$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -10738,24 +10754,25 @@ export function involvedObjectUnion8FromJSON(
 }
 
 /** @internal */
-export const Source8$inboundSchema: z.ZodType<Source8, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource8$inboundSchema: z.ZodType<DataSource8, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source8FromJSON(
+export function dataSource8FromJSON(
   jsonString: string,
-): SafeParseResult<Source8, SDKValidationError> {
+): SafeParseResult<DataSource8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source8' from JSON`,
+    (x) => DataSource8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource8' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
-  .union([z.lazy(() => Source8$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource8$inboundSchema), z.any()]);
 
 export function sourceUnion8FromJSON(
   jsonString: string,
@@ -10785,8 +10802,9 @@ export const Event11$inboundSchema: z.ZodType<Event11, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source8$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource8$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -12866,24 +12884,25 @@ export function involvedObjectUnion7FromJSON(
 }
 
 /** @internal */
-export const Source7$inboundSchema: z.ZodType<Source7, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource7$inboundSchema: z.ZodType<DataSource7, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source7FromJSON(
+export function dataSource7FromJSON(
   jsonString: string,
-): SafeParseResult<Source7, SDKValidationError> {
+): SafeParseResult<DataSource7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source7' from JSON`,
+    (x) => DataSource7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource7' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
-  .union([z.lazy(() => Source7$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource7$inboundSchema), z.any()]);
 
 export function sourceUnion7FromJSON(
   jsonString: string,
@@ -12913,8 +12932,9 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source7$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource7$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -13418,24 +13438,25 @@ export function involvedObjectUnion6FromJSON(
 }
 
 /** @internal */
-export const Source6$inboundSchema: z.ZodType<Source6, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource6$inboundSchema: z.ZodType<DataSource6, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source6FromJSON(
+export function dataSource6FromJSON(
   jsonString: string,
-): SafeParseResult<Source6, SDKValidationError> {
+): SafeParseResult<DataSource6, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source6' from JSON`,
+    (x) => DataSource6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource6' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion6$inboundSchema: z.ZodType<SourceUnion6, unknown> = z
-  .union([z.lazy(() => Source6$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource6$inboundSchema), z.any()]);
 
 export function sourceUnion6FromJSON(
   jsonString: string,
@@ -13467,8 +13488,9 @@ export const Event8$inboundSchema: z.ZodType<Event8, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source6$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource6$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -13734,24 +13756,25 @@ export function involvedObjectUnion5FromJSON(
 }
 
 /** @internal */
-export const Source5$inboundSchema: z.ZodType<Source5, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource5$inboundSchema: z.ZodType<DataSource5, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source5FromJSON(
+export function dataSource5FromJSON(
   jsonString: string,
-): SafeParseResult<Source5, SDKValidationError> {
+): SafeParseResult<DataSource5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source5' from JSON`,
+    (x) => DataSource5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource5' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion5$inboundSchema: z.ZodType<SourceUnion5, unknown> = z
-  .union([z.lazy(() => Source5$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource5$inboundSchema), z.any()]);
 
 export function sourceUnion5FromJSON(
   jsonString: string,
@@ -13783,8 +13806,9 @@ export const Event7$inboundSchema: z.ZodType<Event7, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source5$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource5$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -14049,24 +14073,25 @@ export function involvedObjectUnion4FromJSON(
 }
 
 /** @internal */
-export const Source4$inboundSchema: z.ZodType<Source4, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource4$inboundSchema: z.ZodType<DataSource4, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source4FromJSON(
+export function dataSource4FromJSON(
   jsonString: string,
-): SafeParseResult<Source4, SDKValidationError> {
+): SafeParseResult<DataSource4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source4' from JSON`,
+    (x) => DataSource4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource4' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion4$inboundSchema: z.ZodType<SourceUnion4, unknown> = z
-  .union([z.lazy(() => Source4$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource4$inboundSchema), z.any()]);
 
 export function sourceUnion4FromJSON(
   jsonString: string,
@@ -14098,8 +14123,9 @@ export const Event6$inboundSchema: z.ZodType<Event6, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source4$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource4$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -14680,24 +14706,25 @@ export function involvedObjectUnion3FromJSON(
 }
 
 /** @internal */
-export const Source3$inboundSchema: z.ZodType<Source3, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource3$inboundSchema: z.ZodType<DataSource3, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source3FromJSON(
+export function dataSource3FromJSON(
   jsonString: string,
-): SafeParseResult<Source3, SDKValidationError> {
+): SafeParseResult<DataSource3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source3' from JSON`,
+    (x) => DataSource3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource3' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion3$inboundSchema: z.ZodType<SourceUnion3, unknown> = z
-  .union([z.lazy(() => Source3$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource3$inboundSchema), z.any()]);
 
 export function sourceUnion3FromJSON(
   jsonString: string,
@@ -14727,8 +14754,9 @@ export const Event4$inboundSchema: z.ZodType<Event4, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source3$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource3$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -15154,24 +15182,25 @@ export function involvedObjectUnion2FromJSON(
 }
 
 /** @internal */
-export const Source2$inboundSchema: z.ZodType<Source2, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource2$inboundSchema: z.ZodType<DataSource2, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source2FromJSON(
+export function dataSource2FromJSON(
   jsonString: string,
-): SafeParseResult<Source2, SDKValidationError> {
+): SafeParseResult<DataSource2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source2' from JSON`,
+    (x) => DataSource2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource2' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion2$inboundSchema: z.ZodType<SourceUnion2, unknown> = z
-  .union([z.lazy(() => Source2$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource2$inboundSchema), z.any()]);
 
 export function sourceUnion2FromJSON(
   jsonString: string,
@@ -15203,8 +15232,9 @@ export const Event3$inboundSchema: z.ZodType<Event3, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source2$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource2$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -15937,24 +15967,25 @@ export function involvedObjectUnion1FromJSON(
 }
 
 /** @internal */
-export const Source1$inboundSchema: z.ZodType<Source1, unknown> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const DataSource1$inboundSchema: z.ZodType<DataSource1, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function source1FromJSON(
+export function dataSource1FromJSON(
   jsonString: string,
-): SafeParseResult<Source1, SDKValidationError> {
+): SafeParseResult<DataSource1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source1' from JSON`,
+    (x) => DataSource1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSource1' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion1$inboundSchema: z.ZodType<SourceUnion1, unknown> = z
-  .union([z.lazy(() => Source1$inboundSchema), z.any()]);
+  .union([z.lazy(() => DataSource1$inboundSchema), z.any()]);
 
 export function sourceUnion1FromJSON(
   jsonString: string,
@@ -15984,8 +16015,9 @@ export const Event1$inboundSchema: z.ZodType<Event1, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source1$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([z.lazy(() => DataSource1$inboundSchema), z.any()]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -17116,7 +17148,13 @@ export function rawFromJSON(
 }
 
 /** @internal */
+export const SourceEnum$inboundSchema: z.ZodEnum<typeof SourceEnum> = z.enum(
+  SourceEnum,
+);
+
+/** @internal */
 export const Heartbeat$inboundSchema: z.ZodType<Heartbeat, unknown> = z.object({
+  alienResourceId: z.nullable(z.string()).optional(),
   backend: BackendEnum$inboundSchema,
   controllerPlatform: ControllerPlatform$inboundSchema,
   data: z.union([
@@ -17145,6 +17183,7 @@ export const Heartbeat$inboundSchema: z.ZodType<Heartbeat, unknown> = z.object({
   raw: z.array(z.lazy(() => Raw$inboundSchema)),
   resourceId: z.string(),
   resourceType: z.string(),
+  source: SourceEnum$inboundSchema.optional(),
 });
 
 export function heartbeatFromJSON(

@@ -3617,7 +3617,13 @@ export type SyncAcquireResponseStackStateUnion =
   | any;
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const SyncAcquireResponseStatus = {
   Pending: "pending",
@@ -3640,7 +3646,13 @@ export const SyncAcquireResponseStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type SyncAcquireResponseStatus = ClosedEnum<
   typeof SyncAcquireResponseStatus
@@ -5204,7 +5216,13 @@ export type SyncAcquireResponseCurrent = {
   runtimeMetadata?: SyncAcquireResponseRuntimeMetadata | any | null | undefined;
   stackState?: SyncAcquireResponseStackState | any | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: SyncAcquireResponseStatus;
   targetRelease?: SyncAcquireResponseTargetRelease | any | null | undefined;

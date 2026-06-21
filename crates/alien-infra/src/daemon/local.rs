@@ -327,8 +327,8 @@ fn emit_local_daemon_heartbeat(
         resource_type: Daemon::RESOURCE_TYPE,
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Daemon(DaemonHeartbeatData::Local(LocalDaemonHeartbeatData {
             status: WorkloadHeartbeatStatus {

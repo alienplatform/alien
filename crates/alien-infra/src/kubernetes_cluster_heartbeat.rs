@@ -25,7 +25,7 @@ pub struct KubernetesClusterHeartbeatInput<'a> {
     pub api_reachable: bool,
     pub namespace_ready: bool,
     pub rbac_ready: bool,
-    pub agent_ready: bool,
+    pub operator_ready: bool,
     pub status_message: Option<String>,
 }
 
@@ -202,8 +202,8 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         resource_type: KubernetesCluster::RESOURCE_TYPE,
         controller_platform: Platform::Kubernetes,
         backend: HeartbeatBackend::Kubernetes,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::KubernetesCluster(data),
         raw: vec![],
@@ -235,7 +235,7 @@ fn cluster_data(
     let health = if !input.api_reachable
         || !input.namespace_ready
         || !input.rbac_ready
-        || !input.agent_ready
+        || !input.operator_ready
     {
         ObservedHealth::Unhealthy
     } else if nodes_status.available && node_count > 0 && ready_nodes == 0 {

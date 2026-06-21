@@ -22,7 +22,7 @@ pub mod test_utils;
 pub use emitter::{HelmEmitter, HelmFragment, InfrastructureValue, ServiceAccountIdentity};
 pub use generator::{
     generate_helm_chart, generate_operator_manifest, render_manager_fetch_values, HelmChart,
-    HelmOptions, ManagerFetchHelmValuesOptions, OperatorManifestOptions, OperatorPermission,
-    OperatorScope,
+    HelmOptions, ManagerFetchHelmValuesOptions, OperatorLogCollectorOptions,
+    OperatorManifestOptions, OperatorPermission, OperatorScope,
 };
 pub use registry::HelmRegistry;

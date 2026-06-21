@@ -4,12 +4,24 @@
 
 import { resourcesGetDeploymentDetail } from "../funcs/resourcesGetDeploymentDetail.js";
 import { resourcesListDeployments } from "../funcs/resourcesListDeployments.js";
+import { resourcesListInventory } from "../funcs/resourcesListInventory.js";
 import { resourcesListOverview } from "../funcs/resourcesListOverview.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Resources extends ClientSDK {
+  async listInventory(
+    request: operations.ListInventoryRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ListInventoryResponse> {
+    return unwrapAsync(resourcesListInventory(
+      this,
+      request,
+      options,
+    ));
+  }
+
   async listOverview(
     request: operations.ListResourceOverviewRequest,
     options?: RequestOptions,
@@ -21,9 +33,6 @@ export class Resources extends ClientSDK {
     ));
   }
 
-  /**
-   * List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
-   */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,
     options?: RequestOptions,

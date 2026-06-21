@@ -69,12 +69,12 @@ pub async fn cleanup_deployments(
     Ok(())
 }
 
-/// Stop and remove alien-agent Docker containers started during tests.
+/// Stop and remove alien-operator Docker containers started during tests.
 ///
 /// Looks for containers matching a label or name pattern and removes them.
 /// Best-effort: errors are logged but do not fail the cleanup.
 pub async fn cleanup_agent_containers(label: &str) -> Result<(), Box<dyn std::error::Error>> {
-    info!(%label, "cleaning up alien-agent containers");
+    info!(%label, "cleaning up alien-operator containers");
 
     // List containers with the test label
     let output = tokio::process::Command::new("docker")
@@ -89,13 +89,13 @@ pub async fn cleanup_agent_containers(label: &str) -> Result<(), Box<dyn std::er
         .collect();
 
     if container_ids.is_empty() {
-        info!("no alien-agent containers to clean up");
+        info!("no alien-operator containers to clean up");
         return Ok(());
     }
 
     info!(
         count = container_ids.len(),
-        "removing alien-agent containers"
+        "removing alien-operator containers"
     );
 
     for id in &container_ids {

@@ -120,7 +120,7 @@ impl crate::traits::Vault for KubernetesSecretVault {
                 namespace: Some(self.namespace.clone()),
                 labels: Some({
                     let mut labels = BTreeMap::new();
-                    labels.insert("managed-by".to_string(), "alien".to_string());
+                    labels.insert("managed-by".to_string(), "operator".to_string());
                     labels.insert("vault-prefix".to_string(), self.vault_prefix.clone());
                     labels
                 }),

@@ -34,7 +34,7 @@
 | [alien-runtime](./alien-runtime/) | In-container runtime — starts user code, injects bindings via gRPC, routes requests |
 | [alien-bindings](./alien-bindings/) | Platform-agnostic binding traits and providers (storage, KV, vault, queue, etc.) |
 | [alien-sdk](./alien-sdk/) | Public Rust SDK for Alien applications — re-exports alien-bindings |
-| [alien-agent](./alien-agent/) | Pull-model agent — syncs with manager, runs deployments in remote environments |
+| [alien-operator](./alien-operator/) | Pull-model operator — syncs with manager, runs deployments in remote environments |
 
 ## Cloud Clients
 
@@ -55,7 +55,7 @@ Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cl
 |-------|-------------|
 | [alien-cli](./alien-cli/) | Developer CLI — `alien dev`, `alien build`, `alien release`, `alien deploy`, `alien serve` |
 | [alien-cli-common](./alien-cli-common/) | Shared CLI utilities (networking, TUI) used by both CLIs |
-| [alien-deploy-cli](./alien-deploy-cli/) | Deployment CLI for customer admins — `alien-deploy deploy/destroy/status/list/agent` |
+| [alien-deploy-cli](./alien-deploy-cli/) | Deployment CLI for customer admins — `alien-deploy deploy/destroy/status/list/operator` |
 
 ## Local Platform
 

@@ -7,11 +7,11 @@ Types of packages that can be built
 ```typescript
 import { PackageTypeEnum } from "@alienplatform/platform-api/models";
 
-let value: PackageTypeEnum = "agent-image";
+let value: PackageTypeEnum = "operator-image";
 ```
 
 ## Values
 
 ```typescript
-"cli" | "cloudformation" | "helm" | "agent-image" | "terraform"
+"cli" | "cloudformation" | "helm" | "operator-image" | "terraform"
 ```

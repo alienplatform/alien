@@ -1273,7 +1273,7 @@ async fn run_cloudformation_k8s(
         }
     };
     let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let agent_result = crate::agent::TestAlienAgent::helm_install_with_values(
+    let agent_result = crate::operator::TestAlienOperator::helm_install_with_values(
         chart_dir.path(),
         &values_file,
         &release,
@@ -1485,7 +1485,7 @@ async fn run_terraform_k8s(
         }
     };
     let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let agent_result = crate::agent::TestAlienAgent::helm_install_with_values(
+    let agent_result = crate::operator::TestAlienOperator::helm_install_with_values(
         chart_dir.path(),
         &values_file,
         &release,
@@ -1846,7 +1846,7 @@ async fn write_manager_fetch_values(
             deployment_name: &deployment.name,
             manager_url: &prepared.manager.public_url,
             deployment_token: &deployment.token,
-            runtime_encryption_key: &crate::agent::generate_encryption_key(),
+            runtime_encryption_key: &crate::operator::generate_encryption_key(),
             stack: &stack,
             stack_state,
             stack_settings,
@@ -1936,7 +1936,7 @@ fn runtime_values() -> anyhow::Result<Value> {
     let image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
         .ok()
         .filter(|image| !image.is_empty())
-        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
     let (repository, tag) = split_image_tag(&image)?;
     let mut runtime = serde_json::json!({
         "image": {
@@ -1945,7 +1945,7 @@ fn runtime_values() -> anyhow::Result<Value> {
             "pullPolicy": "IfNotPresent",
         },
         "encryption": {
-            "key": crate::agent::generate_encryption_key(),
+            "key": crate::operator::generate_encryption_key(),
         }
     });
     if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
@@ -4192,7 +4192,7 @@ mod tests {
             values_object,
             serde_json::json!({
                 "image": {
-                    "repository": "ghcr.io/alienplatform/alien-agent",
+                    "repository": "ghcr.io/alienplatform/alien-operator",
                     "tag": "test",
                     "pullPolicy": "IfNotPresent"
                 },

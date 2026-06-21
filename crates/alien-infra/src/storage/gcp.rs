@@ -793,8 +793,8 @@ fn emit_gcp_storage_heartbeat(
         resource_type: Storage::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Storage(StorageHeartbeatData::GcpCloudStorage(
             GcpCloudStorageHeartbeatData {
