@@ -970,7 +970,6 @@ dependencies = [
  "alien-core",
  "alien-deploy-cli",
  "alien-error",
- "alien-gcp-clients",
  "alien-helm",
  "alien-manager",
  "alien-manager-api",

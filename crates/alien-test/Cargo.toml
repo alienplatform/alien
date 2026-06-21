@@ -24,7 +24,6 @@ alien-helm = { workspace = true }
 alien-permissions = { workspace = true }
 alien-bindings = { workspace = true, features = ["aws"] }
 alien-azure-clients = { workspace = true }
-alien-gcp-clients = { workspace = true }
 alien-client-config = { workspace = true }
 aws-sdk-ecr = { workspace = true }
 aws-sdk-iam = { workspace = true }
