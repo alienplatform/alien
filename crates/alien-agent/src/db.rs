@@ -887,6 +887,56 @@ impl AgentDb {
         Ok(())
     }
 
+    /// Get the deployment-scoped sync token returned by initialization.
+    pub async fn get_sync_token(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'sync_token'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query sync_token".to_string(),
+            })?;
+
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch sync_token row".to_string(),
+            })? {
+            Some(row) => {
+                let sync_token: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read sync_token value".to_string(),
+                        })?;
+                Ok(Some(sync_token))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the deployment-scoped sync token returned by initialization.
+    pub async fn set_sync_token(&self, token: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('sync_token', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (token.to_string(),),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set sync_token".to_string(),
+        })?;
+
+        Ok(())
+    }
+
     /// Get the commands URL (public URL for cloud functions to poll commands).
     pub async fn get_commands_url(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
@@ -935,5 +985,52 @@ impl AgentDb {
         })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentDb;
+
+    const TEST_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn sync_token_persists_across_reopen() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is utf-8");
+
+        {
+            let db = AgentDb::new(data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .expect("open encrypted agent db");
+
+            assert_eq!(
+                db.get_sync_token().await.expect("read missing sync token"),
+                None
+            );
+
+            db.set_sync_token("deployment-token-1")
+                .await
+                .expect("store sync token");
+            assert_eq!(
+                db.get_sync_token().await.expect("read sync token"),
+                Some("deployment-token-1".to_string())
+            );
+
+            db.set_sync_token("deployment-token-2")
+                .await
+                .expect("overwrite sync token");
+        }
+
+        let db = AgentDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("reopen encrypted agent db");
+        assert_eq!(
+            db.get_sync_token()
+                .await
+                .expect("read persisted sync token"),
+            Some("deployment-token-2".to_string())
+        );
     }
 }

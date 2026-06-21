@@ -50,6 +50,12 @@ pub struct Args {
     #[arg(long, env = "AGENT_NAME")]
     pub agent_name: Option<String>,
 
+    #[arg(long, env = "OPERATOR_SCOPE")]
+    pub operator_scope: Option<String>,
+
+    #[arg(long, env = "OPERATOR_PERMISSION")]
+    pub operator_permission: Option<String>,
+
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
 
@@ -173,6 +179,8 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
             .as_ref()
             .and_then(|c| c.deployment_id.clone())
     });
+    let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
+    let operator_permission = args.operator_permission;
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -187,6 +195,10 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
 
             if let Some(stored_deployment_id) = db.get_deployment_id().await? {
                 info!("   Using stored deployment ID: {}", stored_deployment_id);
+                if let Some(stored_sync_token) = db.get_sync_token().await? {
+                    info!("   Using stored deployment-scoped sync token");
+                    sync_token = stored_sync_token;
+                }
             } else if let Some(deployment_id) = configured_deployment_id {
                 info!("   Using configured deployment ID: {}", deployment_id);
                 db.set_deployment_id(&deployment_id).await?;
@@ -198,6 +210,8 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
                     &sync_token,
                     args.platform,
                     args.agent_name.as_deref(),
+                    operator_scope.as_deref(),
+                    operator_permission.as_deref(),
                 )
                 .await?;
 
@@ -205,6 +219,7 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
 
                 if let Some(ref dt) = deployment_token {
                     info!("   Received deployment-scoped token from manager");
+                    db.set_sync_token(dt).await?;
                     sync_token = dt.clone();
                 }
 
@@ -465,6 +480,8 @@ async fn initialize_with_manager(
     token: &str,
     platform: Platform,
     agent_name: Option<&str>,
+    operator_scope: Option<&str>,
+    operator_permission: Option<&str>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -510,6 +527,12 @@ async fn initialize_with_manager(
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
+    }
+    if let Some(scope) = operator_scope {
+        builder = builder.body_map(|b| b.scope(scope.to_string()));
+    }
+    if let Some(permission) = operator_permission {
+        builder = builder.body_map(|b| b.permission(permission.to_string()));
     }
 
     let response = builder

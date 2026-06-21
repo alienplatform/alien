@@ -1386,6 +1386,13 @@
           },
           "deploymentId": {
             "type": "string"
+          },
+          "heartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Resource heartbeats emitted by pull-mode deployment steps."
           }
         }
       },
@@ -7321,6 +7328,13 @@
           "error"
         ]
       },
+      "HeartbeatSource": {
+        "type": "string",
+        "enum": [
+          "managed",
+          "observed"
+        ]
+      },
       "HeartbeatsMode": {
         "type": "string",
         "description": "How heartbeat health checks are handled.",
@@ -7458,6 +7472,12 @@
               "null"
             ]
           },
+          "permission": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "platform": {
             "oneOf": [
               {
@@ -7466,6 +7486,12 @@
               {
                 "$ref": "#/components/schemas/Platform"
               }
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "stackSettings": {
@@ -11201,6 +11227,12 @@
           "raw"
         ],
         "properties": {
+          "alienResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "backend": {
             "$ref": "#/components/schemas/HeartbeatBackend"
           },
@@ -11227,10 +11259,14 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "For managed heartbeats this is the Alien resource id. For observed heartbeats this is the\nraw provider identity, such as a Kubernetes object identity."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"
+          },
+          "source": {
+            "$ref": "#/components/schemas/HeartbeatSource"
           }
         }
       },
