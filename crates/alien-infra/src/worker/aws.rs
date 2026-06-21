@@ -17,8 +17,8 @@ use crate::aws_sdk::{
     EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
     FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaFunctionConfiguration,
     ListEventSourceMappingsRequest, NotificationConfiguration, ProtocolType, PutRuleRequest,
-    PutTargetsRequest, ReimportCertificateRequest, SecurityPolicy, UpdateFunctionCodeRequest,
-    UpdateFunctionConfigurationRequest, VpcConfig,
+    PutTargetsRequest, ReimportCertificateRequest, RuleState, SecurityPolicy,
+    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -64,10 +64,20 @@ fn readiness_probe_dns_override(
     })
 }
 
-fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
+fn eventbridge_tags(prefix: &str, resource_id: &str) -> Result<Vec<EventBridgeTag>> {
     standard_resource_tags(prefix, resource_id)
         .into_iter()
-        .map(|(key, value)| EventBridgeTag { key, value })
+        .map(|(key, value)| {
+            EventBridgeTag::builder()
+                .key(key)
+                .value(value)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid EventBridge tag".to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                })
+        })
         .collect()
 }
 
@@ -1616,16 +1626,23 @@ impl AwsWorkerController {
                     .await?;
 
                 let rule_response = eventbridge_client
-                    .put_rule(PutRuleRequest {
-                        name: rule_name.clone(),
-                        schedule_expression,
-                        state: Some("ENABLED".to_string()),
-                        description: Some(format!(
-                            "Alien schedule trigger for worker '{}'",
-                            config.id
-                        )),
-                        tags: Some(eventbridge_tags(ctx.resource_prefix, &config.id)),
-                    })
+                    .put_rule(
+                        PutRuleRequest::builder()
+                            .name(rule_name.clone())
+                            .schedule_expression(schedule_expression)
+                            .state(RuleState::Enabled)
+                            .description(format!(
+                                "Alien schedule trigger for worker '{}'",
+                                config.id
+                            ))
+                            .set_tags(Some(eventbridge_tags(ctx.resource_prefix, &config.id)?))
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "Invalid EventBridge rule request".to_string(),
+                                resource_id: Some(config.id.clone()),
+                            })?,
+                    )
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to create EventBridge rule '{}'", rule_name),
@@ -1672,13 +1689,27 @@ impl AwsWorkerController {
 
                 // Add Lambda as the target of the rule
                 eventbridge_client
-                    .put_targets(PutTargetsRequest {
-                        rule: rule_name.clone(),
-                        targets: vec![EventBridgeTarget {
-                            id: "1".to_string(),
-                            arn: function_arn.to_string(),
-                        }],
-                    })
+                    .put_targets(
+                        PutTargetsRequest::builder()
+                            .rule(rule_name.clone())
+                            .targets(
+                                EventBridgeTarget::builder()
+                                    .id("1")
+                                    .arn(function_arn)
+                                    .build()
+                                    .into_alien_error()
+                                    .context(ErrorData::CloudPlatformError {
+                                        message: "Invalid EventBridge target".to_string(),
+                                        resource_id: Some(config.id.clone()),
+                                    })?,
+                            )
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "Invalid EventBridge targets request".to_string(),
+                                resource_id: Some(config.id.clone()),
+                            })?,
+                    )
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -2956,16 +2987,26 @@ impl AwsWorkerController {
                         .await?;
 
                     let rule_response = eventbridge_client
-                        .put_rule(PutRuleRequest {
-                            name: rule_name.clone(),
-                            schedule_expression,
-                            state: Some("ENABLED".to_string()),
-                            description: Some(format!(
-                                "Alien schedule trigger for worker '{}'",
-                                current_config.id
-                            )),
-                            tags: Some(eventbridge_tags(ctx.resource_prefix, &current_config.id)),
-                        })
+                        .put_rule(
+                            PutRuleRequest::builder()
+                                .name(rule_name.clone())
+                                .schedule_expression(schedule_expression)
+                                .state(RuleState::Enabled)
+                                .description(format!(
+                                    "Alien schedule trigger for worker '{}'",
+                                    current_config.id
+                                ))
+                                .set_tags(Some(eventbridge_tags(
+                                    ctx.resource_prefix,
+                                    &current_config.id,
+                                )?))
+                                .build()
+                                .into_alien_error()
+                                .context(ErrorData::CloudPlatformError {
+                                    message: "Invalid EventBridge rule request".to_string(),
+                                    resource_id: Some(current_config.id.clone()),
+                                })?,
+                        )
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to create EventBridge rule '{}'", rule_name),
@@ -3009,13 +3050,27 @@ impl AwsWorkerController {
                     }
 
                     eventbridge_client
-                        .put_targets(PutTargetsRequest {
-                            rule: rule_name.clone(),
-                            targets: vec![EventBridgeTarget {
-                                id: "1".to_string(),
-                                arn: function_arn.to_string(),
-                            }],
-                        })
+                        .put_targets(
+                            PutTargetsRequest::builder()
+                                .rule(rule_name.clone())
+                                .targets(
+                                    EventBridgeTarget::builder()
+                                        .id("1")
+                                        .arn(function_arn)
+                                        .build()
+                                        .into_alien_error()
+                                        .context(ErrorData::CloudPlatformError {
+                                            message: "Invalid EventBridge target".to_string(),
+                                            resource_id: Some(current_config.id.clone()),
+                                        })?,
+                                )
+                                .build()
+                                .into_alien_error()
+                                .context(ErrorData::CloudPlatformError {
+                                    message: "Invalid EventBridge targets request".to_string(),
+                                    resource_id: Some(current_config.id.clone()),
+                                })?,
+                        )
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!(

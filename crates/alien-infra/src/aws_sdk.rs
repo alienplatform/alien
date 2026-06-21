@@ -48,10 +48,7 @@ use aws_sdk_ecr::{
     },
     Client as EcrClient,
 };
-use aws_sdk_eventbridge::{
-    types::{RuleState, Tag as AwsEventBridgeTag, Target as AwsEventBridgeTarget},
-    Client as EventBridgeClient,
-};
+use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
     types::{
         AttachedPolicy as AwsIamAttachedPolicy, InstanceProfile as AwsIamInstanceProfile,
@@ -146,6 +143,14 @@ pub use aws_sdk_apigatewayv2::{
         DomainNameConfiguration as ApiGatewayV2DomainNameConfiguration, EndpointType,
         IntegrationType, ProtocolType, SecurityPolicy,
     },
+};
+
+pub use aws_sdk_eventbridge::{
+    operation::{
+        put_rule::{PutRuleInput as PutRuleRequest, PutRuleOutput as PutRuleResponse},
+        put_targets::PutTargetsInput as PutTargetsRequest,
+    },
+    types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
 };
 
 pub use aws_sdk_lambda::operation::{
@@ -360,55 +365,6 @@ pub struct FunctionConfiguration {
     pub last_update_status: Option<String>,
     /// KMS key ARN.
     pub kms_key_arn: Option<String>,
-}
-
-/// EventBridge PutRule request.
-#[derive(Debug, Clone, Builder)]
-pub struct PutRuleRequest {
-    /// Rule name.
-    pub name: String,
-    /// Schedule expression, such as cron(...) or rate(...).
-    pub schedule_expression: String,
-    /// Rule state, such as ENABLED.
-    pub state: Option<String>,
-    /// Rule description.
-    pub description: Option<String>,
-    /// Resource tags.
-    pub tags: Option<Vec<EventBridgeTag>>,
-}
-
-/// EventBridge PutRule response.
-#[derive(Debug, Clone)]
-pub struct PutRuleResponse {
-    /// Rule ARN.
-    pub rule_arn: Option<String>,
-}
-
-/// EventBridge PutTargets request.
-#[derive(Debug, Clone, Builder)]
-pub struct PutTargetsRequest {
-    /// Rule name.
-    pub rule: String,
-    /// Targets to associate with the rule.
-    pub targets: Vec<EventBridgeTarget>,
-}
-
-/// EventBridge target.
-#[derive(Debug, Clone, Builder)]
-pub struct EventBridgeTarget {
-    /// Target ID.
-    pub id: String,
-    /// Target ARN.
-    pub arn: String,
-}
-
-/// EventBridge tag.
-#[derive(Debug, Clone, Builder)]
-pub struct EventBridgeTag {
-    /// Tag key.
-    pub key: String,
-    /// Tag value.
-    pub value: String,
 }
 
 /// EC2 filter used in describe requests.
@@ -3260,31 +3216,40 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
 #[async_trait]
 impl EventBridgeApi for EventBridgeClient {
     async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse> {
+        let rule_name = request
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = eventbridge_result(
             self.put_rule()
-                .name(request.name.clone())
-                .schedule_expression(request.schedule_expression)
-                .set_state(request.state.as_deref().map(RuleState::from))
+                .set_name(request.name)
+                .set_schedule_expression(request.schedule_expression)
+                .set_event_pattern(request.event_pattern)
+                .set_state(request.state)
                 .set_description(request.description)
-                .set_tags(eventbridge_tags_to_aws(request.tags)?)
+                .set_role_arn(request.role_arn)
+                .set_tags(request.tags)
+                .set_event_bus_name(request.event_bus_name)
                 .send()
                 .await,
             "PutRule",
             "EventBridgeRule",
-            &request.name,
+            &rule_name,
         )?;
 
-        Ok(PutRuleResponse {
-            rule_arn: output.rule_arn,
-        })
+        Ok(output)
     }
 
     async fn put_targets(&self, request: PutTargetsRequest) -> Result<()> {
-        let rule_name = request.rule.clone();
+        let rule_name = request
+            .rule
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = eventbridge_result(
             self.put_targets()
-                .rule(request.rule)
-                .set_targets(Some(eventbridge_targets_to_aws(request.targets)?))
+                .set_rule(request.rule)
+                .set_event_bus_name(request.event_bus_name)
+                .set_targets(request.targets)
                 .send()
                 .await,
             "PutTargets",
@@ -5674,46 +5639,6 @@ where
                 }))
         }
     }
-}
-
-fn eventbridge_tags_to_aws(
-    tags: Option<Vec<EventBridgeTag>>,
-) -> Result<Option<Vec<AwsEventBridgeTag>>> {
-    tags.map(|tags| {
-        tags.into_iter()
-            .map(|tag| {
-                AwsEventBridgeTag::builder()
-                    .key(tag.key)
-                    .value(tag.value)
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid EventBridge tag".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .collect()
-    })
-    .transpose()
-}
-
-fn eventbridge_targets_to_aws(
-    targets: Vec<EventBridgeTarget>,
-) -> Result<Vec<AwsEventBridgeTarget>> {
-    targets
-        .into_iter()
-        .map(|target| {
-            AwsEventBridgeTarget::builder()
-                .id(target.id)
-                .arn(target.arn)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Invalid EventBridge target".to_string(),
-                    resource_id: None,
-                })
-        })
-        .collect()
 }
 
 fn ensure_no_eventbridge_target_failures(
