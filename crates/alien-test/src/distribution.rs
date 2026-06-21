@@ -25,7 +25,7 @@ use alien_core::{
     Platform, Stack, StackSettings, StackState, Worker, WorkerCode,
 };
 #[cfg(test)]
-use alien_core::{Container, ContainerCode, ResourceSpec, Storage, Vault};
+use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
 use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
@@ -749,6 +749,11 @@ fn stack_settings_for_terraform(
         kubernetes.exposure = Some(exposure);
         settings.kubernetes = Some(kubernetes);
     }
+    if target.is_kubernetes()
+        && prepared.config.kubernetes_cluster_mode == KubernetesClusterMode::Existing
+    {
+        set_kubernetes_cluster_ownership(&mut settings, KubernetesClusterOwnership::Existing);
+    }
 
     if prepared.platform != Platform::Azure {
         return Ok(settings);
@@ -1322,6 +1327,24 @@ fn set_kubernetes_namespace(settings: &mut StackSettings, namespace: String) {
     settings.kubernetes = Some(kubernetes);
 }
 
+fn set_kubernetes_cluster_ownership(
+    settings: &mut StackSettings,
+    ownership: KubernetesClusterOwnership,
+) {
+    let mut kubernetes = settings.kubernetes.take().unwrap_or(KubernetesSettings {
+        cluster: None,
+        exposure: None,
+    });
+    let mut cluster = kubernetes.cluster.unwrap_or(KubernetesClusterSettings {
+        ownership,
+        namespace: None,
+        cloud: None,
+    });
+    cluster.ownership = ownership;
+    kubernetes.cluster = Some(cluster);
+    settings.kubernetes = Some(kubernetes);
+}
+
 fn rewrite_push_distribution_images(
     mut stack: Stack,
     platform: Platform,
@@ -1670,7 +1693,8 @@ async fn apply_terraform_and_import(
             grant_terraform_shared_env_join_permission(&prepared.config, &outputs).await?;
         }
         if target.cloud_platform() == Platform::Gcp {
-            wait_for_gcp_management_permissions(&prepared.config, &outputs).await?;
+            wait_for_gcp_management_permissions(&prepared.config, &outputs, has_remote_management)
+                .await?;
         }
         if target.cloud_platform() == Platform::Azure
             && has_remote_management
@@ -2580,19 +2604,32 @@ async fn terraform_output_json(workdir: &Path, env: &[(String, String)]) -> anyh
 async fn wait_for_gcp_management_permissions(
     config: &TestConfig,
     outputs: &Value,
+    has_remote_management: bool,
 ) -> anyhow::Result<()> {
-    let target = config.gcp_target.as_ref().context("GCP target missing")?;
-    let management_source = config.gcp_mgmt.as_ref();
-    let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
-        outputs,
-        "deployment_management_config",
-    )?)?;
+    if !has_remote_management {
+        info!(
+            "Skipping GCP management permission probe because Terraform rendered no remote management resource"
+        );
+        return Ok(());
+    }
+
+    let management_config: Option<ManagementConfig> = serde_json::from_str(
+        &terraform_output_string(outputs, "deployment_management_config")?,
+    )?;
+    let Some(management_config) = management_config else {
+        info!(
+            "Skipping GCP management permission probe because Terraform output has no management config"
+        );
+        return Ok(());
+    };
     let management_service_account_email = match management_config {
         ManagementConfig::Gcp(config) => config.service_account_email,
         other => {
             anyhow::bail!("expected GCP management config, got {other:?}");
         }
     };
+    let target = config.gcp_target.as_ref().context("GCP target missing")?;
+    let management_source = config.gcp_mgmt.as_ref();
     if management_service_account_email.is_empty() {
         warn!(
             "Skipping GCP management permission probe because no management service account is configured"
@@ -3356,8 +3393,54 @@ fn apply_env(cmd: &mut Command, env: &[(String, String)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::permissions::PermissionProfile;
+    use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::ResourceLifecycle;
+
+    fn empty_test_config() -> TestConfig {
+        TestConfig {
+            aws_mgmt: None,
+            aws_target: None,
+            aws_resources: crate::config::AwsTestResources {
+                s3_bucket: None,
+                command_kv_table: None,
+                lambda_image: None,
+                lambda_execution_role_arn: None,
+                ecr_push_role_arn: None,
+                ecr_pull_role_arn: None,
+                ecr_repository: None,
+            },
+            gcp_mgmt: None,
+            gcp_target: None,
+            gcp_resources: crate::config::GcpTestResources {
+                gcs_bucket: None,
+                cloudrun_image: None,
+                gar_repository: None,
+            },
+            azure_mgmt: None,
+            azure_target: None,
+            azure_resources: crate::config::AzureTestResources {
+                resource_group: None,
+                storage_account: None,
+                blob_container: None,
+                container_app_image: None,
+                managed_environment_name: None,
+                registry_name: None,
+                acr_repository: None,
+                shared_container_env: None,
+            },
+            e2e_artifact_registry: crate::config::E2eArtifactRegistryConfig {
+                aws_ar_push_role_arn: None,
+                aws_ar_pull_role_arn: None,
+                gcp_gar_repository: None,
+                gcp_ar_pull_sa_email: None,
+                gcp_ar_push_sa_email: None,
+                azure_acr_repository: None,
+            },
+            kubernetes: crate::config::KubernetesTestConfig::default(),
+            e2e_network_mode: crate::config::E2eNetworkMode::None,
+            kubernetes_cluster_mode: KubernetesClusterMode::Existing,
+        }
+    }
 
     fn contains_resource_type(stack: &Stack, resource_type: &str) -> bool {
         stack
@@ -3386,6 +3469,79 @@ mod tests {
         assert_eq!(
             deployment_running_timeout(Platform::Gcp, TestApp::ComprehensiveRust),
             Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn existing_kubernetes_cluster_mode_marks_cluster_as_existing() {
+        let mut settings = StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: Some(KubernetesClusterSettings {
+                    ownership: KubernetesClusterOwnership::Managed,
+                    namespace: Some("alien-runtime".to_string()),
+                    cloud: None,
+                }),
+                exposure: Some(KubernetesExposureSettings::Disabled),
+            }),
+            ..StackSettings::default()
+        };
+
+        set_kubernetes_cluster_ownership(&mut settings, KubernetesClusterOwnership::Existing);
+
+        let kubernetes = settings.kubernetes.expect("kubernetes settings");
+        let cluster = kubernetes.cluster.expect("cluster settings");
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::Existing);
+        assert_eq!(cluster.namespace.as_deref(), Some("alien-runtime"));
+        assert_eq!(
+            kubernetes.exposure,
+            Some(KubernetesExposureSettings::Disabled)
+        );
+    }
+
+    #[tokio::test]
+    async fn gke_existing_cluster_render_does_not_add_cloud_network() {
+        let source_stack = Stack::new("gke-existing-cluster-source".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["worker/execute"]),
+            )
+            .add(
+                Container::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(ContainerCode::Image {
+                        image: "manager.example.com/alien-e2e:tag".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.25".to_string(),
+                        desired: "0.25".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "128Mi".to_string(),
+                        desired: "128Mi".to_string(),
+                    })
+                    .port(8080)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut stack_settings = stack_settings_for_flow(DeploymentModel::Pull);
+        set_kubernetes_cluster_ownership(&mut stack_settings, KubernetesClusterOwnership::Existing);
+
+        let rendered_stack = terraform_kubernetes_stack_for_target(
+            source_stack,
+            alien_terraform::TerraformTarget::Gke,
+            stack_settings,
+        )
+        .await
+        .expect("GKE existing-cluster Terraform render preflights should pass");
+
+        assert!(
+            contains_resource_type(&rendered_stack, "kubernetes-cluster"),
+            "GKE render should still add the KubernetesCluster handoff resource"
+        );
+        assert!(
+            !contains_resource_type(&rendered_stack, "network"),
+            "GKE existing-cluster render must not add a setup-owned GCP VPC for Kubernetes workloads"
         );
     }
 
@@ -3434,6 +3590,36 @@ mod tests {
                 .is_err(),
             "rendered setup stack is not a valid release/source stack"
         );
+    }
+
+    #[tokio::test]
+    async fn gcp_management_probe_skips_direct_target_without_remote_management() {
+        wait_for_gcp_management_permissions(
+            &empty_test_config(),
+            &serde_json::json!({
+                "deployment_management_config": {
+                    "value": "null"
+                }
+            }),
+            false,
+        )
+        .await
+        .expect("direct-target GCP setup should not require management config");
+    }
+
+    #[tokio::test]
+    async fn gcp_management_probe_skips_null_management_output() {
+        wait_for_gcp_management_permissions(
+            &empty_test_config(),
+            &serde_json::json!({
+                "deployment_management_config": {
+                    "value": "null"
+                }
+            }),
+            true,
+        )
+        .await
+        .expect("null Terraform management config should not require a GCP management probe");
     }
 
     #[tokio::test]
@@ -3545,15 +3731,16 @@ mod tests {
             .map(|(_, contents)| contents)
             .collect::<String>();
 
-        assert!(rendered.contains("managerServiceAccount = local.helm_manager_service_account"));
         assert!(
-            rendered.contains(
-                "\"eks.amazonaws.com/role-arn\" = aws_iam_role.remote_stack_management.arn"
-            ),
+            rendered.contains("helm_manager_service_account = {"),
+            "Terraform locals should include the manager service account values handed to Helm"
+        );
+        assert!(
+            rendered.contains("\"eks.amazonaws.com/role-arn\" = aws_iam_role.management.arn"),
             "Helm values must annotate the manager service account with its IRSA role"
         );
         assert!(
-            rendered.contains("id   = \"remote-stack-management\""),
+            rendered.contains("id   = \"management\""),
             "rendered Terraform should include the management identity resource"
         );
         assert!(
@@ -3561,9 +3748,7 @@ mod tests {
             "management role must be able to read the EKS cluster for cloud metadata heartbeat"
         );
         assert!(
-            rendered.contains(
-                "arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.kubernetes_cluster_mode == \"create\" ? format(\"%s-k8s\", local.resource_prefix) : var.eks_cluster_name}"
-            ),
+            rendered.contains("arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.kubernetes_cluster_name}"),
             "EKS cluster read must follow the Terraform-selected cluster name, not only the resource prefix"
         );
         assert!(
@@ -3572,7 +3757,7 @@ mod tests {
             "Terraform setup must create the EKS OIDC provider before Helm handoff"
         );
         assert!(
-            rendered.contains("aws_iam_openid_connect_provider.eks.arn"),
+            rendered.contains("aws_iam_openid_connect_provider.eks[0].arn"),
             "IRSA trust must depend on the Terraform-managed OIDC provider"
         );
         assert!(
@@ -3715,10 +3900,12 @@ mod tests {
             .map(|(_, contents)| contents)
             .collect::<String>();
 
-        assert!(rendered.contains("roles/run.admin"));
+        assert!(rendered.contains(
+            "resource \"google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""
+        ));
+        assert!(rendered.contains("run.services.update"));
         assert!(rendered.contains("roles/iam.serviceAccountUser"));
         assert!(rendered.contains("roles/artifactregistry.reader"));
-        assert!(rendered.contains("roles/cloudbuild.builds.editor"));
     }
 
     #[tokio::test]
@@ -3766,12 +3953,19 @@ mod tests {
             iam_member_declarations.len(),
             "GCP IAM member declarations should be unique: {iam_member_declarations:?}"
         );
+        let viewer_bindings = rendered
+            .matches("role    = \"roles/secretmanager.viewer\"")
+            .count();
+        assert_eq!(
+            viewer_bindings, 4,
+            "GCP vault heartbeat/management bindings should be emitted once per target scope"
+        );
         assert_eq!(
             rendered
-                .matches("role    = \"roles/secretmanager.viewer\"")
+                .matches("title       = \"ResourceVaultSecretsHeartbeat\"")
                 .count(),
-            1,
-            "global management vault heartbeat binding should be emitted once"
+            2,
+            "resource-scoped vault heartbeat conditions should be emitted once per generated vault"
         );
     }
 
@@ -3892,8 +4086,77 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered.contains("deployment_management_config = null"));
-        assert!(!rendered.contains("azure_oidc_issuer"));
-        assert!(!rendered.contains("azure_oidc_subject"));
+        assert!(!rendered.contains("variable \"azure_oidc_issuer\""));
+        assert!(!rendered.contains("variable \"azure_oidc_subject\""));
+        assert!(!rendered
+            .contains("resource \"azurerm_federated_identity_credential\" \"management_fic\""));
+    }
+
+    #[tokio::test]
+    async fn azure_push_distribution_render_grants_setup_heartbeats_to_management() {
+        let source_stack = Stack::new("distribution-azure-rsm".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["worker/execute"]),
+            )
+            .add(
+                Worker::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/api:tag".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Kv::new("state".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Queue::new("commands".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Push);
+
+        let rendered_stack = apply_render_mutations(source_stack, Platform::Azure, &stack_settings)
+            .await
+            .expect("Azure push render mutations should succeed");
+
+        let ManagementPermissions::Extend(management_profile) = rendered_stack.management() else {
+            panic!("Azure push render should generate management permissions");
+        };
+        let global_permission_ids: Vec<_> = management_profile
+            .0
+            .get("*")
+            .expect("management profile should include global permissions")
+            .iter()
+            .map(|permission| permission.id().to_string())
+            .collect();
+
+        for expected in [
+            "azure-resource-group/heartbeat",
+            "azure-storage-account/heartbeat",
+            "azure-service-bus-namespace/heartbeat",
+            "service-account/heartbeat",
+            "service-activation/heartbeat",
+        ] {
+            assert!(
+                global_permission_ids.contains(&expected.to_string()),
+                "Azure management profile should include {expected}"
+            );
+        }
+        assert!(
+            !global_permission_ids
+                .iter()
+                .any(|permission| permission.contains("azure_")
+                    || permission.contains("service_activation")),
+            "Azure management profile must use permission-set IDs, not Rust resource type names"
+        );
     }
 
     #[test]

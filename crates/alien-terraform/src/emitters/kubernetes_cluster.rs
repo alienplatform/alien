@@ -1,14 +1,19 @@
 use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::aws::helpers::{
+        aws_terraform_permission_context, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize,
+    },
     expr,
 };
 use alien_core::{
     import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Network, ResourceLifecycle, Result,
-    Stack, Worker,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Network, PermissionProfile,
+    PermissionSetReference, RemoteStackManagement, ResourceLifecycle, Result, Stack, Worker,
 };
 use alien_error::AlienError;
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -616,6 +621,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
         ]);
+        emit_eks_cluster_management_iam(ctx, &mut fragment, label)?;
         Ok(fragment)
     }
 
@@ -627,6 +633,77 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             "cluster_name",
         )
     }
+}
+
+fn emit_eks_cluster_management_iam(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+) -> Result<()> {
+    let Some(management_label) = remote_stack_management_label(ctx) else {
+        return Ok(());
+    };
+    let Some(profile) = ctx.stack.management().profile() else {
+        return Ok(());
+    };
+
+    let context = aws_terraform_permission_context()
+        .with_resource_id(ctx.resource_id.to_string())
+        .with_resource_name(format!("${{local.{label}_cluster_name}}"));
+
+    for (idx, permission_set_ref) in
+        kubernetes_cluster_management_permission_refs(profile, ctx.resource_id)
+            .into_iter()
+            .enumerate()
+    {
+        let Some(permission_set) =
+            permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        else {
+            continue;
+        };
+        if permission_set.id.ends_with("/provision")
+            || !permission_set.id.starts_with("kubernetes-cluster/")
+            || permission_set.platforms.aws.is_none()
+        {
+            continue;
+        }
+
+        emit_iam_role_policy_for_target_with_label(
+            fragment,
+            management_label,
+            &permission_set,
+            &format!(
+                "{management_label}_{label}_{}_{idx}",
+                iam_policy_name_sanitize(&permission_set.id)
+            ),
+            &iam_policy_name_sanitize(&format!("{}-{}-{idx}", ctx.resource_id, permission_set.id)),
+            &context,
+            BindingTarget::Resource,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn kubernetes_cluster_management_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    profile
+        .0
+        .get(resource_id)
+        .map(|refs| refs.iter().collect())
+        .unwrap_or_default()
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
 }
 
 fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {

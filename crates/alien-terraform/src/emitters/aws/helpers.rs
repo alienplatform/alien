@@ -195,6 +195,13 @@ pub fn jsonencode(value: Expression) -> Expression {
 /// [`PermissionContext`]). This helper preserves that interpolation
 /// when translating to HCL.
 pub fn json_value_to_expression(value: serde_json::Value) -> Expression {
+    json_value_to_expression_impl(value, None)
+}
+
+fn json_value_to_expression_impl(
+    value: serde_json::Value,
+    key_order: Option<fn(&str) -> u8>,
+) -> Expression {
     match value {
         serde_json::Value::Null => Expression::Null,
         serde_json::Value::Bool(b) => Expression::Bool(b),
@@ -214,16 +221,40 @@ pub fn json_value_to_expression(value: serde_json::Value) -> Expression {
                 Expression::String(s)
             }
         }
-        serde_json::Value::Array(items) => {
-            Expression::Array(items.into_iter().map(json_value_to_expression).collect())
-        }
-        serde_json::Value::Object(map) => {
-            let pairs: Vec<(String, Expression)> = map
+        serde_json::Value::Array(items) => Expression::Array(
+            items
                 .into_iter()
-                .map(|(key, value)| (key, json_value_to_expression(value)))
+                .map(|item| json_value_to_expression_impl(item, key_order))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<(String, Expression)> = map
+                .into_iter()
+                .map(|(key, value)| (key, json_value_to_expression_impl(value, key_order)))
                 .collect();
+            if let Some(key_order) = key_order {
+                pairs.sort_by(|(left, _), (right, _)| {
+                    key_order(left)
+                        .cmp(&key_order(right))
+                        .then_with(|| left.cmp(right))
+                });
+            }
             expr::object(pairs.iter().map(|(k, v)| (k.as_str(), v.clone())))
         }
+    }
+}
+
+fn iam_json_key_order(key: &str) -> u8 {
+    match key {
+        "Version" => 0,
+        "Statement" => 1,
+        "Sid" => 2,
+        "Effect" => 3,
+        "Principal" => 4,
+        "Action" => 5,
+        "Resource" => 6,
+        "Condition" => 7,
+        _ => u8::MAX,
     }
 }
 
@@ -233,7 +264,10 @@ pub fn json_value_to_expression(value: serde_json::Value) -> Expression {
 /// `jsonencode(...)` expression that preserves any embedded
 /// `${var.…}` / `${data.…}` templates.
 pub fn jsonencode_policy_value(value: serde_json::Value) -> Expression {
-    jsonencode(json_value_to_expression(value))
+    jsonencode(json_value_to_expression_impl(
+        value,
+        Some(iam_json_key_order),
+    ))
 }
 
 /// Build a `policy = jsonencode({Version, Statement})` attribute.

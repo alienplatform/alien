@@ -115,6 +115,7 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
   const proc = spawn(cliPath, args, {
     cwd: options.app,
     env: childEnv,
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   })
 
@@ -188,7 +189,7 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
       appPath: options.app,
     })
   } catch (error) {
-    proc.kill("SIGTERM")
+    signalProcessTree(proc, "SIGTERM")
     throw await withTestingContext(
       error,
       "deploy",
@@ -196,6 +197,22 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
       { statusFile, appPath: options.app, platform: options.platform ?? "local" },
     )
   }
+}
+
+function signalProcessTree(
+  proc: import("node:child_process").ChildProcess,
+  signal: NodeJS.Signals,
+): void {
+  if (proc.pid && process.platform !== "win32") {
+    try {
+      process.kill(-proc.pid, signal)
+      return
+    } catch {
+      // Fall back to signaling only the direct child.
+    }
+  }
+
+  proc.kill(signal)
 }
 
 // ---------------------------------------------------------------------------

@@ -31,34 +31,53 @@ fn deployment_url(deployment: &TestDeployment) -> anyhow::Result<&str> {
         .context("Deployment URL not yet assigned")
 }
 
+fn post_empty(client: &reqwest::Client, url: String) -> reqwest::RequestBuilder {
+    client
+        .post(url)
+        .header(reqwest::header::CONTENT_LENGTH, "0")
+        .body(Vec::<u8>::new())
+}
+
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
 
 /// Check health endpoint: GET /health → { status: "ok" }
 ///
-/// Retries on transient errors:
+/// Retries on transient endpoint readiness failures:
+/// - request send errors: Kubernetes/GCP load balancers can publish an address
+///   before the first backend connection is stable
 /// - 403: AWS permission propagation delay (resource-based policies can take ~60s)
 /// - 500: Lambda cold start init timeout (large Bun binaries can exceed the 10s
 ///   init phase limit, causing the first invocation to fail with 500)
 pub async fn check_health(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking health endpoint");
+    check_health_url(url, std::time::Duration::from_secs(5)).await
+}
 
+async fn check_health_url(url: &str, retry_delay: std::time::Duration) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let max_attempts = 15;
-    let retry_delay = std::time::Duration::from_secs(5);
+    let health_url = format!("{}/health", url);
 
     for attempt in 1..=max_attempts {
-        let resp = client
-            .get(format!("{}/health", url))
-            .send()
-            .await
-            .context("Health check request failed")?;
+        let resp = match client.get(&health_url).send().await {
+            Ok(resp) => resp,
+            Err(error) if attempt < max_attempts => {
+                info!(
+                    attempt,
+                    max_attempts,
+                    error = %error,
+                    "Health check request failed before receiving a response (transient, retrying)"
+                );
+                tokio::time::sleep(retry_delay).await;
+                continue;
+            }
+            Err(error) => return Err(error).context("Health check request failed"),
+        };
 
         let status = resp.status();
-
-        // Retry on 403 (permission propagation) and 500 (cold start timeout)
         if (status == reqwest::StatusCode::FORBIDDEN
             || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR)
             && attempt < max_attempts
@@ -95,6 +114,76 @@ pub async fn check_health(deployment: &TestDeployment) -> anyhow::Result<()> {
     }
 
     unreachable!()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::{check_health_url, post_empty};
+
+    #[tokio::test]
+    async fn health_check_retries_request_send_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("read listener address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_task = Arc::clone(&attempts);
+
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept connection");
+                let attempt = attempts_for_task.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt == 1 {
+                    drop(socket);
+                    continue;
+                }
+
+                let mut buf = [0_u8; 1024];
+                let _ = socket.read(&mut buf).await.expect("read request");
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 15\r\n\r\n{\"status\":\"ok\"}",
+                    )
+                    .await
+                    .expect("write response");
+                break;
+            }
+        });
+
+        check_health_url(
+            &format!("http://{addr}"),
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .expect("health check should retry transient send failure");
+        server.await.expect("server task should finish");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn post_empty_sets_explicit_zero_content_length() {
+        let request = post_empty(
+            &reqwest::Client::new(),
+            "http://example.test/storage-test/alien-storage".to_string(),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request.headers().get(reqwest::header::CONTENT_LENGTH),
+            Some(&reqwest::header::HeaderValue::from_static("0"))
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -374,8 +463,8 @@ pub async fn check_storage(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking storage binding");
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/storage-test/{}", url, STORAGE_BINDING))
+    let client = reqwest::Client::new();
+    let resp = post_empty(&client, format!("{}/storage-test/{}", url, STORAGE_BINDING))
         .send()
         .await
         .context("Storage test request failed")?;
@@ -414,8 +503,8 @@ pub async fn check_kv(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking KV binding");
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/kv-test/{}", url, KV_BINDING))
+    let client = reqwest::Client::new();
+    let resp = post_empty(&client, format!("{}/kv-test/{}", url, KV_BINDING))
         .send()
         .await
         .context("KV test request failed")?;
@@ -451,8 +540,11 @@ pub async fn check_vault(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking vault binding");
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/vault-test/{}", url, VAULT_BINDING))
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("Failed to build vault test HTTP client")?;
+    let resp = post_empty(&client, format!("{}/vault-test/{}", url, VAULT_BINDING))
         .send()
         .await
         .context("Vault test request failed")?;
@@ -491,8 +583,8 @@ pub async fn check_queue(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking queue binding");
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/queue-test/{}", url, QUEUE_BINDING))
+    let client = reqwest::Client::new();
+    let resp = post_empty(&client, format!("{}/queue-test/{}", url, QUEUE_BINDING))
         .send()
         .await
         .context("Queue test request failed")?;
@@ -805,11 +897,14 @@ pub async fn check_service_account(deployment: &TestDeployment) -> anyhow::Resul
     let url = deployment_url(deployment)?;
     info!("Checking service account binding");
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/service-account-test/{}", url, "test-alien-sa"))
-        .send()
-        .await
-        .context("Service account test request failed")?;
+    let client = reqwest::Client::new();
+    let resp = post_empty(
+        &client,
+        format!("{}/service-account-test/{}", url, "test-alien-sa"),
+    )
+    .send()
+    .await
+    .context("Service account test request failed")?;
 
     let status = resp.status();
     if !status.is_success() {

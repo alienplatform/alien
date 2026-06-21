@@ -2076,6 +2076,13 @@ impl GcpWorkerController {
             });
         }
 
+        let Some(proxy_name) = self.target_https_proxy_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        };
+
         let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Certificate chain missing (certificate not issued)".to_string(),
@@ -2135,18 +2142,12 @@ impl GcpWorkerController {
             }
         }
 
-        let proxy_name = self.target_https_proxy_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: cfg.id.clone(),
-                message: "Target HTTPS proxy name missing for certificate renewal".to_string(),
-            })
-        })?;
         let ssl_cert_url = format!(
             "projects/{}/global/sslCertificates/{}",
             gcp_config.project_id, ssl_cert_name
         );
         compute_client
-            .set_target_https_proxy_ssl_certificates(proxy_name.clone(), vec![ssl_cert_url])
+            .set_target_https_proxy_ssl_certificates(proxy_name, vec![ssl_cert_url])
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
@@ -2205,7 +2206,7 @@ impl GcpWorkerController {
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         if cfg == previous_cfg {
             return Ok(HandlerAction::Continue {
-                state: UpdateRunningReadinessProbe,
+                state: UpdateEnsuringPublicExposure,
                 suggested_delay: None,
             });
         }
@@ -2389,11 +2390,633 @@ impl GcpWorkerController {
 
         info!(name=%service_name, "Cloud Run service updated successfully");
 
-        // Always go to updating push subscriptions next (linear flow)
         Ok(HandlerAction::Continue {
-            state: UpdatePushSubscriptions,
+            state: UpdateEnsuringPublicExposure,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = UpdateEnsuringPublicExposure,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_ensuring_public_exposure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let current_config = ctx.desired_resource_config::<Worker>()?;
+
+        if current_config.ingress != Ingress::Public {
+            return Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay: None,
+            });
+        }
+
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        if !has_domain_info {
+            return Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay: None,
+            });
+        }
+
+        if self.forwarding_rule_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay: None,
+            });
+        }
+
+        Ok(HandlerAction::Continue {
+            state: UpdateWaitingForCertificate,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdateWaitingForCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: ImportingSslCertificate,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateImportingInitialSslCertificate,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingServerlessNeg,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingServerlessNeg,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingPushSubscriptions,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_certificate",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateImportingInitialSslCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_importing_initial_ssl_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.importing_ssl_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForSslCertificate,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForSslCertificate,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "importing_ssl_certificate",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForSslCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_ssl_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_ssl_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingServerlessNeg,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingServerlessNeg,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_ssl_certificate",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingServerlessNeg,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_serverless_neg(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_serverless_neg(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForServerlessNeg,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForServerlessNeg,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingBackendService,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingBackendService,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_serverless_neg",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForServerlessNeg,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_serverless_neg(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_serverless_neg(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingBackendService,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingBackendService,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_serverless_neg",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingBackendService,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_backend_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_backend_service(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForBackendService,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForBackendService,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingUrlMap,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingUrlMap,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_backend_service",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForBackendService,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_backend_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_backend_service(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingUrlMap,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingUrlMap,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_backend_service",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingUrlMap,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_url_map(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_url_map(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForUrlMap,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForUrlMap,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingTargetHttpsProxy,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingTargetHttpsProxy,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_url_map",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForUrlMap,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_url_map(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_url_map(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingTargetHttpsProxy,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingTargetHttpsProxy,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_url_map",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingTargetHttpsProxy,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_target_https_proxy(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_target_https_proxy(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForTargetHttpsProxy,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForTargetHttpsProxy,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingGlobalAddress,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingGlobalAddress,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_target_https_proxy",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForTargetHttpsProxy,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_target_https_proxy(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_target_https_proxy(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingGlobalAddress,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingGlobalAddress,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_target_https_proxy",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingGlobalAddress,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_global_address(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_global_address(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForGlobalAddress,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForGlobalAddress,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingForwardingRule,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingForwardingRule,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_global_address",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForGlobalAddress,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_global_address(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_global_address(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingForwardingRule,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingForwardingRule,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_global_address",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingForwardingRule,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_forwarding_rule(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_forwarding_rule(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForForwardingRule,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForForwardingRule,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: WaitingForDns,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForDns,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_forwarding_rule",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForForwardingRule,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_forwarding_rule(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_forwarding_rule(ctx).await? {
+            HandlerAction::Continue {
+                state: WaitingForDns,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForDns,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_forwarding_rule",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForDns,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_dns(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.waiting_for_dns(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingPushSubscriptions,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "waiting_for_dns",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
     }
 
     #[handler(
@@ -2535,11 +3158,43 @@ impl GcpWorkerController {
             info!(worker=%current_config.id, "No trigger changes detected");
         }
 
-        // Always go to readiness probe next (linear flow)
         Ok(HandlerAction::Continue {
-            state: UpdateRunningReadinessProbe,
+            state: UpdateSettingIamPolicy,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = UpdateSettingIamPolicy,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_setting_iam_policy(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.setting_iam_policy(ctx).await? {
+            HandlerAction::Continue {
+                state: RunningReadinessProbe,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "setting_iam_policy",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
     }
 
     #[handler(
@@ -3606,6 +4261,17 @@ impl GcpWorkerController {
             }
             Err(_) => Ok(false),
         }
+    }
+
+    fn unexpected_update_wrapper_state(
+        resource_id: &str,
+        handler: &str,
+        state: GcpWorkerState,
+    ) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: resource_id.to_string(),
+            message: format!("{handler} returned unexpected state during update: {state:?}"),
+        })
     }
 
     async fn ensure_global_address_ip(
@@ -5525,11 +6191,19 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
 
         // Update to the new worker
+        let target_is_public = to_function.ingress == Ingress::Public;
         executor.update(to_function).unwrap();
 
         // Run the update flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let outputs = executor.outputs().unwrap();
+        let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        if target_is_public {
+            let expected_url = format!("https://{}.test.example.com", worker_id);
+            assert_eq!(function_outputs.url.as_deref(), Some(expected_url.as_str()));
+        }
     }
 
     // ─────────────── BEST EFFORT DELETION TESTS ───────────────────────

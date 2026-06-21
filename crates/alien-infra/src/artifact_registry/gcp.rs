@@ -11,7 +11,7 @@ use alien_core::{
     ResourceStatus,
 };
 use alien_gcp_clients::artifactregistry::{Repository, RepositoryFormat};
-use alien_gcp_clients::iam::{CreateServiceAccountRequest, ServiceAccount};
+use alien_gcp_clients::iam::{CreateServiceAccountRequest, IamPolicy, ServiceAccount};
 use chrono::Utc;
 
 /// Generates the prefixed GAR repository name for a given resource.
@@ -788,47 +788,58 @@ impl GcpArtifactRegistryController {
         let project_id = gcp_config.project_id.clone();
         let location = gcp_config.region.clone();
 
-        // Use ResourcePermissionsHelper to apply repository-level IAM
-        // (instead of project-level IAM which is overly broad)
-        let client = ctx
-            .service_provider
-            .get_gcp_artifact_registry_client(gcp_config)?;
+        let mut bindings = Vec::new();
+        ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
+            ctx,
+            &config.id,
+            &repository_name,
+            "artifact-registry",
+            &mut bindings,
+        )
+        .await?;
+
+        if bindings.is_empty() {
+            info!(
+                repository_id = %repository_name,
+                "No resource-scoped permissions to apply to Artifact Registry repository"
+            );
+            return Ok(());
+        }
+
         let project_id_owned = project_id.clone();
         let location_owned = location.clone();
         let repository_id_owned = repository_name.clone();
         let config_id_owned = config.id.clone();
+        let iam_policy = IamPolicy {
+            version: Some(3),
+            bindings,
+            etag: None,
+            kind: None,
+            resource_id: None,
+        };
 
-        ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
-            ctx,
-            &config.id,
-            &repository_name,
-            "Artifact Registry repository",
-            "artifact-registry",
-            client,
-            |client, iam_policy| async move {
-                client
-                    .set_repository_iam_policy(
-                        project_id_owned,
-                        location_owned,
-                        repository_id_owned.clone(),
-                        iam_policy,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to apply IAM policy to Artifact Registry repository '{}'",
-                            repository_id_owned
-                        ),
-                        resource_id: Some(config_id_owned),
-                    })?;
-                info!(
-                    repository_id = %repository_id_owned,
-                    "Applied IAM policy to Artifact Registry repository"
-                );
-                Ok(())
-            },
-        )
-        .await?;
+        let client = ctx
+            .service_provider
+            .get_gcp_artifact_registry_client(gcp_config)?;
+        client
+            .set_repository_iam_policy(
+                project_id_owned,
+                location_owned,
+                repository_id_owned.clone(),
+                iam_policy,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to apply IAM policy to Artifact Registry repository '{}'",
+                    repository_id_owned
+                ),
+                resource_id: Some(config_id_owned),
+            })?;
+        info!(
+            repository_id = %repository_id_owned,
+            "Applied IAM policy to Artifact Registry repository"
+        );
 
         Ok(())
     }

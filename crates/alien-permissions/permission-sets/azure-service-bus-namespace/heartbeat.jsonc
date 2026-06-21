@@ -1,0 +1,21 @@
+{
+  "id": "azure-service-bus-namespace/heartbeat",
+  "description": "Allows readonly monitoring and health checks for Azure Service Bus namespace resources",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "predefinedRoles": ["Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

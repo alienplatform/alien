@@ -1408,6 +1408,9 @@ mod tests {
             .returning(|_, _, _| Ok(()));
 
         // Mock successful policy deletion (for both roles)
+        mock_iam
+            .expect_list_attached_role_policies()
+            .returning(|_| Ok(empty_attached_role_policies_response()));
         mock_iam.expect_list_role_policies().returning(|role_name| {
             let policy_name = if role_name.ends_with("-pull") {
                 "ECRPullPolicy"

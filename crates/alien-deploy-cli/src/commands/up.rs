@@ -243,6 +243,34 @@ mod tests {
     }
 
     #[test]
+    fn stack_settings_external_bindings_are_copied_to_deployment_config() {
+        let mut external_bindings = alien_core::ExternalBindings::new();
+        external_bindings.insert(
+            "storage",
+            alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("test-bucket")),
+        );
+        let stack_settings = StackSettings {
+            external_bindings: Some(external_bindings),
+            ..StackSettings::default()
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(stack_settings.clone())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+
+        assert!(!config.external_bindings.has("storage"));
+        apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
+
+        assert!(config.external_bindings.has("storage"));
+    }
+
+    #[test]
     fn parses_cloud_base_platform_for_kubernetes() {
         assert_eq!(
             parse_base_platform(Platform::Kubernetes, Some("aws")).unwrap(),
@@ -1583,6 +1611,15 @@ async fn run_push_model(
     .await
 }
 
+fn apply_external_bindings_from_stack_settings(
+    config: &mut DeploymentConfig,
+    stack_settings: &StackSettings,
+) {
+    if let Some(ref external_bindings) = stack_settings.external_bindings {
+        config.external_bindings = external_bindings.clone();
+    }
+}
+
 /// Run the push-model initial setup flow for a deployment.
 ///
 /// Fetches deployment and release state from the manager, acquires a sync lock,
@@ -1749,12 +1786,7 @@ pub async fn push_initial_setup(
     config.deployment_token = Some(deployment_token.to_string());
     config.base_platform = base_platform;
 
-    // Extract external bindings from stack_settings (e.g., shared Container Apps Environment).
-    // The JSON deserialization above doesn't connect stack_settings.external_bindings to
-    // config.external_bindings, so we extract it explicitly.
-    if let Some(ref ext_bindings) = stack_settings.external_bindings {
-        config.external_bindings = ext_bindings.clone();
-    }
+    apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
     // Acquire sync lock — retry until the specific deployment is locked by us.
     // The manager's deployment loop may already hold the lock; we must wait for
@@ -1963,6 +1995,8 @@ pub async fn push_deletion(
     .context(ErrorData::ConfigurationError {
         message: "Failed to construct deployment config".to_string(),
     })?;
+
+    apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
     // Acquire sync lock with retry
     let session = format!("push-deletion-{}", uuid::Uuid::new_v4());

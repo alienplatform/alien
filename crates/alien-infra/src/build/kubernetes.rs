@@ -877,13 +877,13 @@ mod tests {
         // Test basic functionality
         assert_eq!(
             kubernetes_resource_name("my-stack", "build-my-build"),
-            "my-stack-build-my-build"
+            "build-my-build"
         );
 
         // Test character filtering and lowercasing
         assert_eq!(
             kubernetes_resource_name("My_Stack!", "build-Test#123"),
-            "my-stack-build-test-123"
+            "build-test-123"
         );
 
         // Test length truncation
