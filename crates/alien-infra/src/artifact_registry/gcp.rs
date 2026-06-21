@@ -939,6 +939,9 @@ mod tests {
     use google_cloud_longrunning::model::Operation;
     use std::sync::Arc;
 
+    const TEST_PROJECT_ID: &str = "test-project";
+    const TEST_LOCATION: &str = "us-central1";
+
     fn basic_artifact_registry() -> ArtifactRegistry {
         ArtifactRegistry::new("my-registry".to_string()).build()
     }
@@ -946,14 +949,14 @@ mod tests {
     fn create_successful_service_account_response(account_id: &str) -> ServiceAccount {
         ServiceAccount {
             name: Some(format!(
-                "projects/test-project-123/serviceAccounts/{}",
-                account_id
+                "projects/{}/serviceAccounts/{}",
+                TEST_PROJECT_ID, account_id
             )),
-            project_id: Some("test-project-123".to_string()),
+            project_id: Some(TEST_PROJECT_ID.to_string()),
             unique_id: Some("123456789012".to_string()),
             email: Some(format!(
-                "{}@test-project-123.iam.gserviceaccount.com",
-                account_id
+                "{}@{}.iam.gserviceaccount.com",
+                account_id, TEST_PROJECT_ID
             )),
             display_name: Some(format!("Test service account {}", account_id)),
             etag: Some("etag123".to_string()),
@@ -1035,9 +1038,6 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds() {
         let registry = basic_artifact_registry();
-        // Use the same values as GcpClientConfig::mock()
-        let project_id = "test-project-123";
-        let location = "us-central1";
 
         let mock_iam = setup_mock_client_for_creation_and_deletion();
         let mock_provider = setup_mock_service_provider(mock_iam);
@@ -1062,11 +1062,11 @@ mod tests {
 
         assert_eq!(
             registry_outputs.registry_id,
-            format!("projects/{}/locations/{}", project_id, location)
+            format!("projects/{}/locations/{}", TEST_PROJECT_ID, TEST_LOCATION)
         );
         assert_eq!(
             registry_outputs.registry_endpoint,
-            format!("{}-docker.pkg.dev/{}", location, project_id)
+            format!("{}-docker.pkg.dev/{}", TEST_LOCATION, TEST_PROJECT_ID)
         );
         assert!(registry_outputs.pull_role.is_some());
         assert!(registry_outputs.push_role.is_some());
@@ -1080,9 +1080,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_flow_succeeds() {
         let registry = basic_artifact_registry();
-        // Use the same values as GcpClientConfig::mock()
-        let project_id = "test-project-123";
-        let location = "us-central1";
 
         let mock_iam = setup_mock_client_for_creation_and_update();
         let mock_provider = setup_mock_service_provider(mock_iam);
