@@ -136,6 +136,10 @@ pub use aws_sdk_ec2::{
             AllocateAddressInput as AllocateAddressRequest,
             AllocateAddressOutput as AllocateAddressResponse,
         },
+        associate_route_table::{
+            AssociateRouteTableInput as AssociateRouteTableRequest,
+            AssociateRouteTableOutput as AssociateRouteTableResponse,
+        },
         attach_internet_gateway::AttachInternetGatewayInput as AttachInternetGatewayRequest,
         create_internet_gateway::{
             CreateInternetGatewayInput as CreateInternetGatewayRequest,
@@ -144,6 +148,11 @@ pub use aws_sdk_ec2::{
         create_nat_gateway::{
             CreateNatGatewayInput as CreateNatGatewayRequest,
             CreateNatGatewayOutput as CreateNatGatewayResponse,
+        },
+        create_route::CreateRouteInput as CreateRouteRequest,
+        create_route_table::{
+            CreateRouteTableInput as CreateRouteTableRequest,
+            CreateRouteTableOutput as CreateRouteTableResponse,
         },
         create_subnet::{
             CreateSubnetInput as CreateSubnetRequest, CreateSubnetOutput as CreateSubnetResponse,
@@ -168,7 +177,7 @@ pub use aws_sdk_ec2::{
     },
     types::{
         ConnectivityType, DomainType, Filter, InternetGateway, IpPermission, IpRange, NatGateway,
-        ResourceType as Ec2ResourceType, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
+        ResourceType as Ec2ResourceType, RouteTable, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
     },
 };
 
@@ -293,58 +302,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_support: Option<bool>,
     /// Enable DNS hostnames.
     pub enable_dns_hostnames: Option<bool>,
-}
-
-/// Request to create a route table.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateRouteTableRequest {
-    /// VPC ID.
-    pub vpc_id: String,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating a route table.
-#[derive(Debug, Clone)]
-pub struct CreateRouteTableResponse {
-    /// Created route table.
-    pub route_table: Option<RouteTable>,
-}
-
-/// EC2 route table metadata.
-#[derive(Debug, Clone)]
-pub struct RouteTable {
-    /// Route table ID.
-    pub route_table_id: Option<String>,
-}
-
-/// Request to create a route.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateRouteRequest {
-    /// Route table ID.
-    pub route_table_id: String,
-    /// Destination CIDR block.
-    pub destination_cidr_block: String,
-    /// Internet gateway ID.
-    pub gateway_id: Option<String>,
-    /// NAT gateway ID.
-    pub nat_gateway_id: Option<String>,
-}
-
-/// Request to associate a route table.
-#[derive(Debug, Clone, Builder)]
-pub struct AssociateRouteTableRequest {
-    /// Route table ID.
-    pub route_table_id: String,
-    /// Subnet ID.
-    pub subnet_id: String,
-}
-
-/// Response from associating a route table.
-#[derive(Debug, Clone)]
-pub struct AssociateRouteTableResponse {
-    /// Association ID.
-    pub association_id: Option<String>,
 }
 
 /// Request to describe security groups.
@@ -3500,23 +3457,20 @@ impl Ec2Api for Ec2Client {
         &self,
         request: CreateRouteTableRequest,
     ) -> Result<CreateRouteTableResponse> {
-        let vpc_id = request.vpc_id.clone();
-        let response = ec2_result(
+        let vpc_id = request.vpc_id().unwrap_or("<unknown>").to_string();
+
+        ec2_result(
             self.create_route_table()
-                .vpc_id(&vpc_id)
+                .set_client_token(request.client_token)
+                .set_dry_run(request.dry_run)
+                .set_vpc_id(request.vpc_id)
                 .set_tag_specifications(request.tag_specifications)
                 .send()
                 .await,
             "CreateRouteTable",
             "RouteTable",
             &vpc_id,
-        )?;
-
-        Ok(CreateRouteTableResponse {
-            route_table: response.route_table().map(|route_table| RouteTable {
-                route_table_id: route_table.route_table_id().map(ToString::to_string),
-            }),
-        })
+        )
     }
 
     async fn delete_route_table(&self, route_table_id: &str) -> Result<()> {
@@ -3533,12 +3487,26 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn create_route(&self, request: CreateRouteRequest) -> Result<()> {
-        let route_table_id = request.route_table_id.clone();
+        let route_table_id = request.route_table_id().unwrap_or("<unknown>").to_string();
+
         ec2_result(
             self.create_route()
-                .route_table_id(&route_table_id)
-                .destination_cidr_block(request.destination_cidr_block)
+                .set_destination_prefix_list_id(request.destination_prefix_list_id)
+                .set_vpc_endpoint_id(request.vpc_endpoint_id)
+                .set_transit_gateway_id(request.transit_gateway_id)
+                .set_local_gateway_id(request.local_gateway_id)
+                .set_carrier_gateway_id(request.carrier_gateway_id)
+                .set_core_network_arn(request.core_network_arn)
+                .set_odb_network_arn(request.odb_network_arn)
+                .set_dry_run(request.dry_run)
+                .set_route_table_id(request.route_table_id)
+                .set_destination_cidr_block(request.destination_cidr_block)
                 .set_gateway_id(request.gateway_id)
+                .set_destination_ipv6_cidr_block(request.destination_ipv6_cidr_block)
+                .set_egress_only_internet_gateway_id(request.egress_only_internet_gateway_id)
+                .set_instance_id(request.instance_id)
+                .set_network_interface_id(request.network_interface_id)
+                .set_vpc_peering_connection_id(request.vpc_peering_connection_id)
                 .set_nat_gateway_id(request.nat_gateway_id)
                 .send()
                 .await,
@@ -3553,21 +3521,21 @@ impl Ec2Api for Ec2Client {
         &self,
         request: AssociateRouteTableRequest,
     ) -> Result<AssociateRouteTableResponse> {
-        let route_table_id = request.route_table_id.clone();
-        let response = ec2_result(
+        let route_table_id = request.route_table_id().unwrap_or("<unknown>").to_string();
+
+        ec2_result(
             self.associate_route_table()
-                .route_table_id(&route_table_id)
-                .subnet_id(request.subnet_id)
+                .set_gateway_id(request.gateway_id)
+                .set_public_ipv4_pool(request.public_ipv4_pool)
+                .set_dry_run(request.dry_run)
+                .set_subnet_id(request.subnet_id)
+                .set_route_table_id(request.route_table_id)
                 .send()
                 .await,
             "AssociateRouteTable",
             "RouteTableAssociation",
             &route_table_id,
-        )?;
-
-        Ok(AssociateRouteTableResponse {
-            association_id: response.association_id().map(ToString::to_string),
-        })
+        )
     }
 
     async fn disassociate_route_table(&self, association_id: &str) -> Result<()> {

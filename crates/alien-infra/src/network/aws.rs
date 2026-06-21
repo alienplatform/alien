@@ -1032,14 +1032,19 @@ impl AwsNetworkController {
             .create_route_table(
                 CreateRouteTableRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![self.create_tag_specification(
+                    .set_tag_specifications(Some(vec![self.create_tag_specification(
                         ctx.resource_prefix,
                         &config.id,
                         "route-table",
                         format!("{}-public-rt", ctx.resource_prefix),
                         [],
-                    )])
-                    .build(),
+                    )]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build public route table creation request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1048,8 +1053,9 @@ impl AwsNetworkController {
             })?;
 
         let public_rt_id = public_rt_response
-            .route_table
-            .and_then(|rt| rt.route_table_id)
+            .route_table()
+            .and_then(|rt| rt.route_table_id())
+            .map(ToString::to_string)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: "Public route table created but no ID returned".to_string(),
@@ -1064,7 +1070,12 @@ impl AwsNetworkController {
                     .route_table_id(public_rt_id.clone())
                     .destination_cidr_block("0.0.0.0/0".to_string())
                     .gateway_id(igw_id.clone())
-                    .build(),
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build Internet Gateway route request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1079,7 +1090,15 @@ impl AwsNetworkController {
                     AssociateRouteTableRequest::builder()
                         .route_table_id(public_rt_id.clone())
                         .subnet_id(subnet_id.clone())
-                        .build(),
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to build public route table association request for subnet {}",
+                                subnet_id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?,
                 )
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -1090,8 +1109,8 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(assoc_id) = assoc_response.association_id {
-                self.route_table_association_ids.push(assoc_id);
+            if let Some(assoc_id) = assoc_response.association_id() {
+                self.route_table_association_ids.push(assoc_id.to_string());
             }
         }
 
@@ -1104,14 +1123,19 @@ impl AwsNetworkController {
             .create_route_table(
                 CreateRouteTableRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![self.create_tag_specification(
+                    .set_tag_specifications(Some(vec![self.create_tag_specification(
                         ctx.resource_prefix,
                         &config.id,
                         "route-table",
                         format!("{}-private-rt", ctx.resource_prefix),
                         [],
-                    )])
-                    .build(),
+                    )]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build private route table creation request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1120,8 +1144,9 @@ impl AwsNetworkController {
             })?;
 
         let private_rt_id = private_rt_response
-            .route_table
-            .and_then(|rt| rt.route_table_id)
+            .route_table()
+            .and_then(|rt| rt.route_table_id())
+            .map(ToString::to_string)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: "Private route table created but no ID returned".to_string(),
@@ -1136,7 +1161,15 @@ impl AwsNetworkController {
                     AssociateRouteTableRequest::builder()
                         .route_table_id(private_rt_id.clone())
                         .subnet_id(subnet_id.clone())
-                        .build(),
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to build private route table association request for subnet {}",
+                                subnet_id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?,
                 )
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -1147,8 +1180,8 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(assoc_id) = assoc_response.association_id {
-                self.route_table_association_ids.push(assoc_id);
+            if let Some(assoc_id) = assoc_response.association_id() {
+                self.route_table_association_ids.push(assoc_id.to_string());
             }
         }
 
@@ -1331,7 +1364,12 @@ impl AwsNetworkController {
                             .route_table_id(private_rt_id.clone())
                             .destination_cidr_block("0.0.0.0/0".to_string())
                             .nat_gateway_id(nat_gateway_id.clone())
-                            .build(),
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "Failed to build NAT Gateway route request".to_string(),
+                                resource_id: Some(config.id.clone()),
+                            })?,
                     )
                     .await
                     .context(ErrorData::CloudPlatformError {
@@ -1353,7 +1391,10 @@ impl AwsNetworkController {
             }
             Some("failed") | Some("deleted") => {
                 Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("NAT Gateway in failed state: {:?}", nat_gateway.state),
+                    message: format!(
+                        "NAT Gateway in failed state: {:?}",
+                        nat_gateway.state().map(|state| state.as_str())
+                    ),
                     resource_id: Some(config.id.clone()),
                 }))
             }
