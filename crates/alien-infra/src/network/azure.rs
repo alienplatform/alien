@@ -8,9 +8,11 @@
 //! - Network Security Groups (NSGs) for traffic control
 
 use crate::core::{
-    AddressSpace, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku, NetworkSecurityGroup,
-    NetworkSecurityGroupPropertiesFormat, OperationResult, PublicIpAddress,
-    PublicIpAddressPropertiesFormat, PublicIpAddressSku, ResourceControllerContext, SecurityRule,
+    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
+    AzureNetworkResource, IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat,
+    NatGatewaySku, NetworkSecurityGroup, NetworkSecurityGroupPropertiesFormat, OperationResult,
+    PublicIpAddress, PublicIpAddressPropertiesFormat, PublicIpAddressSku,
+    ResourceControllerContext, SecurityRule, SecurityRuleAccess, SecurityRuleDirection,
     SecurityRulePropertiesFormat, SubResource, Subnet, SubnetPropertiesFormat, VirtualNetwork,
     VirtualNetworkPropertiesFormat,
 };
@@ -25,10 +27,18 @@ use alien_error::{AlienError, Context};
 use alien_macros::controller;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tracing::{debug, info, warn};
 
 const AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS: u32 = 60;
 const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
+
+fn managed_azure_network_resource(location: String) -> AzureNetworkResource {
+    let mut resource = AzureNetworkResource::new();
+    resource.location = Some(location);
+    resource.tags = Some(json!({ "managed-by": "runtime" }));
+    resource
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,7 +403,7 @@ impl AzureNetworkController {
                     Err(err) => return Err(err),
                 };
 
-                self.location = vnet.location;
+                self.location = vnet.resource.location;
                 if let Some(props) = &vnet.properties {
                     if let Some(addr_space) = &props.address_space {
                         self.cidr_block = addr_space.address_prefixes.first().cloned();
@@ -437,7 +447,7 @@ impl AzureNetworkController {
             .get_azure_network_client(azure_config)?;
 
         let vnet = VirtualNetwork {
-            location: Some(location),
+            resource: managed_azure_network_resource(location),
             properties: Some(VirtualNetworkPropertiesFormat {
                 address_space: Some(AddressSpace {
                     address_prefixes: vec![cidr_block],
@@ -445,9 +455,6 @@ impl AzureNetworkController {
                 }),
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "runtime".to_string())]
-                .into_iter()
-                .collect(),
             ..Default::default()
         };
 
@@ -462,7 +469,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(created_vnet) => {
-                self.vnet_resource_id = created_vnet.id;
+                self.vnet_resource_id = created_vnet.resource.id;
                 Ok(HandlerAction::Continue {
                     state: CreatingPublicSubnet,
                     suggested_delay: None,
@@ -502,7 +509,7 @@ impl AzureNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.vnet_resource_id = vnet.id;
+        self.vnet_resource_id = vnet.resource.id;
         info!(vnet_name = %vnet_name, "VNet created successfully");
 
         Ok(HandlerAction::Continue {
@@ -806,18 +813,15 @@ impl AzureNetworkController {
             .get_azure_network_client(azure_config)?;
 
         let public_ip = PublicIpAddress {
-            location: Some(location),
+            resource: managed_azure_network_resource(location),
             sku: Some(PublicIpAddressSku {
-                name: Some("Standard".to_string()),
+                name: Some(public_ip_address_sku::Name::Standard),
                 tier: None,
             }),
-            properties: Some(PublicIpAddressPropertiesFormat {
-                public_ip_allocation_method: Some("Static".to_string()),
+            properties: Some(Box::new(PublicIpAddressPropertiesFormat {
+                public_ip_allocation_method: Some(IpAllocationMethod::Static),
                 ..Default::default()
-            }),
-            tags: [("managed-by".to_string(), "runtime".to_string())]
-                .into_iter()
-                .collect(),
+            })),
             ..Default::default()
         };
 
@@ -834,7 +838,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(created_ip) => {
-                self.public_ip_id = created_ip.id;
+                self.public_ip_id = created_ip.resource.id;
                 Ok(HandlerAction::Continue {
                     state: CreatingNatGateway,
                     suggested_delay: None,
@@ -874,7 +878,7 @@ impl AzureNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.public_ip_id = public_ip.id;
+        self.public_ip_id = public_ip.resource.id;
         info!(public_ip_name = %public_ip_name, "Public IP created");
 
         Ok(HandlerAction::Continue {
@@ -906,9 +910,9 @@ impl AzureNetworkController {
             .get_azure_network_client(azure_config)?;
 
         let nat_gateway = NatGateway {
-            location: Some(location),
+            resource: managed_azure_network_resource(location),
             sku: Some(NatGatewaySku {
-                name: Some("Standard".to_string()),
+                name: Some(nat_gateway_sku::Name::Standard),
             }),
             properties: Some(NatGatewayPropertiesFormat {
                 public_ip_addresses: vec![SubResource {
@@ -917,9 +921,6 @@ impl AzureNetworkController {
                 idle_timeout_in_minutes: Some(4),
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "runtime".to_string())]
-                .into_iter()
-                .collect(),
             ..Default::default()
         };
 
@@ -936,7 +937,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(created_nat) => {
-                self.nat_gateway_id = created_nat.id;
+                self.nat_gateway_id = created_nat.resource.id;
                 Ok(HandlerAction::Continue {
                     state: AssociatingNatToSubnet,
                     suggested_delay: None,
@@ -976,7 +977,7 @@ impl AzureNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.nat_gateway_id = nat_gateway.id;
+        self.nat_gateway_id = nat_gateway.resource.id;
         info!(nat_gateway_name = %nat_gateway_name, "NAT Gateway created");
 
         Ok(HandlerAction::Continue {
@@ -1107,36 +1108,27 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
+        let mut allow_vnet_inbound = SecurityRulePropertiesFormat::new(
+            security_rule_properties_format::Protocol::U2a,
+            SecurityRuleAccess::Allow,
+            100,
+            SecurityRuleDirection::Inbound,
+        );
+        allow_vnet_inbound.source_address_prefix = Some(cidr_block);
+        allow_vnet_inbound.source_port_range = Some("*".to_string());
+        allow_vnet_inbound.destination_address_prefix = Some("*".to_string());
+        allow_vnet_inbound.destination_port_range = Some("*".to_string());
+
         let nsg = NetworkSecurityGroup {
-            location: Some(location),
+            resource: managed_azure_network_resource(location),
             properties: Some(NetworkSecurityGroupPropertiesFormat {
                 security_rules: vec![SecurityRule {
                     name: Some("AllowVNetInBound".to_string()),
-                    properties: Some(SecurityRulePropertiesFormat {
-                        priority: 100,
-                        direction: "Inbound".to_string(),
-                        access: "Allow".to_string(),
-                        protocol: "*".to_string(),
-                        source_address_prefix: Some(cidr_block),
-                        source_port_range: Some("*".to_string()),
-                        destination_address_prefix: Some("*".to_string()),
-                        destination_port_range: Some("*".to_string()),
-                        description: None,
-                        destination_address_prefixes: vec![],
-                        destination_application_security_groups: vec![],
-                        destination_port_ranges: vec![],
-                        provisioning_state: None,
-                        source_address_prefixes: vec![],
-                        source_application_security_groups: vec![],
-                        source_port_ranges: vec![],
-                    }),
+                    properties: Some(allow_vnet_inbound),
                     ..Default::default()
                 }],
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "runtime".to_string())]
-                .into_iter()
-                .collect(),
             ..Default::default()
         };
 
@@ -1153,7 +1145,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(created_nsg) => {
-                self.nsg_id = created_nsg.id;
+                self.nsg_id = created_nsg.resource.id;
                 info!("Azure Network infrastructure created successfully");
                 Ok(HandlerAction::Continue {
                     state: Ready,
@@ -1194,7 +1186,7 @@ impl AzureNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.nsg_id = nsg.id;
+        self.nsg_id = nsg.resource.id;
         info!(nsg_name = %nsg_name, vnet_name = ?self.vnet_name, "Azure Network infrastructure created successfully");
 
         Ok(HandlerAction::Continue {
