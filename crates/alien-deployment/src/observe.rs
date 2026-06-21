@@ -5,8 +5,8 @@ use alien_core::{
 };
 use alien_error::Context;
 use alien_observer::{
-    AwsObserveContext, AwsObserver, KubernetesObserveContext, KubernetesObserver, ObserveScope,
-    Observer,
+    AwsObserveContext, AwsObserver, GcpObserveContext, GcpObserver, KubernetesObserveContext,
+    KubernetesObserver, ObserveScope, Observer,
 };
 use tracing::debug;
 
@@ -25,6 +25,13 @@ pub async fn run_observe_pass(
                 .await
                 .context(ErrorData::DeploymentError {
                     message: "Failed to run AWS observe pass".to_string(),
+                });
+        }
+        Platform::Gcp => {
+            return run_gcp_observe_pass(client_config, deployment_id)
+                .await
+                .context(ErrorData::DeploymentError {
+                    message: "Failed to run GCP observe pass".to_string(),
                 });
         }
         Platform::Kubernetes => {}
@@ -122,6 +129,45 @@ async fn run_aws_observe_pass(
         .await
         .context(ErrorData::DeploymentError {
             message: "Failed to run AWS resource observer".to_string(),
+        })
+}
+
+async fn run_gcp_observe_pass(
+    client_config: &ClientConfig,
+    deployment_id: &str,
+) -> Result<Vec<ResourceHeartbeat>> {
+    let Some(gcp_config) = client_config.gcp_config() else {
+        debug!("Skipping observe pass because client config is not GCP");
+        return Ok(vec![]);
+    };
+
+    let http_client = reqwest::Client::new();
+    let cloud_asset_client = std::sync::Arc::new(alien_gcp_clients::CloudAssetClient::new(
+        http_client.clone(),
+        gcp_config.clone(),
+    ));
+    let monitoring_client = std::sync::Arc::new(alien_gcp_clients::MonitoringClient::new(
+        http_client,
+        gcp_config.clone(),
+    ));
+
+    let observer = GcpObserver::new(GcpObserveContext {
+        deployment_id: deployment_id.to_string(),
+        project_id: gcp_config.project_id.clone(),
+        region: gcp_config.region.clone(),
+        cloud_asset_client,
+        monitoring_client,
+    });
+    let scope = ObserveScope {
+        namespace: gcp_config.project_id.clone(),
+        label_selector: None,
+    };
+
+    observer
+        .discover(&scope)
+        .await
+        .context(ErrorData::DeploymentError {
+            message: "Failed to run GCP resource observer".to_string(),
         })
 }
 

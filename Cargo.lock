@@ -872,6 +872,7 @@ dependencies = [
  "alien-client-core",
  "alien-core",
  "alien-error",
+ "alien-gcp-clients",
  "alien-k8s-clients",
  "async-trait",
  "chrono",

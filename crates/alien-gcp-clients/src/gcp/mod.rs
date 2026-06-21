@@ -1,5 +1,6 @@
 pub mod api_client;
 pub mod artifactregistry;
+pub mod cloudasset;
 pub mod cloud_sql;
 pub mod cloudbuild;
 pub mod cloudrun;
@@ -11,6 +12,7 @@ pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
 pub mod longrunning;
+pub mod monitoring;
 pub mod pubsub;
 pub mod resource_manager;
 pub mod secret_manager;
