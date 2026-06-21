@@ -116,12 +116,10 @@ use google_cloud_pubsub::{
     },
 };
 use google_cloud_resourcemanager_v3::{client::Projects, model::Project as OfficialGcpProject};
-use google_cloud_scheduler_v1::{
-    client::CloudScheduler as OfficialCloudScheduler,
-    model::{
-        HttpMethod as OfficialSchedulerHttpMethod, HttpTarget as OfficialSchedulerHttpTarget,
-        Job as OfficialSchedulerJob, OidcToken as OfficialSchedulerOidcToken,
-    },
+use google_cloud_scheduler_v1::client::CloudScheduler as OfficialCloudScheduler;
+pub use google_cloud_scheduler_v1::model::{
+    HttpMethod as SchedulerHttpMethod, HttpTarget, Job as SchedulerJob,
+    OidcToken as SchedulerOidcToken,
 };
 use google_cloud_storage::{
     client::StorageControl as OfficialStorageControl,
@@ -2149,57 +2147,6 @@ pub trait CloudSchedulerApi: Send + Sync + std::fmt::Debug {
     async fn get_job(&self, job_name: String) -> Result<SchedulerJob>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SchedulerJob {
-    /// Fully-qualified Cloud Scheduler job resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// User-visible job description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Cron or English-like schedule expression.
-    pub schedule: String,
-    /// Time zone used to interpret the schedule.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_zone: Option<String>,
-    /// HTTP target configuration for the scheduled invocation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_target: Option<HttpTarget>,
-    /// Cloud Scheduler state, such as ENABLED or PAUSED.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct HttpTarget {
-    /// Full HTTP or HTTPS URI invoked by Cloud Scheduler.
-    pub uri: String,
-    /// HTTP method used for the invocation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_method: Option<String>,
-    /// Base64-encoded HTTP request body.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<String>,
-    /// HTTP headers to send with the request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, String>>,
-    /// OIDC token configuration for the Authorization header.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_token: Option<SchedulerOidcToken>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SchedulerOidcToken {
-    /// Service account email used to mint the OIDC token.
-    pub service_account_email: String,
-    /// Optional token audience. Defaults to the target URI when omitted by GCP.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audience: Option<String>,
-}
-
 struct OfficialGcpCloudSchedulerClient {
     config: GcpClientConfig,
     client: OnceCell<OfficialCloudScheduler>,
@@ -2243,9 +2190,9 @@ impl CloudSchedulerApi for OfficialGcpCloudSchedulerClient {
     ) -> Result<SchedulerJob> {
         let job_name =
             cloud_scheduler_job_resource_name(&self.config.project_id, &location, &job_id);
-        let mut official_job = scheduler_job_to_official(job)?;
-        if official_job.name.is_empty() {
-            official_job.name = job_name.clone();
+        let mut job = job;
+        if job.name.is_empty() {
+            job.name = job_name.clone();
         }
 
         match self
@@ -2256,11 +2203,11 @@ impl CloudSchedulerApi for OfficialGcpCloudSchedulerClient {
                 "projects/{}/locations/{location}",
                 self.config.project_id
             ))
-            .set_job(official_job)
+            .set_job(job)
             .send()
             .await
         {
-            Ok(job) => Ok(scheduler_job_from_official(job)),
+            Ok(job) => Ok(job),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "Cloud Scheduler job".to_string(),
@@ -2315,7 +2262,7 @@ impl CloudSchedulerApi for OfficialGcpCloudSchedulerClient {
             .send()
             .await
         {
-            Ok(job) => Ok(scheduler_job_from_official(job)),
+            Ok(job) => Ok(job),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "Cloud Scheduler job".to_string(),
@@ -6968,117 +6915,6 @@ fn artifact_registry_repository_resource_name(
 
 fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &str) -> String {
     format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
-}
-
-fn scheduler_job_to_official(job: SchedulerJob) -> Result<OfficialSchedulerJob> {
-    let mut official = OfficialSchedulerJob::new().set_schedule(job.schedule);
-
-    if let Some(name) = job.name {
-        official = official.set_name(name);
-    }
-    if let Some(description) = job.description {
-        official = official.set_description(description);
-    }
-    if let Some(time_zone) = job.time_zone {
-        official = official.set_time_zone(time_zone);
-    }
-    if let Some(http_target) = job.http_target {
-        official = official.set_http_target(scheduler_http_target_to_official(http_target)?);
-    }
-
-    Ok(official)
-}
-
-fn scheduler_job_from_official(job: OfficialSchedulerJob) -> SchedulerJob {
-    let http_target = job
-        .http_target()
-        .map(|target| scheduler_http_target_from_official(target));
-    let state = job.state.name().map(String::from);
-
-    SchedulerJob {
-        name: none_if_empty(job.name),
-        description: none_if_empty(job.description),
-        schedule: job.schedule,
-        time_zone: none_if_empty(job.time_zone),
-        http_target,
-        state,
-    }
-}
-
-fn scheduler_http_target_to_official(target: HttpTarget) -> Result<OfficialSchedulerHttpTarget> {
-    let mut official = OfficialSchedulerHttpTarget::new()
-        .set_uri(target.uri)
-        .set_http_method(scheduler_http_method_to_official(
-            target.http_method.as_deref(),
-        )?);
-
-    if let Some(headers) = target.headers {
-        official = official.set_headers(headers);
-    }
-    if let Some(body) = target.body {
-        use base64::Engine;
-
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(body)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to base64-decode Cloud Scheduler HTTP target body".to_string(),
-                resource_id: None,
-            })?;
-        official = official.set_body(bytes);
-    }
-    if let Some(oidc_token) = target.oidc_token {
-        let mut official_oidc = OfficialSchedulerOidcToken::new()
-            .set_service_account_email(oidc_token.service_account_email);
-        if let Some(audience) = oidc_token.audience {
-            official_oidc = official_oidc.set_audience(audience);
-        }
-        official = official.set_oidc_token(official_oidc);
-    }
-
-    Ok(official)
-}
-
-fn scheduler_http_target_from_official(target: &OfficialSchedulerHttpTarget) -> HttpTarget {
-    use base64::Engine;
-
-    HttpTarget {
-        uri: target.uri.clone(),
-        http_method: target.http_method.name().map(String::from),
-        body: if target.body.is_empty() {
-            None
-        } else {
-            Some(base64::engine::general_purpose::STANDARD.encode(&target.body))
-        },
-        headers: if target.headers.is_empty() {
-            None
-        } else {
-            Some(target.headers.clone())
-        },
-        oidc_token: target.oidc_token().map(|token| SchedulerOidcToken {
-            service_account_email: token.service_account_email.clone(),
-            audience: none_if_empty(token.audience.clone()),
-        }),
-    }
-}
-
-fn scheduler_http_method_to_official(method: Option<&str>) -> Result<OfficialSchedulerHttpMethod> {
-    match method.map(str::to_ascii_uppercase).as_deref() {
-        None => Ok(OfficialSchedulerHttpMethod::Unspecified),
-        Some("POST") => Ok(OfficialSchedulerHttpMethod::Post),
-        Some("GET") => Ok(OfficialSchedulerHttpMethod::Get),
-        Some("HEAD") => Ok(OfficialSchedulerHttpMethod::Head),
-        Some("PUT") => Ok(OfficialSchedulerHttpMethod::Put),
-        Some("DELETE") => Ok(OfficialSchedulerHttpMethod::Delete),
-        Some("PATCH") => Ok(OfficialSchedulerHttpMethod::Patch),
-        Some("OPTIONS") => Ok(OfficialSchedulerHttpMethod::Options),
-        Some(method) => Err(AlienError::new(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Unsupported Cloud Scheduler HTTP method '{method}'"),
-                resource_id: None,
-            },
-        )),
-    }
 }
 
 fn none_if_empty(value: String) -> Option<String> {

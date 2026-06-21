@@ -4,8 +4,8 @@ use tracing::{debug, info, warn};
 
 use crate::core::{
     Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, GcsNotification,
-    HttpTarget, IamPolicy, OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerJob,
-    SchedulerOidcToken, Subscription, Topic,
+    HttpTarget, IamPolicy, OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod,
+    SchedulerJob, SchedulerOidcToken, Subscription, Topic,
 };
 
 use crate::core::ResourceControllerContext;
@@ -1612,26 +1612,23 @@ impl GcpWorkerController {
                 "Creating Cloud Scheduler job"
             );
 
-            let job = SchedulerJob {
-                name: None,
-                description: Some(format!(
+            let job = SchedulerJob::new()
+                .set_description(format!(
                     "Schedule trigger for worker '{}' (index {})",
                     cfg.id, index
-                )),
-                schedule: cron.to_string(),
-                time_zone: Some("UTC".to_string()),
-                http_target: Some(HttpTarget {
-                    uri: service_url.clone(),
-                    http_method: Some("POST".to_string()),
-                    body: None,
-                    headers: None,
-                    oidc_token: Some(SchedulerOidcToken {
-                        service_account_email: service_account_email.clone(),
-                        audience: Some(service_url.clone()),
-                    }),
-                }),
-                state: None,
-            };
+                ))
+                .set_schedule(cron.to_string())
+                .set_time_zone("UTC")
+                .set_http_target(
+                    HttpTarget::new()
+                        .set_uri(service_url.clone())
+                        .set_http_method(SchedulerHttpMethod::Post)
+                        .set_oidc_token(
+                            SchedulerOidcToken::new()
+                                .set_service_account_email(service_account_email.clone())
+                                .set_audience(service_url.clone()),
+                        ),
+                );
 
             match scheduler_client
                 .create_job(gcp_config.region.clone(), job_id.clone(), job)
@@ -3119,26 +3116,23 @@ impl GcpWorkerController {
                         gcp_config.project_id, gcp_config.region, job_id
                     );
 
-                    let job = SchedulerJob {
-                        name: None,
-                        description: Some(format!(
+                    let job = SchedulerJob::new()
+                        .set_description(format!(
                             "Schedule trigger for worker '{}' (index {})",
                             current_config.id, index
-                        )),
-                        schedule: cron.to_string(),
-                        time_zone: Some("UTC".to_string()),
-                        http_target: Some(HttpTarget {
-                            uri: service_url.clone(),
-                            http_method: Some("POST".to_string()),
-                            body: None,
-                            headers: None,
-                            oidc_token: Some(SchedulerOidcToken {
-                                service_account_email: service_account_email.clone(),
-                                audience: Some(service_url.clone()),
-                            }),
-                        }),
-                        state: None,
-                    };
+                        ))
+                        .set_schedule(cron.to_string())
+                        .set_time_zone("UTC")
+                        .set_http_target(
+                            HttpTarget::new()
+                                .set_uri(service_url.clone())
+                                .set_http_method(SchedulerHttpMethod::Post)
+                                .set_oidc_token(
+                                    SchedulerOidcToken::new()
+                                        .set_service_account_email(service_account_email.clone())
+                                        .set_audience(service_url.clone()),
+                                ),
+                        );
 
                     match scheduler_client
                         .create_job(gcp_config.region.clone(), job_id.clone(), job)
