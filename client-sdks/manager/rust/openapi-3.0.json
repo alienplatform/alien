@@ -1401,6 +1401,13 @@
           },
           "deploymentId": {
             "type": "string"
+          },
+          "heartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Resource heartbeats emitted by pull-mode deployment steps."
           }
         }
       },
@@ -6416,6 +6423,13 @@
           "error"
         ]
       },
+      "HeartbeatSource": {
+        "type": "string",
+        "enum": [
+          "managed",
+          "observed"
+        ]
+      },
       "HeartbeatsMode": {
         "type": "string",
         "description": "How heartbeat health checks are handled.",
@@ -6536,8 +6550,16 @@
             "type": "string",
             "nullable": true
           },
+          "permission": {
+            "type": "string",
+            "nullable": true
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
             "nullable": true
           },
           "stackSettings": {
@@ -9703,6 +9725,10 @@
           "raw"
         ],
         "properties": {
+          "alienResourceId": {
+            "type": "string",
+            "nullable": true
+          },
           "backend": {
             "$ref": "#/components/schemas/HeartbeatBackend"
           },
@@ -9727,10 +9753,14 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "For managed heartbeats this is the Alien resource id. For observed heartbeats this is the\nraw provider identity, such as a Kubernetes object identity."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"
+          },
+          "source": {
+            "$ref": "#/components/schemas/HeartbeatSource"
           }
         }
       },

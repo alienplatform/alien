@@ -143,6 +143,10 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
     /// Optional base cloud platform for Kubernetes setup targets such as
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]
