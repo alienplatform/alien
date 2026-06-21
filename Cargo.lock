@@ -869,6 +869,7 @@ name = "alien-observer"
 version = "1.7.1"
 dependencies = [
  "alien-aws-clients",
+ "alien-azure-clients",
  "alien-client-core",
  "alien-core",
  "alien-error",

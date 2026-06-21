@@ -5,8 +5,8 @@ use alien_core::{
 };
 use alien_error::Context;
 use alien_observer::{
-    AwsObserveContext, AwsObserver, GcpObserveContext, GcpObserver, KubernetesObserveContext,
-    KubernetesObserver, ObserveScope, Observer,
+    AwsObserveContext, AwsObserver, AzureObserveContext, AzureObserver, GcpObserveContext,
+    GcpObserver, KubernetesObserveContext, KubernetesObserver, ObserveScope, Observer,
 };
 use tracing::debug;
 
@@ -32,6 +32,13 @@ pub async fn run_observe_pass(
                 .await
                 .context(ErrorData::DeploymentError {
                     message: "Failed to run GCP observe pass".to_string(),
+                });
+        }
+        Platform::Azure => {
+            return run_azure_observe_pass(client_config, deployment_id)
+                .await
+                .context(ErrorData::DeploymentError {
+                    message: "Failed to run Azure observe pass".to_string(),
                 });
         }
         Platform::Kubernetes => {}
@@ -168,6 +175,45 @@ async fn run_gcp_observe_pass(
         .await
         .context(ErrorData::DeploymentError {
             message: "Failed to run GCP resource observer".to_string(),
+        })
+}
+
+async fn run_azure_observe_pass(
+    client_config: &ClientConfig,
+    deployment_id: &str,
+) -> Result<Vec<ResourceHeartbeat>> {
+    let Some(azure_config) = client_config.azure_config() else {
+        debug!("Skipping observe pass because client config is not Azure");
+        return Ok(vec![]);
+    };
+
+    let http_client = reqwest::Client::new();
+    let resource_graph_client =
+        std::sync::Arc::new(alien_azure_clients::AzureResourceGraphClient::new(
+            http_client.clone(),
+            alien_azure_clients::AzureTokenCache::new(azure_config.clone()),
+        ));
+    let monitor_client = std::sync::Arc::new(alien_azure_clients::AzureMonitorClient::new(
+        http_client,
+        alien_azure_clients::AzureTokenCache::new(azure_config.clone()),
+    ));
+
+    let observer = AzureObserver::new(AzureObserveContext {
+        deployment_id: deployment_id.to_string(),
+        subscription_id: azure_config.subscription_id.clone(),
+        resource_graph_client,
+        monitor_client,
+    });
+    let scope = ObserveScope {
+        namespace: azure_config.subscription_id.clone(),
+        label_selector: None,
+    };
+
+    observer
+        .discover(&scope)
+        .await
+        .context(ErrorData::DeploymentError {
+            message: "Failed to run Azure resource observer".to_string(),
         })
 }
 

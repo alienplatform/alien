@@ -1,5 +1,7 @@
 #[cfg(feature = "aws")]
 mod aws;
+#[cfg(feature = "azure")]
+mod azure;
 mod error;
 #[cfg(feature = "gcp")]
 mod gcp;
@@ -11,6 +13,8 @@ use async_trait::async_trait;
 
 #[cfg(feature = "aws")]
 pub use aws::{aws_raw_identity, AwsObserveContext, AwsObserver};
+#[cfg(feature = "azure")]
+pub use azure::{azure_raw_identity, AzureObserveContext, AzureObserver};
 pub use error::Result;
 #[cfg(feature = "gcp")]
 pub use gcp::{gcp_raw_identity, GcpObserveContext, GcpObserver};
