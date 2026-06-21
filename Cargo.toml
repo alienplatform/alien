@@ -18,6 +18,7 @@ members = [
   "crates/alien-gcp-clients", 
   "crates/alien-azure-clients",
   "crates/alien-k8s-clients",
+  "crates/alien-observer",
   "crates/alien-error",
   "crates/alien-error-derive",
   "crates/alien-permissions",
@@ -83,6 +84,7 @@ alien-cloudformation = { path = "crates/alien-cloudformation", version = "1.10.7
 alien-terraform = { path = "crates/alien-terraform", version = "1.10.7" }
 alien-helm = { path = "crates/alien-helm", version = "1.10.7" }
 alien-manager = { path = "crates/alien-manager", version = "1.10.7" }
+alien-observer = { path = "crates/alien-observer", version = "1.10.7" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "1.10.7", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "1.10.7", default-features = false, features = ["rustls"] }

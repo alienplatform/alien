@@ -448,9 +448,10 @@ mod tests {
     use super::*;
     use alien_core::{
         ContainerHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
-        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, KubernetesContainerHeartbeatData,
-        KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState,
-        ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, HeartbeatSource,
+        KubernetesContainerHeartbeatData, KubernetesWorkloadKind, ObservedHealth, Platform,
+        ProviderLifecycleState, ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus,
+        WorkloadReplicaStatus,
     };
     use chrono::TimeZone;
 
@@ -458,6 +459,8 @@ mod tests {
         ResourceHeartbeat {
             deployment_id: Some("dep_test".to_string()),
             resource_id: "api".to_string(),
+            source: HeartbeatSource::Managed,
+            alien_resource_id: None,
             resource_type: ResourceType::from("container"),
             controller_platform: Platform::Kubernetes,
             backend: HeartbeatBackend::Kubernetes,
