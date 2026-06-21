@@ -3650,11 +3650,17 @@ impl AwsWorkerController {
         let result = client
             .describe_network_interfaces(
                 DescribeNetworkInterfacesRequest::builder()
-                    .filters(vec![Filter::builder()
+                    .set_filters(Some(vec![Filter::builder()
                         .name("description")
                         .values(format!("AWS Lambda VPC ENI-{}*", aws_worker_name))
-                        .build()])
-                    .build(),
+                        .build()]))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build Lambda VPC network interface lookup request"
+                            .to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -3662,10 +3668,7 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        let network_interfaces = result
-            .network_interface_set
-            .map(|set| set.items)
-            .unwrap_or_default();
+        let network_interfaces = result.network_interfaces();
 
         if network_interfaces.is_empty() {
             return Ok(HandlerAction::Continue {
@@ -3676,7 +3679,7 @@ impl AwsWorkerController {
 
         let network_interface_ids = network_interfaces
             .iter()
-            .filter_map(|eni| eni.network_interface_id.as_deref())
+            .filter_map(|eni| eni.network_interface_id())
             .collect::<Vec<_>>();
 
         info!(

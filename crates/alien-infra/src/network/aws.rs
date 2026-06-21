@@ -720,7 +720,15 @@ impl AwsNetworkController {
 
         // Get availability zones
         let az_response = client
-            .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
+            .describe_availability_zones(
+                DescribeAvailabilityZonesRequest::builder()
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build availability zone describe request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to describe availability zones".to_string(),
@@ -729,12 +737,10 @@ impl AwsNetworkController {
 
         // Take the requested number of AZs
         self.availability_zones = az_response
-            .availability_zone_info
-            .map(|set| set.items)
-            .unwrap_or_default()
+            .availability_zones()
             .iter()
             .take(availability_zones as usize)
-            .filter_map(|az| az.zone_name.clone())
+            .filter_map(|az| az.zone_name().map(ToString::to_string))
             .collect();
 
         if self.availability_zones.is_empty() {

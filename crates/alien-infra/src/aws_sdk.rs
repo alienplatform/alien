@@ -165,9 +165,17 @@ pub use aws_sdk_ec2::{
             DeleteNatGatewayInput as DeleteNatGatewayRequest,
             DeleteNatGatewayOutput as DeleteNatGatewayResponse,
         },
+        describe_availability_zones::{
+            DescribeAvailabilityZonesInput as DescribeAvailabilityZonesRequest,
+            DescribeAvailabilityZonesOutput as DescribeAvailabilityZonesResponse,
+        },
         describe_nat_gateways::{
             DescribeNatGatewaysInput as DescribeNatGatewaysRequest,
             DescribeNatGatewaysOutput as DescribeNatGatewaysResponse,
+        },
+        describe_network_interfaces::{
+            DescribeNetworkInterfacesInput as DescribeNetworkInterfacesRequest,
+            DescribeNetworkInterfacesOutput as DescribeNetworkInterfacesResponse,
         },
         describe_security_groups::{
             DescribeSecurityGroupsInput as DescribeSecurityGroupsRequest,
@@ -183,9 +191,9 @@ pub use aws_sdk_ec2::{
         detach_internet_gateway::DetachInternetGatewayInput as DetachInternetGatewayRequest,
     },
     types::{
-        ConnectivityType, DomainType, Filter, InternetGateway, IpPermission, IpRange, NatGateway,
-        ResourceType as Ec2ResourceType, RouteTable, SecurityGroup, Subnet, Tag as Ec2Tag,
-        TagSpecification, Vpc,
+        AvailabilityZone, ConnectivityType, DomainType, Filter, InternetGateway, IpPermission,
+        IpRange, NatGateway, NetworkInterface, ResourceType as Ec2ResourceType, RouteTable,
+        SecurityGroup, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
     },
 };
 
@@ -310,76 +318,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_support: Option<bool>,
     /// Enable DNS hostnames.
     pub enable_dns_hostnames: Option<bool>,
-}
-
-/// Request to describe network interfaces.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeNetworkInterfacesRequest {
-    /// Network interface IDs.
-    pub network_interface_ids: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Maximum results.
-    pub max_results: Option<i32>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// Response from describing network interfaces.
-#[derive(Debug, Clone)]
-pub struct DescribeNetworkInterfacesResponse {
-    /// Network interface set.
-    pub network_interface_set: Option<NetworkInterfaceSet>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// EC2 network interface set.
-#[derive(Debug, Clone)]
-pub struct NetworkInterfaceSet {
-    /// Network interfaces.
-    pub items: Vec<NetworkInterface>,
-}
-
-/// EC2 network interface metadata.
-#[derive(Debug, Clone)]
-pub struct NetworkInterface {
-    /// Network interface ID.
-    pub network_interface_id: Option<String>,
-}
-
-/// Request to describe availability zones.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeAvailabilityZonesRequest {
-    /// Zone names.
-    pub zone_names: Option<Vec<String>>,
-    /// Zone IDs.
-    pub zone_ids: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Whether to include all zones.
-    pub all_availability_zones: Option<bool>,
-}
-
-/// Response from describing availability zones.
-#[derive(Debug, Clone)]
-pub struct DescribeAvailabilityZonesResponse {
-    /// Availability zone set.
-    pub availability_zone_info: Option<AvailabilityZoneSet>,
-}
-
-/// EC2 availability zone set.
-#[derive(Debug, Clone)]
-pub struct AvailabilityZoneSet {
-    /// Availability zones.
-    pub items: Vec<AvailabilityZone>,
-}
-
-/// EC2 availability zone metadata.
-#[derive(Debug, Clone)]
-pub struct AvailabilityZone {
-    /// Zone name.
-    pub zone_name: Option<String>,
 }
 
 /// S3 bucket metadata used for storage heartbeats.
@@ -3463,33 +3401,19 @@ impl Ec2Api for Ec2Client {
         &self,
         request: DescribeNetworkInterfacesRequest,
     ) -> Result<DescribeNetworkInterfacesResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_network_interfaces()
+                .set_next_token(request.next_token)
+                .set_max_results(request.max_results)
+                .set_dry_run(request.dry_run)
                 .set_network_interface_ids(request.network_interface_ids)
                 .set_filters(request.filters)
-                .set_max_results(request.max_results)
-                .set_next_token(request.next_token)
                 .send()
                 .await,
             "DescribeNetworkInterfaces",
             "NetworkInterface",
             "*",
-        )?;
-
-        Ok(DescribeNetworkInterfacesResponse {
-            network_interface_set: Some(NetworkInterfaceSet {
-                items: response
-                    .network_interfaces()
-                    .iter()
-                    .map(|interface| NetworkInterface {
-                        network_interface_id: interface
-                            .network_interface_id()
-                            .map(ToString::to_string),
-                    })
-                    .collect(),
-            }),
-            next_token: response.next_token().map(ToString::to_string),
-        })
+        )
     }
 
     async fn create_security_group(
@@ -3582,30 +3506,19 @@ impl Ec2Api for Ec2Client {
         &self,
         request: DescribeAvailabilityZonesRequest,
     ) -> Result<DescribeAvailabilityZonesResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_availability_zones()
                 .set_zone_names(request.zone_names)
                 .set_zone_ids(request.zone_ids)
-                .set_filters(request.filters)
                 .set_all_availability_zones(request.all_availability_zones)
+                .set_dry_run(request.dry_run)
+                .set_filters(request.filters)
                 .send()
                 .await,
             "DescribeAvailabilityZones",
             "AvailabilityZone",
             "*",
-        )?;
-
-        Ok(DescribeAvailabilityZonesResponse {
-            availability_zone_info: Some(AvailabilityZoneSet {
-                items: response
-                    .availability_zones()
-                    .iter()
-                    .map(|zone| AvailabilityZone {
-                        zone_name: zone.zone_name().map(ToString::to_string),
-                    })
-                    .collect(),
-            }),
-        })
+        )
     }
 }
 
