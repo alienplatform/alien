@@ -14,10 +14,11 @@ use crate::aws_sdk::{
     ApiGatewayV2CreateStageRequest as CreateStageRequest,
     ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
     CreateEventSourceMappingRequest, CreateFunctionRequest, DescribeNetworkInterfacesRequest,
-    Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode, FunctionConfiguration,
-    ImportCertificateRequest, LambdaFunctionConfiguration, ListEventSourceMappingsRequest,
-    NotificationConfiguration, PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest,
-    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
+    FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaFunctionConfiguration,
+    ListEventSourceMappingsRequest, NotificationConfiguration, ProtocolType, PutRuleRequest,
+    PutTargetsRequest, ReimportCertificateRequest, SecurityPolicy, UpdateFunctionCodeRequest,
+    UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -702,9 +703,14 @@ impl AwsWorkerController {
             .create_api(
                 CreateApiRequest::builder()
                     .name(format!("{}-{}-api", ctx.resource_prefix, worker_config.id))
-                    .protocol_type("HTTP".to_string())
-                    .tags(api_tags)
-                    .build(),
+                    .protocol_type(ProtocolType::Http)
+                    .set_tags(Some(api_tags))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway HTTP API create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -766,12 +772,17 @@ impl AwsWorkerController {
 
         let integration = client
             .create_integration(
-                &api_id,
                 CreateIntegrationRequest::builder()
-                    .integration_type("AWS_PROXY".to_string())
+                    .api_id(api_id.clone())
+                    .integration_type(IntegrationType::AwsProxy)
                     .integration_uri(function_arn)
-                    .payload_format_version("2.0".to_string())
-                    .build(),
+                    .payload_format_version("2.0")
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway integration create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -833,11 +844,16 @@ impl AwsWorkerController {
 
         let route = client
             .create_route(
-                &api_id,
                 CreateRouteRequest::builder()
-                    .route_key("$default".to_string())
+                    .api_id(api_id.clone())
+                    .route_key("$default")
                     .target(format!("integrations/{}", integration_id))
-                    .build(),
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway route create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -904,15 +920,20 @@ impl AwsWorkerController {
 
         let stage = client
             .create_stage(
-                &api_id,
                 CreateStageRequest::builder()
-                    .stage_name("$default".to_string())
+                    .api_id(api_id.clone())
+                    .stage_name("$default")
                     .auto_deploy(true)
-                    .tags(standard_resource_tags(
+                    .set_tags(Some(standard_resource_tags(
                         ctx.resource_prefix,
                         &worker_config.id,
-                    ))
-                    .build(),
+                    )))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway stage create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -987,16 +1008,23 @@ impl AwsWorkerController {
             .create_domain_name(
                 CreateDomainNameRequest::builder()
                     .domain_name(fqdn.clone())
-                    .domain_name_configurations(vec![DomainNameConfiguration::builder()
-                        .certificate_arn(cert_arn)
-                        .endpoint_type("REGIONAL".to_string())
-                        .security_policy("TLS_1_2".to_string())
-                        .build()])
-                    .tags(standard_resource_tags(
+                    .domain_name_configurations(
+                        DomainNameConfiguration::builder()
+                            .certificate_arn(cert_arn)
+                            .endpoint_type(EndpointType::Regional)
+                            .security_policy(SecurityPolicy::Tls12)
+                            .build(),
+                    )
+                    .set_tags(Some(standard_resource_tags(
                         ctx.resource_prefix,
                         &worker_config.id,
-                    ))
-                    .build(),
+                    )))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway domain create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1069,11 +1097,16 @@ impl AwsWorkerController {
 
         let mapping = client
             .create_api_mapping(
-                &domain_name,
                 CreateApiMappingRequest::builder()
+                    .domain_name(domain_name)
                     .api_id(api_id.clone())
                     .stage(stage)
-                    .build(),
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid API Gateway API mapping create request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -4030,12 +4063,13 @@ mod tests {
     use rstest::rstest;
 
     use crate::aws_sdk::{
-        AddPermissionResponse, ApiGatewayV2ApiDescription as Api,
-        ApiGatewayV2ApiMapping as ApiMapping, ApiGatewayV2DomainName as DomainName,
-        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
-        ApiGatewayV2Integration as Integration, ApiGatewayV2Route as Route,
-        ApiGatewayV2Stage as Stage, FunctionConfiguration, ImportCertificateResponse, MockAcmApi,
-        MockApiGatewayV2Api, MockIamApi, MockLambdaApi,
+        AddPermissionResponse, ApiGatewayV2CreateApiMappingResponse as ApiMapping,
+        ApiGatewayV2CreateApiResponse as Api, ApiGatewayV2CreateDomainNameResponse as DomainName,
+        ApiGatewayV2CreateIntegrationResponse as Integration,
+        ApiGatewayV2CreateRouteResponse as Route, ApiGatewayV2CreateStageResponse as Stage,
+        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, EndpointType,
+        FunctionConfiguration, ImportCertificateResponse, MockAcmApi, MockApiGatewayV2Api,
+        MockIamApi, MockLambdaApi, SecurityPolicy,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -4055,6 +4089,49 @@ mod tests {
             last_update_status: Some("Successful".to_string()),
             kms_key_arn: None,
         }
+    }
+
+    fn test_api_gateway_api(api_endpoint: Option<&str>) -> Api {
+        let mut builder = Api::builder().api_id("test-api-id");
+        if let Some(api_endpoint) = api_endpoint {
+            builder = builder.api_endpoint(api_endpoint);
+        }
+        builder.build()
+    }
+
+    fn test_api_gateway_integration() -> Integration {
+        Integration::builder()
+            .integration_id("test-integration-id")
+            .build()
+    }
+
+    fn test_api_gateway_route() -> Route {
+        Route::builder().route_id("test-route-id").build()
+    }
+
+    fn test_api_gateway_stage() -> Stage {
+        Stage::builder().stage_name("$default").build()
+    }
+
+    fn test_api_gateway_domain(domain_name: &str) -> DomainName {
+        DomainName::builder()
+            .domain_name(domain_name)
+            .domain_name_configurations(
+                DomainNameConfiguration::builder()
+                    .certificate_arn("arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id")
+                    .endpoint_type(EndpointType::Regional)
+                    .security_policy(SecurityPolicy::Tls12)
+                    .api_gateway_domain_name("test.execute-api.us-east-1.amazonaws.com")
+                    .hosted_zone_id("Z1D633PJN98FT9")
+                    .build(),
+            )
+            .build()
+    }
+
+    fn test_api_gateway_mapping() -> ApiMapping {
+        ApiMapping::builder()
+            .api_mapping_id("test-mapping-id")
+            .build()
     }
 
     fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
@@ -4113,112 +4190,50 @@ mod tests {
     fn create_apigatewayv2_mock_for_creation() -> Arc<MockApiGatewayV2Api> {
         let mut mock_apigw = MockApiGatewayV2Api::new();
         mock_apigw.expect_create_api().returning(|_| {
-            Ok(Api {
-                api_id: Some("test-api-id".to_string()),
-                api_endpoint: Some(
-                    "https://test-api-id.execute-api.us-east-1.amazonaws.com".to_string(),
-                ),
-                name: None,
-                protocol_type: None,
-            })
+            Ok(test_api_gateway_api(Some(
+                "https://test-api-id.execute-api.us-east-1.amazonaws.com",
+            )))
         });
-        mock_apigw.expect_create_integration().returning(|_, _| {
-            Ok(Integration {
-                integration_id: Some("test-integration-id".to_string()),
-                integration_type: None,
-                integration_uri: None,
-            })
-        });
-        mock_apigw.expect_create_route().returning(|_, _| {
-            Ok(Route {
-                route_id: Some("test-route-id".to_string()),
-                route_key: None,
-            })
-        });
-        mock_apigw.expect_create_stage().returning(|_, _| {
-            Ok(Stage {
-                stage_name: Some("$default".to_string()),
-                auto_deploy: None,
-            })
-        });
-        mock_apigw.expect_create_domain_name().returning(|_| {
-            Ok(DomainName {
-                domain_name: Some("test.example.com".to_string()),
-                domain_name_configurations: Some(vec![DomainNameConfiguration {
-                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                        .to_string(),
-                    endpoint_type: "REGIONAL".to_string(),
-                    security_policy: "TLS_1_2".to_string(),
-                    api_gateway_domain_name: Some(
-                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
-                    ),
-                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
-                }]),
-            })
-        });
-        mock_apigw.expect_create_api_mapping().returning(|_, _| {
-            Ok(ApiMapping {
-                api_mapping_id: Some("test-mapping-id".to_string()),
-                api_mapping_key: None,
-                stage: None,
-            })
-        });
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_| Ok(test_api_gateway_integration()));
+        mock_apigw
+            .expect_create_route()
+            .returning(|_| Ok(test_api_gateway_route()));
+        mock_apigw
+            .expect_create_stage()
+            .returning(|_| Ok(test_api_gateway_stage()));
+        mock_apigw
+            .expect_create_domain_name()
+            .returning(|_| Ok(test_api_gateway_domain("test.example.com")));
+        mock_apigw
+            .expect_create_api_mapping()
+            .returning(|_| Ok(test_api_gateway_mapping()));
         Arc::new(mock_apigw)
     }
 
     fn create_apigatewayv2_mock_for_creation_and_deletion() -> Arc<MockApiGatewayV2Api> {
         let mut mock_apigw = MockApiGatewayV2Api::new();
         mock_apigw.expect_create_api().returning(|_| {
-            Ok(Api {
-                api_id: Some("test-api-id".to_string()),
-                api_endpoint: Some(
-                    "https://test-api-id.execute-api.us-east-1.amazonaws.com".to_string(),
-                ),
-                name: None,
-                protocol_type: None,
-            })
+            Ok(test_api_gateway_api(Some(
+                "https://test-api-id.execute-api.us-east-1.amazonaws.com",
+            )))
         });
-        mock_apigw.expect_create_integration().returning(|_, _| {
-            Ok(Integration {
-                integration_id: Some("test-integration-id".to_string()),
-                integration_type: None,
-                integration_uri: None,
-            })
-        });
-        mock_apigw.expect_create_route().returning(|_, _| {
-            Ok(Route {
-                route_id: Some("test-route-id".to_string()),
-                route_key: None,
-            })
-        });
-        mock_apigw.expect_create_stage().returning(|_, _| {
-            Ok(Stage {
-                stage_name: Some("$default".to_string()),
-                auto_deploy: None,
-            })
-        });
-        mock_apigw.expect_create_domain_name().returning(|_| {
-            Ok(DomainName {
-                domain_name: Some("test.example.com".to_string()),
-                domain_name_configurations: Some(vec![DomainNameConfiguration {
-                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                        .to_string(),
-                    endpoint_type: "REGIONAL".to_string(),
-                    security_policy: "TLS_1_2".to_string(),
-                    api_gateway_domain_name: Some(
-                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
-                    ),
-                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
-                }]),
-            })
-        });
-        mock_apigw.expect_create_api_mapping().returning(|_, _| {
-            Ok(ApiMapping {
-                api_mapping_id: Some("test-mapping-id".to_string()),
-                api_mapping_key: None,
-                stage: None,
-            })
-        });
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_| Ok(test_api_gateway_integration()));
+        mock_apigw
+            .expect_create_route()
+            .returning(|_| Ok(test_api_gateway_route()));
+        mock_apigw
+            .expect_create_stage()
+            .returning(|_| Ok(test_api_gateway_stage()));
+        mock_apigw
+            .expect_create_domain_name()
+            .returning(|_| Ok(test_api_gateway_domain("test.example.com")));
+        mock_apigw
+            .expect_create_api_mapping()
+            .returning(|_| Ok(test_api_gateway_mapping()));
         mock_apigw
             .expect_delete_api_mapping()
             .returning(|_, _| Ok(()));
@@ -4734,56 +4749,28 @@ mod tests {
         let mut mock_apigw = MockApiGatewayV2Api::new();
         mock_apigw
             .expect_create_api()
-            .withf(|request| request.name.contains("public-func"))
-            .returning(|_| {
-                Ok(Api {
-                    api_id: Some("test-api-id".to_string()),
-                    api_endpoint: None,
-                    name: None,
-                    protocol_type: None,
-                })
-            });
-        mock_apigw.expect_create_integration().returning(|_, _| {
-            Ok(Integration {
-                integration_id: Some("test-integration-id".to_string()),
-                integration_type: None,
-                integration_uri: None,
+            .withf(|request| {
+                request
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("public-func"))
             })
-        });
-        mock_apigw.expect_create_route().returning(|_, _| {
-            Ok(Route {
-                route_id: Some("test-route-id".to_string()),
-                route_key: None,
-            })
-        });
-        mock_apigw.expect_create_stage().returning(|_, _| {
-            Ok(Stage {
-                stage_name: Some("$default".to_string()),
-                auto_deploy: None,
-            })
-        });
-        mock_apigw.expect_create_domain_name().returning(|_| {
-            Ok(DomainName {
-                domain_name: Some("public-func.test.example.com".to_string()),
-                domain_name_configurations: Some(vec![DomainNameConfiguration {
-                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                        .to_string(),
-                    endpoint_type: "REGIONAL".to_string(),
-                    security_policy: "TLS_1_2".to_string(),
-                    api_gateway_domain_name: Some(
-                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
-                    ),
-                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
-                }]),
-            })
-        });
-        mock_apigw.expect_create_api_mapping().returning(|_, _| {
-            Ok(ApiMapping {
-                api_mapping_id: Some("test-mapping-id".to_string()),
-                api_mapping_key: None,
-                stage: None,
-            })
-        });
+            .returning(|_| Ok(test_api_gateway_api(None)));
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_| Ok(test_api_gateway_integration()));
+        mock_apigw
+            .expect_create_route()
+            .returning(|_| Ok(test_api_gateway_route()));
+        mock_apigw
+            .expect_create_stage()
+            .returning(|_| Ok(test_api_gateway_stage()));
+        mock_apigw
+            .expect_create_domain_name()
+            .returning(|_| Ok(test_api_gateway_domain("public-func.test.example.com")));
+        mock_apigw
+            .expect_create_api_mapping()
+            .returning(|_| Ok(test_api_gateway_mapping()));
         mock_apigw
             .expect_delete_api_mapping()
             .returning(|_, _| Ok(()));

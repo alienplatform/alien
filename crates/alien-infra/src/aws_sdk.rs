@@ -6,14 +6,7 @@ use async_trait::async_trait;
 use aws_config::{BehaviorVersion, SdkConfig};
 use aws_credential_types::Credentials;
 use aws_sdk_acm::Client as AcmClient;
-use aws_sdk_apigatewayv2::{
-    types::{
-        ApiMapping as AwsApiGatewayV2ApiMapping,
-        DomainNameConfiguration as AwsApiGatewayV2DomainNameConfiguration, EndpointType,
-        IntegrationType, ProtocolType, SecurityPolicy,
-    },
-    Client as ApiGatewayV2Client,
-};
+use aws_sdk_apigatewayv2::Client as ApiGatewayV2Client;
 use aws_sdk_codebuild::{
     types::{
         ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
@@ -118,6 +111,42 @@ pub use aws_sdk_acm::{
 };
 
 pub type ReimportCertificateRequest = ImportCertificateRequest;
+
+pub use aws_sdk_apigatewayv2::{
+    operation::{
+        create_api::{
+            CreateApiInput as ApiGatewayV2CreateApiRequest,
+            CreateApiOutput as ApiGatewayV2CreateApiResponse,
+        },
+        create_api_mapping::{
+            CreateApiMappingInput as ApiGatewayV2CreateApiMappingRequest,
+            CreateApiMappingOutput as ApiGatewayV2CreateApiMappingResponse,
+        },
+        create_domain_name::{
+            CreateDomainNameInput as ApiGatewayV2CreateDomainNameRequest,
+            CreateDomainNameOutput as ApiGatewayV2CreateDomainNameResponse,
+        },
+        create_integration::{
+            CreateIntegrationInput as ApiGatewayV2CreateIntegrationRequest,
+            CreateIntegrationOutput as ApiGatewayV2CreateIntegrationResponse,
+        },
+        create_route::{
+            CreateRouteInput as ApiGatewayV2CreateRouteRequest,
+            CreateRouteOutput as ApiGatewayV2CreateRouteResponse,
+        },
+        create_stage::{
+            CreateStageInput as ApiGatewayV2CreateStageRequest,
+            CreateStageOutput as ApiGatewayV2CreateStageResponse,
+        },
+        get_api::GetApiOutput as ApiGatewayV2GetApiResponse,
+        get_api_mappings::GetApiMappingsOutput as ApiGatewayV2GetApiMappingsResponse,
+        get_domain_name::GetDomainNameOutput as ApiGatewayV2GetDomainNameResponse,
+    },
+    types::{
+        DomainNameConfiguration as ApiGatewayV2DomainNameConfiguration, EndpointType,
+        IntegrationType, ProtocolType, SecurityPolicy,
+    },
+};
 
 pub use aws_sdk_lambda::operation::{
     add_permission::{
@@ -331,156 +360,6 @@ pub struct FunctionConfiguration {
     pub last_update_status: Option<String>,
     /// KMS key ARN.
     pub kms_key_arn: Option<String>,
-}
-
-/// API Gateway V2 create API request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateApiRequest {
-    /// API display name.
-    pub name: String,
-    /// Protocol type, such as HTTP.
-    pub protocol_type: String,
-    /// Resource tags.
-    pub tags: Option<HashMap<String, String>>,
-}
-
-/// API Gateway V2 API metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2ApiDescription {
-    /// API identifier.
-    pub api_id: Option<String>,
-    /// Default execute-api endpoint.
-    pub api_endpoint: Option<String>,
-    /// API display name.
-    pub name: Option<String>,
-    /// Protocol type.
-    pub protocol_type: Option<String>,
-}
-
-/// API Gateway V2 create integration request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateIntegrationRequest {
-    /// Integration type, such as AWS_PROXY.
-    pub integration_type: String,
-    /// Integration URI.
-    pub integration_uri: String,
-    /// Payload format version.
-    pub payload_format_version: Option<String>,
-}
-
-/// API Gateway V2 integration metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2Integration {
-    /// Integration identifier.
-    pub integration_id: Option<String>,
-    /// Integration type.
-    pub integration_type: Option<String>,
-    /// Integration URI.
-    pub integration_uri: Option<String>,
-}
-
-/// API Gateway V2 create route request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateRouteRequest {
-    /// Route key.
-    pub route_key: String,
-    /// Route target.
-    pub target: String,
-}
-
-/// API Gateway V2 route metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2Route {
-    /// Route identifier.
-    pub route_id: Option<String>,
-    /// Route key.
-    pub route_key: Option<String>,
-}
-
-/// API Gateway V2 create stage request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateStageRequest {
-    /// Stage name.
-    pub stage_name: String,
-    /// Whether deployments are automatic.
-    pub auto_deploy: Option<bool>,
-    /// Resource tags.
-    pub tags: Option<HashMap<String, String>>,
-}
-
-/// API Gateway V2 stage metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2Stage {
-    /// Stage name.
-    pub stage_name: Option<String>,
-    /// Whether deployments are automatic.
-    pub auto_deploy: Option<bool>,
-}
-
-/// API Gateway V2 domain-name configuration.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2DomainNameConfiguration {
-    /// ACM certificate ARN.
-    pub certificate_arn: String,
-    /// Endpoint type, such as REGIONAL.
-    pub endpoint_type: String,
-    /// TLS security policy.
-    pub security_policy: String,
-    /// API Gateway target domain name.
-    pub api_gateway_domain_name: Option<String>,
-    /// Route 53 hosted zone ID for the target.
-    pub hosted_zone_id: Option<String>,
-}
-
-/// API Gateway V2 create domain-name request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateDomainNameRequest {
-    /// Custom domain name.
-    pub domain_name: String,
-    /// Domain-name configurations.
-    pub domain_name_configurations: Vec<ApiGatewayV2DomainNameConfiguration>,
-    /// Resource tags.
-    pub tags: Option<HashMap<String, String>>,
-}
-
-/// API Gateway V2 domain-name metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2DomainName {
-    /// Custom domain name.
-    pub domain_name: Option<String>,
-    /// Domain-name configurations.
-    pub domain_name_configurations: Option<Vec<ApiGatewayV2DomainNameConfiguration>>,
-}
-
-/// API Gateway V2 create API mapping request.
-#[derive(Debug, Clone, Builder)]
-pub struct ApiGatewayV2CreateApiMappingRequest {
-    /// API identifier.
-    pub api_id: String,
-    /// Stage name.
-    pub stage: String,
-    /// Optional mapping key.
-    pub api_mapping_key: Option<String>,
-}
-
-/// API Gateway V2 API mapping metadata.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2ApiMapping {
-    /// API mapping identifier.
-    pub api_mapping_id: Option<String>,
-    /// API mapping key.
-    pub api_mapping_key: Option<String>,
-    /// Stage name.
-    pub stage: Option<String>,
-}
-
-/// API Gateway V2 API mappings response.
-#[derive(Debug, Clone)]
-pub struct ApiGatewayV2GetApiMappingsResponse {
-    /// API mappings.
-    pub items: Option<Vec<ApiGatewayV2ApiMapping>>,
-    /// Pagination token.
-    pub next_token: Option<String>,
 }
 
 /// EventBridge PutRule request.
@@ -1873,44 +1752,41 @@ pub trait ApiGatewayV2Api: Send + Sync {
     async fn create_api(
         &self,
         request: ApiGatewayV2CreateApiRequest,
-    ) -> Result<ApiGatewayV2ApiDescription>;
+    ) -> Result<ApiGatewayV2CreateApiResponse>;
     /// Get an API Gateway API.
-    async fn get_api(&self, api_id: &str) -> Result<ApiGatewayV2ApiDescription>;
+    async fn get_api(&self, api_id: &str) -> Result<ApiGatewayV2GetApiResponse>;
     /// Delete an API Gateway API.
     async fn delete_api(&self, api_id: &str) -> Result<()>;
     /// Create an API integration.
     async fn create_integration(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateIntegrationRequest,
-    ) -> Result<ApiGatewayV2Integration>;
+    ) -> Result<ApiGatewayV2CreateIntegrationResponse>;
     /// Create an API route.
     async fn create_route(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateRouteRequest,
-    ) -> Result<ApiGatewayV2Route>;
+    ) -> Result<ApiGatewayV2CreateRouteResponse>;
     /// Create an API stage.
     async fn create_stage(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateStageRequest,
-    ) -> Result<ApiGatewayV2Stage>;
+    ) -> Result<ApiGatewayV2CreateStageResponse>;
     /// Create a custom domain name.
     async fn create_domain_name(
         &self,
         request: ApiGatewayV2CreateDomainNameRequest,
-    ) -> Result<ApiGatewayV2DomainName>;
+    ) -> Result<ApiGatewayV2CreateDomainNameResponse>;
     /// Get a custom domain name.
-    async fn get_domain_name(&self, domain_name: &str) -> Result<ApiGatewayV2DomainName>;
+    async fn get_domain_name(&self, domain_name: &str)
+        -> Result<ApiGatewayV2GetDomainNameResponse>;
     /// Delete a custom domain name.
     async fn delete_domain_name(&self, domain_name: &str) -> Result<()>;
     /// Create a custom domain API mapping.
     async fn create_api_mapping(
         &self,
-        domain_name: &str,
         request: ApiGatewayV2CreateApiMappingRequest,
-    ) -> Result<ApiGatewayV2ApiMapping>;
+    ) -> Result<ApiGatewayV2CreateApiMappingResponse>;
     /// List custom domain API mappings.
     async fn get_api_mappings(
         &self,
@@ -3118,30 +2994,38 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
     async fn create_api(
         &self,
         request: ApiGatewayV2CreateApiRequest,
-    ) -> Result<ApiGatewayV2ApiDescription> {
+    ) -> Result<ApiGatewayV2CreateApiResponse> {
+        let resource_name = request
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_api()
-                .name(request.name.clone())
-                .protocol_type(ProtocolType::from(request.protocol_type.as_str()))
+                .set_api_key_selection_expression(request.api_key_selection_expression)
+                .set_cors_configuration(request.cors_configuration)
+                .set_credentials_arn(request.credentials_arn)
+                .set_description(request.description)
+                .set_disable_schema_validation(request.disable_schema_validation)
+                .set_disable_execute_api_endpoint(request.disable_execute_api_endpoint)
+                .set_ip_address_type(request.ip_address_type)
+                .set_name(request.name)
+                .set_protocol_type(request.protocol_type)
+                .set_route_key(request.route_key)
+                .set_route_selection_expression(request.route_selection_expression)
                 .set_tags(request.tags)
+                .set_target(request.target)
+                .set_version(request.version)
                 .send()
                 .await,
             "CreateApi",
             "ApiGatewayApi",
-            &request.name,
+            &resource_name,
         )?;
 
-        Ok(ApiGatewayV2ApiDescription {
-            api_id: output.api_id,
-            api_endpoint: output.api_endpoint,
-            name: output.name,
-            protocol_type: output
-                .protocol_type
-                .map(|protocol_type| protocol_type.as_str().to_string()),
-        })
+        Ok(output)
     }
 
-    async fn get_api(&self, api_id: &str) -> Result<ApiGatewayV2ApiDescription> {
+    async fn get_api(&self, api_id: &str) -> Result<ApiGatewayV2GetApiResponse> {
         let output = api_gateway_v2_result(
             self.get_api().api_id(api_id).send().await,
             "GetApi",
@@ -3149,14 +3033,7 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
             api_id,
         )?;
 
-        Ok(ApiGatewayV2ApiDescription {
-            api_id: output.api_id,
-            api_endpoint: output.api_endpoint,
-            name: output.name,
-            protocol_type: output
-                .protocol_type
-                .map(|protocol_type| protocol_type.as_str().to_string()),
-        })
+        Ok(output)
     }
 
     async fn delete_api(&self, api_id: &str) -> Result<()> {
@@ -3171,112 +3048,136 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
 
     async fn create_integration(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateIntegrationRequest,
-    ) -> Result<ApiGatewayV2Integration> {
+    ) -> Result<ApiGatewayV2CreateIntegrationResponse> {
+        let api_id = request
+            .api_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_integration()
-                .api_id(api_id)
-                .integration_type(IntegrationType::from(request.integration_type.as_str()))
-                .integration_uri(request.integration_uri)
+                .set_api_id(request.api_id)
+                .set_connection_id(request.connection_id)
+                .set_connection_type(request.connection_type)
+                .set_content_handling_strategy(request.content_handling_strategy)
+                .set_credentials_arn(request.credentials_arn)
+                .set_description(request.description)
+                .set_integration_method(request.integration_method)
+                .set_integration_subtype(request.integration_subtype)
+                .set_integration_type(request.integration_type)
+                .set_integration_uri(request.integration_uri)
+                .set_passthrough_behavior(request.passthrough_behavior)
                 .set_payload_format_version(request.payload_format_version)
+                .set_request_parameters(request.request_parameters)
+                .set_request_templates(request.request_templates)
+                .set_response_parameters(request.response_parameters)
+                .set_template_selection_expression(request.template_selection_expression)
+                .set_timeout_in_millis(request.timeout_in_millis)
+                .set_tls_config(request.tls_config)
                 .send()
                 .await,
             "CreateIntegration",
             "ApiGatewayIntegration",
-            api_id,
+            &api_id,
         )?;
 
-        Ok(ApiGatewayV2Integration {
-            integration_id: output.integration_id,
-            integration_type: output
-                .integration_type
-                .map(|integration_type| integration_type.as_str().to_string()),
-            integration_uri: output.integration_uri,
-        })
+        Ok(output)
     }
 
     async fn create_route(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateRouteRequest,
-    ) -> Result<ApiGatewayV2Route> {
+    ) -> Result<ApiGatewayV2CreateRouteResponse> {
+        let api_id = request
+            .api_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_route()
-                .api_id(api_id)
-                .route_key(request.route_key)
-                .target(request.target)
+                .set_api_id(request.api_id)
+                .set_api_key_required(request.api_key_required)
+                .set_authorization_scopes(request.authorization_scopes)
+                .set_authorization_type(request.authorization_type)
+                .set_authorizer_id(request.authorizer_id)
+                .set_model_selection_expression(request.model_selection_expression)
+                .set_operation_name(request.operation_name)
+                .set_request_models(request.request_models)
+                .set_request_parameters(request.request_parameters)
+                .set_route_key(request.route_key)
+                .set_route_response_selection_expression(
+                    request.route_response_selection_expression,
+                )
+                .set_target(request.target)
                 .send()
                 .await,
             "CreateRoute",
             "ApiGatewayRoute",
-            api_id,
+            &api_id,
         )?;
 
-        Ok(ApiGatewayV2Route {
-            route_id: output.route_id,
-            route_key: output.route_key,
-        })
+        Ok(output)
     }
 
     async fn create_stage(
         &self,
-        api_id: &str,
         request: ApiGatewayV2CreateStageRequest,
-    ) -> Result<ApiGatewayV2Stage> {
+    ) -> Result<ApiGatewayV2CreateStageResponse> {
+        let api_id = request
+            .api_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_stage()
-                .api_id(api_id)
-                .stage_name(request.stage_name)
+                .set_access_log_settings(request.access_log_settings)
+                .set_api_id(request.api_id)
                 .set_auto_deploy(request.auto_deploy)
+                .set_client_certificate_id(request.client_certificate_id)
+                .set_default_route_settings(request.default_route_settings)
+                .set_deployment_id(request.deployment_id)
+                .set_description(request.description)
+                .set_route_settings(request.route_settings)
+                .set_stage_name(request.stage_name)
+                .set_stage_variables(request.stage_variables)
                 .set_tags(request.tags)
                 .send()
                 .await,
             "CreateStage",
             "ApiGatewayStage",
-            api_id,
+            &api_id,
         )?;
 
-        Ok(ApiGatewayV2Stage {
-            stage_name: output.stage_name,
-            auto_deploy: output.auto_deploy,
-        })
+        Ok(output)
     }
 
     async fn create_domain_name(
         &self,
         request: ApiGatewayV2CreateDomainNameRequest,
-    ) -> Result<ApiGatewayV2DomainName> {
+    ) -> Result<ApiGatewayV2CreateDomainNameResponse> {
+        let domain_name = request
+            .domain_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_domain_name()
-                .domain_name(request.domain_name.clone())
-                .set_domain_name_configurations(Some(
-                    request
-                        .domain_name_configurations
-                        .into_iter()
-                        .map(api_gateway_v2_domain_name_configuration_to_aws)
-                        .collect(),
-                ))
+                .set_domain_name(request.domain_name)
+                .set_domain_name_configurations(request.domain_name_configurations)
+                .set_mutual_tls_authentication(request.mutual_tls_authentication)
+                .set_routing_mode(request.routing_mode)
                 .set_tags(request.tags)
                 .send()
                 .await,
             "CreateDomainName",
             "ApiGatewayDomainName",
-            &request.domain_name,
+            &domain_name,
         )?;
 
-        Ok(ApiGatewayV2DomainName {
-            domain_name: output.domain_name,
-            domain_name_configurations: output.domain_name_configurations.map(|configs| {
-                configs
-                    .into_iter()
-                    .map(api_gateway_v2_domain_name_configuration_from_aws)
-                    .collect()
-            }),
-        })
+        Ok(output)
     }
 
-    async fn get_domain_name(&self, domain_name: &str) -> Result<ApiGatewayV2DomainName> {
+    async fn get_domain_name(
+        &self,
+        domain_name: &str,
+    ) -> Result<ApiGatewayV2GetDomainNameResponse> {
         let output = api_gateway_v2_result(
             self.get_domain_name().domain_name(domain_name).send().await,
             "GetDomainName",
@@ -3284,15 +3185,7 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
             domain_name,
         )?;
 
-        Ok(ApiGatewayV2DomainName {
-            domain_name: output.domain_name,
-            domain_name_configurations: output.domain_name_configurations.map(|configs| {
-                configs
-                    .into_iter()
-                    .map(api_gateway_v2_domain_name_configuration_from_aws)
-                    .collect()
-            }),
-        })
+        Ok(output)
     }
 
     async fn delete_domain_name(&self, domain_name: &str) -> Result<()> {
@@ -3310,27 +3203,26 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
 
     async fn create_api_mapping(
         &self,
-        domain_name: &str,
         request: ApiGatewayV2CreateApiMappingRequest,
-    ) -> Result<ApiGatewayV2ApiMapping> {
+    ) -> Result<ApiGatewayV2CreateApiMappingResponse> {
+        let domain_name = request
+            .domain_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let output = api_gateway_v2_result(
             self.create_api_mapping()
-                .domain_name(domain_name)
-                .api_id(request.api_id)
-                .stage(request.stage)
+                .set_api_id(request.api_id)
                 .set_api_mapping_key(request.api_mapping_key)
+                .set_domain_name(request.domain_name)
+                .set_stage(request.stage)
                 .send()
                 .await,
             "CreateApiMapping",
             "ApiGatewayApiMapping",
-            domain_name,
+            &domain_name,
         )?;
 
-        Ok(ApiGatewayV2ApiMapping {
-            api_mapping_id: output.api_mapping_id,
-            api_mapping_key: output.api_mapping_key,
-            stage: output.stage,
-        })
+        Ok(output)
     }
 
     async fn get_api_mappings(
@@ -3347,15 +3239,7 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
             domain_name,
         )?;
 
-        Ok(ApiGatewayV2GetApiMappingsResponse {
-            items: output.items.map(|items| {
-                items
-                    .into_iter()
-                    .map(api_gateway_v2_api_mapping_from_aws)
-                    .collect()
-            }),
-            next_token: output.next_token,
-        })
+        Ok(output)
     }
 
     async fn delete_api_mapping(&self, domain_name: &str, api_mapping_id: &str) -> Result<()> {
@@ -5743,46 +5627,6 @@ where
                     resource_id: None,
                 }))
         }
-    }
-}
-
-fn api_gateway_v2_domain_name_configuration_to_aws(
-    configuration: ApiGatewayV2DomainNameConfiguration,
-) -> AwsApiGatewayV2DomainNameConfiguration {
-    AwsApiGatewayV2DomainNameConfiguration::builder()
-        .certificate_arn(configuration.certificate_arn)
-        .endpoint_type(EndpointType::from(configuration.endpoint_type.as_str()))
-        .security_policy(SecurityPolicy::from(configuration.security_policy.as_str()))
-        .set_api_gateway_domain_name(configuration.api_gateway_domain_name)
-        .set_hosted_zone_id(configuration.hosted_zone_id)
-        .build()
-}
-
-fn api_gateway_v2_domain_name_configuration_from_aws(
-    configuration: AwsApiGatewayV2DomainNameConfiguration,
-) -> ApiGatewayV2DomainNameConfiguration {
-    ApiGatewayV2DomainNameConfiguration {
-        certificate_arn: configuration.certificate_arn.unwrap_or_default(),
-        endpoint_type: configuration
-            .endpoint_type
-            .map(|endpoint_type| endpoint_type.as_str().to_string())
-            .unwrap_or_default(),
-        security_policy: configuration
-            .security_policy
-            .map(|security_policy| security_policy.as_str().to_string())
-            .unwrap_or_default(),
-        api_gateway_domain_name: configuration.api_gateway_domain_name,
-        hosted_zone_id: configuration.hosted_zone_id,
-    }
-}
-
-fn api_gateway_v2_api_mapping_from_aws(
-    api_mapping: AwsApiGatewayV2ApiMapping,
-) -> ApiGatewayV2ApiMapping {
-    ApiGatewayV2ApiMapping {
-        api_mapping_id: api_mapping.api_mapping_id,
-        api_mapping_key: api_mapping.api_mapping_key,
-        stage: api_mapping.stage,
     }
 }
 
