@@ -3,8 +3,8 @@ use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
 use crate::core::{
-    AzureServiceBusNamespace as AzureServiceBusArmNamespace, AzureServiceBusNamespaceProperties,
-    AzureServiceBusResource, AzureServiceBusTrackedResource, ResourceControllerContext,
+    AzureServiceBusNamespaceProperties, AzureServiceBusResource, AzureServiceBusTrackedResource,
+    ResourceControllerContext, SbNamespace,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -420,7 +420,7 @@ fn emit_azure_service_bus_namespace_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    namespace: &AzureServiceBusArmNamespace,
+    namespace: &SbNamespace,
 ) {
     let properties = namespace.properties.as_ref();
     let namespace_status = properties.and_then(|p| p.status.clone());
@@ -501,7 +501,7 @@ impl AzureServiceBusNamespaceController {
     // ─────────────── HELPER METHODS ────────────────────────────
     fn handle_creation_completed(
         &mut self,
-        namespace: &AzureServiceBusArmNamespace,
+        namespace: &SbNamespace,
         azure_config: &AzureClientConfig,
         resource_group_name: &str,
     ) {
@@ -543,12 +543,12 @@ impl AzureServiceBusNamespaceController {
         &self,
         azure_config: &AzureClientConfig,
         _ctx: &ResourceControllerContext,
-    ) -> AzureServiceBusArmNamespace {
+    ) -> SbNamespace {
         let location = azure_config
             .region
             .clone()
             .unwrap_or_else(|| "eastus".to_string());
-        let mut namespace = AzureServiceBusArmNamespace::new(AzureServiceBusTrackedResource {
+        let mut namespace = SbNamespace::new(AzureServiceBusTrackedResource {
             resource: AzureServiceBusResource {
                 id: None,
                 name: self.namespace_name.clone(),

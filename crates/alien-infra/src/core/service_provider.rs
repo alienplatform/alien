@@ -69,10 +69,9 @@ pub use azure_mgmt_network::package_2024_03::models::{
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 pub use azure_mgmt_servicebus::package_2024_01::models::{
     MessageCountDetails as AzureServiceBusMessageCountDetails, Resource as AzureServiceBusResource,
-    SbNamespace as AzureServiceBusNamespace,
-    SbNamespaceProperties as AzureServiceBusNamespaceProperties, SbQueue as AzureServiceBusQueue,
-    SbQueueProperties as AzureServiceBusQueueProperties, SbSku as AzureServiceBusSku,
-    TrackedResource as AzureServiceBusTrackedResource,
+    SbNamespace, SbNamespaceProperties as AzureServiceBusNamespaceProperties,
+    SbQueue as AzureServiceBusQueue, SbQueueProperties as AzureServiceBusQueueProperties,
+    SbSku as AzureServiceBusSku, TrackedResource as AzureServiceBusTrackedResource,
 };
 pub use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
@@ -4316,14 +4315,14 @@ pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
         &self,
         resource_group_name: String,
         namespace_name: String,
-        parameters: AzureServiceBusNamespace,
-    ) -> Result<AzureServiceBusNamespace>;
+        parameters: SbNamespace,
+    ) -> Result<SbNamespace>;
 
     async fn get_namespace(
         &self,
         resource_group_name: String,
         namespace_name: String,
-    ) -> Result<AzureServiceBusNamespace>;
+    ) -> Result<SbNamespace>;
 
     async fn delete_namespace(
         &self,
@@ -4483,8 +4482,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         &self,
         resource_group_name: String,
         namespace_name: String,
-        parameters: AzureServiceBusNamespace,
-    ) -> Result<AzureServiceBusNamespace> {
+        parameters: SbNamespace,
+    ) -> Result<SbNamespace> {
         let body = serde_json::to_string(&parameters)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
@@ -4516,7 +4515,7 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         &self,
         resource_group_name: String,
         namespace_name: String,
-    ) -> Result<AzureServiceBusNamespace> {
+    ) -> Result<SbNamespace> {
         let response = self
             .request(
                 Method::GET,

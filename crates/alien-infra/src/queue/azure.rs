@@ -380,6 +380,7 @@ mod tests {
     use crate::core::MockAuthorizationApi;
     use crate::core::MockAzureServiceBusManagementApi;
     use crate::core::MockPlatformServiceProvider;
+    use crate::core::SbNamespace;
     use alien_core::{Platform, Queue, ResourceStatus};
     use std::sync::Arc;
 
@@ -387,7 +388,7 @@ mod tests {
         let mut mock = MockAzureServiceBusManagementApi::new();
         mock.expect_create_or_update_namespace()
             .returning(|_, _, _| {
-                Ok(crate::core::AzureServiceBusNamespace::new(
+                Ok(SbNamespace::new(
                     crate::core::AzureServiceBusTrackedResource::new("eastus".to_string()),
                 ))
             });
