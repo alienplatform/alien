@@ -314,40 +314,56 @@ impl AwsRemoteStackManagementController {
         // Step 1: List and detach all managed (attached) policies
         match client.list_attached_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(attached_policies) = response
-                    .list_attached_role_policies_result
-                    .attached_policies
-                {
-                    for policy in &attached_policies.member {
-                        info!(
-                            role_name = %role_name,
-                            policy_arn = %policy.policy_arn,
-                            "Detaching managed policy from management role"
-                        );
-                        let detach_result = client
-                            .detach_role_policy(role_name, &policy.policy_arn)
-                            .await;
-                        match detach_result {
-                            Ok(_) => {}
-                            Err(e) => {
-                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
-                                    warn!(role_name = %role_name, policy_arn = %policy.policy_arn, "Managed policy already detached");
-                                } else {
-                                    return Err(e.context(ErrorData::CloudPlatformError {
+                for policy in response.attached_policies() {
+                    let policy_name = policy.policy_name().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include a name",
+                                role_name
+                            ),
+                            resource_id: Some("remote-stack-management".to_string()),
+                        })
+                    })?;
+                    let policy_arn = policy.policy_arn().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include an ARN",
+                                role_name
+                            ),
+                            resource_id: Some("remote-stack-management".to_string()),
+                        })
+                    })?;
+                    let policy_name = policy_name.to_string();
+                    let policy_arn = policy_arn.to_string();
+
+                    info!(
+                        role_name = %role_name,
+                        policy_arn = %policy_arn,
+                        "Detaching managed policy from management role"
+                    );
+                    let detach_result = client.detach_role_policy(role_name, &policy_arn).await;
+                    match detach_result {
+                        Ok(_) => {}
+                        Err(e) => {
+                            if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
+                                warn!(role_name = %role_name, policy_arn = %policy_arn, "Managed policy already detached");
+                            } else {
+                                return Err(e
+                                    .context(ErrorData::CloudPlatformError {
                                         message: format!(
-                                            "Failed to detach managed policy '{}' from management role",
-                                            policy.policy_arn
-                                        ),
+                                        "Failed to detach managed policy '{}' from management role",
+                                        policy_arn
+                                    ),
                                         resource_id: Some("remote-stack-management".to_string()),
-                                    }).into());
-                                }
+                                    })
+                                    .into());
                             }
                         }
+                    }
 
-                        if self.is_owned_management_policy_name(&policy.policy_name) {
-                            self.delete_owned_policy(client.as_ref(), &policy.policy_arn)
-                                .await?;
-                        }
+                    if self.is_owned_management_policy_name(&policy_name) {
+                        self.delete_owned_policy(client.as_ref(), &policy_arn)
+                            .await?;
                     }
                 }
             }
@@ -369,27 +385,27 @@ impl AwsRemoteStackManagementController {
         // Step 2: List and delete all inline policies
         match client.list_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                    for policy_name in &policy_names.member {
-                        info!(
-                            role_name = %role_name,
-                            policy_name = %policy_name,
-                            "Deleting inline policy from management role"
-                        );
-                        match client.delete_role_policy(role_name, policy_name).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
-                                    warn!(role_name = %role_name, policy_name = %policy_name, "Inline policy already deleted");
-                                } else {
-                                    return Err(e.context(ErrorData::CloudPlatformError {
+                for policy_name in response.policy_names() {
+                    info!(
+                        role_name = %role_name,
+                        policy_name = %policy_name,
+                        "Deleting inline policy from management role"
+                    );
+                    match client.delete_role_policy(role_name, policy_name).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
+                                warn!(role_name = %role_name, policy_name = %policy_name, "Inline policy already deleted");
+                            } else {
+                                return Err(e
+                                    .context(ErrorData::CloudPlatformError {
                                         message: format!(
-                                            "Failed to delete inline policy '{}' from management role",
-                                            policy_name
-                                        ),
+                                        "Failed to delete inline policy '{}' from management role",
+                                        policy_name
+                                    ),
                                         resource_id: Some("remote-stack-management".to_string()),
-                                    }).into());
-                                }
+                                    })
+                                    .into());
                             }
                         }
                     }
@@ -979,30 +995,39 @@ impl AwsRemoteStackManagementController {
                 ),
                 resource_id: Some("remote-stack-management".to_string()),
             })?;
-        let attached = response
-            .list_attached_role_policies_result
-            .attached_policies
-            .map(|attached| attached.member)
-            .unwrap_or_default();
+        for policy in response.attached_policies() {
+            let policy_name = policy.policy_name().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Attached policy for '{}' did not include a name", role_name),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })
+            })?;
+            let policy_arn = policy.policy_arn().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Attached policy for '{}' did not include an ARN", role_name),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })
+            })?;
+            let policy_name = policy_name.to_string();
+            let policy_arn = policy_arn.to_string();
 
-        for policy in attached {
-            if !self.is_owned_management_policy_name(&policy.policy_name)
-                || desired.contains(policy.policy_arn.as_str())
+            if !self.is_owned_management_policy_name(&policy_name)
+                || desired.contains(policy_arn.as_str())
             {
                 continue;
             }
 
             client
-                .detach_role_policy(role_name, &policy.policy_arn)
+                .detach_role_policy(role_name, &policy_arn)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to detach stale management policy '{}' from role '{}'",
-                        policy.policy_arn, role_name
+                        policy_arn, role_name
                     ),
                     resource_id: Some("remote-stack-management".to_string()),
                 })?;
-            self.delete_owned_policy(client, &policy.policy_arn).await?;
+            self.delete_owned_policy(client, &policy_arn).await?;
         }
 
         Ok(())

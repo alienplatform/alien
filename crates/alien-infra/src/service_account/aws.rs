@@ -2,8 +2,8 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::aws_sdk::{
-    AttachedPolicy, CreateRoleRequest, CreateRoleTag, Role, TrustPolicyDocument,
-    TrustPolicyPrincipal, TrustPolicyPrincipalValue, TrustPolicyStatement,
+    CreateRoleRequest, CreateRoleTag, Role, TrustPolicyDocument, TrustPolicyPrincipal,
+    TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -256,18 +256,32 @@ impl AwsServiceAccountController {
             }
         }
 
-        let attached_policies = client
+        let attached_policy_response = client
             .list_attached_role_policies(role_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to list attached IAM role policies during heartbeat check"
                     .to_string(),
                 resource_id: Some(config.id.clone()),
-            })?
-            .list_attached_role_policies_result
-            .attached_policies
-            .map(|policies| policies.member)
-            .unwrap_or_default();
+            })?;
+        let attached_policy_names = attached_policy_response
+            .attached_policies()
+            .iter()
+            .map(|policy| {
+                policy
+                    .policy_name()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include a name",
+                                role_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let inline_policy_names = client
             .list_role_policies(role_name)
@@ -277,16 +291,14 @@ impl AwsServiceAccountController {
                     .to_string(),
                 resource_id: Some(config.id.clone()),
             })?
-            .list_role_policies_result
-            .policy_names
-            .map(|names| names.member)
-            .unwrap_or_default();
+            .policy_names()
+            .to_vec();
 
         emit_aws_service_account_heartbeat(
             ctx,
             &config.id,
             role_metadata,
-            attached_policies,
+            attached_policy_names,
             inline_policy_names,
             self.stack_permissions_applied,
         );
@@ -388,57 +400,73 @@ impl AwsServiceAccountController {
         // Step 1: List and detach all managed policies
         match client.list_attached_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(attached_policies) = response
-                    .list_attached_role_policies_result
-                    .attached_policies
-                {
-                    for policy in &attached_policies.member {
-                        info!(
-                            role_name = %role_name,
-                            policy_arn = %policy.policy_arn,
-                            policy_name = %policy.policy_name,
-                            "Detaching managed policy"
-                        );
+                let resource_id = ctx.desired_resource_config::<ServiceAccount>()?.id.clone();
+                if response.attached_policies().is_empty() {
+                    info!(role_name = %role_name, "No managed policies attached to role");
+                }
 
-                        match client
-                            .detach_role_policy(role_name, &policy.policy_arn)
-                            .await
-                        {
-                            Ok(_) => {
-                                info!(
+                for policy in response.attached_policies() {
+                    let policy_name = policy.policy_name().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include a name",
+                                role_name
+                            ),
+                            resource_id: Some(resource_id.clone()),
+                        })
+                    })?;
+                    let policy_arn = policy.policy_arn().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include an ARN",
+                                role_name
+                            ),
+                            resource_id: Some(resource_id.clone()),
+                        })
+                    })?;
+                    let policy_name = policy_name.to_string();
+                    let policy_arn = policy_arn.to_string();
+
+                    info!(
+                        role_name = %role_name,
+                        policy_arn = %policy_arn,
+                        policy_name = %policy_name,
+                        "Detaching managed policy"
+                    );
+
+                    match client.detach_role_policy(role_name, &policy_arn).await {
+                        Ok(_) => {
+                            info!(
+                                role_name = %role_name,
+                                policy_arn = %policy_arn,
+                                "Managed policy detached successfully"
+                            );
+                        }
+                        Err(e) => {
+                            // Check if it's a resource not found error
+                            if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
+                                warn!(
                                     role_name = %role_name,
-                                    policy_arn = %policy.policy_arn,
-                                    "Managed policy detached successfully"
+                                    policy_arn = %policy_arn,
+                                    "Managed policy already detached or doesn't exist"
                                 );
-                            }
-                            Err(e) => {
-                                // Check if it's a resource not found error
-                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
-                                    warn!(
-                                        role_name = %role_name,
-                                        policy_arn = %policy.policy_arn,
-                                        "Managed policy already detached or doesn't exist"
-                                    );
-                                } else {
-                                    return Err(e
-                                        .context(ErrorData::CloudPlatformError {
-                                            message: format!(
-                                                "Failed to detach managed policy '{}'",
-                                                policy.policy_arn
-                                            ),
-                                            resource_id: Some(
-                                                ctx.desired_resource_config::<ServiceAccount>()?
-                                                    .id
-                                                    .clone(),
-                                            ),
-                                        })
-                                        .into());
-                                }
+                            } else {
+                                return Err(e
+                                    .context(ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to detach managed policy '{}'",
+                                            policy_arn
+                                        ),
+                                        resource_id: Some(
+                                            ctx.desired_resource_config::<ServiceAccount>()?
+                                                .id
+                                                .clone(),
+                                        ),
+                                    })
+                                    .into());
                             }
                         }
                     }
-                } else {
-                    info!(role_name = %role_name, "No managed policies attached to role");
                 }
             }
             Err(e) => {
@@ -461,50 +489,50 @@ impl AwsServiceAccountController {
         // Step 2: List and delete all inline policies
         match client.list_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                    for policy_name in &policy_names.member {
-                        info!(
-                            role_name = %role_name,
-                            policy_name = %policy_name,
-                            "Deleting inline policy"
-                        );
+                if response.policy_names().is_empty() {
+                    info!(role_name = %role_name, "No inline policies attached to role");
+                }
 
-                        match client.delete_role_policy(role_name, policy_name).await {
-                            Ok(_) => {
-                                info!(
+                for policy_name in response.policy_names() {
+                    info!(
+                        role_name = %role_name,
+                        policy_name = %policy_name,
+                        "Deleting inline policy"
+                    );
+
+                    match client.delete_role_policy(role_name, policy_name).await {
+                        Ok(_) => {
+                            info!(
+                                role_name = %role_name,
+                                policy_name = %policy_name,
+                                "Inline policy deleted successfully"
+                            );
+                        }
+                        Err(e) => {
+                            // Check if it's a resource not found error
+                            if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
+                                warn!(
                                     role_name = %role_name,
                                     policy_name = %policy_name,
-                                    "Inline policy deleted successfully"
+                                    "Inline policy already deleted or doesn't exist"
                                 );
-                            }
-                            Err(e) => {
-                                // Check if it's a resource not found error
-                                if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
-                                    warn!(
-                                        role_name = %role_name,
-                                        policy_name = %policy_name,
-                                        "Inline policy already deleted or doesn't exist"
-                                    );
-                                } else {
-                                    return Err(e
-                                        .context(ErrorData::CloudPlatformError {
-                                            message: format!(
-                                                "Failed to delete inline policy '{}'",
-                                                policy_name
-                                            ),
-                                            resource_id: Some(
-                                                ctx.desired_resource_config::<ServiceAccount>()?
-                                                    .id
-                                                    .clone(),
-                                            ),
-                                        })
-                                        .into());
-                                }
+                            } else {
+                                return Err(e
+                                    .context(ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to delete inline policy '{}'",
+                                            policy_name
+                                        ),
+                                        resource_id: Some(
+                                            ctx.desired_resource_config::<ServiceAccount>()?
+                                                .id
+                                                .clone(),
+                                        ),
+                                    })
+                                    .into());
                             }
                         }
                     }
-                } else {
-                    info!(role_name = %role_name, "No inline policies attached to role");
                 }
             }
             Err(e) => {
@@ -1003,7 +1031,7 @@ fn emit_aws_service_account_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     role: &Role,
-    attached_policies: Vec<AttachedPolicy>,
+    attached_policy_names: Vec<String>,
     inline_policy_names: Vec<String>,
     stack_permissions_applied: bool,
 ) {
@@ -1013,10 +1041,6 @@ fn emit_aws_service_account_heartbeat(
         .iter()
         .filter(|tag| tag.key().starts_with("alien"))
         .count() as u32;
-    let attached_policy_names = attached_policies
-        .iter()
-        .map(|policy| policy.policy_name.clone())
-        .collect::<Vec<_>>();
     let attached_policy_count = attached_policy_names.len() as u32;
     let inline_policy_count = inline_policy_names.len() as u32;
     let message = format!("AWS IAM role '{}' is reachable", role.role_name());

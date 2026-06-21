@@ -935,47 +935,46 @@ impl AwsArtifactRegistryController {
     ) -> Result<()> {
         match iam_client.list_attached_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(attached_policies) = response
-                    .list_attached_role_policies_result
-                    .attached_policies
-                {
-                    for policy in attached_policies.member {
-                        match iam_client
-                            .detach_role_policy(role_name, &policy.policy_arn)
-                            .await
+                for policy in response.attached_policies() {
+                    let policy_arn = policy.policy_arn().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Attached policy for '{}' did not include an ARN",
+                                role_name
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        })
+                    })?;
+                    let policy_arn = policy_arn.to_string();
+                    match iam_client.detach_role_policy(role_name, &policy_arn).await {
+                        Ok(_) => {
+                            info!(
+                                role_name = %role_name,
+                                policy_arn = %policy_arn,
+                                role_label = %role_label,
+                                "Artifact registry role managed policy detached successfully"
+                            );
+                        }
+                        Err(e)
+                            if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) =>
                         {
-                            Ok(_) => {
-                                info!(
-                                    role_name = %role_name,
-                                    policy_arn = %policy.policy_arn,
-                                    role_label = %role_label,
-                                    "Artifact registry role managed policy detached successfully"
-                                );
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.error,
-                                    Some(ErrorData::CloudResourceNotFound { .. })
-                                ) =>
-                            {
-                                info!(
-                                    role_name = %role_name,
-                                    policy_arn = %policy.policy_arn,
-                                    role_label = %role_label,
-                                    "Artifact registry role managed policy already detached"
-                                );
-                            }
-                            Err(e) => {
-                                return Err(e.into_alien_error().context(
-                                    ErrorData::CloudPlatformError {
-                                        message: format!(
-                                            "Failed to detach {} role policy '{}' from '{}'",
-                                            role_label, policy.policy_arn, role_name
-                                        ),
-                                        resource_id: Some(resource_id.to_string()),
-                                    },
-                                ));
-                            }
+                            info!(
+                                role_name = %role_name,
+                                policy_arn = %policy_arn,
+                                role_label = %role_label,
+                                "Artifact registry role managed policy already detached"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.into_alien_error().context(
+                                ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to detach {} role policy '{}' from '{}'",
+                                        role_label, policy_arn, role_name
+                                    ),
+                                    resource_id: Some(resource_id.to_string()),
+                                },
+                            ));
                         }
                     }
                 }
@@ -994,41 +993,36 @@ impl AwsArtifactRegistryController {
 
         match iam_client.list_role_policies(role_name).await {
             Ok(response) => {
-                if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                    for policy_name in policy_names.member {
-                        match iam_client.delete_role_policy(role_name, &policy_name).await {
-                            Ok(_) => {
-                                info!(
-                                    role_name = %role_name,
-                                    policy_name = %policy_name,
-                                    role_label = %role_label,
-                                    "Artifact registry role inline policy deleted successfully"
-                                );
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.error,
-                                    Some(ErrorData::CloudResourceNotFound { .. })
-                                ) =>
-                            {
-                                info!(
-                                    role_name = %role_name,
-                                    policy_name = %policy_name,
-                                    role_label = %role_label,
-                                    "Artifact registry role inline policy already deleted"
-                                );
-                            }
-                            Err(e) => {
-                                return Err(e.into_alien_error().context(
-                                    ErrorData::CloudPlatformError {
-                                        message: format!(
-                                            "Failed to delete {} role policy '{}' from '{}'",
-                                            role_label, policy_name, role_name
-                                        ),
-                                        resource_id: Some(resource_id.to_string()),
-                                    },
-                                ));
-                            }
+                for policy_name in response.policy_names() {
+                    match iam_client.delete_role_policy(role_name, policy_name).await {
+                        Ok(_) => {
+                            info!(
+                                role_name = %role_name,
+                                policy_name = %policy_name,
+                                role_label = %role_label,
+                                "Artifact registry role inline policy deleted successfully"
+                            );
+                        }
+                        Err(e)
+                            if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) =>
+                        {
+                            info!(
+                                role_name = %role_name,
+                                policy_name = %policy_name,
+                                role_label = %role_label,
+                                "Artifact registry role inline policy already deleted"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.into_alien_error().context(
+                                ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to delete {} role policy '{}' from '{}'",
+                                        role_label, policy_name, role_name
+                                    ),
+                                    resource_id: Some(resource_id.to_string()),
+                                },
+                            ));
                         }
                     }
                 }
@@ -1425,9 +1419,8 @@ fn ecr_repository_required_string(
 mod tests {
     use super::*;
     use crate::aws_sdk::{
-        AttachedPolicies, CreateRoleResponse, ListAttachedRolePoliciesResponse,
-        ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
-        MockIamApi, PolicyNames, Role,
+        CreateRoleResponse, ListAttachedRolePoliciesResponse, ListRolePoliciesResponse, MockIamApi,
+        Role,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
@@ -1486,15 +1479,11 @@ mod tests {
             } else {
                 "ECRPushPolicy"
             };
-            Ok(ListRolePoliciesResponse {
-                list_role_policies_result: ListRolePoliciesResult {
-                    policy_names: Some(PolicyNames {
-                        member: vec![policy_name.to_string()],
-                    }),
-                    is_truncated: Some(false),
-                    marker: None,
-                },
-            })
+            Ok(ListRolePoliciesResponse::builder()
+                .policy_names(policy_name)
+                .is_truncated(false)
+                .build()
+                .expect("test list role policies response should build"))
         });
         mock_iam
             .expect_delete_role_policy()
@@ -1538,23 +1527,17 @@ mod tests {
     }
 
     fn empty_attached_role_policies_response() -> ListAttachedRolePoliciesResponse {
-        ListAttachedRolePoliciesResponse {
-            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
-                attached_policies: Some(AttachedPolicies { member: vec![] }),
-                is_truncated: Some(false),
-                marker: None,
-            },
-        }
+        ListAttachedRolePoliciesResponse::builder()
+            .is_truncated(false)
+            .build()
     }
 
     fn empty_inline_role_policies_response() -> ListRolePoliciesResponse {
-        ListRolePoliciesResponse {
-            list_role_policies_result: ListRolePoliciesResult {
-                policy_names: Some(PolicyNames { member: vec![] }),
-                is_truncated: Some(false),
-                marker: None,
-            },
-        }
+        ListRolePoliciesResponse::builder()
+            .set_policy_names(Some(vec![]))
+            .is_truncated(false)
+            .build()
+            .expect("test list role policies response should build")
     }
 
     #[tokio::test]

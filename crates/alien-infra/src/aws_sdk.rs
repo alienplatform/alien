@@ -24,10 +24,7 @@ use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
-    types::{
-        AttachedPolicy as AwsIamAttachedPolicy, InstanceProfile as AwsIamInstanceProfile,
-        Tag as AwsIamTag,
-    },
+    types::{InstanceProfile as AwsIamInstanceProfile, Tag as AwsIamTag},
     Client as IamClient,
 };
 use aws_sdk_lambda::{
@@ -219,9 +216,11 @@ pub use aws_sdk_iam::{
         create_policy_version::CreatePolicyVersionOutput as CreatePolicyVersionResponse,
         create_role::CreateRoleOutput as CreateRoleResponse,
         get_role::GetRoleOutput as GetRoleResponse,
+        list_attached_role_policies::ListAttachedRolePoliciesOutput as ListAttachedRolePoliciesResponse,
         list_policy_versions::ListPolicyVersionsOutput as ListPolicyVersionsResponse,
+        list_role_policies::ListRolePoliciesOutput as ListRolePoliciesResponse,
     },
-    types::{Policy, PolicyVersion, Role},
+    types::{AttachedPolicy, Policy, PolicyVersion, Role},
 };
 pub use aws_sdk_s3::types::{
     BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, BucketVersioningStatus,
@@ -425,65 +424,6 @@ pub struct GetRolePolicyResult {
     pub policy_name: String,
     /// Policy document.
     pub policy_document: String,
-}
-
-/// IAM list attached role policies response.
-#[derive(Debug, Clone)]
-pub struct ListAttachedRolePoliciesResponse {
-    /// Operation result.
-    pub list_attached_role_policies_result: ListAttachedRolePoliciesResult,
-}
-
-/// IAM list attached role policies result.
-#[derive(Debug, Clone)]
-pub struct ListAttachedRolePoliciesResult {
-    /// Attached policies wrapper.
-    pub attached_policies: Option<AttachedPolicies>,
-    /// Whether the result is truncated.
-    pub is_truncated: Option<bool>,
-    /// Pagination marker.
-    pub marker: Option<String>,
-}
-
-/// IAM attached policy collection wrapper.
-#[derive(Debug, Clone)]
-pub struct AttachedPolicies {
-    /// Attached policy members.
-    pub member: Vec<AttachedPolicy>,
-}
-
-/// IAM attached policy metadata.
-#[derive(Debug, Clone)]
-pub struct AttachedPolicy {
-    /// Policy name.
-    pub policy_name: String,
-    /// Policy ARN.
-    pub policy_arn: String,
-}
-
-/// IAM list role policies response.
-#[derive(Debug, Clone)]
-pub struct ListRolePoliciesResponse {
-    /// Operation result.
-    pub list_role_policies_result: ListRolePoliciesResult,
-}
-
-/// IAM list role policies result.
-#[derive(Debug, Clone)]
-pub struct ListRolePoliciesResult {
-    /// Policy names wrapper.
-    pub policy_names: Option<PolicyNames>,
-    /// Whether the result is truncated.
-    pub is_truncated: Option<bool>,
-    /// Pagination marker.
-    pub marker: Option<String>,
-}
-
-/// IAM inline policy name collection wrapper.
-#[derive(Debug, Clone)]
-pub struct PolicyNames {
-    /// Policy name members.
-    pub member: Vec<String>,
 }
 
 /// IAM instance profile creation request.
@@ -1341,19 +1281,18 @@ impl IamApi for IamClient {
             role_name,
         )?;
 
-        Ok(ListAttachedRolePoliciesResponse {
-            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
-                attached_policies: Some(AttachedPolicies {
-                    member: response
-                        .attached_policies()
-                        .iter()
-                        .map(iam_attached_policy)
-                        .collect(),
-                }),
-                is_truncated: Some(response.is_truncated()),
-                marker: response.marker().map(ToString::to_string),
-            },
-        })
+        for policy in response.attached_policies() {
+            if policy.policy_name().is_none() || policy.policy_arn().is_none() {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "IAM ListAttachedRolePolicies response for '{role_name}' included a policy without both name and ARN"
+                    ),
+                    resource_id: None,
+                }));
+            }
+        }
+
+        Ok(response)
     }
 
     async fn create_policy(
@@ -1493,15 +1432,7 @@ impl IamApi for IamClient {
             role_name,
         )?;
 
-        Ok(ListRolePoliciesResponse {
-            list_role_policies_result: ListRolePoliciesResult {
-                policy_names: Some(PolicyNames {
-                    member: response.policy_names().to_vec(),
-                }),
-                is_truncated: Some(response.is_truncated()),
-                marker: response.marker().map(ToString::to_string),
-            },
-        })
+        Ok(response)
     }
 
     async fn create_instance_profile(
@@ -4061,13 +3992,6 @@ fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamT
                 })
         })
         .collect()
-}
-
-fn iam_attached_policy(policy: &AwsIamAttachedPolicy) -> AttachedPolicy {
-    AttachedPolicy {
-        policy_name: policy.policy_name().unwrap_or_default().to_string(),
-        policy_arn: policy.policy_arn().unwrap_or_default().to_string(),
-    }
 }
 
 fn iam_instance_profile(profile: &AwsIamInstanceProfile) -> InstanceProfile {
