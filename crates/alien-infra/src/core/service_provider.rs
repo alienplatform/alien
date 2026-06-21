@@ -70,8 +70,7 @@ pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, Reso
 pub use azure_mgmt_servicebus::package_2024_01::models::{
     MessageCountDetails as AzureServiceBusMessageCountDetails, Resource as AzureServiceBusResource,
     SbNamespace, SbNamespaceProperties as AzureServiceBusNamespaceProperties, SbQueue,
-    SbQueueProperties, SbSku as AzureServiceBusSku,
-    TrackedResource as AzureServiceBusTrackedResource,
+    SbQueueProperties, TrackedResource as AzureServiceBusTrackedResource,
 };
 pub use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
@@ -79,7 +78,6 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
     StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
     StorageAccountPropertiesCreateParameters, Table, TableProperties,
-    TrackedResource as AzureStorageTrackedResource,
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
