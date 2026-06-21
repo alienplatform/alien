@@ -13,12 +13,13 @@ use crate::aws_sdk::{
     ApiGatewayV2CreateRouteRequest as CreateRouteRequest,
     ApiGatewayV2CreateStageRequest as CreateStageRequest,
     ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
-    CreateEventSourceMappingRequest, CreateFunctionRequest, DescribeNetworkInterfacesRequest,
+    CreateEventSourceMappingRequest, CreateFunctionInput, DescribeNetworkInterfacesRequest,
     EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
-    FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaFunctionConfiguration,
-    ListEventSourceMappingsRequest, NotificationConfiguration, ProtocolType, PutRuleRequest,
-    PutTargetsRequest, ReimportCertificateRequest, RuleState, S3Event, SecurityPolicy,
-    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaArchitecture,
+    LambdaFunctionConfiguration, ListEventSourceMappingsRequest, NotificationConfiguration,
+    PackageType, ProtocolType, PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest,
+    RuleState, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
+    UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -475,20 +476,25 @@ impl AwsWorkerController {
             info!(name=%aws_worker_name, "Configuring Lambda worker to run inside VPC");
         }
 
-        let request = CreateFunctionRequest::builder()
+        let request = CreateFunctionInput::builder()
             .function_name(aws_worker_name.clone())
             .role(role_arn)
             .code(code)
-            .package_type("Image".to_string())
+            .package_type(PackageType::Image)
             .description(format!("Runtime worker: {}", cfg.id))
             .timeout(cfg.timeout_seconds as i32)
             .memory_size(cfg.memory_mb as i32)
             .publish(false)
-            .tags(function_tags)
-            .maybe_environment(environment)
-            .architectures(vec!["arm64".to_string()])
-            .maybe_vpc_config(vpc_config)
-            .build();
+            .set_tags(Some(function_tags))
+            .set_environment(environment)
+            .architectures(LambdaArchitecture::Arm64)
+            .set_vpc_config(vpc_config)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build Lambda CreateFunction request".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
 
         let response =
             client
@@ -4132,8 +4138,8 @@ mod tests {
         ApiGatewayV2CreateIntegrationResponse as Integration,
         ApiGatewayV2CreateRouteResponse as Route, ApiGatewayV2CreateStageResponse as Stage,
         ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, EndpointType,
-        FunctionConfiguration, ImportCertificateResponse, MockAcmApi, MockApiGatewayV2Api,
-        MockIamApi, MockLambdaApi, SecurityPolicy,
+        FunctionConfiguration, ImportCertificateResponse, LambdaArchitecture, MockAcmApi,
+        MockApiGatewayV2Api, MockIamApi, MockLambdaApi, PackageType, SecurityPolicy,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -4938,11 +4944,11 @@ mod tests {
             .withf(|request| {
                 request.memory_size == Some(512)
                     && request.timeout == Some(120)
-                    && request.package_type == "Image"
+                    && request.package_type == Some(PackageType::Image)
                     && request
                         .architectures
                         .as_ref()
-                        .map(|a| a.contains(&"arm64".to_string()))
+                        .map(|a| a.contains(&LambdaArchitecture::Arm64))
                         .unwrap_or(false)
             })
             .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));

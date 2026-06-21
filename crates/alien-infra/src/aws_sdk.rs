@@ -24,10 +24,7 @@ use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::Client as IamClient;
-use aws_sdk_lambda::{
-    types::{Architecture as AwsLambdaArchitecture, PackageType},
-    Client as LambdaClient,
-};
+use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::{
     error::ProvideErrorMetadata,
     operation::{
@@ -53,7 +50,6 @@ use aws_sdk_ssm::{
     types::{ParameterStringFilter, ParameterTier, ParameterType},
 };
 use aws_types::region::Region;
-use bon::Builder;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
@@ -236,6 +232,7 @@ pub use aws_sdk_lambda::operation::{
         CreateEventSourceMappingInput as CreateEventSourceMappingRequest,
         CreateEventSourceMappingOutput as CreateEventSourceMappingResponse,
     },
+    create_function::CreateFunctionInput,
     delete_event_source_mapping::DeleteEventSourceMappingOutput as DeleteEventSourceMappingResponse,
     list_event_source_mappings::{
         ListEventSourceMappingsInput as ListEventSourceMappingsRequest,
@@ -244,7 +241,9 @@ pub use aws_sdk_lambda::operation::{
     update_function_code::UpdateFunctionCodeInput as UpdateFunctionCodeRequest,
     update_function_configuration::UpdateFunctionConfigurationInput as UpdateFunctionConfigurationRequest,
 };
-pub use aws_sdk_lambda::types::{Environment, FunctionCode, VpcConfig};
+pub use aws_sdk_lambda::types::{
+    Architecture as LambdaArchitecture, Environment, FunctionCode, PackageType, VpcConfig,
+};
 
 /// Parameter metadata returned from SSM for vault heartbeat sampling.
 #[derive(Debug, Clone)]
@@ -266,38 +265,6 @@ pub struct DescribeSsmParametersResponse {
     pub parameters: Vec<SsmParameterMetadata>,
     /// Whether SSM returned a next token.
     pub has_more_parameters: bool,
-}
-
-/// Lambda function creation request used by worker controllers.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateFunctionRequest {
-    /// Lambda function name.
-    pub function_name: String,
-    /// IAM execution role ARN.
-    pub role: String,
-    /// Lambda code configuration.
-    pub code: FunctionCode,
-    /// Deployment package type, such as Image.
-    #[builder(default = "Image".to_string())]
-    pub package_type: String,
-    /// Function description.
-    pub description: Option<String>,
-    /// Timeout in seconds.
-    pub timeout: Option<i32>,
-    /// Memory size in MB.
-    pub memory_size: Option<i32>,
-    /// Whether to publish a version.
-    pub publish: Option<bool>,
-    /// Environment variables.
-    pub environment: Option<Environment>,
-    /// Supported architectures.
-    pub architectures: Option<Vec<String>>,
-    /// Function tags.
-    pub tags: Option<HashMap<String, String>>,
-    /// KMS key ARN.
-    pub kms_key_arn: Option<String>,
-    /// VPC configuration.
-    pub vpc_config: Option<VpcConfig>,
 }
 
 /// Lambda function metadata used by worker controllers.
@@ -467,10 +434,7 @@ pub trait AcmApi: Send + Sync {
 #[async_trait]
 pub trait LambdaApi: Send + Sync {
     /// Create a Lambda function.
-    async fn create_function(
-        &self,
-        request: CreateFunctionRequest,
-    ) -> Result<FunctionConfiguration>;
+    async fn create_function(&self, request: CreateFunctionInput) -> Result<FunctionConfiguration>;
     /// Add an invocation permission statement.
     async fn add_permission(&self, request: AddPermissionRequest) -> Result<AddPermissionResponse>;
     /// Update Lambda function code.
@@ -1241,30 +1205,48 @@ impl AcmApi for AcmClient {
 
 #[async_trait]
 impl LambdaApi for LambdaClient {
-    async fn create_function(
-        &self,
-        request: CreateFunctionRequest,
-    ) -> Result<FunctionConfiguration> {
+    async fn create_function(&self, request: CreateFunctionInput) -> Result<FunctionConfiguration> {
+        let function_name = request.function_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "CreateFunction request did not include functionName".to_string(),
+                resource_id: None,
+            })
+        })?;
         let output = lambda_result(
             self.create_function()
-                .function_name(request.function_name.clone())
-                .role(request.role)
-                .code(request.code)
-                .package_type(PackageType::from(request.package_type.as_str()))
+                .set_function_name(request.function_name)
+                .set_runtime(request.runtime)
+                .set_role(request.role)
+                .set_handler(request.handler)
+                .set_code(request.code)
                 .set_description(request.description)
                 .set_timeout(request.timeout)
                 .set_memory_size(request.memory_size)
                 .set_publish(request.publish)
-                .set_environment(request.environment)
-                .set_architectures(request.architectures.map(lambda_architectures_to_aws))
-                .set_tags(request.tags)
-                .set_kms_key_arn(request.kms_key_arn)
                 .set_vpc_config(request.vpc_config)
+                .set_package_type(request.package_type)
+                .set_dead_letter_config(request.dead_letter_config)
+                .set_environment(request.environment)
+                .set_kms_key_arn(request.kms_key_arn)
+                .set_tracing_config(request.tracing_config)
+                .set_tags(request.tags)
+                .set_layers(request.layers)
+                .set_file_system_configs(request.file_system_configs)
+                .set_image_config(request.image_config)
+                .set_code_signing_config_arn(request.code_signing_config_arn)
+                .set_architectures(request.architectures)
+                .set_ephemeral_storage(request.ephemeral_storage)
+                .set_snap_start(request.snap_start)
+                .set_logging_config(request.logging_config)
+                .set_capacity_provider_config(request.capacity_provider_config)
+                .set_publish_to(request.publish_to)
+                .set_durable_config(request.durable_config)
+                .set_tenancy_config(request.tenancy_config)
                 .send()
                 .await,
             "CreateFunction",
             "LambdaFunction",
-            &request.function_name,
+            &function_name,
         )?;
 
         Ok(function_configuration_from_create_output(output))
@@ -3742,13 +3724,6 @@ where
                 }))
         }
     }
-}
-
-fn lambda_architectures_to_aws(architectures: Vec<String>) -> Vec<AwsLambdaArchitecture> {
-    architectures
-        .iter()
-        .map(|architecture| AwsLambdaArchitecture::from(architecture.as_str()))
-        .collect()
 }
 
 fn function_configuration_from_create_output(
