@@ -549,6 +549,7 @@ dependencies = [
  "alien-gcp-clients",
  "alien-infra",
  "alien-manager-api",
+ "alien-observer",
  "alien-preflights",
  "async-trait",
  "chrono",
@@ -846,6 +847,23 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "alien-observer"
+version = "1.7.1"
+dependencies = [
+ "alien-client-core",
+ "alien-core",
+ "alien-error",
+ "alien-k8s-clients",
+ "async-trait",
+ "chrono",
+ "k8s-openapi",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

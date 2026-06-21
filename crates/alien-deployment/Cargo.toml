@@ -11,7 +11,8 @@ openapi = ["dep:utoipa"]
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
-alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes", "test", "local"] }
+alien-observer = { workspace = true, features = ["kubernetes"] }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
 
 # Cloud client crates
@@ -59,4 +60,3 @@ features = ["test"]
 [dev-dependencies.alien-bindings]
 workspace = true
 features = ["local"]
-

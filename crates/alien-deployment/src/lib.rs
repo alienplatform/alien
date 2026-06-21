@@ -10,6 +10,7 @@ mod helpers;
 mod initial_setup;
 pub mod loop_contract;
 pub mod manager_api_transport;
+mod observe;
 mod pending;
 mod provisioning;
 pub mod runner;

@@ -3,8 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_runtime_pod_labels, reconcile_environment_secret, EnvironmentVariableBuilder,
-    KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
+    ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -17,8 +18,10 @@ use crate::kubernetes_workload_heartbeat::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
-    ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
+    branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, Container,
+    ContainerCode, ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
+    ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -523,7 +526,7 @@ impl KubernetesContainerController {
                         alien_core::KubernetesWorkloadKind::Deployment
                     },
                     workload,
-                    label_selector: label_selector(&labels)?,
+                    label_selector: label_selector(&labels),
                 },
             )
             .await?;
@@ -1301,7 +1304,8 @@ impl KubernetesContainerController {
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
-        let labels = self.build_labels(container_name);
+        let selector_labels = self.build_labels(container_name);
+        let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
             .build_pod_spec(
@@ -1326,7 +1330,7 @@ impl KubernetesContainerController {
             spec: Some(DeploymentSpec {
                 replicas: Some(config.replicas.unwrap_or(1) as i32),
                 selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(selector_labels),
                     ..Default::default()
                 },
                 template: PodTemplateSpec {
@@ -1356,7 +1360,8 @@ impl KubernetesContainerController {
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<StatefulSet> {
-        let labels = self.build_labels(container_name);
+        let selector_labels = self.build_labels(container_name);
+        let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
             .build_pod_spec(
@@ -1409,7 +1414,7 @@ impl KubernetesContainerController {
             spec: Some(StatefulSetSpec {
                 replicas: Some(config.replicas.unwrap_or(1) as i32),
                 selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(selector_labels),
                     ..Default::default()
                 },
                 service_name: Some(container_name.to_string()),
@@ -1648,15 +1653,27 @@ impl KubernetesContainerController {
         labels
     }
 
+    fn workload_labels(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        mut labels: BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        labels.extend(kubernetes_branded_resource_labels(ctx, resource_id));
+        labels
+    }
+
     fn is_managed_workload(
         &self,
         labels: Option<&BTreeMap<String, String>>,
         container_name: &str,
     ) -> bool {
+        let managed_by_key = branded_tag_key(DEFAULT_ALIEN_LABEL_DOMAIN, ALIEN_MANAGED_BY_TAG_KEY);
         labels.is_some_and(|labels| {
-            labels.get("managed-by").map(String::as_str) == Some("runtime")
-                && labels.get("component").map(String::as_str) == Some("container")
-                && labels.get("app").map(String::as_str) == Some(container_name)
+            labels.get(&managed_by_key).map(String::as_str) == Some(ALIEN_MANAGED_BY_TAG_VALUE)
+                || (labels.get("managed-by").map(String::as_str) == Some("runtime")
+                    && labels.get("component").map(String::as_str) == Some("container")
+                    && labels.get("app").map(String::as_str) == Some(container_name))
         })
     }
 

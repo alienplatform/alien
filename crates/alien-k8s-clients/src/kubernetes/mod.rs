@@ -19,6 +19,7 @@ pub mod routes;
 pub mod secrets;
 pub mod services;
 pub mod version;
+pub mod workload_heartbeat;
 
 /// Resolved Kubernetes configuration for making API calls
 #[derive(Debug, Clone)]

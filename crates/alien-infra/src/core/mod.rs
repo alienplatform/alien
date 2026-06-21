@@ -34,7 +34,7 @@ pub use resource_permissions_helper::*;
 
 use std::collections::BTreeMap;
 
-use alien_core::Platform;
+use alien_core::{default_branded_standard_resource_tags, Platform};
 
 pub fn kubernetes_runtime_pod_labels(
     ctx: &ResourceControllerContext<'_>,
@@ -45,6 +45,15 @@ pub fn kubernetes_runtime_pod_labels(
         ctx.deployment_config.base_platform,
         labels,
     )
+}
+
+pub fn kubernetes_branded_resource_labels(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> BTreeMap<String, String> {
+    default_branded_standard_resource_tags(ctx.resource_prefix, resource_id)
+        .into_iter()
+        .collect()
 }
 
 fn kubernetes_runtime_pod_labels_for_platform(

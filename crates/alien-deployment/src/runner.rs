@@ -24,6 +24,7 @@
 
 use crate::{
     loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
+    observe::run_observe_pass,
     step,
     transport::DeploymentLoopTransport,
     Result,
@@ -147,6 +148,50 @@ async fn run_step_loop_inner(
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
     if !state.has_desired() {
+        let service_provider = service_provider
+            .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+        let heartbeats = run_observe_pass(
+            state.platform,
+            client_config,
+            &service_provider,
+            deployment_id,
+            config,
+        )
+        .await?;
+
+        if !heartbeats.is_empty() {
+            let mut checkpoint_attempt = 1usize;
+            let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
+            loop {
+                match transport
+                    .reconcile_step(deployment_id, state, config, true, None, heartbeats.clone())
+                    .await
+                {
+                    Ok(reconciled) => {
+                        if let Some(updated_state) = reconciled.state {
+                            *state = updated_state;
+                        }
+                        if let Some(updated_config) = reconciled.config {
+                            *config = updated_config;
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            deployment_id = %deployment_id,
+                            attempt = checkpoint_attempt,
+                            retry_after_ms = checkpoint_delay.as_millis() as u64,
+                            error = %e,
+                            "Failed to checkpoint observe-only deployment; retrying before returning"
+                        );
+                        tokio::time::sleep(checkpoint_delay).await;
+                        checkpoint_attempt += 1;
+                        checkpoint_delay = (checkpoint_delay * 2).min(CHECKPOINT_RETRY_MAX_DELAY);
+                    }
+                }
+            }
+        }
+
         return Ok(RunnerResult {
             loop_result: LoopResult {
                 stop_reason: LoopStopReason::NoWork,
@@ -251,9 +296,25 @@ async fn run_step_loop_inner(
         // Capture step metadata before overwriting state.
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
-        let heartbeats = step_result.heartbeats.clone();
+        let mut heartbeats = step_result.heartbeats.clone();
 
         *state = step_result.state;
+
+        if state.status == DeploymentStatus::Running {
+            let observe_service_provider = service_provider.clone().unwrap_or_else(|| {
+                Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
+            });
+            heartbeats.extend(
+                run_observe_pass(
+                    state.platform,
+                    client_config,
+                    &observe_service_provider,
+                    deployment_id,
+                    config,
+                )
+                .await?,
+            );
+        }
 
         // Checkpoint after every step. This is a durability barrier: once a
         // cloud/API step has produced new state, the runner must not execute
