@@ -149,11 +149,9 @@ impl GcpArtifactRegistryController {
                     "Repository not found, creating it"
                 );
 
-                let repository = Repository {
-                    format: Some(RepositoryFormat::Docker),
-                    description: Some(format!("Runtime Artifact Registry for {}", config.id)),
-                    ..Default::default()
-                };
+                let repository = Repository::new()
+                    .set_format(RepositoryFormat::Docker)
+                    .set_description(format!("Runtime Artifact Registry for {}", config.id));
 
                 let operation = ar_client
                     .create_repository(
@@ -898,26 +896,18 @@ fn emit_gcp_artifact_registry_heartbeat(
                 project_id: project_id.to_string(),
                 location: location.to_string(),
                 repository_id: repository_id.to_string(),
-                name: repository.name,
-                format: repository.format.map(|format| format!("{format:?}")),
-                mode: repository.mode,
-                description: repository.description,
-                label_count: repository
-                    .labels
-                    .as_ref()
-                    .map(|labels| labels.len() as u32)
-                    .unwrap_or(0),
-                cleanup_policy_count: repository
-                    .cleanup_policies
-                    .as_ref()
-                    .map(|policies| policies.len() as u32)
-                    .unwrap_or(0),
-                cleanup_policy_dry_run: repository.cleanup_policy_dry_run,
-                kms_key_name_present: repository.kms_key_name.is_some(),
-                size_bytes: repository.size_bytes,
-                satisfies_pzs: repository.satisfies_pzs,
-                create_time: repository.create_time,
-                update_time: repository.update_time,
+                name: none_if_empty(repository.name),
+                format: repository.format.name().map(String::from),
+                mode: repository.mode.name().map(String::from),
+                description: none_if_empty(repository.description),
+                label_count: repository.labels.len() as u32,
+                cleanup_policy_count: repository.cleanup_policies.len() as u32,
+                cleanup_policy_dry_run: Some(repository.cleanup_policy_dry_run),
+                kms_key_name_present: !repository.kms_key_name.is_empty(),
+                size_bytes: Some(repository.size_bytes.to_string()),
+                satisfies_pzs: Some(repository.satisfies_pzs),
+                create_time: repository.create_time.map(String::from),
+                update_time: repository.update_time.map(String::from),
                 iam_policy_etag_present: iam_policy.etag.is_some(),
                 iam_binding_count: iam_roles.len() as u32,
                 iam_roles,
@@ -927,6 +917,14 @@ fn emit_gcp_artifact_registry_heartbeat(
         ),
         raw: vec![],
     });
+}
+
+fn none_if_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 #[cfg(test)]

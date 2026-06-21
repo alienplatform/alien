@@ -87,12 +87,10 @@ pub use azure_mgmt_storage::package_2023_05::models::{
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
-use google_cloud_artifactregistry_v1::{
-    client::ArtifactRegistry as OfficialArtifactRegistry,
-    model::{
-        repository::Format as OfficialArtifactRegistryRepositoryFormat,
-        Repository as OfficialArtifactRegistryRepository,
-    },
+use google_cloud_artifactregistry_v1::client::ArtifactRegistry as OfficialArtifactRegistry;
+pub use google_cloud_artifactregistry_v1::model::{
+    repository::Format as ArtifactRegistryRepositoryFormat,
+    Repository as ArtifactRegistryRepository,
 };
 use google_cloud_auth::credentials::{
     self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
@@ -2492,72 +2490,6 @@ pub trait ArtifactRegistryApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Operation>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtifactRegistryRepository {
-    /// Artifact Registry repository resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Package format stored in the repository.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub format: Option<ArtifactRegistryRepositoryFormat>,
-    /// User-provided repository description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// User-defined repository labels.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
-    /// Repository creation timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub create_time: Option<String>,
-    /// Repository update timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub update_time: Option<String>,
-    /// Customer-managed encryption key resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kms_key_name: Option<String>,
-    /// Repository mode.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-    /// Cleanup policies keyed by policy ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cleanup_policies: Option<HashMap<String, Value>>,
-    /// Repository size in bytes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size_bytes: Option<String>,
-    /// Whether the repository satisfies physical zone separation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub satisfies_pzs: Option<bool>,
-    /// Whether cleanup policies are dry-run only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cleanup_policy_dry_run: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ArtifactRegistryRepositoryFormat {
-    /// Unspecified package format.
-    FormatUnspecified,
-    /// Docker package format.
-    Docker,
-    /// Maven package format.
-    Maven,
-    /// NPM package format.
-    Npm,
-    /// APT package format.
-    Apt,
-    /// YUM package format.
-    Yum,
-    /// Python package format.
-    Python,
-    /// Go package format.
-    Go,
-    /// Generic package format.
-    Generic,
-    /// Ruby package format.
-    Ruby,
-}
-
 struct OfficialGcpArtifactRegistryClient {
     config: GcpClientConfig,
     client: OnceCell<OfficialArtifactRegistry>,
@@ -2605,7 +2537,7 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
             .create_repository()
             .set_parent(format!("projects/{project_id}/locations/{location}"))
             .set_repository_id(repository_id.clone())
-            .set_repository(artifact_registry_repository_to_official(repository)?)
+            .set_repository(repository)
             .send()
             .await
             .into_alien_error()
@@ -2665,7 +2597,7 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
             .send()
             .await
         {
-            Ok(repository) => Ok(artifact_registry_repository_from_official(repository)),
+            Ok(repository) => Ok(repository),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "Artifact Registry repository".to_string(),
@@ -7146,129 +7078,6 @@ fn scheduler_http_method_to_official(method: Option<&str>) -> Result<OfficialSch
                 resource_id: None,
             },
         )),
-    }
-}
-
-fn artifact_registry_repository_to_official(
-    repository: ArtifactRegistryRepository,
-) -> Result<OfficialArtifactRegistryRepository> {
-    let mut official = OfficialArtifactRegistryRepository::new();
-
-    if let Some(name) = repository.name {
-        official = official.set_name(name);
-    }
-    if let Some(format) = repository.format {
-        official = official.set_format(official_artifact_registry_format(format));
-    }
-    if let Some(description) = repository.description {
-        official = official.set_description(description);
-    }
-    if let Some(labels) = repository.labels {
-        official = official.set_labels(labels);
-    }
-    if let Some(kms_key_name) = repository.kms_key_name {
-        official = official.set_kms_key_name(kms_key_name);
-    }
-    if let Some(cleanup_policy_dry_run) = repository.cleanup_policy_dry_run {
-        official = official.set_cleanup_policy_dry_run(cleanup_policy_dry_run);
-    }
-
-    Ok(official)
-}
-
-fn artifact_registry_repository_from_official(
-    repository: OfficialArtifactRegistryRepository,
-) -> ArtifactRegistryRepository {
-    ArtifactRegistryRepository {
-        name: none_if_empty(repository.name),
-        format: local_artifact_registry_format(repository.format),
-        description: none_if_empty(repository.description),
-        labels: if repository.labels.is_empty() {
-            None
-        } else {
-            Some(repository.labels)
-        },
-        create_time: repository.create_time.map(String::from),
-        update_time: repository.update_time.map(String::from),
-        kms_key_name: none_if_empty(repository.kms_key_name),
-        mode: Some(format!("{:?}", repository.mode)),
-        cleanup_policies: if repository.cleanup_policies.is_empty() {
-            None
-        } else {
-            Some(
-                repository
-                    .cleanup_policies
-                    .into_keys()
-                    .map(|key| (key, Value::Null))
-                    .collect(),
-            )
-        },
-        size_bytes: Some(repository.size_bytes.to_string()),
-        satisfies_pzs: Some(repository.satisfies_pzs),
-        cleanup_policy_dry_run: Some(repository.cleanup_policy_dry_run),
-    }
-}
-
-fn official_artifact_registry_format(
-    format: ArtifactRegistryRepositoryFormat,
-) -> OfficialArtifactRegistryRepositoryFormat {
-    match format {
-        ArtifactRegistryRepositoryFormat::FormatUnspecified => {
-            OfficialArtifactRegistryRepositoryFormat::Unspecified
-        }
-        ArtifactRegistryRepositoryFormat::Docker => {
-            OfficialArtifactRegistryRepositoryFormat::Docker
-        }
-        ArtifactRegistryRepositoryFormat::Maven => OfficialArtifactRegistryRepositoryFormat::Maven,
-        ArtifactRegistryRepositoryFormat::Npm => OfficialArtifactRegistryRepositoryFormat::Npm,
-        ArtifactRegistryRepositoryFormat::Apt => OfficialArtifactRegistryRepositoryFormat::Apt,
-        ArtifactRegistryRepositoryFormat::Yum => OfficialArtifactRegistryRepositoryFormat::Yum,
-        ArtifactRegistryRepositoryFormat::Python => {
-            OfficialArtifactRegistryRepositoryFormat::Python
-        }
-        ArtifactRegistryRepositoryFormat::Go => OfficialArtifactRegistryRepositoryFormat::Go,
-        ArtifactRegistryRepositoryFormat::Generic => {
-            OfficialArtifactRegistryRepositoryFormat::Generic
-        }
-        ArtifactRegistryRepositoryFormat::Ruby => OfficialArtifactRegistryRepositoryFormat::Ruby,
-    }
-}
-
-fn local_artifact_registry_format(
-    format: OfficialArtifactRegistryRepositoryFormat,
-) -> Option<ArtifactRegistryRepositoryFormat> {
-    match format {
-        OfficialArtifactRegistryRepositoryFormat::Unspecified => {
-            Some(ArtifactRegistryRepositoryFormat::FormatUnspecified)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Docker => {
-            Some(ArtifactRegistryRepositoryFormat::Docker)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Maven => {
-            Some(ArtifactRegistryRepositoryFormat::Maven)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Npm => {
-            Some(ArtifactRegistryRepositoryFormat::Npm)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Apt => {
-            Some(ArtifactRegistryRepositoryFormat::Apt)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Yum => {
-            Some(ArtifactRegistryRepositoryFormat::Yum)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Python => {
-            Some(ArtifactRegistryRepositoryFormat::Python)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Go => Some(ArtifactRegistryRepositoryFormat::Go),
-        OfficialArtifactRegistryRepositoryFormat::Generic => {
-            Some(ArtifactRegistryRepositoryFormat::Generic)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Ruby => {
-            Some(ArtifactRegistryRepositoryFormat::Ruby)
-        }
-        OfficialArtifactRegistryRepositoryFormat::Kfp
-        | OfficialArtifactRegistryRepositoryFormat::UnknownValue(_) => None,
-        _ => None,
     }
 }
 
