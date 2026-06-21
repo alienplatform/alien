@@ -79,8 +79,8 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     ContainerProperties as AzureBlobContainerProperties, Endpoints as AzureStorageAccountEndpoints,
     Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
     StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
-    StorageAccountPropertiesCreateParameters, Table as AzureTableArmResource,
-    TableProperties as AzureTableArmProperties, TrackedResource as AzureStorageTrackedResource,
+    StorageAccountPropertiesCreateParameters, Table, TableProperties,
+    TrackedResource as AzureStorageTrackedResource,
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
@@ -3981,13 +3981,13 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         storage_account_name: &str,
         table_name: &str,
     ) -> Result<()> {
-        let table = AzureTableArmResource {
+        let table = Table {
             resource: AzureStorageResource {
                 id: None,
                 name: Some(table_name.to_string()),
                 type_: None,
             },
-            properties: Some(AzureTableArmProperties {
+            properties: Some(TableProperties {
                 signed_identifiers: vec![],
                 table_name: Some(table_name.to_string()),
             }),
@@ -4042,7 +4042,7 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
                 table_name,
             )
             .await?;
-        let table = serde_json::from_str::<AzureTableArmResource>(&body)
+        let table = serde_json::from_str::<Table>(&body)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: format!("Failed to parse Azure Table '{table_name}' response"),
