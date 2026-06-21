@@ -15,10 +15,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
-#[cfg(test)]
-use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
@@ -36,6 +34,20 @@ where
         error.code.as_str(),
         "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
     )
+}
+
+fn gcp_expr_from_condition(condition: alien_permissions::generators::GcpIamCondition) -> Expr {
+    Expr::new()
+        .set_expression(condition.expression)
+        .set_title(condition.title)
+        .set_description(condition.description)
+}
+
+fn gcp_binding_from_grant(binding: GcpIamBinding) -> Binding {
+    Binding::new()
+        .set_role(binding.role)
+        .set_members(binding.members)
+        .set_or_clear_condition(binding.condition.map(gcp_expr_from_condition))
 }
 
 #[controller]
@@ -232,18 +244,7 @@ impl GcpRemoteStackManagementController {
                 continue;
             }
 
-            for binding in project_bindings {
-                new_bindings.push(Binding {
-                    role: binding.role,
-                    members: binding.members,
-                    condition: binding.condition.map(|cond| Expr {
-                        expression: cond.expression,
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        location: None,
-                    }),
-                });
-            }
+            new_bindings.extend(project_bindings.into_iter().map(gcp_binding_from_grant));
         }
 
         let mut owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
@@ -284,13 +285,11 @@ impl GcpRemoteStackManagementController {
         );
 
         if changed {
-            let new_policy = IamPolicy::builder()
-                .version(3)
-                .bindings(all_bindings)
-                .maybe_etag(current_policy.etag)
-                .maybe_kind(current_policy.kind)
-                .maybe_resource_id(current_policy.resource_id)
-                .build();
+            let new_policy = IamPolicy::new()
+                .set_version(3)
+                .set_bindings(all_bindings)
+                .set_audit_configs(current_policy.audit_configs)
+                .set_etag(current_policy.etag);
 
             rm_client
                 .set_project_iam_policy(project_id.clone(), new_policy, None)
@@ -366,14 +365,12 @@ impl GcpRemoteStackManagementController {
         let mut all_bindings = current_policy.bindings;
         let member = format!("serviceAccount:{management_service_account_email}");
         let desired_bindings = vec![
-            Binding::builder()
-                .role("roles/iam.serviceAccountTokenCreator".to_string())
-                .members(vec![member.clone()])
-                .build(),
-            Binding::builder()
-                .role("roles/iam.serviceAccountUser".to_string())
-                .members(vec![member.clone()])
-                .build(),
+            Binding::new()
+                .set_role("roles/iam.serviceAccountTokenCreator")
+                .set_members([member.clone()]),
+            Binding::new()
+                .set_role("roles/iam.serviceAccountUser")
+                .set_members([member.clone()]),
         ];
         let owned_exact_roles =
             ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
@@ -398,13 +395,11 @@ impl GcpRemoteStackManagementController {
             });
         }
 
-        let new_policy = IamPolicy::builder()
-            .version(3)
-            .bindings(all_bindings)
-            .maybe_etag(current_policy.etag)
-            .maybe_kind(current_policy.kind)
-            .maybe_resource_id(current_policy.resource_id)
-            .build();
+        let new_policy = IamPolicy::new()
+            .set_version(3)
+            .set_bindings(all_bindings)
+            .set_audit_configs(current_policy.audit_configs)
+            .set_etag(current_policy.etag);
 
         iam_client
             .set_service_account_iam_policy(service_account_email.clone(), new_policy)
@@ -814,16 +809,7 @@ impl GcpRemoteStackManagementController {
                 );
 
                 for binding in project_bindings {
-                    new_bindings.push(Binding {
-                        role: binding.role,
-                        members: binding.members,
-                        condition: binding.condition.map(|cond| Expr {
-                            expression: cond.expression,
-                            title: Some(cond.title),
-                            description: Some(cond.description),
-                            location: None,
-                        }),
-                    });
+                    new_bindings.push(gcp_binding_from_grant(binding));
                 }
             }
         }

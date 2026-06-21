@@ -224,13 +224,7 @@ impl ResourcePermissionsHelper {
         )
         .await?;
 
-        let iam_policy = IamPolicy {
-            version: Some(3),
-            bindings: all_bindings,
-            etag: None,
-            kind: None,
-            resource_id: None,
-        };
+        let iam_policy = IamPolicy::new().set_version(3).set_bindings(all_bindings);
 
         info!(
             resource_name = %resource_name,
@@ -1575,31 +1569,28 @@ impl ResourcePermissionsHelper {
             }));
         }
 
-        all_bindings.push(Binding {
-            role: binding.role,
-            members: vec![member.to_string()],
-            condition: binding.condition.map(|cond| Expr {
-                expression: cond.expression,
-                title: Some(cond.title),
-                description: Some(cond.description),
-                location: None,
-            }),
-        });
+        all_bindings.push(
+            Binding::new()
+                .set_role(binding.role)
+                .set_members([member.to_string()])
+                .set_or_clear_condition(binding.condition.map(Self::gcp_expr_from_condition)),
+        );
 
         Ok(())
     }
 
     pub fn gcp_policy_binding_from_iam_binding(binding: GcpIamBinding) -> Binding {
-        Binding {
-            role: binding.role,
-            members: binding.members,
-            condition: binding.condition.map(|cond| Expr {
-                expression: cond.expression,
-                title: Some(cond.title),
-                description: Some(cond.description),
-                location: None,
-            }),
-        }
+        Binding::new()
+            .set_role(binding.role)
+            .set_members(binding.members)
+            .set_or_clear_condition(binding.condition.map(Self::gcp_expr_from_condition))
+    }
+
+    fn gcp_expr_from_condition(condition: GcpIamCondition) -> Expr {
+        Expr::new()
+            .set_expression(condition.expression)
+            .set_title(condition.title)
+            .set_description(condition.description)
     }
 }
 
@@ -1608,6 +1599,12 @@ mod tests {
     use super::*;
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Stack, Storage};
+
+    fn test_gcp_binding(role: &str, members: &[&str]) -> Binding {
+        Binding::new()
+            .set_role(role)
+            .set_members(members.iter().copied())
+    }
     use indexmap::IndexMap;
 
     #[test]
@@ -1719,34 +1716,30 @@ mod tests {
     #[test]
     fn gcp_project_member_reconciliation_removes_stale_owned_roles_only() {
         let mut bindings = vec![
-            Binding {
-                role: "projects/p/roles/role_stack_storage_data_read_old".to_string(),
-                members: vec![
-                    "serviceAccount:app@p.iam.gserviceaccount.com".to_string(),
-                    "serviceAccount:other@p.iam.gserviceaccount.com".to_string(),
+            test_gcp_binding(
+                "projects/p/roles/role_stack_storage_data_read_old",
+                &[
+                    "serviceAccount:app@p.iam.gserviceaccount.com",
+                    "serviceAccount:other@p.iam.gserviceaccount.com",
                 ],
-                condition: None,
-            },
-            Binding {
-                role: "roles/viewer".to_string(),
-                members: vec![
-                    "serviceAccount:app@p.iam.gserviceaccount.com".to_string(),
-                    "deleted:serviceAccount:app@p.iam.gserviceaccount.com?uid=123".to_string(),
-                    "deleted:serviceAccount:someone-else@p.iam.gserviceaccount.com?uid=456"
-                        .to_string(),
+            ),
+            test_gcp_binding(
+                "roles/viewer",
+                &[
+                    "serviceAccount:app@p.iam.gserviceaccount.com",
+                    "deleted:serviceAccount:app@p.iam.gserviceaccount.com?uid=123",
+                    "deleted:serviceAccount:someone-else@p.iam.gserviceaccount.com?uid=456",
                 ],
-                condition: None,
-            },
+            ),
         ];
 
         let owned_role_prefixes = vec!["projects/p/roles/role_stack_storage_data_read".to_string()];
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut bindings,
-            vec![Binding {
-                role: "projects/p/roles/role_stack_storage_data_read".to_string(),
-                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            }],
+            vec![test_gcp_binding(
+                "projects/p/roles/role_stack_storage_data_read",
+                &["serviceAccount:app@p.iam.gserviceaccount.com"],
+            )],
             "serviceAccount:app@p.iam.gserviceaccount.com",
             &owned_role_prefixes,
             &[],
@@ -1791,26 +1784,23 @@ mod tests {
     #[test]
     fn gcp_project_member_reconciliation_does_not_clobber_other_management_slices() {
         let mut bindings = vec![
-            Binding {
-                role: "projects/p/roles/role_stack_worker_management".to_string(),
-                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
-            Binding {
-                role: "projects/p/roles/role_stack_vault_data_write_old".to_string(),
-                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
+            test_gcp_binding(
+                "projects/p/roles/role_stack_worker_management",
+                &["serviceAccount:management@p.iam.gserviceaccount.com"],
+            ),
+            test_gcp_binding(
+                "projects/p/roles/role_stack_vault_data_write_old",
+                &["serviceAccount:management@p.iam.gserviceaccount.com"],
+            ),
         ];
 
         let vault_prefixes = vec!["projects/p/roles/role_stack_vault_data_write".to_string()];
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut bindings,
-            vec![Binding {
-                role: "projects/p/roles/role_stack_vault_data_write".to_string(),
-                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            }],
+            vec![test_gcp_binding(
+                "projects/p/roles/role_stack_vault_data_write",
+                &["serviceAccount:management@p.iam.gserviceaccount.com"],
+            )],
             "serviceAccount:management@p.iam.gserviceaccount.com",
             &vault_prefixes,
             &[],
@@ -1837,16 +1827,14 @@ mod tests {
     #[test]
     fn gcp_project_member_reconciliation_removes_owned_slice_when_desired_empty() {
         let mut bindings = vec![
-            Binding {
-                role: "projects/p/roles/role_stack_worker_management".to_string(),
-                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
-            Binding {
-                role: "projects/p/roles/role_stack_vault_data_write".to_string(),
-                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
+            test_gcp_binding(
+                "projects/p/roles/role_stack_worker_management",
+                &["serviceAccount:management@p.iam.gserviceaccount.com"],
+            ),
+            test_gcp_binding(
+                "projects/p/roles/role_stack_vault_data_write",
+                &["serviceAccount:management@p.iam.gserviceaccount.com"],
+            ),
         ];
 
         let worker_prefixes = vec!["projects/p/roles/role_stack_worker_management".to_string()];
@@ -1873,21 +1861,18 @@ mod tests {
     #[test]
     fn gcp_project_member_reconciliation_removes_stale_owned_predefined_roles() {
         let mut bindings = vec![
-            Binding {
-                role: "roles/pubsub.publisher".to_string(),
-                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
-            Binding {
-                role: "roles/pubsub.viewer".to_string(),
-                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
-            Binding {
-                role: "roles/viewer".to_string(),
-                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            },
+            test_gcp_binding(
+                "roles/pubsub.publisher",
+                &["serviceAccount:app@p.iam.gserviceaccount.com"],
+            ),
+            test_gcp_binding(
+                "roles/pubsub.viewer",
+                &["serviceAccount:app@p.iam.gserviceaccount.com"],
+            ),
+            test_gcp_binding(
+                "roles/viewer",
+                &["serviceAccount:app@p.iam.gserviceaccount.com"],
+            ),
         ];
 
         let owned_exact_roles = vec![
@@ -1896,11 +1881,10 @@ mod tests {
         ];
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut bindings,
-            vec![Binding {
-                role: "roles/pubsub.publisher".to_string(),
-                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
-                condition: None,
-            }],
+            vec![test_gcp_binding(
+                "roles/pubsub.publisher",
+                &["serviceAccount:app@p.iam.gserviceaccount.com"],
+            )],
             "serviceAccount:app@p.iam.gserviceaccount.com",
             &[],
             &owned_exact_roles,

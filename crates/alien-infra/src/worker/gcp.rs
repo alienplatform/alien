@@ -4130,13 +4130,7 @@ impl GcpWorkerController {
         )
         .await?;
 
-        let iam_policy = IamPolicy {
-            version: Some(3),
-            bindings: all_bindings,
-            etag: None,
-            kind: None,
-            resource_id: None,
-        };
+        let iam_policy = IamPolicy::new().set_version(3).set_bindings(all_bindings);
         let bindings_count = iam_policy.bindings.len();
 
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
@@ -4559,11 +4553,11 @@ impl GcpWorkerController {
                         binding.members.push(all_users_member);
                     }
                 } else {
-                    policy.bindings.push(GcpBinding {
-                        role: invoker_role,
-                        members: vec![all_users_member],
-                        condition: None,
-                    });
+                    policy.bindings.push(
+                        GcpBinding::new()
+                            .set_role(invoker_role)
+                            .set_members([all_users_member]),
+                    );
                 }
             }
         }
@@ -4762,16 +4756,17 @@ impl GcpWorkerController {
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
             for binding in selected_bindings {
-                all_bindings.push(GcpBinding {
-                    role: binding.role,
-                    members: vec![member.clone()],
-                    condition: binding.condition.map(|cond| GcpExpr {
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        expression: cond.expression,
-                        location: None,
-                    }),
-                });
+                all_bindings.push(
+                    GcpBinding::new()
+                        .set_role(binding.role)
+                        .set_members([member.clone()])
+                        .set_or_clear_condition(binding.condition.map(|cond| {
+                            GcpExpr::new()
+                                .set_expression(cond.expression)
+                                .set_title(cond.title)
+                                .set_description(cond.description)
+                        })),
+                );
             }
         }
 
@@ -5098,14 +5093,11 @@ impl GcpWorkerController {
             )
         };
 
-        let iam_policy = IamPolicy::builder()
-            .version(1)
-            .bindings(vec![GcpBinding {
-                role: "roles/pubsub.publisher".to_string(),
-                members: vec![gcs_service_agent],
-                condition: None,
-            }])
-            .build();
+        let iam_policy = IamPolicy::new()
+            .set_version(1)
+            .set_bindings([GcpBinding::new()
+                .set_role("roles/pubsub.publisher")
+                .set_members([gcs_service_agent])]);
 
         pubsub_client
             .set_topic_iam_policy(topic_short_name.clone(), iam_policy)
@@ -5644,13 +5636,7 @@ mod tests {
     }
 
     fn create_empty_iam_policy() -> IamPolicy {
-        IamPolicy {
-            version: Some(1),
-            bindings: vec![],
-            etag: None,
-            kind: None,
-            resource_id: None,
-        }
+        IamPolicy::new().set_version(1)
     }
 
     fn setup_mock_client_for_creation_and_update(

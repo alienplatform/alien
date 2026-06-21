@@ -370,13 +370,11 @@ impl GcpVaultController {
             return Ok(());
         }
 
-        let new_policy = IamPolicy::builder()
-            .version(3)
-            .bindings(all_bindings)
-            .maybe_etag(current_policy.etag)
-            .maybe_kind(current_policy.kind)
-            .maybe_resource_id(current_policy.resource_id)
-            .build();
+        let new_policy = IamPolicy::new()
+            .set_version(3)
+            .set_bindings(all_bindings)
+            .set_audit_configs(current_policy.audit_configs)
+            .set_etag(current_policy.etag);
 
         rm_client
             .set_project_iam_policy(gcp_config.project_id.clone(), new_policy, None)

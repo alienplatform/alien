@@ -806,13 +806,7 @@ impl GcpArtifactRegistryController {
         let location_owned = location.clone();
         let repository_id_owned = repository_name.clone();
         let config_id_owned = config.id.clone();
-        let iam_policy = IamPolicy {
-            version: Some(3),
-            bindings,
-            etag: None,
-            kind: None,
-            resource_id: None,
-        };
+        let iam_policy = IamPolicy::new().set_version(3).set_bindings(bindings);
 
         let client = ctx
             .service_provider
@@ -914,7 +908,7 @@ fn emit_gcp_artifact_registry_heartbeat(
                 satisfies_pzs: Some(repository.satisfies_pzs),
                 create_time: repository.create_time.map(String::from),
                 update_time: repository.update_time.map(String::from),
-                iam_policy_etag_present: iam_policy.etag.is_some(),
+                iam_policy_etag_present: !iam_policy.etag.is_empty(),
                 iam_binding_count: iam_roles.len() as u32,
                 iam_roles,
                 pull_service_account_email,

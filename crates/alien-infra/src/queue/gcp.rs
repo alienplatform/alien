@@ -351,18 +351,13 @@ fn gcp_iam_policy_for_kind(
     bindings: &[alien_permissions::generators::GcpIamBinding],
     kind: GcpBindingResourceKind,
 ) -> IamPolicy {
-    IamPolicy {
-        version: Some(3),
-        bindings: bindings
+    IamPolicy::new().set_version(3).set_bindings(
+        bindings
             .iter()
             .filter(|binding| binding.resource_kind == Some(kind))
             .cloned()
-            .map(crate::core::ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
-            .collect(),
-        etag: None,
-        kind: None,
-        resource_id: None,
-    }
+            .map(crate::core::ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding),
+    )
 }
 
 fn emit_gcp_pubsub_queue_heartbeat(

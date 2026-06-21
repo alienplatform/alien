@@ -274,14 +274,14 @@ impl GcpStorageController {
                         binding.members.push(all_users);
                     }
                 } else {
-                    existing_policy.bindings.push(Binding {
-                        role: public_viewer_role.to_string(),
-                        members: vec![all_users],
-                        condition: None,
-                    });
+                    existing_policy.bindings.push(
+                        Binding::new()
+                            .set_role(public_viewer_role)
+                            .set_members([all_users]),
+                    );
                 }
 
-                existing_policy.version = Some(3);
+                existing_policy.version = 3;
 
                 client
                     .set_bucket_iam_policy(bucket_name.clone(), existing_policy)
@@ -488,17 +488,9 @@ impl GcpStorageController {
                     })?;
 
                 // Then set IAM policy
-                let iam_policy = IamPolicy {
-                    version: Some(1),
-                    bindings: vec![Binding {
-                        role: "roles/storage.objectViewer".to_string(),
-                        members: vec!["allUsers".to_string()],
-                        condition: None,
-                    }],
-                    etag: None,
-                    kind: Some("storage#policy".to_string()),
-                    resource_id: Some(bucket_name.clone()),
-                };
+                let iam_policy = IamPolicy::new().set_version(1).set_bindings([Binding::new()
+                    .set_role("roles/storage.objectViewer")
+                    .set_members(["allUsers"])]);
 
                 client
                     .set_bucket_iam_policy(bucket_name.clone(), iam_policy)
@@ -885,7 +877,7 @@ impl GcpStorageController {
             existing_policy.bindings.extend(all_bindings);
 
             // GCP requires version 3 when any binding has a condition
-            existing_policy.version = Some(3);
+            existing_policy.version = 3;
 
             // Apply the updated IAM policy
             client
@@ -1021,25 +1013,13 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone2)));
 
         // Mock IAM policy operations
-        mock_gcs.expect_get_bucket_iam_policy().returning(|_| {
-            Ok(IamPolicy {
-                version: Some(1),
-                bindings: vec![],
-                etag: None,
-                kind: Some("storage#policy".to_string()),
-                resource_id: None,
-            })
-        });
+        mock_gcs
+            .expect_get_bucket_iam_policy()
+            .returning(|_| Ok(IamPolicy::new().set_version(1)));
 
-        mock_gcs.expect_set_bucket_iam_policy().returning(|_, _| {
-            Ok(IamPolicy {
-                version: Some(1),
-                bindings: vec![],
-                etag: None,
-                kind: Some("storage#policy".to_string()),
-                resource_id: None,
-            })
-        });
+        mock_gcs
+            .expect_set_bucket_iam_policy()
+            .returning(|_, _| Ok(IamPolicy::new().set_version(1)));
 
         // Mock deletion operations
         mock_gcs.expect_empty_bucket().returning(|_| Ok(()));
@@ -1065,25 +1045,13 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone1)));
 
         // Mock IAM policy operations for public read changes
-        mock_gcs.expect_set_bucket_iam_policy().returning(|_, _| {
-            Ok(IamPolicy {
-                version: Some(1),
-                bindings: vec![],
-                etag: None,
-                kind: Some("storage#policy".to_string()),
-                resource_id: None,
-            })
-        });
+        mock_gcs
+            .expect_set_bucket_iam_policy()
+            .returning(|_, _| Ok(IamPolicy::new().set_version(1)));
 
-        mock_gcs.expect_get_bucket_iam_policy().returning(|_| {
-            Ok(IamPolicy {
-                version: Some(1),
-                bindings: vec![],
-                etag: None,
-                kind: Some("storage#policy".to_string()),
-                resource_id: None,
-            })
-        });
+        mock_gcs
+            .expect_get_bucket_iam_policy()
+            .returning(|_| Ok(IamPolicy::new().set_version(1)));
 
         Arc::new(mock_gcs)
     }
@@ -1584,17 +1552,9 @@ mod tests {
                 true
             })
             .returning(|_, _| {
-                Ok(IamPolicy {
-                    version: Some(1),
-                    bindings: vec![Binding {
-                        role: "roles/storage.objectViewer".to_string(),
-                        members: vec!["allUsers".to_string()],
-                        condition: None,
-                    }],
-                    etag: None,
-                    kind: Some("storage#policy".to_string()),
-                    resource_id: None,
-                })
+                Ok(IamPolicy::new().set_version(1).set_bindings([Binding::new()
+                    .set_role("roles/storage.objectViewer")
+                    .set_members(["allUsers"])]))
             });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));

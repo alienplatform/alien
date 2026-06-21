@@ -1,17 +1,15 @@
-use crate::core::{Binding, Expr, IamPolicy};
+use crate::core::IamPolicy;
 use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 use alien_core::GcpClientConfig;
 use alien_error::AlienError;
 use bon::Builder;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
-use google_cloud_iam_v1::model::{Binding as OfficialBinding, Policy as OfficialPolicy};
 use google_cloud_longrunning::model::{
     operation::Result as OfficialOperationResult, Operation as OfficialOperation,
 };
 use google_cloud_run_v2::{
     client::Services as OfficialCloudRunServices, model::Service as OfficialService,
 };
-use google_cloud_type::model::Expr as OfficialExpr;
 use http::StatusCode;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
@@ -553,7 +551,6 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
             .send()
             .await
             .map_err(|error| cloud_run_error(error, "Service", &service_name))
-            .map(iam_policy_from_official)
     }
 
     async fn set_service_iam_policy(
@@ -564,7 +561,7 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
     ) -> CloudClientResult<IamPolicy> {
         let request = google_cloud_iam_v1::model::SetIamPolicyRequest::new()
             .set_resource(self.service_resource_name(&location, &service_name))
-            .set_policy(iam_policy_to_official(iam_policy)?);
+            .set_policy(iam_policy);
 
         self.services()
             .await?
@@ -573,7 +570,6 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
             .send()
             .await
             .map_err(|error| cloud_run_error(error, "Service", &service_name))
-            .map(iam_policy_from_official)
     }
 
     async fn get_operation(
@@ -685,89 +681,6 @@ fn any_to_json(any: &wkt::Any) -> serde_json::Value {
             "typeUrl": any.type_url(),
         })
     })
-}
-
-fn iam_policy_to_official(policy: IamPolicy) -> CloudClientResult<OfficialPolicy> {
-    use base64::Engine;
-
-    let etag = policy
-        .etag
-        .as_deref()
-        .map(|etag| {
-            base64::engine::general_purpose::STANDARD
-                .decode(etag)
-                .map_err(|error| {
-                    AlienError::new(CloudClientErrorData::GenericError {
-                        message: format!("Failed to base64-decode GCP IAM policy etag: {error}"),
-                    })
-                })
-        })
-        .transpose()?
-        .unwrap_or_default();
-
-    Ok(OfficialPolicy::new()
-        .set_version(policy.version.unwrap_or_default())
-        .set_bindings(policy.bindings.into_iter().map(binding_to_official))
-        .set_etag(etag))
-}
-
-fn iam_policy_from_official(policy: OfficialPolicy) -> IamPolicy {
-    use base64::Engine;
-
-    IamPolicy {
-        version: Some(policy.version),
-        bindings: policy
-            .bindings
-            .into_iter()
-            .map(binding_from_official)
-            .collect(),
-        etag: if policy.etag.is_empty() {
-            None
-        } else {
-            Some(base64::engine::general_purpose::STANDARD.encode(policy.etag))
-        },
-        kind: None,
-        resource_id: None,
-    }
-}
-
-fn binding_to_official(binding: Binding) -> OfficialBinding {
-    let mut official_binding = OfficialBinding::new()
-        .set_role(binding.role)
-        .set_members(binding.members);
-
-    if let Some(condition) = binding.condition {
-        official_binding = official_binding.set_condition(
-            OfficialExpr::new()
-                .set_expression(condition.expression)
-                .set_title(condition.title.unwrap_or_default())
-                .set_description(condition.description.unwrap_or_default())
-                .set_location(condition.location.unwrap_or_default()),
-        );
-    }
-
-    official_binding
-}
-
-fn binding_from_official(binding: OfficialBinding) -> Binding {
-    Binding {
-        role: binding.role,
-        members: binding.members,
-        condition: binding.condition.map(|condition| Expr {
-            expression: condition.expression,
-            title: empty_string_to_none(condition.title),
-            description: empty_string_to_none(condition.description),
-            location: empty_string_to_none(condition.location),
-        }),
-    }
-}
-
-fn empty_string_to_none(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
 }
 
 fn field_mask_from_comma_separated(update_mask: String) -> wkt::FieldMask {

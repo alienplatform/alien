@@ -105,7 +105,7 @@ pub use google_cloud_iam_admin_v1::model::{
     role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
     ServiceAccount,
 };
-pub use google_cloud_iam_v1::model::GetPolicyOptions;
+pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy as IamPolicy};
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{
     SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
@@ -122,6 +122,7 @@ use google_cloud_storage::{
     client::StorageControl as OfficialStorageControl,
     model::{Bucket, DeleteObjectRequest},
 };
+pub use google_cloud_type::model::Expr;
 use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -232,57 +233,7 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Role>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct IamPolicy {
-    /// IAM policy version.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<i32>,
-    /// Optional policy kind returned by some Google APIs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// Optional resource identifier returned by some Google APIs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_id: Option<String>,
-    /// IAM role bindings.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bindings: Vec<Binding>,
-    /// Base64-encoded IAM policy etag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub etag: Option<String>,
-}
-
 pub type GcpIamPolicy = IamPolicy;
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Binding {
-    /// Role granted by this binding.
-    pub role: String,
-    /// Principals granted the role.
-    #[builder(default)]
-    pub members: Vec<String>,
-    /// Optional conditional expression for the binding.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<Expr>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Expr {
-    /// CEL expression text.
-    pub expression: String,
-    /// Optional expression title.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Optional expression description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Optional expression source location.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-}
 
 struct OfficialGcpIamClient {
     config: GcpClientConfig,
@@ -460,7 +411,6 @@ impl GcpIamApi for OfficialGcpIamClient {
             ))
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM get_iam_policy request failed".to_string(),
@@ -480,10 +430,9 @@ impl GcpIamApi for OfficialGcpIamClient {
                 &self.config.project_id,
                 &service_account_name,
             ))
-            .set_policy(gcp_iam_policy_to_official(iam_policy)?)
+            .set_policy(iam_policy)
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM set_iam_policy request failed".to_string(),
@@ -751,7 +700,7 @@ impl OfficialGcpPubSubClient {
             }
         };
 
-        let body = json!({ "policy": gcp_iam_policy_to_official(policy)? });
+        let body = json!({ "policy": policy });
         let response = self
             .http_client
             .post(url)
@@ -780,9 +729,8 @@ impl OfficialGcpPubSubClient {
         }
 
         response
-            .json::<google_cloud_iam_v1::model::Policy>()
+            .json::<IamPolicy>()
             .await
-            .map(gcp_iam_policy_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to parse Pub/Sub setIamPolicy response".to_string(),
@@ -1308,7 +1256,6 @@ impl GcsApi for OfficialGcpGcsClient {
             .set_resource(self.bucket_resource_name(&bucket_name))
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .map_err(|error| {
                 if gax_error_is_not_found(&error) {
                     AlienError::new(crate::error::ErrorData::CloudResourceNotFound {
@@ -1332,7 +1279,7 @@ impl GcsApi for OfficialGcpGcsClient {
         bucket_name: String,
         iam_policy: IamPolicy,
     ) -> Result<IamPolicy> {
-        let policy = gcp_iam_policy_to_official(iam_policy)?;
+        let policy = iam_policy;
         self.storage_control()
             .await?
             .set_iam_policy()
@@ -1340,7 +1287,6 @@ impl GcsApi for OfficialGcpGcsClient {
             .set_policy(policy)
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .map_err(|error| {
                 if gax_error_is_not_found(&error) {
                     AlienError::new(crate::error::ErrorData::CloudResourceNotFound {
@@ -2007,7 +1953,6 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
             ))
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Artifact Registry get_iam_policy request failed".to_string(),
@@ -2030,10 +1975,9 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
                 &location,
                 &repository_id,
             ))
-            .set_policy(gcp_iam_policy_to_official(iam_policy)?)
+            .set_policy(iam_policy)
             .send()
             .await
-            .map(gcp_iam_policy_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Artifact Registry set_iam_policy request failed".to_string(),
@@ -2129,15 +2073,12 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
             request = request.set_options(options);
         }
 
-        request
-            .send()
-            .await
-            .map(gcp_iam_policy_from_official)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
+        request.send().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
                 message: "Resource Manager get_iam_policy request failed".to_string(),
                 resource_id: Some(project_id),
-            })
+            },
+        )
     }
 
     async fn set_project_iam_policy(
@@ -2162,17 +2103,14 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
             .await?
             .set_iam_policy()
             .set_resource(format!("projects/{project_id}"))
-            .set_policy(gcp_iam_policy_to_official(policy)?);
+            .set_policy(policy);
 
-        request
-            .send()
-            .await
-            .map(gcp_iam_policy_from_official)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
+        request.send().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
                 message: "Resource Manager set_iam_policy request failed".to_string(),
                 resource_id: Some(project_id),
-            })
+            },
+        )
     }
 
     async fn get_project_metadata(&self, project_id: String) -> Result<Project> {
@@ -6316,14 +6254,6 @@ fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &
     format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
 }
 
-fn none_if_empty(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
 fn service_account_resource_name(project_id: &str, service_account_name: &str) -> String {
     if service_account_name.starts_with("projects/") {
         service_account_name.to_string()
@@ -6422,75 +6352,6 @@ fn field_mask_from_comma_separated(update_mask: String) -> wkt::FieldMask {
             .map(str::trim)
             .filter(|path| !path.is_empty()),
     )
-}
-
-fn gcp_iam_policy_from_official(policy: google_cloud_iam_v1::model::Policy) -> GcpIamPolicy {
-    use base64::Engine;
-
-    GcpIamPolicy {
-        version: Some(policy.version),
-        kind: None,
-        resource_id: None,
-        bindings: policy
-            .bindings
-            .into_iter()
-            .map(|binding| Binding {
-                role: binding.role,
-                members: binding.members,
-                condition: binding.condition.map(|condition| Expr {
-                    expression: condition.expression,
-                    title: none_if_empty(condition.title),
-                    description: none_if_empty(condition.description),
-                    location: none_if_empty(condition.location),
-                }),
-            })
-            .collect(),
-        etag: if policy.etag.is_empty() {
-            None
-        } else {
-            Some(base64::engine::general_purpose::STANDARD.encode(policy.etag))
-        },
-    }
-}
-
-fn gcp_iam_policy_to_official(policy: GcpIamPolicy) -> Result<google_cloud_iam_v1::model::Policy> {
-    use base64::Engine;
-
-    let etag = policy
-        .etag
-        .as_deref()
-        .map(|etag| {
-            base64::engine::general_purpose::STANDARD
-                .decode(etag)
-                .into_alien_error()
-                .context(crate::error::ErrorData::CloudPlatformError {
-                    message: "Failed to base64-decode GCP IAM policy etag".to_string(),
-                    resource_id: policy.resource_id.clone(),
-                })
-        })
-        .transpose()?
-        .unwrap_or_default();
-
-    Ok(google_cloud_iam_v1::model::Policy::new()
-        .set_version(policy.version.unwrap_or_default())
-        .set_bindings(policy.bindings.into_iter().map(|binding| {
-            let mut official_binding = google_cloud_iam_v1::model::Binding::new()
-                .set_role(binding.role)
-                .set_members(binding.members);
-
-            if let Some(condition) = binding.condition {
-                official_binding = official_binding.set_condition(
-                    google_cloud_type::model::Expr::new()
-                        .set_expression(condition.expression)
-                        .set_title(condition.title.unwrap_or_default())
-                        .set_description(condition.description.unwrap_or_default())
-                        .set_location(condition.location.unwrap_or_default()),
-                );
-            }
-
-            official_binding
-        }))
-        .set_etag(etag))
 }
 
 fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
