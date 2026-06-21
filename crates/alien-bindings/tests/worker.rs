@@ -10,42 +10,39 @@ use alien_bindings::{
 use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, WorkerBinding};
 
-// Import cloud clients for creating test resources
-#[cfg(feature = "azure")]
-use alien_azure_clients::authorization::{AuthorizationApi, AzureAuthorizationClient, Scope};
-#[cfg(feature = "azure")]
-use alien_azure_clients::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
-#[cfg(feature = "azure")]
-use alien_azure_clients::long_running_operation::LongRunningOperationClient;
-#[cfg(feature = "azure")]
-use alien_azure_clients::managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi};
-#[cfg(feature = "azure")]
-use alien_azure_clients::models::authorization_role_assignments::{
-    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-};
-#[cfg(feature = "azure")]
-use alien_azure_clients::models::container_apps::{
-    Configuration, Container as AzureContainer, ContainerApp, ContainerAppProperties, Ingress,
-    ManagedServiceIdentity, ManagedServiceIdentityType, RegistryCredentials, Scale, Template,
-    TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
-};
-#[cfg(feature = "azure")]
-use alien_azure_clients::models::managed_identity::Identity;
-use alien_azure_clients::AzureTokenCache;
 #[cfg(feature = "aws")]
 use alien_core::{AwsClientConfig, AwsCredentials};
+#[cfg(feature = "azure")]
+use alien_core::{AzureClientConfig, AzureCredentials};
 #[cfg(feature = "gcp")]
-use alien_gcp_clients::cloudrun::{
-    CloudRunApi, CloudRunClient, Container, ContainerPort, RevisionTemplate, Service,
-    TrafficTarget, TrafficTargetAllocationType,
-};
+use alien_core::{GcpClientConfig, GcpCredentials};
 #[cfg(feature = "aws")]
 use aws_sdk_lambda::{
     types::{Architecture, Cors, FunctionCode, FunctionUrlAuthType, InvokeMode, PackageType},
     Client as LambdaClient,
 };
+#[cfg(feature = "azure")]
+use azure_core::{
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
+    time::{Duration as AzureDuration, OffsetDateTime},
+};
+#[cfg(feature = "azure")]
+use azure_identity::{ClientSecretCredential, ClientSecretCredentialOptions};
+#[cfg(feature = "gcp")]
+use google_cloud_auth::credentials::{self, Credentials};
+#[cfg(feature = "gcp")]
+use google_cloud_longrunning::model::Operation as CloudRunOperation;
+#[cfg(feature = "gcp")]
+use google_cloud_run_v2::{
+    client::Services as CloudRunServices,
+    model::{
+        Container, ContainerPort, RevisionTemplate, Service, TrafficTarget,
+        TrafficTargetAllocationType,
+    },
+};
+#[cfg(feature = "azure")]
+use reqwest::{Method, StatusCode};
 
-use alien_client_core::ErrorData;
 use async_trait::async_trait;
 use rstest::rstest;
 use std::path::PathBuf as StdPathBuf;
@@ -494,7 +491,7 @@ struct GcpProviderTestContext {
     function: Arc<dyn Worker>,
     service_name: String,
     location: String,
-    cloudrun_client: CloudRunClient,
+    cloudrun_client: CloudRunServices,
     project_id: String,
     created_services: Mutex<HashSet<String>>,
 }
@@ -522,17 +519,19 @@ impl AsyncTestContext for GcpProviderTestContext {
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION")
             .expect("GOOGLE_MANAGEMENT_REGION must be set in .env.test");
 
-        let config = alien_gcp_clients::GcpClientConfig {
+        let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: gcp_region.clone(),
-            credentials: alien_gcp_clients::GcpCredentials::ServiceAccountKey {
+            credentials: GcpCredentials::ServiceAccountKey {
                 json: gcp_credentials_json.clone(),
             },
             service_overrides: None,
             project_number: None,
         };
 
-        let cloudrun_client = CloudRunClient::new(reqwest::Client::new(), config);
+        let cloudrun_client = cloud_run_services_client_from_alien_config(&config)
+            .await
+            .expect("Failed to build official Cloud Run services client");
 
         // Create a unique service name
         let service_name = format!(
@@ -541,39 +540,45 @@ impl AsyncTestContext for GcpProviderTestContext {
         );
 
         // Create the Cloud Run service
-        let container = Container::builder()
-            .image("gcr.io/cloudrun/hello".to_string())
-            .ports(vec![ContainerPort::builder().container_port(8080).build()])
-            .build();
+        let container = Container::new()
+            .set_image("gcr.io/cloudrun/hello")
+            .set_ports([ContainerPort::new().set_container_port(8080)]);
 
-        let revision_template = RevisionTemplate::builder()
-            .containers(vec![container])
-            .build();
+        let revision_template = RevisionTemplate::new().set_containers([container]);
 
-        let traffic_target = TrafficTarget::builder()
-            .r#type(TrafficTargetAllocationType::TrafficTargetAllocationTypeLatest)
-            .percent(100)
-            .build();
+        let traffic_target = TrafficTarget::new()
+            .set_type(TrafficTargetAllocationType::Latest)
+            .set_percent(100);
 
-        let service = Service::builder()
-            .template(revision_template)
-            .traffic(vec![traffic_target])
-            .invoker_iam_disabled(true) // Allow unauthenticated access for testing
-            .build();
+        let service = Service::new()
+            .set_template(revision_template)
+            .set_traffic([traffic_target])
+            .set_invoker_iam_disabled(true); // Allow unauthenticated access for testing
 
-        let _create_operation = cloudrun_client
-            .create_service(gcp_region.clone(), service_name.clone(), service, None)
+        let create_operation = cloudrun_client
+            .create_service()
+            .set_parent(cloud_run_parent(&project_id, &gcp_region))
+            .set_service_id(service_name.clone())
+            .set_service(service)
+            .send()
             .await
             .expect("Failed to create test Cloud Run service");
 
         info!("✅ Created Cloud Run service: {}", service_name);
 
-        // Wait for service to be created
-        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+        wait_for_cloud_run_operation(&cloudrun_client, create_operation, &service_name)
+            .await
+            .expect("Cloud Run service creation should complete");
 
         // Get the service to verify it was created and get its URL
         let created_service = cloudrun_client
-            .get_service(gcp_region.clone(), service_name.clone())
+            .get_service()
+            .set_name(cloud_run_service_name(
+                &project_id,
+                &gcp_region,
+                &service_name,
+            ))
+            .send()
             .await
             .expect("Failed to get created service");
 
@@ -639,24 +644,29 @@ impl AsyncTestContext for GcpProviderTestContext {
         for service_name in services_to_cleanup {
             match self
                 .cloudrun_client
-                .delete_service(self.location.clone(), service_name.clone(), None, None)
+                .delete_service()
+                .set_name(cloud_run_service_name(
+                    &self.project_id,
+                    &self.location,
+                    &service_name,
+                ))
+                .send()
                 .await
             {
                 Ok(_) => info!(
                     "✅ Service {} deletion initiated successfully",
                     service_name
                 ),
-                Err(infra_err) => match &infra_err.error {
-                    Some(ErrorData::RemoteResourceNotFound { .. }) => {
+                Err(error) => {
+                    if official_gcp_error_is_not_found(&error) {
                         info!("🔍 Service {} was already deleted", service_name);
-                    }
-                    _ => {
+                    } else {
                         warn!(
                             "Failed to delete service {} during cleanup: {:?}",
-                            service_name, infra_err
+                            service_name, error
                         );
                     }
-                },
+                }
             }
         }
 
@@ -678,19 +688,103 @@ impl FunctionTestContext for GcpProviderTestContext {
     }
 }
 
+#[cfg(feature = "gcp")]
+async fn cloud_run_services_client_from_alien_config(
+    config: &GcpClientConfig,
+) -> anyhow::Result<CloudRunServices> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    CloudRunServices::builder()
+        .with_credentials(credentials)
+        .build()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to build official Cloud Run client: {error}"))
+}
+
+#[cfg(feature = "gcp")]
+fn gcp_credentials_from_alien_config(config: &GcpClientConfig) -> anyhow::Result<Credentials> {
+    match &config.credentials {
+        GcpCredentials::ServiceAccountKey { json } => {
+            let key = serde_json::from_str::<serde_json::Value>(json).map_err(|error| {
+                anyhow::anyhow!("Failed to parse GCP service account key JSON: {error}")
+            })?;
+            credentials::service_account::Builder::new(key)
+                .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                    ["https://www.googleapis.com/auth/cloud-platform"],
+                ))
+                .build()
+                .map_err(|error| {
+                    anyhow::anyhow!("Failed to build GCP service account credentials: {error}")
+                })
+        }
+        other => anyhow::bail!(
+            "alien-bindings Cloud Run live test setup supports service-account-key credentials only, got {other:?}"
+        ),
+    }
+}
+
+#[cfg(feature = "gcp")]
+async fn wait_for_cloud_run_operation(
+    client: &CloudRunServices,
+    mut operation: CloudRunOperation,
+    service_name: &str,
+) -> anyhow::Result<()> {
+    for attempt in 1..=40 {
+        if operation.done {
+            if let Some(error) = operation.error() {
+                anyhow::bail!("Cloud Run operation for service '{service_name}' failed: {error:?}");
+            }
+            return Ok(());
+        }
+
+        info!(
+            "⏳ Waiting for Cloud Run operation on {} (attempt {}/40)",
+            service_name, attempt
+        );
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        operation = client
+            .get_operation()
+            .set_name(operation.name.clone())
+            .send()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Failed to poll Cloud Run operation for service '{service_name}': {error}"
+                )
+            })?;
+    }
+
+    anyhow::bail!("Cloud Run operation for service '{service_name}' did not finish within timeout")
+}
+
+#[cfg(feature = "gcp")]
+fn cloud_run_parent(project_id: &str, region: &str) -> String {
+    format!("projects/{project_id}/locations/{region}")
+}
+
+#[cfg(feature = "gcp")]
+fn cloud_run_service_name(project_id: &str, region: &str, service_name: &str) -> String {
+    format!(
+        "{}/services/{}",
+        cloud_run_parent(project_id, region),
+        service_name
+    )
+}
+
+#[cfg(feature = "gcp")]
+fn official_gcp_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == google_cloud_gax::error::rpc::Code::NotFound)
+        || error.http_status_code() == Some(404)
+}
+
 // --- Azure Provider Context ---
 #[cfg(feature = "azure")]
 struct AzureProviderTestContext {
     function: Arc<dyn Worker>,
     resource_group_name: String,
     container_app_name: String,
-    container_apps_client: AzureContainerAppsClient,
-    authorization_client: AzureAuthorizationClient,
-    managed_identity_client: AzureManagedIdentityClient,
-    long_running_operation_client: LongRunningOperationClient,
-    managed_environment_id: String,
-    location: String,
-    container_image: String,
+    management_client: AzureContainerAppsManagementTestClient,
     created_container_apps: Mutex<HashSet<String>>,
     created_managed_identities: Mutex<HashSet<String>>,
     created_role_assignments: Mutex<HashSet<String>>,
@@ -721,43 +815,28 @@ impl AsyncTestContext for AzureProviderTestContext {
         let mut container_image = env::var("ALIEN_TEST_AZURE_CONTAINER_APP_IMAGE")
             .unwrap_or_else(|_| default_container_image.clone());
 
-        let client_config = alien_azure_clients::AzureClientConfig {
+        let client_config = AzureClientConfig {
             subscription_id: subscription_id.clone(),
-            tenant_id,
+            tenant_id: tenant_id.clone(),
             region: Some("eastus".to_string()),
-            credentials: alien_azure_clients::AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
+            credentials: AzureCredentials::ServicePrincipal {
+                client_id: client_id.clone(),
+                client_secret: client_secret.clone(),
             },
             service_overrides: None,
         };
 
-        let container_apps_client = AzureContainerAppsClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
-
-        let authorization_client = AzureAuthorizationClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
-
-        let managed_identity_client = AzureManagedIdentityClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
-
-        let long_running_operation_client = LongRunningOperationClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
+        let management_client = AzureContainerAppsManagementTestClient::new(client_config.clone())
+            .expect("Failed to build Azure Container Apps management test client");
 
         // Get the existing managed environment to retrieve its ID
-        let managed_environment = container_apps_client.get_managed_environment(&resource_group_name, &managed_environment_name).await
+        let managed_environment = management_client.get_managed_environment(&resource_group_name, &managed_environment_name).await
             .expect("Failed to get existing managed environment. Make sure ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME points to an existing managed environment.");
 
         let managed_environment_id = managed_environment
-            .id
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(String::from)
             .expect("Managed environment should have an ID");
 
         // Create a unique container app name
@@ -783,37 +862,23 @@ impl AsyncTestContext for AzureProviderTestContext {
             );
             let identity_name = format!("{}-identity", container_app_name);
 
-            // Create managed identity
-            let managed_identity = Identity {
-                location: "eastus".to_string(),
-                tags: Default::default(),
-                properties: None,
-                id: None,
-                name: None,
-                type_: None,
-                system_data: None,
-            };
-
-            let created_identity = managed_identity_client
-                .create_or_update_user_assigned_identity(
-                    &resource_group_name,
-                    &identity_name,
-                    &managed_identity,
-                )
+            let created_identity = management_client
+                .create_user_assigned_identity(&resource_group_name, &identity_name, "eastus")
                 .await
                 .expect("Failed to create managed identity");
 
             let principal_id = created_identity
-                .properties
-                .as_ref()
-                .and_then(|p| p.principal_id.clone())
+                .get("properties")
+                .and_then(|properties| properties.get("principalId"))
+                .and_then(serde_json::Value::as_str)
+                .map(String::from)
                 .expect("Managed identity should have a principal ID");
 
             let identity_resource_id = created_identity
-                .id
-                .as_ref()
-                .expect("Managed identity should have a resource ID")
-                .clone();
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from)
+                .expect("Managed identity should have a resource ID");
 
             info!(
                 "✅ Created managed identity with principal ID: {}",
@@ -832,59 +897,34 @@ impl AsyncTestContext for AzureProviderTestContext {
                 acr_name
             );
 
-            // Build ACR resource scope
-            let acr_scope = Scope::Resource {
-                resource_group_name: resource_group_name.clone(),
-                resource_provider: "Microsoft.ContainerRegistry".to_string(),
-                parent_resource_path: None,
-                resource_type: "registries".to_string(),
-                resource_name: acr_name.to_string(),
-            };
-
             // Create role assignment
             let assignment_id = Uuid::new_v4().to_string();
             let acr_pull_role_definition_id = "7f951dda-4ed3-4680-a7ca-43fe172d538d"; // AcrPull built-in role
+            let acr_scope = format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
+                subscription_id, resource_group_name, acr_name
+            );
             let role_definition_full_id = format!(
                 "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
                 subscription_id, acr_pull_role_definition_id
             );
 
-            let role_assignment = RoleAssignment {
-                properties: Some(RoleAssignmentProperties {
-                    principal_id: principal_id.to_string(),
-                    role_definition_id: role_definition_full_id,
-                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                    scope: Some(
-                        acr_scope.to_scope_string(authorization_client.token_cache.config()),
-                    ),
-                    condition: None,
-                    condition_version: None,
-                    delegated_managed_identity_resource_id: None,
-                    description: Some(
-                        "AcrPull role for Container App managed identity".to_string(),
-                    ),
-                    created_by: None,
-                    created_on: None,
-                    updated_by: None,
-                    updated_on: None,
-                }),
-                id: None,
-                name: None,
-                type_: None,
-            };
+            let full_assignment_id = format!(
+                "{}/providers/Microsoft.Authorization/roleAssignments/{}",
+                acr_scope, assignment_id
+            );
 
-            let full_assignment_id =
-                authorization_client.build_role_assignment_id(&acr_scope, assignment_id);
-
-            let role_assignment_result = authorization_client
+            let role_assignment_result = management_client
                 .create_or_update_role_assignment_by_id(
-                    full_assignment_id.clone(),
-                    &role_assignment,
+                    &full_assignment_id,
+                    &principal_id,
+                    &role_definition_full_id,
+                    &acr_scope,
                 )
                 .await;
 
             if let Err(e) = role_assignment_result {
-                if matches!(e.error, Some(ErrorData::RemoteResourceNotFound { .. })) {
+                if e.status == Some(StatusCode::NOT_FOUND) {
                     warn!(
                         "ACR registry not found for image {}, falling back to public image",
                         container_image
@@ -903,27 +943,17 @@ impl AsyncTestContext for AzureProviderTestContext {
                 // Wait for role assignment to propagate
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
-                let registries = vec![RegistryCredentials {
-                    server: Some(acr_server.to_string()),
-                    identity: Some(identity_resource_id.clone()),
-                    ..Default::default()
-                }];
+                let registries = vec![serde_json::json!({
+                    "server": acr_server,
+                    "identity": identity_resource_id,
+                })];
 
-                // Create managed identity configuration for the container app
-                let mut user_assigned_identities = std::collections::HashMap::new();
-                user_assigned_identities.insert(
-                    identity_resource_id.clone(),
-                    UserAssignedIdentity::default(),
-                );
-
-                let identity = Some(ManagedServiceIdentity {
-                    type_: ManagedServiceIdentityType::UserAssigned,
-                    user_assigned_identities: Some(UserAssignedIdentities(
-                        user_assigned_identities,
-                    )),
-                    principal_id: None,
-                    tenant_id: None,
-                });
+                let identity = Some(serde_json::json!({
+                    "type": "UserAssigned",
+                    "userAssignedIdentities": {
+                        identity_resource_id: {},
+                    },
+                }));
 
                 info!("✅ Configured managed identity and registry credentials");
 
@@ -935,72 +965,15 @@ impl AsyncTestContext for AzureProviderTestContext {
         };
 
         // Create the Container App
-        let container_app = ContainerApp {
-            location: "eastus".to_string(),
+        let container_app = azure_container_app_request(
+            "eastus",
+            &managed_environment_id,
+            &container_image,
+            registries,
             identity,
-            properties: Some(ContainerAppProperties {
-                environment_id: Some(managed_environment_id.clone()),
-                template: Some(Template {
-                    containers: vec![
-                        AzureContainer {
-                            name: Some("main".to_string()),
-                            image: Some(container_image.clone()),
-                            env: vec![],
-                            resources: Some(alien_azure_clients::models::container_apps::ContainerResources {
-                                cpu: Some(0.5),
-                                memory: Some("1Gi".to_string()),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }
-                    ],
-                    scale: Some(Scale {
-                        min_replicas: Some(1),
-                        max_replicas: 10,
-                        rules: vec![],
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                configuration: Some(Configuration {
-                    ingress: Some(Ingress {
-                        external: true,
-                        target_port: Some(8080),
-                        traffic: vec![
-                            TrafficWeight {
-                                latest_revision: true,
-                                weight: Some(100),
-                                ..Default::default()
-                            }
-                        ],
-                        transport: alien_azure_clients::models::container_apps::IngressTransport::Auto,
-                        ..Default::default()
-                    }),
-                    registries,
-                    active_revisions_mode: alien_azure_clients::models::container_apps::ConfigurationActiveRevisionsMode::Single,
-                    ..Default::default()
-                }),
-                outbound_ip_addresses: vec![],
-                custom_domain_verification_id: None,
-                latest_ready_revision_name: None,
-                latest_revision_fqdn: None,
-                latest_revision_name: None,
-                managed_environment_id: Some(managed_environment_id.clone()),
-                running_status: None,
-                workload_profile_name: None,
-                provisioning_state: None,
-                event_stream_endpoint: None,
-            }),
-            tags: Default::default(),
-            id: None,
-            name: None,
-            type_: None,
-            managed_by: None,
-            system_data: None,
-            extended_location: None,
-        };
+        );
 
-        let create_result = container_apps_client
+        management_client
             .create_or_update_container_app(
                 &resource_group_name,
                 &container_app_name,
@@ -1008,16 +981,6 @@ impl AsyncTestContext for AzureProviderTestContext {
             )
             .await
             .expect("Failed to create test Container App");
-
-        // Wait for the ARM operation to complete
-        create_result
-            .wait_for_operation_completion(
-                &long_running_operation_client,
-                "CreateContainerApp",
-                &container_app_name,
-            )
-            .await
-            .expect("Failed to wait for Container App creation");
 
         info!("✅ Created Container App: {}", container_app_name);
 
@@ -1027,26 +990,28 @@ impl AsyncTestContext for AzureProviderTestContext {
         loop {
             attempts += 1;
 
-            match container_apps_client
+            match management_client
                 .get_container_app(&resource_group_name, &container_app_name)
                 .await
             {
                 Ok(app) => {
-                    if let Some(props) = &app.properties {
-                        if let Some(state) = &props.provisioning_state {
-                            info!(
-                                "📊 Container app provisioning state: {:?} (attempt {}/{})",
-                                state, attempts, max_attempts
-                            );
+                    if let Some(state) = app
+                        .get("properties")
+                        .and_then(|properties| properties.get("provisioningState"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        info!(
+                            "📊 Container app provisioning state: {} (attempt {}/{})",
+                            state, attempts, max_attempts
+                        );
 
-                            if *state == alien_azure_clients::models::container_apps::ContainerAppPropertiesProvisioningState::Succeeded {
-                                info!("✅ Container app is ready!");
-                                break;
-                            }
+                        if state == "Succeeded" {
+                            info!("✅ Container app is ready!");
+                            break;
+                        }
 
-                            if *state == alien_azure_clients::models::container_apps::ContainerAppPropertiesProvisioningState::Failed {
-                                panic!("❌ Container app provisioning failed");
-                            }
+                        if state == "Failed" {
+                            panic!("❌ Container app provisioning failed");
                         }
                     }
 
@@ -1068,16 +1033,17 @@ impl AsyncTestContext for AzureProviderTestContext {
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
         // Get the created app to get its URL
-        let created_app = container_apps_client
+        let created_app = management_client
             .get_container_app(&resource_group_name, &container_app_name)
             .await
             .expect("Failed to get created container app");
 
         let app_url = created_app
-            .properties
-            .and_then(|props| props.configuration)
-            .and_then(|config| config.ingress)
-            .and_then(|ingress| ingress.fqdn)
+            .get("properties")
+            .and_then(|properties| properties.get("configuration"))
+            .and_then(|configuration| configuration.get("ingress"))
+            .and_then(|ingress| ingress.get("fqdn"))
+            .and_then(serde_json::Value::as_str)
             .map(|fqdn| format!("https://{}", fqdn))
             .expect("Container app should have a valid FQDN after creation");
 
@@ -1089,30 +1055,9 @@ impl AsyncTestContext for AzureProviderTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert("AZURE_TENANT_ID".to_string(), client_config.tenant_id);
-
-        // Extract credentials based on the type
-        let (azure_client_id, azure_client_secret) = match &client_config.credentials {
-            alien_azure_clients::AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            } => (client_id.clone(), client_secret.clone()),
-            alien_azure_clients::AzureCredentials::AccessToken { .. } => {
-                panic!("AccessToken credentials not supported in worker binding tests")
-            }
-            alien_azure_clients::AzureCredentials::WorkloadIdentity { client_id, .. } => {
-                panic!("WorkloadIdentity credentials not fully supported in worker binding tests, client_id: {}", client_id)
-            }
-            alien_azure_clients::AzureCredentials::ManagedIdentity { client_id, .. } => {
-                panic!("ManagedIdentity credentials not supported in worker binding tests, client_id: {}", client_id)
-            }
-            alien_azure_clients::AzureCredentials::VmManagedIdentity { .. } => {
-                panic!("VmManagedIdentity credentials not supported in worker binding tests")
-            }
-        };
-
-        env_map.insert("AZURE_CLIENT_ID".to_string(), azure_client_id);
-        env_map.insert("AZURE_CLIENT_SECRET".to_string(), azure_client_secret);
+        env_map.insert("AZURE_TENANT_ID".to_string(), tenant_id);
+        env_map.insert("AZURE_CLIENT_ID".to_string(), client_id);
+        env_map.insert("AZURE_CLIENT_SECRET".to_string(), client_secret);
         env_map.insert("AZURE_SUBSCRIPTION_ID".to_string(), subscription_id);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -1140,13 +1085,7 @@ impl AsyncTestContext for AzureProviderTestContext {
             function,
             resource_group_name,
             container_app_name,
-            container_apps_client,
-            authorization_client,
-            managed_identity_client,
-            long_running_operation_client,
-            managed_environment_id,
-            location: "eastus".to_string(),
-            container_image,
+            management_client,
             created_container_apps: Mutex::new(created_container_apps),
             created_managed_identities: Mutex::new(created_managed_identities),
             created_role_assignments: Mutex::new(created_role_assignments),
@@ -1164,12 +1103,12 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         for assignment_id in role_assignments_to_cleanup {
             match self
-                .authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
+                .management_client
+                .delete_role_assignment_by_id(&assignment_id)
                 .await
             {
                 Ok(_) => info!("✅ Role assignment {} deleted successfully", assignment_id),
-                Err(err) if matches!(err.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+                Err(err) if err.status == Some(StatusCode::NOT_FOUND) => {
                     info!("🔍 Role assignment {} was already deleted", assignment_id);
                 }
                 Err(e) => {
@@ -1189,12 +1128,12 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         for identity_name in identities_to_cleanup {
             match self
-                .managed_identity_client
+                .management_client
                 .delete_user_assigned_identity(&self.resource_group_name, &identity_name)
                 .await
             {
                 Ok(_) => info!("✅ Managed identity {} deleted successfully", identity_name),
-                Err(err) if matches!(err.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+                Err(err) if err.status == Some(StatusCode::NOT_FOUND) => {
                     info!("🔍 Managed identity {} was already deleted", identity_name);
                 }
                 Err(e) => {
@@ -1214,7 +1153,7 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         for container_app_name in container_apps_to_cleanup {
             match self
-                .container_apps_client
+                .management_client
                 .delete_container_app(&self.resource_group_name, &container_app_name)
                 .await
             {
@@ -1222,7 +1161,7 @@ impl AsyncTestContext for AzureProviderTestContext {
                     "✅ Container app {} deleted successfully",
                     container_app_name
                 ),
-                Err(err) if matches!(err.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+                Err(err) if err.status == Some(StatusCode::NOT_FOUND) => {
                     info!(
                         "🔍 Container app {} was already deleted",
                         container_app_name
@@ -1252,6 +1191,529 @@ impl FunctionTestContext for AzureProviderTestContext {
     }
     fn get_test_endpoint(&self) -> String {
         format!("{}/{}", self.resource_group_name, self.container_app_name)
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Clone)]
+struct AzureContainerAppsManagementTestClient {
+    config: AzureClientConfig,
+    credential: Arc<dyn TokenCredential>,
+    http_client: reqwest::Client,
+}
+
+#[cfg(feature = "azure")]
+impl AzureContainerAppsManagementTestClient {
+    fn new(config: AzureClientConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            credential: azure_credential_from_config(&config)?,
+            config,
+            http_client: reqwest::Client::new(),
+        })
+    }
+
+    async fn get_managed_environment(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+    ) -> Result<serde_json::Value, AzureTestRestError> {
+        let (_, _, body) = self
+            .request(
+                Method::GET,
+                self.managed_environment_url(resource_group_name, environment_name),
+                None,
+                environment_name,
+            )
+            .await?;
+        self.parse_json(&body, environment_name)
+    }
+
+    async fn create_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        location: &str,
+    ) -> Result<serde_json::Value, AzureTestRestError> {
+        let body = serde_json::json!({
+            "location": location,
+            "tags": {
+                "Environment": "Test",
+                "Application": "alien-test",
+            },
+        });
+        let (status, headers, response_body) = self
+            .request(
+                Method::PUT,
+                self.user_assigned_identity_url(resource_group_name, identity_name),
+                Some(body.to_string()),
+                identity_name,
+            )
+            .await?;
+        self.wait_for_operation_if_needed(
+            status,
+            &headers,
+            "CreateUserAssignedIdentity",
+            identity_name,
+        )
+        .await?;
+        self.parse_json(&response_body, identity_name)
+    }
+
+    async fn delete_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        let (status, headers, _) = self
+            .request(
+                Method::DELETE,
+                self.user_assigned_identity_url(resource_group_name, identity_name),
+                None,
+                identity_name,
+            )
+            .await?;
+        self.wait_for_operation_if_needed(
+            status,
+            &headers,
+            "DeleteUserAssignedIdentity",
+            identity_name,
+        )
+        .await
+    }
+
+    async fn create_or_update_role_assignment_by_id(
+        &self,
+        role_assignment_id: &str,
+        principal_id: &str,
+        role_definition_id: &str,
+        scope: &str,
+    ) -> Result<(), AzureTestRestError> {
+        let body = serde_json::json!({
+            "properties": {
+                "principalId": principal_id,
+                "roleDefinitionId": role_definition_id,
+                "principalType": "ServicePrincipal",
+                "scope": scope,
+                "description": "AcrPull role for Container App managed identity",
+            },
+        });
+        self.request(
+            Method::PUT,
+            self.role_assignment_url(role_assignment_id),
+            Some(body.to_string()),
+            role_assignment_id,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_role_assignment_by_id(
+        &self,
+        role_assignment_id: &str,
+    ) -> Result<(), AzureTestRestError> {
+        self.request(
+            Method::DELETE,
+            self.role_assignment_url(role_assignment_id),
+            None,
+            role_assignment_id,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn create_or_update_container_app(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+        container_app: &serde_json::Value,
+    ) -> Result<(), AzureTestRestError> {
+        let (status, headers, _) = self
+            .request(
+                Method::PUT,
+                self.container_app_url(resource_group_name, container_app_name),
+                Some(container_app.to_string()),
+                container_app_name,
+            )
+            .await?;
+        self.wait_for_operation_if_needed(
+            status,
+            &headers,
+            "CreateContainerApp",
+            container_app_name,
+        )
+        .await
+    }
+
+    async fn get_container_app(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+    ) -> Result<serde_json::Value, AzureTestRestError> {
+        let (_, _, body) = self
+            .request(
+                Method::GET,
+                self.container_app_url(resource_group_name, container_app_name),
+                None,
+                container_app_name,
+            )
+            .await?;
+        self.parse_json(&body, container_app_name)
+    }
+
+    async fn delete_container_app(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        let (status, headers, _) = self
+            .request(
+                Method::DELETE,
+                self.container_app_url(resource_group_name, container_app_name),
+                None,
+                container_app_name,
+            )
+            .await?;
+        self.wait_for_operation_if_needed(
+            status,
+            &headers,
+            "DeleteContainerApp",
+            container_app_name,
+        )
+        .await
+    }
+
+    fn base_url(&self) -> String {
+        self.config
+            .service_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.endpoints.get("management"))
+            .map(String::as_str)
+            .unwrap_or("https://management.azure.com")
+            .trim_end_matches('/')
+            .to_string()
+    }
+
+    fn managed_environment_url(&self, resource_group_name: &str, environment_name: &str) -> String {
+        format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}?api-version=2025-01-01",
+            self.base_url(), self.config.subscription_id, resource_group_name, environment_name
+        )
+    }
+
+    fn container_app_url(&self, resource_group_name: &str, container_app_name: &str) -> String {
+        format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}?api-version=2025-01-01",
+            self.base_url(), self.config.subscription_id, resource_group_name, container_app_name
+        )
+    }
+
+    fn user_assigned_identity_url(&self, resource_group_name: &str, identity_name: &str) -> String {
+        format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}?api-version=2023-01-31",
+            self.base_url(), self.config.subscription_id, resource_group_name, identity_name
+        )
+    }
+
+    fn role_assignment_url(&self, role_assignment_id: &str) -> String {
+        format!(
+            "{}{}?api-version=2022-04-01",
+            self.base_url(),
+            role_assignment_id
+        )
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        url: String,
+        body: Option<String>,
+        resource_name: &str,
+    ) -> Result<(StatusCode, reqwest::header::HeaderMap, String), AzureTestRestError> {
+        let token = self.bearer_token().await?;
+        let mut request = self
+            .http_client
+            .request(method, &url)
+            .bearer_auth(token.token.secret());
+
+        if let Some(body) = body {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
+        }
+
+        let response = request.send().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Azure Container Apps ARM request failed for '{resource_name}': {error}"),
+            )
+        })?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response.text().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!(
+                    "Failed to read Azure Container Apps ARM response for '{resource_name}': {error}"
+                ),
+            )
+        })?;
+
+        if !status.is_success() {
+            return Err(AzureTestRestError::new(
+                Some(status),
+                format!(
+                    "Azure Container Apps ARM request for '{resource_name}' returned HTTP {}: {text}",
+                    status.as_u16()
+                ),
+            ));
+        }
+
+        Ok((status, headers, text))
+    }
+
+    async fn bearer_token(&self) -> Result<AccessToken, AzureTestRestError> {
+        self.credential
+            .get_token(&["https://management.azure.com/.default"], None)
+            .await
+            .map_err(|error| {
+                AzureTestRestError::new(None, format!("Failed to get Azure ARM token: {error}"))
+            })
+    }
+
+    async fn wait_for_operation_if_needed(
+        &self,
+        status: StatusCode,
+        headers: &reqwest::header::HeaderMap,
+        operation_name: &str,
+        resource_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        if status != StatusCode::ACCEPTED {
+            return Ok(());
+        }
+
+        let operation_url = headers
+            .get("azure-asyncoperation")
+            .or_else(|| headers.get("location"))
+            .ok_or_else(|| {
+                AzureTestRestError::new(
+                    None,
+                    format!(
+                        "Azure {operation_name} for '{resource_name}' returned 202 without operation URL"
+                    ),
+                )
+            })?
+            .to_str()
+            .map_err(|error| {
+                AzureTestRestError::new(
+                    None,
+                    format!("Failed to parse Azure operation URL header: {error}"),
+                )
+            })?
+            .to_string();
+        let retry_after = headers
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10);
+
+        for attempt in 1..=60 {
+            info!(
+                "⏳ Waiting for Azure {} on {} (attempt {}/60)",
+                operation_name, resource_name, attempt
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(retry_after)).await;
+
+            let (poll_status, _, body) = self
+                .request(Method::GET, operation_url.clone(), None, resource_name)
+                .await?;
+
+            if poll_status == StatusCode::NO_CONTENT {
+                return Ok(());
+            }
+
+            if body.trim().is_empty() {
+                if poll_status == StatusCode::OK {
+                    return Ok(());
+                }
+                continue;
+            }
+
+            let value = self.parse_json(&body, resource_name)?;
+            match value
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("succeeded") => return Ok(()),
+                Some("failed") | Some("canceled") => {
+                    return Err(AzureTestRestError::new(
+                        Some(poll_status),
+                        format!(
+                            "Azure {operation_name} for '{resource_name}' failed: {}",
+                            value
+                                .get("error")
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| "no error details".to_string())
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Err(AzureTestRestError::new(
+            None,
+            format!("Azure {operation_name} for '{resource_name}' did not finish within timeout"),
+        ))
+    }
+
+    fn parse_json(
+        &self,
+        body: &str,
+        resource_name: &str,
+    ) -> Result<serde_json::Value, AzureTestRestError> {
+        serde_json::from_str(body).map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Failed to parse Azure ARM JSON for '{resource_name}': {error}: {body}"),
+            )
+        })
+    }
+}
+
+#[cfg(feature = "azure")]
+fn azure_container_app_request(
+    location: &str,
+    managed_environment_id: &str,
+    container_image: &str,
+    registries: Vec<serde_json::Value>,
+    identity: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut container_app = serde_json::json!({
+        "location": location,
+        "properties": {
+            "environmentId": managed_environment_id,
+            "managedEnvironmentId": managed_environment_id,
+            "template": {
+                "containers": [{
+                    "name": "main",
+                    "image": container_image,
+                    "env": [],
+                    "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi",
+                    },
+                }],
+                "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 10,
+                    "rules": [],
+                },
+            },
+            "configuration": {
+                "ingress": {
+                    "external": true,
+                    "targetPort": 8080,
+                    "traffic": [{
+                        "latestRevision": true,
+                        "weight": 100,
+                    }],
+                    "transport": "Auto",
+                },
+                "registries": registries,
+                "activeRevisionsMode": "Single",
+            },
+        },
+        "tags": {
+            "Environment": "Test",
+            "Application": "alien-test",
+        },
+    });
+
+    if let Some(identity) = identity {
+        container_app["identity"] = identity;
+    }
+
+    container_app
+}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct AzureTestRestError {
+    status: Option<StatusCode>,
+    message: String,
+}
+
+#[cfg(feature = "azure")]
+impl AzureTestRestError {
+    fn new(status: Option<StatusCode>, message: String) -> Self {
+        Self { status, message }
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::fmt::Display for AzureTestRestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::error::Error for AzureTestRestError {}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct StaticAzureAccessTokenCredential {
+    token: String,
+}
+
+#[cfg(feature = "azure")]
+#[async_trait]
+impl TokenCredential for StaticAzureAccessTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        if scopes.is_empty() {
+            return Err(azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Credential,
+                "no scopes specified",
+            ));
+        }
+
+        Ok(AccessToken::new(
+            self.token.clone(),
+            OffsetDateTime::now_utc() + AzureDuration::days(365),
+        ))
+    }
+}
+
+#[cfg(feature = "azure")]
+fn azure_credential_from_config(
+    config: &AzureClientConfig,
+) -> anyhow::Result<Arc<dyn TokenCredential>> {
+    match &config.credentials {
+        AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
+            token: token.clone(),
+        })),
+        AzureCredentials::ServicePrincipal {
+            client_id,
+            client_secret,
+        } => ClientSecretCredential::new(
+            &config.tenant_id,
+            client_id.clone(),
+            Secret::new(client_secret.clone()),
+            Some(ClientSecretCredentialOptions::default()),
+        )
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .map_err(|error| {
+            anyhow::anyhow!("Failed to build Azure service principal credentials: {error}")
+        }),
+        other => anyhow::bail!(
+            "alien-bindings Azure Container Apps live test setup supports service principal/access-token credentials only, got {other:?}"
+        ),
     }
 }
 

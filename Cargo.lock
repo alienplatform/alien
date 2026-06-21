@@ -197,6 +197,7 @@ dependencies = [
  "google-cloud-firestore-admin-v1",
  "google-cloud-gax",
  "google-cloud-longrunning",
+ "google-cloud-run-v2",
  "google-cloud-secretmanager-v1",
  "http 1.4.0",
  "k8s-openapi",
