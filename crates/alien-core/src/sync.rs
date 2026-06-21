@@ -33,7 +33,7 @@ pub struct SyncResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
     /// Target deployment the agent should converge toward.
-    /// None means no changes needed.
+    /// None means no changes needed or this is an observe-only deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetDeployment>,
     /// Public URL for the commands API (e.g. `https://manager.example.com/v1`).
@@ -167,5 +167,36 @@ mod tests {
 
         let serialized = serde_json::to_value(&req).unwrap();
         assert_eq!(serialized["heartbeats"][0]["resourceId"], "api");
+    }
+
+    #[test]
+    fn test_sync_response_observe_only_state_roundtrip() {
+        let state = DeploymentState {
+            status: crate::DeploymentStatus::Running,
+            platform: crate::Platform::Kubernetes,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: crate::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        assert!(!state.has_desired());
+
+        let resp = SyncResponse {
+            current_state: Some(state),
+            target: None,
+            commands_url: None,
+        };
+
+        let serialized = serde_json::to_string(&resp).unwrap();
+        let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
+        let current_state = deserialized.current_state.unwrap();
+
+        assert_eq!(current_state.status, crate::DeploymentStatus::Running);
+        assert!(!current_state.has_desired());
+        assert!(deserialized.target.is_none());
     }
 }

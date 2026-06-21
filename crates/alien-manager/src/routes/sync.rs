@@ -634,6 +634,16 @@ mod tests {
     }
 
     #[test]
+    fn accepts_observe_only_running_state_without_desired_release() {
+        let deployment = deployment_record_with_state("pending", None);
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Running;
+
+        assert!(!agent_state.has_desired());
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
     fn builds_authoritative_state_from_manager_record() {
         let stack_state = StackState::with_resource_prefix(Platform::Aws, "abc123".to_string());
         let deployment = deployment_record_with_state("initial-setup", Some(stack_state.clone()));
@@ -662,6 +672,13 @@ mod tests {
         let mut deployment = deployment_record_with_state("running", None);
         deployment.current_release_id = Some("rel_test".to_string());
         deployment.desired_release_id = Some("rel_test".to_string());
+
+        assert!(!deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn observe_only_deployment_does_not_need_target() {
+        let deployment = deployment_record_with_state("running", None);
 
         assert!(!deployment_needs_target(&deployment));
     }
