@@ -4,9 +4,8 @@ use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::{
-    AzureStorageAccountEndpoints as AzureStorageArmEndpoints, AzureStorageSku, AzureStorageSkuName,
-    ResourceControllerContext, StorageAccount, StorageAccountCreateParameters,
-    StorageAccountPropertiesCreateParameters,
+    AzureStorageSku, AzureStorageSkuName, Endpoints, ResourceControllerContext, StorageAccount,
+    StorageAccountCreateParameters, StorageAccountPropertiesCreateParameters,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -548,9 +547,7 @@ fn emit_azure_storage_account_heartbeat(
     });
 }
 
-fn storage_account_endpoints(
-    endpoints: Option<&AzureStorageArmEndpoints>,
-) -> AzureStorageAccountEndpoints {
+fn storage_account_endpoints(endpoints: Option<&Endpoints>) -> AzureStorageAccountEndpoints {
     endpoints
         .map(|endpoints| AzureStorageAccountEndpoints {
             blob: endpoints.blob.clone(),

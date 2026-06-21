@@ -75,7 +75,7 @@ pub use azure_mgmt_servicebus::package_2024_01::models::{
 };
 pub use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
-    ContainerProperties as AzureBlobContainerProperties, Endpoints as AzureStorageAccountEndpoints,
+    ContainerProperties as AzureBlobContainerProperties, Endpoints,
     Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
     StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
     StorageAccountPropertiesCreateParameters, Table, TableProperties,
