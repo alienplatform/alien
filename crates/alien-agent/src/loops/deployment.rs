@@ -51,13 +51,20 @@ impl DeploymentLoopTransport for AgentTransport {
         _config: &alien_core::DeploymentConfig,
         _update_heartbeat: bool,
         _suggested_delay_ms: Option<u64>,
-        _heartbeats: Vec<ResourceHeartbeat>,
+        heartbeats: Vec<ResourceHeartbeat>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
         // Persist state to local DB after each step
         self.db
             .set_deployment_state(state)
             .await
             .map_err(|e| e.into_generic())?;
+
+        if !heartbeats.is_empty() {
+            self.db
+                .set_pending_heartbeats(&heartbeats)
+                .await
+                .map_err(|e| e.into_generic())?;
+        }
 
         // Re-read config from DB (sync loop may have updated it)
         let config = self

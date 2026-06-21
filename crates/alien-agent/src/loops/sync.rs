@@ -131,10 +131,12 @@ async fn sync_with_manager(
         .get_deployment_id()
         .await?
         .expect("deployment_id must be set in online mode");
+    let heartbeats = state.db.get_pending_heartbeats().await?;
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
+        heartbeats,
     };
 
     // Call manager with deployment_id in request body.

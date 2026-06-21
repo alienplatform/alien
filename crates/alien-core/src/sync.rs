@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeploymentConfig, DeploymentState, ReleaseInfo};
+use crate::{DeploymentConfig, DeploymentState, ReleaseInfo, ResourceHeartbeat};
 
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +16,9 @@ pub struct SyncRequest {
     /// Current deployment state as seen by the agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
+    /// Resource heartbeats emitted by the Operator's deployment step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 /// Response from the manager to the agent sync request.
@@ -59,12 +62,14 @@ mod tests {
         let req = SyncRequest {
             deployment_id: "dep_abc123".to_string(),
             current_state: None,
+            heartbeats: Vec::new(),
         };
 
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["deploymentId"], "dep_abc123");
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
+        assert!(json.get("heartbeats").is_none());
     }
 
     #[test]
@@ -73,6 +78,7 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_xyz");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
     }
 
     #[test]
@@ -108,9 +114,58 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_1");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
 
         // snake_case should NOT work
         let json = r#"{"deployment_id": "dep_1"}"#;
         assert!(serde_json::from_str::<SyncRequest>(json).is_err());
+    }
+
+    #[test]
+    fn test_sync_request_heartbeats_roundtrip() {
+        let json = serde_json::json!({
+            "deploymentId": "dep_1",
+            "heartbeats": [{
+                "deploymentId": "dep_1",
+                "resourceId": "api",
+                "resourceType": "container",
+                "controllerPlatform": "kubernetes",
+                "backend": "kubernetes",
+                "observedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "resourceType": "container",
+                    "data": {
+                        "backend": "kubernetes",
+                        "status": {
+                            "health": "healthy",
+                            "lifecycle": "running",
+                            "message": null,
+                            "stale": false,
+                            "partial": false,
+                            "collectionIssues": []
+                        },
+                        "namespace": "default",
+                        "name": "api",
+                        "workloadKind": "deployment",
+                        "replicas": { "desired": 1, "current": 1, "ready": 1, "available": 1, "updated": null, "misscheduled": null },
+                        "restarts": 0,
+                        "cpu": null,
+                        "memory": null,
+                        "workload": null,
+                        "pods": [],
+                        "instances": [],
+                        "events": []
+                    }
+                },
+                "raw": []
+            }]
+        });
+
+        let req: SyncRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.heartbeats.len(), 1);
+        assert_eq!(req.heartbeats[0].resource_id, "api");
+
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["heartbeats"][0]["resourceId"], "api");
     }
 }
