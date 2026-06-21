@@ -24,9 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
-use crate::core::{
-    AzureServiceBusQueue, AzureServiceBusQueueProperties, EnvironmentVariableBuilder,
-};
+use crate::core::{EnvironmentVariableBuilder, SbQueue, SbQueueProperties};
 use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -42,15 +40,15 @@ fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
-fn service_bus_queue_request(queue_name: &str) -> AzureServiceBusQueue {
-    AzureServiceBusQueue {
+fn service_bus_queue_request(queue_name: &str) -> SbQueue {
+    SbQueue {
         proxy_resource: azure_mgmt_servicebus::package_2024_01::models::ProxyResource {
             id: None,
             name: Some(queue_name.to_string()),
             type_: None,
             location: None,
         },
-        properties: Some(AzureServiceBusQueueProperties::default()),
+        properties: Some(SbQueueProperties::default()),
         system_data: None,
     }
 }

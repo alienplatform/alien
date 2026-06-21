@@ -1,6 +1,4 @@
-use crate::core::{
-    AzureServiceBusQueue, AzureServiceBusQueueProperties, ResourceControllerContext,
-};
+use crate::core::{ResourceControllerContext, SbQueue, SbQueueProperties};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureServiceBusQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -266,7 +264,7 @@ fn emit_azure_service_bus_queue_heartbeat(
     namespace_name: &str,
     queue_name: &str,
     resource_group: &str,
-    queue: AzureServiceBusQueue,
+    queue: SbQueue,
 ) {
     let properties = queue.properties.unwrap_or_default();
     let count_details = properties.count_details.clone().unwrap_or_default();
@@ -342,15 +340,15 @@ fn emit_azure_service_bus_queue_heartbeat(
     });
 }
 
-fn service_bus_queue_request(queue_name: &str) -> AzureServiceBusQueue {
-    AzureServiceBusQueue {
+fn service_bus_queue_request(queue_name: &str) -> SbQueue {
+    SbQueue {
         proxy_resource: azure_mgmt_servicebus::package_2024_01::models::ProxyResource {
             id: None,
             name: Some(queue_name.to_string()),
             type_: None,
             location: None,
         },
-        properties: Some(AzureServiceBusQueueProperties::default()),
+        properties: Some(SbQueueProperties::default()),
         system_data: None,
     }
 }
@@ -393,9 +391,9 @@ mod tests {
                 ))
             });
         mock.expect_create_or_update_queue()
-            .returning(|_, _, _, _| Ok(AzureServiceBusQueue::default()));
+            .returning(|_, _, _, _| Ok(SbQueue::default()));
         mock.expect_get_queue()
-            .returning(|_, _, _| Ok(AzureServiceBusQueue::default()));
+            .returning(|_, _, _| Ok(SbQueue::default()));
         mock.expect_delete_queue().returning(|_, _, _| Ok(()));
         Arc::new(mock)
     }
