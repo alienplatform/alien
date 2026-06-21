@@ -13,6 +13,7 @@ use tracing::info;
 const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
 const VAULT_BINDING: &str = "alien-vault";
+const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
 
 /// Standard response shape returned by binding test endpoints.
@@ -479,6 +480,47 @@ pub async fn check_vault(deployment: &TestDeployment) -> anyhow::Result<()> {
     }
 
     info!("Vault binding check passed");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Postgres
+// ---------------------------------------------------------------------------
+
+/// Check postgres binding: resolve the connection, connect with a driver, and round-trip a
+/// write/read query against the database.
+pub async fn check_postgres(deployment: &TestDeployment) -> anyhow::Result<()> {
+    let url = deployment_url(deployment)?;
+    info!("Checking postgres binding");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/postgres-test/{}", url, POSTGRES_BINDING))
+        .send()
+        .await
+        .context("Postgres test request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("Postgres test returned {}: {}", status, body);
+    }
+
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse postgres response")?;
+    if !data.success {
+        bail!("Postgres test reported failure");
+    }
+    if data.binding_name != POSTGRES_BINDING {
+        bail!(
+            "Postgres test binding mismatch: expected {}, got {}",
+            POSTGRES_BINDING,
+            data.binding_name
+        );
+    }
+
+    info!("Postgres binding check passed");
     Ok(())
 }
 
