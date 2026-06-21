@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # Configure provider-native ingress for shared Kubernetes E2E clusters.
 #
+# Usage:
+#   ./scripts/configure-e2e-provider-ingress.sh
+#
 # Terraform creates the clusters and emits kubeconfigs. Kubernetes API setup is
 # intentionally done after `terraform apply`: provider-native ingress classes
 # depend on cluster endpoints that are only usable after the apply has finished.
+#
+# Optional provider switches:
+#   ALIEN_E2E_CONFIGURE_EKS=false
+#   ALIEN_E2E_CONFIGURE_GKE=false
+#   ALIEN_E2E_CONFIGURE_AKS=false
+#
+# Optional target selection:
+#   ALIEN_E2E_GCP_TARGET=gcp-target-3
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

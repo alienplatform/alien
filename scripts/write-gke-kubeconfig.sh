@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # Write a GKE kubeconfig that authenticates with a target service account.
+#
+# Usage:
+#   ./scripts/write-gke-kubeconfig.sh \
+#     --key-file /tmp/target-sa.json \
+#     --project "$GOOGLE_TARGET_PROJECT_ID" \
+#     --cluster "$ALIEN_TEST_GKE_CLUSTER_NAME" \
+#     --location "$ALIEN_TEST_GKE_CLUSTER_LOCATION" \
+#     --kubeconfig "$ALIEN_TEST_GKE_KUBECONFIG"
+#
+# Requires gcloud with the gke-gcloud-auth-plugin installed.
 set -euo pipefail
 
 key_file=""

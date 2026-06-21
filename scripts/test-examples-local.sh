@@ -5,6 +5,9 @@ set -euo pipefail
 # part of the root workspace and without relying on relative package paths in
 # committed example manifests.
 #
+# Usage:
+#   pnpm test:examples
+#
 # Strategy:
 # 1. Build local CLI + local TS packages that examples consume.
 # 2. Temporarily inject `pnpm.overrides` into examples/package.json pointing to
