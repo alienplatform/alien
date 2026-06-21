@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::core::{AzureArmResourceGroup, ResourceControllerContext};
+use crate::core::{ResourceControllerContext, ResourceGroup};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
 use alien_core::{
@@ -46,7 +46,7 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        let mut resource_group = AzureArmResourceGroup::new(
+        let mut resource_group = ResourceGroup::new(
             azure_config
                 .region
                 .clone()
@@ -351,7 +351,7 @@ impl AzureResourceGroupController {
 fn emit_azure_resource_group_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    rg: &AzureArmResourceGroup,
+    rg: &ResourceGroup,
 ) {
     let provisioning_state = rg
         .properties

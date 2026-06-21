@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{AzureArmProvider, ResourceControllerContext};
+use crate::core::{Provider, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureResourceProviderActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -349,7 +349,7 @@ fn emit_azure_service_activation_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     namespace: &str,
-    provider: &AzureArmProvider,
+    provider: &Provider,
 ) {
     let registration_state = provider.registration_state.clone();
     let registered = registration_state

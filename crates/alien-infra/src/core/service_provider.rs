@@ -66,9 +66,7 @@ pub use azure_mgmt_network::package_2024_03::models::{
     SecurityRule, SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat,
     SubResource, Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
 };
-pub use azure_mgmt_resources::package_resources_2021_04::models::{
-    Provider as AzureArmProvider, ResourceGroup as AzureArmResourceGroup,
-};
+pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 pub use azure_mgmt_servicebus::package_2024_01::models::{
     MessageCountDetails as AzureServiceBusMessageCountDetails, Resource as AzureServiceBusResource,
     SbNamespace as AzureServiceBusNamespace,
@@ -4063,19 +4061,16 @@ pub trait AzureResourcesApi: Send + Sync {
     async fn create_or_update_resource_group(
         &self,
         resource_group_name: &str,
-        resource_group: &AzureArmResourceGroup,
-    ) -> Result<AzureArmResourceGroup>;
+        resource_group: &ResourceGroup,
+    ) -> Result<ResourceGroup>;
 
     async fn delete_resource_group(&self, resource_group_name: &str) -> Result<()>;
 
-    async fn get_resource_group(&self, resource_group_name: &str) -> Result<AzureArmResourceGroup>;
+    async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup>;
 
-    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<AzureArmProvider>;
+    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider>;
 
-    async fn register_provider(
-        &self,
-        resource_provider_namespace: &str,
-    ) -> Result<AzureArmProvider>;
+    async fn register_provider(&self, resource_provider_namespace: &str) -> Result<Provider>;
 }
 
 struct OfficialAzureResourcesClient {
@@ -4193,8 +4188,8 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
     async fn create_or_update_resource_group(
         &self,
         resource_group_name: &str,
-        resource_group: &AzureArmResourceGroup,
-    ) -> Result<AzureArmResourceGroup> {
+        resource_group: &ResourceGroup,
+    ) -> Result<ResourceGroup> {
         let body = serde_json::to_string(resource_group)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
@@ -4234,7 +4229,7 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
         Ok(())
     }
 
-    async fn get_resource_group(&self, resource_group_name: &str) -> Result<AzureArmResourceGroup> {
+    async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup> {
         let response = self
             .request(
                 Method::GET,
@@ -4254,7 +4249,7 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
         )
     }
 
-    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<AzureArmProvider> {
+    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let response = self
             .request(
                 Method::GET,
@@ -4274,10 +4269,7 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
         )
     }
 
-    async fn register_provider(
-        &self,
-        resource_provider_namespace: &str,
-    ) -> Result<AzureArmProvider> {
+    async fn register_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let response = self
             .request(
                 Method::POST,
