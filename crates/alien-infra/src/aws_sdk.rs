@@ -213,6 +213,7 @@ pub use aws_sdk_iam::{
         create_policy_version::CreatePolicyVersionOutput as CreatePolicyVersionResponse,
         create_role::CreateRoleOutput as CreateRoleResponse,
         get_role::GetRoleOutput as GetRoleResponse,
+        get_role_policy::GetRolePolicyOutput as GetRolePolicyResponse,
         list_attached_role_policies::ListAttachedRolePoliciesOutput as ListAttachedRolePoliciesResponse,
         list_policy_versions::ListPolicyVersionsOutput as ListPolicyVersionsResponse,
         list_role_policies::ListRolePoliciesOutput as ListRolePoliciesResponse,
@@ -357,24 +358,6 @@ pub struct CreateRoleTag {
     pub key: String,
     /// Tag value.
     pub value: String,
-}
-
-/// IAM inline role policy response.
-#[derive(Debug, Clone)]
-pub struct GetRolePolicyResponse {
-    /// Operation result.
-    pub get_role_policy_result: GetRolePolicyResult,
-}
-
-/// IAM inline role policy result.
-#[derive(Debug, Clone)]
-pub struct GetRolePolicyResult {
-    /// Role name.
-    pub role_name: String,
-    /// Policy name.
-    pub policy_name: String,
-    /// Policy document.
-    pub policy_document: String,
 }
 
 /// Trust policy principal.
@@ -991,13 +974,7 @@ impl IamApi for IamClient {
             &resource_name,
         )?;
 
-        Ok(GetRolePolicyResponse {
-            get_role_policy_result: GetRolePolicyResult {
-                role_name: response.role_name().to_string(),
-                policy_name: response.policy_name().to_string(),
-                policy_document: response.policy_document().to_string(),
-            },
-        })
+        Ok(response)
     }
 
     async fn delete_role_policy(&self, role_name: &str, policy_name: &str) -> Result<()> {

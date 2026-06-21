@@ -1342,7 +1342,7 @@ impl ResourcePermissionsHelper {
                     info!(
                         management_role = %management_role_name,
                         policy_name = %policy_name,
-                        stored_policy_size = resp.get_role_policy_result.policy_document.len(),
+                        stored_policy_size = resp.policy_document().len(),
                         "Verified management inline policy exists on role"
                     );
                 }
