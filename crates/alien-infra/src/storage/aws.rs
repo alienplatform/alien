@@ -3,8 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::aws_sdk::{
-    S3BucketMetadata, S3ExpirationStatus, S3LifecycleExpiration, S3LifecycleRule,
-    S3LifecycleRuleFilter, S3PublicAccessBlock, S3VersioningStatus,
+    BucketVersioningStatus, S3BucketMetadata, S3ExpirationStatus, S3LifecycleExpiration,
+    S3LifecycleRule, S3LifecycleRuleFilter, S3PublicAccessBlock,
 };
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -104,7 +104,7 @@ impl AwsStorageController {
             info!(bucket=%bucket_name, "Configuring bucket versioning");
 
             client
-                .put_bucket_versioning(bucket_name, S3VersioningStatus::Enabled)
+                .put_bucket_versioning(bucket_name, BucketVersioningStatus::Enabled)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -368,9 +368,9 @@ impl AwsStorageController {
             info!(bucket=%bucket_name, current=%config.versioning, previous=%prev_config.versioning, "Updating bucket versioning");
 
             let status = if config.versioning {
-                S3VersioningStatus::Enabled
+                BucketVersioningStatus::Enabled
             } else {
-                S3VersioningStatus::Suspended
+                BucketVersioningStatus::Suspended
             };
 
             client
@@ -750,11 +750,13 @@ fn emit_aws_s3_storage_heartbeat(
     bucket_name: &str,
     metadata: S3BucketMetadata,
 ) {
-    let versioning_status_label = metadata.versioning_status.map(versioning_status_label);
     let versioning_enabled = Some(matches!(
-        versioning_status_label.as_deref(),
-        Some("Enabled")
+        metadata.versioning_status.as_ref(),
+        Some(BucketVersioningStatus::Enabled)
     ));
+    let versioning_status = metadata
+        .versioning_status
+        .map(|status| status.as_str().to_string());
     let lifecycle_present = metadata
         .lifecycle_rule_count
         .map(|count| count > 0)
@@ -783,7 +785,7 @@ fn emit_aws_s3_storage_heartbeat(
                 name: bucket_name.to_string(),
                 region: Some(metadata.region.clone()),
                 bucket_location: Some(metadata.region),
-                versioning_status: versioning_status_label,
+                versioning_status,
                 versioning_enabled,
                 lifecycle_present,
                 lifecycle_rule_count: metadata.lifecycle_rule_count,
@@ -858,13 +860,6 @@ fn lifecycle_rule_configs(config: &Storage) -> Result<Vec<S3LifecycleRule>> {
                 })
         })
         .collect()
-}
-
-fn versioning_status_label(status: S3VersioningStatus) -> String {
-    match status {
-        S3VersioningStatus::Enabled => "Enabled".to_string(),
-        S3VersioningStatus::Suspended => "Suspended".to_string(),
-    }
 }
 
 impl AwsStorageController {

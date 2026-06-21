@@ -66,8 +66,8 @@ use aws_sdk_s3::{
         list_object_versions::ListObjectVersionsError, list_objects_v2::ListObjectsV2Error,
     },
     types::{
-        BucketLocationConstraint, BucketVersioningStatus, CreateBucketConfiguration, Delete,
-        ObjectIdentifier, Tag as S3Tag, Tagging, VersioningConfiguration,
+        BucketLocationConstraint, CreateBucketConfiguration, Delete, ObjectIdentifier,
+        Tag as S3Tag, Tagging, VersioningConfiguration,
     },
     Client as S3Client,
 };
@@ -148,8 +148,8 @@ pub use aws_sdk_ecr::types::{
     Repository as EcrRepository,
 };
 pub use aws_sdk_s3::types::{
-    BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, Event as S3Event,
-    ExpirationStatus as S3ExpirationStatus, LambdaFunctionConfiguration,
+    BucketLifecycleConfiguration as S3BucketLifecycleConfiguration, BucketVersioningStatus,
+    Event as S3Event, ExpirationStatus as S3ExpirationStatus, LambdaFunctionConfiguration,
     LifecycleExpiration as S3LifecycleExpiration, LifecycleRule as S3LifecycleRule,
     LifecycleRuleFilter as S3LifecycleRuleFilter, NotificationConfiguration,
     PublicAccessBlockConfiguration as S3PublicAccessBlock,
@@ -907,22 +907,13 @@ pub struct AvailabilityZone {
     pub zone_name: Option<String>,
 }
 
-/// S3 bucket versioning status used by infra controllers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum S3VersioningStatus {
-    /// Bucket versioning is enabled.
-    Enabled,
-    /// Bucket versioning is suspended.
-    Suspended,
-}
-
 /// S3 bucket metadata used for storage heartbeats.
 #[derive(Debug, Clone)]
 pub struct S3BucketMetadata {
     /// Bucket region.
     pub region: String,
     /// Bucket versioning status.
-    pub versioning_status: Option<S3VersioningStatus>,
+    pub versioning_status: Option<BucketVersioningStatus>,
     /// Number of lifecycle rules configured.
     pub lifecycle_rule_count: Option<u64>,
     /// Number of server-side encryption rules configured.
@@ -1847,7 +1838,7 @@ pub trait S3Api: Send + Sync {
     async fn put_bucket_versioning(
         &self,
         bucket_name: &str,
-        status: S3VersioningStatus,
+        status: BucketVersioningStatus,
     ) -> Result<()>;
 
     /// Configure public access blocking.
@@ -4174,14 +4165,9 @@ impl S3Api for S3Client {
     async fn put_bucket_versioning(
         &self,
         bucket_name: &str,
-        status: S3VersioningStatus,
+        status: BucketVersioningStatus,
     ) -> Result<()> {
-        let versioning_configuration = VersioningConfiguration::builder()
-            .status(match status {
-                S3VersioningStatus::Enabled => BucketVersioningStatus::Enabled,
-                S3VersioningStatus::Suspended => BucketVersioningStatus::Suspended,
-            })
-            .build();
+        let versioning_configuration = VersioningConfiguration::builder().status(status).build();
 
         self.put_bucket_versioning()
             .bucket(bucket_name)
@@ -4427,7 +4413,7 @@ impl S3Api for S3Client {
 
         Ok(S3BucketMetadata {
             region: s3_bucket_location_region(location.location_constraint().map(|c| c.as_str())),
-            versioning_status: versioning.status().map(s3_versioning_status),
+            versioning_status: versioning.status().cloned(),
             lifecycle_rule_count,
             encryption_rule_count,
             public_access_block,
@@ -5622,14 +5608,6 @@ where
     error
         .and_then(ProvideErrorMetadata::code)
         .is_some_and(|code| codes.contains(&code))
-}
-
-fn s3_versioning_status(status: &BucketVersioningStatus) -> S3VersioningStatus {
-    match status {
-        BucketVersioningStatus::Enabled => S3VersioningStatus::Enabled,
-        BucketVersioningStatus::Suspended => S3VersioningStatus::Suspended,
-        _ => S3VersioningStatus::Suspended,
-    }
 }
 
 fn s3_bucket_location_region(location_constraint: Option<&str>) -> String {
