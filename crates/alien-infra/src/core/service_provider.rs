@@ -121,20 +121,7 @@ pub use google_cloud_scheduler_v1::model::{
 };
 use google_cloud_storage::{
     client::StorageControl as OfficialStorageControl,
-    model::{
-        bucket::{
-            iam_config::UniformBucketLevelAccess as OfficialUniformBucketLevelAccess,
-            lifecycle::{
-                rule::{
-                    Action as OfficialLifecycleAction, Condition as OfficialLifecycleCondition,
-                },
-                Rule as OfficialLifecycleRule,
-            },
-            IamConfig as OfficialIamConfig, Lifecycle as OfficialLifecycle,
-            Versioning as OfficialVersioning,
-        },
-        Bucket as OfficialBucket, DeleteObjectRequest,
-    },
+    model::{Bucket, DeleteObjectRequest},
 };
 use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -1140,191 +1127,6 @@ pub trait GcsApi: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
-pub struct Bucket {
-    /// GCS bucket resource kind.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// GCS bucket identifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// GCS bucket self link.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// Owning project number.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_number: Option<String>,
-    /// Bucket name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Bucket creation time.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_created: Option<String>,
-    /// Bucket update time.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated: Option<String>,
-    /// Bucket metageneration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metageneration: Option<String>,
-    /// Bucket location.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-    /// Bucket storage class.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_class: Option<String>,
-    /// Bucket ETag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub etag: Option<String>,
-    /// Default event-based hold flag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_event_based_hold: Option<bool>,
-    /// Retention policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_policy: Option<RetentionPolicy>,
-    /// IAM configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iam_configuration: Option<IamConfiguration>,
-    /// Bucket location type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location_type: Option<String>,
-    /// Recovery point objective.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rpo: Option<String>,
-    /// Versioning configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub versioning: Option<Versioning>,
-    /// Website configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub website: Option<Value>,
-    /// Logging configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logging: Option<Value>,
-    /// Lifecycle configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle: Option<Lifecycle>,
-    /// Bucket labels.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
-    /// Encryption configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption: Option<BucketEncryption>,
-    /// Soft delete policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub soft_delete_policy: Option<SoftDeletePolicy>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct RetentionPolicy {
-    /// Time when the retention policy became effective.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effective_time: Option<String>,
-    /// Whether the policy is locked.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_locked: Option<bool>,
-    /// Retention duration in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_period: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct BucketEncryption {
-    /// Default KMS key name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_kms_key_name: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct SoftDeletePolicy {
-    /// Soft delete retention duration in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_duration_seconds: Option<String>,
-    /// Time when the soft delete policy became effective.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effective_time: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct IamConfiguration {
-    /// Uniform bucket-level access configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uniform_bucket_level_access: Option<UniformBucketLevelAccess>,
-    /// Public access prevention mode.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_access_prevention: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct UniformBucketLevelAccess {
-    /// Whether uniform bucket-level access is enabled.
-    pub enabled: bool,
-    /// Time when the setting becomes locked.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub locked_time: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Versioning {
-    /// Whether object versioning is enabled.
-    pub enabled: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Lifecycle {
-    /// Lifecycle rules.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rule: Option<Vec<LifecycleRule>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct LifecycleRule {
-    /// Lifecycle action.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub action: Option<LifecycleAction>,
-    /// Lifecycle condition.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<LifecycleCondition>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct LifecycleAction {
-    /// Lifecycle action type.
-    #[serde(rename = "type")]
-    pub action_type: String,
-    /// Target storage class for SetStorageClass actions.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_class: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct LifecycleCondition {
-    /// Object age in days.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub age: Option<i32>,
-    /// Created-before date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_before: Option<String>,
-    /// Whether the object is live.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_live: Option<bool>,
-    /// Number of newer versions.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub num_newer_versions: Option<i32>,
-    /// Matching storage classes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matches_storage_class: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
 pub struct ListNotificationsResponse {
     /// Response resource kind.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1486,18 +1288,17 @@ impl OfficialGcpGcsClient {
 #[async_trait::async_trait]
 impl GcsApi for OfficialGcpGcsClient {
     async fn create_bucket(&self, bucket_name: String, bucket: Bucket) -> Result<Bucket> {
-        let official_bucket = bucket_to_official(bucket)?;
         match self
             .storage_control()
             .await?
             .create_bucket()
             .set_parent(format!("projects/{}", self.config.project_id))
             .set_bucket_id(bucket_name.clone())
-            .set_bucket(official_bucket)
+            .set_bucket(bucket)
             .send()
             .await
         {
-            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Ok(bucket) => Ok(bucket),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "GCS bucket".to_string(),
@@ -1525,7 +1326,7 @@ impl GcsApi for OfficialGcpGcsClient {
             .send()
             .await
         {
-            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Ok(bucket) => Ok(bucket),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "GCS bucket".to_string(),
@@ -1545,13 +1346,13 @@ impl GcsApi for OfficialGcpGcsClient {
 
     async fn update_bucket(&self, bucket_name: String, bucket_patch: Bucket) -> Result<Bucket> {
         let update_mask = bucket_update_mask(&bucket_patch);
-        let mut official_bucket = bucket_to_official(bucket_patch)?;
-        if official_bucket.name.is_empty() {
-            official_bucket.name = self.bucket_resource_name(&bucket_name);
+        let mut bucket_patch = bucket_patch;
+        if bucket_patch.name.is_empty() {
+            bucket_patch.name = self.bucket_resource_name(&bucket_name);
         }
 
         let mut request =
-            google_cloud_storage::model::UpdateBucketRequest::new().set_bucket(official_bucket);
+            google_cloud_storage::model::UpdateBucketRequest::new().set_bucket(bucket_patch);
         if !update_mask.paths.is_empty() {
             request = request.set_update_mask(update_mask);
         }
@@ -1564,7 +1365,7 @@ impl GcsApi for OfficialGcpGcsClient {
             .send()
             .await
         {
-            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Ok(bucket) => Ok(bucket),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "GCS bucket".to_string(),
@@ -6693,226 +6494,6 @@ fn gcs_rest_endpoint(config: &GcpClientConfig) -> String {
         .unwrap_or_else(|| "https://storage.googleapis.com/storage/v1".to_string())
 }
 
-fn bucket_to_official(bucket: Bucket) -> Result<OfficialBucket> {
-    if bucket.website.is_some()
-        || bucket.logging.is_some()
-        || bucket.retention_policy.is_some()
-        || bucket.encryption.is_some()
-        || bucket.soft_delete_policy.is_some()
-    {
-        return Err(AlienError::new(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "GCS bucket website/logging/retention/encryption/soft-delete fields are not supported by the official adapter yet".to_string(),
-                resource_id: bucket.name,
-            },
-        ));
-    }
-
-    let mut official = OfficialBucket::new();
-    if let Some(name) = bucket.name {
-        official = official.set_name(name);
-    }
-    if let Some(location) = bucket.location {
-        official = official.set_location(location);
-    }
-    if let Some(storage_class) = bucket.storage_class {
-        official = official.set_storage_class(storage_class);
-    }
-    if let Some(default_event_based_hold) = bucket.default_event_based_hold {
-        official = official.set_default_event_based_hold(default_event_based_hold);
-    }
-    if let Some(location_type) = bucket.location_type {
-        official = official.set_location_type(location_type);
-    }
-    if let Some(rpo) = bucket.rpo {
-        official = official.set_rpo(rpo);
-    }
-    if let Some(versioning) = bucket.versioning {
-        official =
-            official.set_versioning(OfficialVersioning::new().set_enabled(versioning.enabled));
-    }
-    if let Some(labels) = bucket.labels {
-        official = official.set_labels(labels);
-    }
-    if let Some(lifecycle) = bucket.lifecycle {
-        official = official.set_lifecycle(lifecycle_to_official(lifecycle)?);
-    }
-    if let Some(iam_configuration) = bucket.iam_configuration {
-        official = official.set_iam_config(iam_configuration_to_official(iam_configuration));
-    }
-
-    Ok(official)
-}
-
-fn bucket_from_official(bucket: OfficialBucket) -> Bucket {
-    Bucket {
-        kind: Some("storage#bucket".to_string()),
-        id: none_if_empty(bucket.bucket_id.clone()).or_else(|| none_if_empty(bucket.name.clone())),
-        self_link: None,
-        project_number: none_if_empty(
-            bucket
-                .project
-                .strip_prefix("projects/")
-                .unwrap_or(&bucket.project)
-                .to_string(),
-        ),
-        name: none_if_empty(bucket.bucket_id.clone()).or_else(|| {
-            bucket
-                .name
-                .rsplit_once("/buckets/")
-                .map(|(_, bucket_name)| bucket_name.to_string())
-        }),
-        time_created: bucket.create_time.map(timestamp_to_string),
-        updated: bucket.update_time.map(timestamp_to_string),
-        metageneration: if bucket.metageneration == 0 {
-            None
-        } else {
-            Some(bucket.metageneration.to_string())
-        },
-        location: none_if_empty(bucket.location),
-        storage_class: none_if_empty(bucket.storage_class),
-        etag: none_if_empty(bucket.etag),
-        default_event_based_hold: Some(bucket.default_event_based_hold),
-        retention_policy: bucket.retention_policy.map(|policy| RetentionPolicy {
-            effective_time: policy.effective_time.map(timestamp_to_string),
-            is_locked: Some(policy.is_locked),
-            retention_period: policy
-                .retention_duration
-                .map(|duration| duration.seconds().to_string()),
-        }),
-        iam_configuration: bucket.iam_config.map(iam_configuration_from_official),
-        location_type: none_if_empty(bucket.location_type),
-        rpo: none_if_empty(bucket.rpo),
-        versioning: bucket.versioning.map(|versioning| Versioning {
-            enabled: versioning.enabled,
-        }),
-        website: None,
-        logging: None,
-        lifecycle: bucket.lifecycle.map(lifecycle_from_official),
-        labels: if bucket.labels.is_empty() {
-            None
-        } else {
-            Some(bucket.labels)
-        },
-        encryption: bucket.encryption.map(|encryption| BucketEncryption {
-            default_kms_key_name: none_if_empty(encryption.default_kms_key),
-        }),
-        soft_delete_policy: bucket.soft_delete_policy.map(|policy| SoftDeletePolicy {
-            retention_duration_seconds: policy
-                .retention_duration
-                .map(|duration| duration.seconds().to_string()),
-            effective_time: policy.effective_time.map(timestamp_to_string),
-        }),
-    }
-}
-
-fn lifecycle_to_official(lifecycle: Lifecycle) -> Result<OfficialLifecycle> {
-    let rules = lifecycle
-        .rule
-        .unwrap_or_default()
-        .into_iter()
-        .map(|rule| {
-            let mut official = OfficialLifecycleRule::new();
-            if let Some(action) = rule.action {
-                let mut official_action =
-                    OfficialLifecycleAction::new().set_type(action.action_type);
-                if let Some(storage_class) = action.storage_class {
-                    official_action = official_action.set_storage_class(storage_class);
-                }
-                official = official.set_action(official_action);
-            }
-            if let Some(condition) = rule.condition {
-                official = official.set_condition(lifecycle_condition_to_official(condition)?);
-            }
-            Ok(official)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(OfficialLifecycle::new().set_rule(rules))
-}
-
-fn lifecycle_from_official(lifecycle: OfficialLifecycle) -> Lifecycle {
-    Lifecycle {
-        rule: Some(
-            lifecycle
-                .rule
-                .into_iter()
-                .map(|rule| LifecycleRule {
-                    action: rule.action.map(|action| LifecycleAction {
-                        action_type: action.r#type,
-                        storage_class: none_if_empty(action.storage_class),
-                    }),
-                    condition: rule.condition.map(|condition| LifecycleCondition {
-                        age: condition.age_days,
-                        created_before: condition.created_before.map(|date| {
-                            format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
-                        }),
-                        is_live: condition.is_live,
-                        num_newer_versions: condition.num_newer_versions,
-                        matches_storage_class: if condition.matches_storage_class.is_empty() {
-                            None
-                        } else {
-                            Some(condition.matches_storage_class)
-                        },
-                    }),
-                })
-                .collect(),
-        ),
-    }
-}
-
-fn lifecycle_condition_to_official(
-    condition: LifecycleCondition,
-) -> Result<OfficialLifecycleCondition> {
-    let mut official = OfficialLifecycleCondition::new();
-    if let Some(age) = condition.age {
-        official = official.set_age_days(age);
-    }
-    if condition.created_before.is_some() {
-        return Err(AlienError::new(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "GCS lifecycle createdBefore conversion is not supported by the official adapter yet".to_string(),
-                resource_id: None,
-            },
-        ));
-    }
-    if let Some(is_live) = condition.is_live {
-        official = official.set_is_live(is_live);
-    }
-    if let Some(num_newer_versions) = condition.num_newer_versions {
-        official = official.set_num_newer_versions(num_newer_versions);
-    }
-    if let Some(matches_storage_class) = condition.matches_storage_class {
-        official = official.set_matches_storage_class(matches_storage_class);
-    }
-    Ok(official)
-}
-
-fn iam_configuration_to_official(iam_configuration: IamConfiguration) -> OfficialIamConfig {
-    let mut official = OfficialIamConfig::new();
-    if let Some(uniform_bucket_level_access) = iam_configuration.uniform_bucket_level_access {
-        official = official.set_uniform_bucket_level_access(
-            OfficialUniformBucketLevelAccess::new()
-                .set_enabled(uniform_bucket_level_access.enabled),
-        );
-    }
-    if let Some(public_access_prevention) = iam_configuration.public_access_prevention {
-        official = official.set_public_access_prevention(public_access_prevention);
-    }
-    official
-}
-
-fn iam_configuration_from_official(iam_configuration: OfficialIamConfig) -> IamConfiguration {
-    IamConfiguration {
-        uniform_bucket_level_access: iam_configuration.uniform_bucket_level_access.map(|access| {
-            UniformBucketLevelAccess {
-                enabled: access.enabled,
-                locked_time: access.lock_time.map(timestamp_to_string),
-            }
-        }),
-        public_access_prevention: none_if_empty(iam_configuration.public_access_prevention),
-    }
-}
-
 fn bucket_update_mask(bucket: &Bucket) -> wkt::FieldMask {
     let mut paths = Vec::new();
     if bucket.versioning.is_some() {
@@ -6921,17 +6502,13 @@ fn bucket_update_mask(bucket: &Bucket) -> wkt::FieldMask {
     if bucket.lifecycle.is_some() {
         paths.push("lifecycle".to_string());
     }
-    if bucket.iam_configuration.is_some() {
+    if bucket.iam_config.is_some() {
         paths.push("iam_config".to_string());
     }
-    if bucket.labels.is_some() {
+    if !bucket.labels.is_empty() {
         paths.push("labels".to_string());
     }
     wkt::FieldMask::default().set_paths(paths)
-}
-
-fn timestamp_to_string(timestamp: wkt::Timestamp) -> String {
-    String::from(timestamp)
 }
 
 async fn gcs_http_error(

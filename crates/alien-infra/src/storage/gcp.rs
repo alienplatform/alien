@@ -3,11 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{
-    Binding, Bucket, GcsApi, IamConfiguration, IamPolicy, Lifecycle, LifecycleAction,
-    LifecycleCondition, LifecycleRule, ResourceControllerContext, UniformBucketLevelAccess,
-    Versioning,
-};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpCloudStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -16,6 +11,19 @@ use alien_core::{
 };
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_storage::model::{
+    bucket::{
+        iam_config::UniformBucketLevelAccess,
+        lifecycle::{
+            rule::{Action as LifecycleAction, Condition as LifecycleCondition},
+            Rule as LifecycleRule,
+        },
+        IamConfig as IamConfiguration, Lifecycle, Versioning,
+    },
+    Bucket,
+};
+
+use crate::core::{Binding, GcsApi, IamPolicy, ResourceControllerContext};
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -26,6 +34,68 @@ fn is_remote_resource_not_found(error: &AlienError<ErrorData>) -> bool {
     matches!(
         error.code.as_str(),
         "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
+}
+
+fn none_if_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn bucket_name_from_resource_name(resource_name: &str) -> Option<String> {
+    resource_name
+        .rsplit_once("/buckets/")
+        .map(|(_, bucket_name)| bucket_name.to_string())
+        .filter(|bucket_name| !bucket_name.is_empty())
+}
+
+fn observed_bucket_name(bucket: &Bucket, fallback: &str) -> String {
+    none_if_empty(bucket.bucket_id.clone())
+        .or_else(|| bucket_name_from_resource_name(&bucket.name))
+        .or_else(|| none_if_empty(bucket.name.clone()))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn timestamp_to_string(timestamp: wkt::Timestamp) -> String {
+    String::from(timestamp)
+}
+
+fn duration_seconds(duration: wkt::Duration) -> String {
+    duration.seconds().to_string()
+}
+
+fn gcs_lifecycle_rules(rules: &[alien_core::LifecycleRule]) -> Vec<LifecycleRule> {
+    rules
+        .iter()
+        .map(|rule| {
+            let action = LifecycleAction::new().set_type("Delete");
+            let mut condition = LifecycleCondition::new().set_age_days(rule.days as i32);
+
+            if let Some(prefix) = &rule.prefix {
+                condition = condition.set_matches_prefix([prefix.clone()]);
+            }
+
+            LifecycleRule::new()
+                .set_action(action)
+                .set_condition(condition)
+        })
+        .collect()
+}
+
+fn gcs_lifecycle(rules: &[alien_core::LifecycleRule]) -> Lifecycle {
+    Lifecycle::new().set_rule(gcs_lifecycle_rules(rules))
+}
+
+fn gcs_iam_patch(uniform_bucket_level_access: bool, public_access_prevention: &str) -> Bucket {
+    Bucket::new().set_iam_config(
+        IamConfiguration::new()
+            .set_uniform_bucket_level_access(
+                UniformBucketLevelAccess::new().set_enabled(uniform_bucket_level_access),
+            )
+            .set_public_access_prevention(public_access_prevention),
     )
 }
 
@@ -62,40 +132,16 @@ impl GcpStorageController {
         let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
         // Build bucket configuration with basic settings only
-        let mut bucket = Bucket::default();
-
-        // Set location from GCP config
-        bucket.location = Some(gcp_config.region.clone());
+        let mut bucket = Bucket::new().set_location(gcp_config.region.clone());
 
         // Configure versioning if enabled
         if config.versioning {
-            bucket.versioning = Some(Versioning { enabled: true });
+            bucket = bucket.set_versioning(Versioning::new().set_enabled(true));
         }
 
         // Configure lifecycle rules if any
         if !config.lifecycle_rules.is_empty() {
-            let gcs_rules: Vec<LifecycleRule> = config
-                .lifecycle_rules
-                .iter()
-                .map(|rule| {
-                    let action = LifecycleAction {
-                        action_type: "Delete".to_string(),
-                        storage_class: None,
-                    };
-
-                    let mut condition = LifecycleCondition::default();
-                    condition.age = Some(rule.days as i32);
-
-                    LifecycleRule {
-                        action: Some(action),
-                        condition: Some(condition),
-                    }
-                })
-                .collect();
-
-            bucket.lifecycle = Some(Lifecycle {
-                rule: Some(gcs_rules),
-            });
+            bucket = bucket.set_lifecycle(gcs_lifecycle(&config.lifecycle_rules));
         }
 
         // Create the bucket with basic configuration only
@@ -109,7 +155,7 @@ impl GcpStorageController {
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
-        self.bucket_name = Some(created_bucket.name.unwrap_or_else(|| bucket_name.clone()));
+        self.bucket_name = Some(observed_bucket_name(&created_bucket, &bucket_name));
 
         Ok(HandlerAction::Continue {
             state: CreateWaitForActive,
@@ -187,14 +233,7 @@ impl GcpStorageController {
             info!(bucket = %bucket_name, "Setting IAM policy for public read access");
 
             // First set uniform bucket-level access
-            let mut bucket_patch = Bucket::default();
-            bucket_patch.iam_configuration = Some(IamConfiguration {
-                uniform_bucket_level_access: Some(UniformBucketLevelAccess {
-                    enabled: true,
-                    locked_time: None,
-                }),
-                public_access_prevention: Some("inherited".to_string()),
-            });
+            let bucket_patch = gcs_iam_patch(true, "inherited");
 
             client
                 .update_bucket(bucket_name.clone(), bucket_patch)
@@ -326,9 +365,8 @@ impl GcpStorageController {
         // Check versioning changes
         if config.versioning != prev_config.versioning {
             info!(bucket = %bucket_name, current = %config.versioning, previous = %prev_config.versioning, "Updating versioning");
-            bucket_patch.versioning = Some(Versioning {
-                enabled: config.versioning,
-            });
+            bucket_patch =
+                bucket_patch.set_versioning(Versioning::new().set_enabled(config.versioning));
             needs_update = true;
         }
 
@@ -337,30 +375,10 @@ impl GcpStorageController {
             info!(bucket = %bucket_name, rules_count = %config.lifecycle_rules.len(), "Updating lifecycle rules");
 
             if config.lifecycle_rules.is_empty() {
-                bucket_patch.lifecycle = Some(Lifecycle { rule: None });
+                bucket_patch = bucket_patch
+                    .set_lifecycle(Lifecycle::new().set_rule(Vec::<LifecycleRule>::new()));
             } else {
-                let gcs_rules: Vec<LifecycleRule> = config
-                    .lifecycle_rules
-                    .iter()
-                    .map(|rule| {
-                        let action = LifecycleAction {
-                            action_type: "Delete".to_string(),
-                            storage_class: None,
-                        };
-
-                        let mut condition = LifecycleCondition::default();
-                        condition.age = Some(rule.days as i32);
-
-                        LifecycleRule {
-                            action: Some(action),
-                            condition: Some(condition),
-                        }
-                    })
-                    .collect();
-
-                bucket_patch.lifecycle = Some(Lifecycle {
-                    rule: Some(gcs_rules),
-                });
+                bucket_patch = bucket_patch.set_lifecycle(gcs_lifecycle(&config.lifecycle_rules));
             }
             needs_update = true;
         }
@@ -456,14 +474,7 @@ impl GcpStorageController {
                 info!(bucket = %bucket_name, "Setting IAM policy for public read access");
 
                 // First set uniform bucket-level access
-                let mut bucket_patch = Bucket::default();
-                bucket_patch.iam_configuration = Some(IamConfiguration {
-                    uniform_bucket_level_access: Some(UniformBucketLevelAccess {
-                        enabled: true,
-                        locked_time: None,
-                    }),
-                    public_access_prevention: Some("inherited".to_string()),
-                });
+                let bucket_patch = gcs_iam_patch(true, "inherited");
 
                 client
                     .update_bucket(bucket_name.clone(), bucket_patch)
@@ -503,14 +514,7 @@ impl GcpStorageController {
                 info!(bucket = %bucket_name, "Removing public read access");
 
                 // First disable uniform bucket-level access
-                let mut bucket_patch = Bucket::default();
-                bucket_patch.iam_configuration = Some(IamConfiguration {
-                    uniform_bucket_level_access: Some(UniformBucketLevelAccess {
-                        enabled: false,
-                        locked_time: None,
-                    }),
-                    public_access_prevention: Some("enforced".to_string()),
-                });
+                let bucket_patch = gcs_iam_patch(false, "enforced");
 
                 client
                     .update_bucket(bucket_name.clone(), bucket_patch)
@@ -757,29 +761,25 @@ fn emit_gcp_storage_heartbeat(
     bucket_name: &str,
     bucket: Bucket,
 ) {
-    let observed_bucket_name = bucket
-        .name
-        .clone()
-        .unwrap_or_else(|| bucket_name.to_string());
+    let observed_bucket_name = observed_bucket_name(&bucket, bucket_name);
     let lifecycle_rule_count = bucket
         .lifecycle
         .as_ref()
-        .and_then(|lifecycle| lifecycle.rule.as_ref())
-        .map(|rules| rules.len() as u64);
+        .map(|lifecycle| lifecycle.rule.len() as u64);
     let lifecycle_present = lifecycle_rule_count.map(|count| count > 0).unwrap_or(false);
     let versioning_enabled = bucket
         .versioning
         .as_ref()
         .map(|versioning| versioning.enabled);
-    let iam_configuration = bucket.iam_configuration.as_ref();
+    let iam_configuration = bucket.iam_config.as_ref();
     let uniform_bucket_level_access = iam_configuration
         .and_then(|configuration| configuration.uniform_bucket_level_access.as_ref());
-    let public_access_prevention =
-        iam_configuration.and_then(|configuration| configuration.public_access_prevention.clone());
+    let public_access_prevention = iam_configuration
+        .and_then(|configuration| none_if_empty(configuration.public_access_prevention.clone()));
     let default_kms_key_name = bucket
         .encryption
         .as_ref()
-        .and_then(|encryption| encryption.default_kms_key_name.clone());
+        .and_then(|encryption| none_if_empty(encryption.default_kms_key.clone()));
     let encryption_config_present = default_kms_key_name.is_some();
     let retention_policy = bucket.retention_policy.as_ref();
     let soft_delete_policy = bucket.soft_delete_policy.as_ref();
@@ -805,26 +805,31 @@ fn emit_gcp_storage_heartbeat(
                     collection_issues: vec![],
                 },
                 name: observed_bucket_name,
-                bucket_id: bucket.id,
-                location: bucket.location,
-                location_type: bucket.location_type,
-                storage_class: bucket.storage_class,
+                bucket_id: none_if_empty(bucket.bucket_id).or_else(|| none_if_empty(bucket.name)),
+                location: none_if_empty(bucket.location),
+                location_type: none_if_empty(bucket.location_type),
+                storage_class: none_if_empty(bucket.storage_class),
                 versioning_enabled,
                 lifecycle_present,
                 lifecycle_rule_count,
                 retention_policy_effective_time: retention_policy
-                    .and_then(|policy| policy.effective_time.clone()),
-                retention_policy_is_locked: retention_policy.and_then(|policy| policy.is_locked),
+                    .and_then(|policy| policy.effective_time.clone())
+                    .map(timestamp_to_string),
+                retention_policy_is_locked: retention_policy.map(|policy| policy.is_locked),
                 retention_period: retention_policy
-                    .and_then(|policy| policy.retention_period.clone()),
+                    .and_then(|policy| policy.retention_duration.clone())
+                    .map(duration_seconds),
                 soft_delete_retention_duration_seconds: soft_delete_policy
-                    .and_then(|policy| policy.retention_duration_seconds.clone()),
+                    .and_then(|policy| policy.retention_duration.clone())
+                    .map(duration_seconds),
                 soft_delete_effective_time: soft_delete_policy
-                    .and_then(|policy| policy.effective_time.clone()),
+                    .and_then(|policy| policy.effective_time.clone())
+                    .map(timestamp_to_string),
                 uniform_bucket_level_access_enabled: uniform_bucket_level_access
                     .map(|access| access.enabled),
                 uniform_bucket_level_access_locked_time: uniform_bucket_level_access
-                    .and_then(|access| access.locked_time.clone()),
+                    .and_then(|access| access.lock_time.clone())
+                    .map(timestamp_to_string),
                 public_access_prevention,
                 encryption_config_present,
                 default_kms_key_name,
@@ -925,13 +930,12 @@ mod tests {
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
+    use google_cloud_storage::model::Bucket;
     use rstest::{fixture, rstest};
 
     use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        Binding, Bucket, IamConfiguration, IamPolicy, Lifecycle, LifecycleAction,
-        LifecycleCondition, LifecycleRule, MockGcpIamApi, MockGcsApi, MockPlatformServiceProvider,
-        PlatformServiceProvider, UniformBucketLevelAccess, Versioning,
+        controller_test::SingleControllerExecutor, Binding, IamPolicy, MockGcpIamApi, MockGcsApi,
+        MockPlatformServiceProvider,
     };
     use crate::error::ErrorData;
     use crate::storage::GcpStorageController;
@@ -988,11 +992,10 @@ mod tests {
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
     fn create_successful_bucket_response(bucket_name: &str) -> Bucket {
-        Bucket {
-            name: Some(bucket_name.to_string()),
-            location: Some("us-central1".to_string()),
-            ..Default::default()
-        }
+        Bucket::new()
+            .set_name(format!("projects/test-project/buckets/{bucket_name}"))
+            .set_bucket_id(bucket_name)
+            .set_location("us-central1")
     }
 
     fn setup_mock_client_for_creation_and_deletion(bucket_name: &str) -> Arc<MockGcsApi> {
@@ -1002,7 +1005,6 @@ mod tests {
         let bucket_name = bucket_name.to_string();
         let bucket_name_clone1 = bucket_name.clone();
         let bucket_name_clone2 = bucket_name.clone();
-        let bucket_name_clone3 = bucket_name.clone();
 
         mock_gcs
             .expect_create_bucket()
@@ -1256,7 +1258,6 @@ mod tests {
     #[tokio::test]
     async fn test_best_effort_deletion_when_bucket_delete_fails() {
         let storage = basic_storage();
-        let bucket_name = format!("test-{}", storage.id);
 
         let mut mock_gcs = MockGcsApi::new();
 
@@ -1365,52 +1366,59 @@ mod tests {
             .expect_create_bucket()
             .withf(|_bucket_name, bucket| {
                 if let Some(lifecycle) = &bucket.lifecycle {
-                    if let Some(rules) = &lifecycle.rule {
-                        // Should have 2 rules
-                        if rules.len() != 2 {
-                            eprintln!("Expected 2 lifecycle rules, got {}", rules.len());
-                            return false;
-                        }
-
-                        // Check first rule (with prefix)
-                        let rule1 = &rules[0];
-                        if let Some(condition) = &rule1.condition {
-                            if condition.age != Some(30) {
-                                eprintln!("Expected 30 days for rule 1, got {:?}", condition.age);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected condition for rule 1");
-                            return false;
-                        }
-
-                        if let Some(action) = &rule1.action {
-                            if action.action_type != "Delete" {
-                                eprintln!("Expected Delete action, got {}", action.action_type);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected action for rule 1");
-                            return false;
-                        }
-
-                        // Check second rule (no prefix, different age)
-                        let rule2 = &rules[1];
-                        if let Some(condition) = &rule2.condition {
-                            if condition.age != Some(365) {
-                                eprintln!("Expected 365 days for rule 2, got {:?}", condition.age);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected condition for rule 2");
-                            return false;
-                        }
-
-                        true
-                    } else {
-                        eprintln!("Expected lifecycle rules");
-                        false
+                    let rules = &lifecycle.rule;
+                    if rules.len() != 2 {
+                        eprintln!("Expected 2 lifecycle rules, got {}", rules.len());
+                        return false;
                     }
+
+                    let rule1 = &rules[0];
+                    if let Some(condition) = &rule1.condition {
+                        if condition.age_days != Some(30) {
+                            eprintln!("Expected 30 days for rule 1, got {:?}", condition.age_days);
+                            return false;
+                        }
+                        if condition.matches_prefix != ["logs/".to_string()] {
+                            eprintln!(
+                                "Expected logs/ prefix for rule 1, got {:?}",
+                                condition.matches_prefix
+                            );
+                            return false;
+                        }
+                    } else {
+                        eprintln!("Expected condition for rule 1");
+                        return false;
+                    }
+
+                    if let Some(action) = &rule1.action {
+                        if action.r#type != "Delete" {
+                            eprintln!("Expected Delete action, got {}", action.r#type);
+                            return false;
+                        }
+                    } else {
+                        eprintln!("Expected action for rule 1");
+                        return false;
+                    }
+
+                    let rule2 = &rules[1];
+                    if let Some(condition) = &rule2.condition {
+                        if condition.age_days != Some(365) {
+                            eprintln!("Expected 365 days for rule 2, got {:?}", condition.age_days);
+                            return false;
+                        }
+                        if !condition.matches_prefix.is_empty() {
+                            eprintln!(
+                                "Expected no prefix for rule 2, got {:?}",
+                                condition.matches_prefix
+                            );
+                            return false;
+                        }
+                    } else {
+                        eprintln!("Expected condition for rule 2");
+                        return false;
+                    }
+
+                    true
                 } else {
                     eprintln!("Expected lifecycle configuration");
                     false
@@ -1517,7 +1525,7 @@ mod tests {
         mock_gcs
             .expect_update_bucket()
             .withf(|_bucket_name, bucket| {
-                if let Some(iam_config) = &bucket.iam_configuration {
+                if let Some(iam_config) = &bucket.iam_config {
                     if let Some(ubla) = &iam_config.uniform_bucket_level_access {
                         if !ubla.enabled {
                             eprintln!("Expected uniform bucket-level access to be enabled");
@@ -1528,16 +1536,11 @@ mod tests {
                         return false;
                     }
 
-                    if let Some(pap) = &iam_config.public_access_prevention {
-                        if pap != "inherited" {
-                            eprintln!(
-                                "Expected public access prevention to be 'inherited', got '{}'",
-                                pap
-                            );
-                            return false;
-                        }
-                    } else {
-                        eprintln!("Expected public access prevention configuration");
+                    if iam_config.public_access_prevention != "inherited" {
+                        eprintln!(
+                            "Expected public access prevention to be 'inherited', got '{}'",
+                            iam_config.public_access_prevention
+                        );
                         return false;
                     }
 
