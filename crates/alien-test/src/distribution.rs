@@ -4,7 +4,7 @@
 //! CloudFormation/Terraform/Helm tests cannot accidentally validate controller
 //! provisioning instead of the setup import path.
 
-use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, env, future::Future, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::{
     AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
@@ -26,8 +26,14 @@ use alien_core::{
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
-use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
+use google_cloud_auth::credentials::{
+    self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
+};
+use google_cloud_auth::errors::CredentialsError;
+use google_cloud_gax::error::rpc::Code as GaxRpcCode;
+use google_cloud_resourcemanager_v3::client::Projects;
+use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -2663,82 +2669,37 @@ async fn wait_for_gcp_management_permissions(
         service_overrides: None,
         project_number: None,
     };
-    let http = reqwest::Client::new();
+    let management_config = impersonated_gcp_config(
+        &base_config,
+        GcpImpersonationConfig {
+            service_account_email: management_service_account_email.clone(),
+            target_project_id: Some(target.project_id.clone()),
+            target_region: Some(target.region.clone()),
+            ..GcpImpersonationConfig::default()
+        },
+    );
+    let impersonated_config = impersonated_gcp_config(
+        &management_config,
+        GcpImpersonationConfig {
+            service_account_email: remote_management.service_account_email.clone(),
+            target_project_id: Some(target.project_id.clone()),
+            target_region: Some(target.region.clone()),
+            ..GcpImpersonationConfig::default()
+        },
+    );
+    let resource_manager = resource_manager_projects_client_from_alien_config(&impersonated_config)
+        .await
+        .context("Failed to build official GCP Resource Manager client for permission probe")?;
 
     let timeout = Duration::from_secs(300);
     let started = tokio::time::Instant::now();
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let management_config = match base_config
-            .impersonate(GcpImpersonationConfig {
-                service_account_email: management_service_account_email.clone(),
-                target_project_id: Some(target.project_id.clone()),
-                target_region: Some(target.region.clone()),
-                ..GcpImpersonationConfig::default()
-            })
-            .await
-        {
-            Ok(config) => config,
-            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
-                if started.elapsed() >= timeout {
-                    anyhow::bail!(
-                        "GCP management service account impersonation did not propagate for {management_service_account_email} within {timeout:?}: {error}"
-                    );
-                }
-                warn!(
-                    service_account_email = %management_service_account_email,
-                    attempt,
-                    %error,
-                    "GCP management service account impersonation is not ready yet"
-                );
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-            Err(error) => {
-                anyhow::bail!("GCP management service account impersonation probe failed: {error}");
-            }
-        };
-        let impersonated_config = match management_config
-            .impersonate(GcpImpersonationConfig {
-                service_account_email: remote_management.service_account_email.clone(),
-                target_project_id: Some(target.project_id.clone()),
-                target_region: Some(target.region.clone()),
-                ..GcpImpersonationConfig::default()
-            })
-            .await
-        {
-            Ok(config) => config,
-            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
-                if started.elapsed() >= timeout {
-                    anyhow::bail!(
-                        "GCP remote stack management service account impersonation did not propagate for {} within {timeout:?}: {error}",
-                        remote_management.service_account_email
-                    );
-                }
-                warn!(
-                    service_account_email = %remote_management.service_account_email,
-                    management_service_account_email = %management_service_account_email,
-                    attempt,
-                    %error,
-                    "GCP remote stack management service account impersonation is not ready yet"
-                );
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-            Err(error) => {
-                anyhow::bail!(
-                    "GCP remote stack management service account impersonation probe failed: {error}"
-                );
-            }
-        };
-
-        let resource_manager = alien_gcp_clients::ResourceManagerClient::new(
-            http.clone(),
-            impersonated_config.clone(),
-        );
         let result = resource_manager
-            .get_project_metadata(target.project_id.clone())
+            .get_project()
+            .set_name(format!("projects/{}", target.project_id))
+            .send()
             .await;
 
         match result {
@@ -2772,11 +2733,224 @@ async fn wait_for_gcp_management_permissions(
     }
 }
 
-fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error) -> bool {
-    matches!(
-        error.code.as_str(),
-        "REMOTE_ACCESS_DENIED" | "RATE_LIMIT_EXCEEDED" | "REMOTE_SERVICE_UNAVAILABLE" | "TIMEOUT"
-    )
+#[derive(Debug, Clone)]
+struct StaticGcpAccessTokenCredentials {
+    token: String,
+    entity_tag: EntityTag,
+}
+
+impl StaticGcpAccessTokenCredentials {
+    fn new(token: String) -> Self {
+        Self {
+            token,
+            entity_tag: EntityTag::new(),
+        }
+    }
+}
+
+impl CredentialsProvider for StaticGcpAccessTokenCredentials {
+    fn headers(
+        &self,
+        _extensions: Extensions,
+    ) -> impl Future<Output = std::result::Result<CacheableResource<HeaderMap>, CredentialsError>> + Send
+    {
+        let token = self.token.clone();
+        let entity_tag = self.entity_tag.clone();
+        async move {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|error| CredentialsError::from_source(false, error))?;
+            value.set_sensitive(true);
+
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, value);
+
+            Ok(CacheableResource::New {
+                entity_tag,
+                data: headers,
+            })
+        }
+    }
+
+    fn universe_domain(&self) -> impl Future<Output = Option<String>> + Send {
+        async { None }
+    }
+}
+
+fn impersonated_gcp_config(
+    config: &GcpClientConfig,
+    impersonation: GcpImpersonationConfig,
+) -> GcpClientConfig {
+    let has_target_project = impersonation.target_project_id.is_some();
+    let project_id = impersonation
+        .target_project_id
+        .clone()
+        .unwrap_or_else(|| config.project_id.clone());
+    let region = impersonation
+        .target_region
+        .clone()
+        .unwrap_or_else(|| config.region.clone());
+
+    GcpClientConfig {
+        project_id,
+        region,
+        credentials: GcpCredentials::ImpersonatedServiceAccount {
+            source: Box::new(config.clone()),
+            config: impersonation,
+        },
+        service_overrides: config.service_overrides.clone(),
+        project_number: if has_target_project {
+            None
+        } else {
+            config.project_number.clone()
+        },
+    }
+}
+
+async fn resource_manager_projects_client_from_alien_config(
+    config: &GcpClientConfig,
+) -> anyhow::Result<Projects> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = Projects::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("resourcemanager"))
+    {
+        builder = builder.with_endpoint(endpoint.clone());
+    }
+
+    builder
+        .build()
+        .await
+        .context("Failed to build official GCP Resource Manager Projects client")
+}
+
+fn gcp_credentials_from_alien_config(config: &GcpClientConfig) -> anyhow::Result<Credentials> {
+    gcp_credentials_from_alien_credentials(&config.credentials)
+}
+
+fn gcp_credentials_from_alien_credentials(
+    credentials: &GcpCredentials,
+) -> anyhow::Result<Credentials> {
+    match credentials {
+        GcpCredentials::AccessToken { token } => Ok(Credentials::from(
+            StaticGcpAccessTokenCredentials::new(token.clone()),
+        )),
+        GcpCredentials::ServiceAccountKey { json } => {
+            let key = serde_json::from_str::<Value>(json)
+                .context("Failed to parse GCP service account key JSON")?;
+            credentials::service_account::Builder::new(key)
+                .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                    ["https://www.googleapis.com/auth/cloud-platform"],
+                ))
+                .build()
+                .context("Failed to build official GCP service account credentials")
+        }
+        GcpCredentials::ServiceMetadata => credentials::mds::Builder::default()
+            .with_scopes(["https://www.googleapis.com/auth/cloud-platform"])
+            .build()
+            .context("Failed to build official GCP metadata server credentials"),
+        GcpCredentials::ExternalAccount {
+            audience,
+            subject_token_type,
+            token_url,
+            credential_source_file,
+            service_account_impersonation_url,
+        } => {
+            let mut external_account = serde_json::json!({
+                "type": "external_account",
+                "audience": audience,
+                "subject_token_type": subject_token_type,
+                "token_url": token_url,
+                "credential_source": {
+                    "file": credential_source_file,
+                },
+                "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+            });
+
+            if let Some(url) = service_account_impersonation_url {
+                external_account["service_account_impersonation_url"] =
+                    Value::String(url.to_string());
+            }
+
+            credentials::external_account::Builder::new(external_account)
+                .build()
+                .context("Failed to build official GCP external account credentials")
+        }
+        GcpCredentials::AuthorizedUser {
+            client_id,
+            client_secret,
+            refresh_token,
+        } => {
+            let authorized_user = serde_json::json!({
+                "type": "authorized_user",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            });
+            credentials::user_account::Builder::new(authorized_user)
+                .with_scopes(["https://www.googleapis.com/auth/cloud-platform"])
+                .build()
+                .context("Failed to build official GCP authorized user credentials")
+        }
+        GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+            gcp_impersonated_credentials_from_alien_config(source, config)
+        }
+        GcpCredentials::ProjectedServiceAccount { .. } => {
+            anyhow::bail!("Projected service account token files are not a complete official Google auth credential configuration; use external_account credentials with an audience and credential source instead")
+        }
+    }
+}
+
+fn gcp_impersonated_credentials_from_alien_config(
+    source: &GcpClientConfig,
+    config: &GcpImpersonationConfig,
+) -> anyhow::Result<Credentials> {
+    let source_credentials = gcp_credentials_from_alien_config(source)?;
+    let mut builder =
+        credentials::impersonated::Builder::from_source_credentials(source_credentials)
+            .with_target_principal(config.service_account_email.clone())
+            .with_scopes(config.scopes.clone());
+
+    if let Some(delegates) = &config.delegates {
+        builder = builder.with_delegates(delegates.clone());
+    }
+
+    if let Some(lifetime) = &config.lifetime {
+        builder = builder.with_lifetime(parse_gcp_duration(lifetime)?);
+    }
+
+    builder
+        .build()
+        .context("Failed to build official GCP impersonated service account credentials")
+}
+
+fn parse_gcp_duration(value: &str) -> anyhow::Result<Duration> {
+    let seconds = value
+        .strip_suffix('s')
+        .with_context(|| format!("Invalid GCP impersonation lifetime '{value}': expected Ns"))?
+        .parse::<u64>()
+        .with_context(|| format!("Invalid GCP impersonation lifetime '{value}'"))?;
+
+    Ok(Duration::from_secs(seconds))
+}
+
+fn gcp_management_permission_probe_should_retry(error: &google_cloud_gax::error::Error) -> bool {
+    error.is_authentication()
+        || error.status().is_some_and(|status| {
+            matches!(
+                status.code,
+                GaxRpcCode::PermissionDenied
+                    | GaxRpcCode::Unauthenticated
+                    | GaxRpcCode::ResourceExhausted
+                    | GaxRpcCode::Unavailable
+                    | GaxRpcCode::DeadlineExceeded
+            )
+        })
+        || error
+            .http_status_code()
+            .is_some_and(|code| matches!(code, 401 | 403 | 429 | 500 | 502 | 503 | 504))
 }
 
 /// Terraform can finish before Azure federated credentials and role

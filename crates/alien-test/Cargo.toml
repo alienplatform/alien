@@ -28,6 +28,10 @@ alien-gcp-clients = { workspace = true }
 alien-client-config = { workspace = true }
 aws-sdk-ecr = { workspace = true }
 aws-sdk-iam = { workspace = true }
+google-cloud-auth = { workspace = true }
+google-cloud-gax = { workspace = true }
+google-cloud-resourcemanager-v3 = { workspace = true }
+http = { workspace = true }
 
 # OCI registry push
 dockdash = { workspace = true }
