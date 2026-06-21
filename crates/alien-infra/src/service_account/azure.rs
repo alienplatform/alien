@@ -3,9 +3,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::core::{
-    AzureManagedIdentityTrackedResource, Identity, Permission, ResourceControllerContext,
-    RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-    RoleDefinition, RoleDefinitionProperties, Scope,
+    Identity, Permission, ResourceControllerContext, RoleAssignment, RoleAssignmentProperties,
+    RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -23,6 +22,7 @@ use alien_permissions::{
     },
     BindingTarget, PermissionContext,
 };
+use azure_mgmt_msi::package_2023_01_31::models::TrackedResource;
 use chrono::Utc;
 use std::collections::HashMap;
 
@@ -174,9 +174,7 @@ impl AzureServiceAccountController {
         let azure_cfg = ctx.get_azure_config()?;
         let location = azure_cfg.region.as_deref().unwrap_or("eastus");
 
-        let identity = Identity::new(AzureManagedIdentityTrackedResource::new(
-            location.to_string(),
-        ));
+        let identity = Identity::new(TrackedResource::new(location.to_string()));
 
         let client = ctx
             .service_provider

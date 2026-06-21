@@ -49,11 +49,7 @@ pub use azure_mgmt_containerregistry::package_2023_11_preview::models::{
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     Vault as AzureKeyVault, VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
 };
-pub use azure_mgmt_msi::package_2023_01_31::models::{
-    FederatedIdentityCredential,
-    FederatedIdentityCredentialProperties as FederatedCredentialProperties, Identity,
-    TrackedResource as AzureManagedIdentityTrackedResource, UserAssignedIdentityProperties,
-};
+pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 pub use azure_mgmt_network::package_2024_03::models::{
     nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
     IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku,

@@ -3,8 +3,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::core::{
-    AuthorizationApi, AzureManagedIdentityTrackedResource, FederatedCredentialProperties,
-    FederatedIdentityCredential, Identity, Permission, ResourceControllerContext,
+    AuthorizationApi, FederatedIdentityCredential, Identity, Permission, ResourceControllerContext,
     ResourcePermissionsHelper, RoleAssignment, RoleAssignmentProperties,
     RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
 };
@@ -25,6 +24,9 @@ use alien_permissions::{
         AzureRuntimePermissionsGenerator,
     },
     get_permission_set, BindingTarget, PermissionContext,
+};
+use azure_mgmt_msi::package_2023_01_31::models::{
+    FederatedIdentityCredentialProperties, TrackedResource,
 };
 use chrono::Utc;
 use std::collections::BTreeSet;
@@ -191,9 +193,7 @@ impl AzureRemoteStackManagementController {
         let azure_cfg = ctx.get_azure_config()?;
         let location = azure_cfg.region.as_deref().unwrap_or("eastus");
 
-        let identity = Identity::new(AzureManagedIdentityTrackedResource::new(
-            location.to_string(),
-        ));
+        let identity = Identity::new(TrackedResource::new(location.to_string()));
 
         let client = ctx
             .service_provider
@@ -289,7 +289,7 @@ impl AzureRemoteStackManagementController {
         let fic_name = get_fic_name(ctx.resource_prefix);
 
         let mut credential = FederatedIdentityCredential::new();
-        credential.properties = Some(FederatedCredentialProperties::new(
+        credential.properties = Some(FederatedIdentityCredentialProperties::new(
             oidc_issuer.clone(),
             oidc_subject.clone(),
             vec!["api://AzureADTokenExchange".to_string()],
@@ -685,7 +685,7 @@ impl AzureRemoteStackManagementController {
         let fic_name = get_fic_name(ctx.resource_prefix);
 
         let mut credential = FederatedIdentityCredential::new();
-        credential.properties = Some(FederatedCredentialProperties::new(
+        credential.properties = Some(FederatedIdentityCredentialProperties::new(
             oidc_issuer.clone(),
             oidc_subject.clone(),
             vec!["api://AzureADTokenExchange".to_string()],
