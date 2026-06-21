@@ -301,6 +301,8 @@ fn emit_local_artifact_registry_heartbeat(
         resource_type: ArtifactRegistry::RESOURCE_TYPE,
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ArtifactRegistry(ArtifactRegistryHeartbeatData::Local(
             LocalArtifactRegistryHeartbeatData {

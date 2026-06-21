@@ -1163,6 +1163,8 @@ fn emit_azure_remote_stack_management_heartbeat(
         resource_type: RemoteStackManagement::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::RemoteStackManagement(
             RemoteStackManagementHeartbeatData::AzureManagedIdentity(

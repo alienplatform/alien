@@ -408,6 +408,8 @@ fn emit_gcp_firestore_kv_heartbeat(
         resource_type: Kv::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Kv(KvHeartbeatData::GcpFirestore(
             GcpFirestoreKvHeartbeatData {

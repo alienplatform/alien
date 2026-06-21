@@ -440,6 +440,8 @@ fn emit_gcp_service_activation_heartbeat(
         resource_type: ServiceActivation::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ServiceActivation(
             ServiceActivationHeartbeatData::GcpServiceUsage(

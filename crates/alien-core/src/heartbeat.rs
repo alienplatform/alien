@@ -10,13 +10,28 @@ use serde_json::Value as JsonValue;
 #[serde(rename_all = "camelCase")]
 pub struct ResourceHeartbeat {
     pub deployment_id: Option<String>,
+    /// For managed heartbeats this is the Alien resource id. For observed heartbeats this is the
+    /// raw provider identity, such as a Kubernetes object identity.
     pub resource_id: String,
+    #[serde(default)]
+    pub source: HeartbeatSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alien_resource_id: Option<String>,
     pub resource_type: ResourceType,
     pub controller_platform: Platform,
     pub backend: HeartbeatBackend,
     pub observed_at: DateTime<Utc>,
     pub data: ResourceHeartbeatData,
     pub raw: Vec<RawHeartbeatSnippet>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum HeartbeatSource {
+    #[default]
+    Managed,
+    Observed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2112,6 +2127,8 @@ mod tests {
             resource_type: ResourceType::from(resource_type),
             controller_platform: Platform::Kubernetes,
             backend: HeartbeatBackend::Kubernetes,
+            source: Default::default(),
+            alien_resource_id: None,
             observed_at: observed_at(),
             data,
             raw: vec![RawHeartbeatSnippet {
@@ -2122,6 +2139,42 @@ mod tests {
                 truncated: false,
             }],
         }
+    }
+
+    #[test]
+    fn resource_heartbeat_defaults_missing_source_to_managed() {
+        let mut heartbeat_json = serde_json::to_value(heartbeat(
+            ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(
+                KubernetesContainerHeartbeatData {
+                    status: workload_status(),
+                    namespace: "default".to_string(),
+                    name: "api".to_string(),
+                    workload_kind: KubernetesWorkloadKind::Deployment,
+                    replicas: workload_replicas(),
+                    restarts: None,
+                    cpu: None,
+                    memory: None,
+                    workload: None,
+                    pods: vec![],
+                    events: vec![],
+                },
+            )),
+            "container",
+        ))
+        .unwrap();
+
+        heartbeat_json
+            .as_object_mut()
+            .unwrap()
+            .remove("source");
+        heartbeat_json
+            .as_object_mut()
+            .unwrap()
+            .remove("alienResourceId");
+
+        let parsed: ResourceHeartbeat = serde_json::from_value(heartbeat_json).unwrap();
+        assert_eq!(parsed.source, HeartbeatSource::Managed);
+        assert_eq!(parsed.alien_resource_id, None);
     }
 
     #[test]

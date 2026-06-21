@@ -202,6 +202,8 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         resource_type: KubernetesCluster::RESOURCE_TYPE,
         controller_platform: Platform::Kubernetes,
         backend: HeartbeatBackend::Kubernetes,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::KubernetesCluster(data),
         raw: vec![],

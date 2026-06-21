@@ -1131,6 +1131,8 @@ fn emit_azure_service_account_heartbeat(
         resource_type: ServiceAccount::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ServiceAccount(
             ServiceAccountHeartbeatData::AzureManagedIdentity(

@@ -23,7 +23,7 @@ get "error"(){
     
     }).catchall(z.lazy(() => DevResourceInfoSchema).describe("Information about a deployed resource")).describe("Resources deployed by this agent (keyed by resource name)"),
 get "status"(){
-                return DeploymentStatusSchema.describe("Deployment status in the deployment lifecycle")
+                return DeploymentStatusSchema.describe("Deployment status in the deployment lifecycle.\n\nFor observe-only deployments with no release or stack state, `Running`\nmeans the Operator is attached. Connectivity comes from `lastHeartbeatAt`;\nresource health comes from inventory and resource heartbeat data.")
               }
     }).describe("Status of a single agent in the dev server")
 
