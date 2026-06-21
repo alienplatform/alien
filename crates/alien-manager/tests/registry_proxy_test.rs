@@ -326,7 +326,7 @@ async fn setup() -> TestSetup {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
         deployment_store
             .reconcile(
@@ -799,7 +799,7 @@ async fn test_proxy_push_then_pull() {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
         s.deployment_store
             .reconcile(

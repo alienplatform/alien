@@ -512,6 +512,7 @@ resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_https_endpo
     "compute.targetHttpsProxies.create",
     "compute.targetHttpsProxies.delete",
     "compute.targetHttpsProxies.get",
+    "compute.targetHttpsProxies.setSslCertificates",
     "compute.targetHttpsProxies.use",
     "compute.urlMaps.create",
     "compute.urlMaps.delete",

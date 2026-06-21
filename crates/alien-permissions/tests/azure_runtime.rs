@@ -52,7 +52,10 @@ fn test_azure_custom_grant_plan() {
 
     assert_eq!(result.custom_roles.len(), 1);
     assert_eq!(result.bindings.len(), 1);
-    assert_eq!(result.custom_roles[0].key, "storage/metadata-read:microsoft_storage_storage_accounts_read");
+    assert_eq!(
+        result.custom_roles[0].key,
+        "storage/metadata-read:microsoft_storage_storage_accounts_read"
+    );
     assert_eq!(
         result.custom_roles[0].role_definition.actions,
         vec!["Microsoft.Storage/storageAccounts/read"]
@@ -84,7 +87,8 @@ fn test_azure_hybrid_grant_plan() {
     assert_eq!(
         result.bindings[1].role_definition,
         AzureRoleDefinitionRef::Custom {
-            key: "artifact-registry/provision:microsoft_container_registry_registries_write_permissions".to_string(),
+            key: "artifact-registry/provision:microsoft_container_registry_registries_write_permissions"
+                .to_string(),
         }
     );
 }

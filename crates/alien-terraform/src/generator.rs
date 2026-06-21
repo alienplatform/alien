@@ -923,6 +923,24 @@ fn variables_body(
             "Existing security group IDs. Required when network is use-existing.",
             Some(vec![]),
         )));
+        blocks.push(nested(list_variable_block(
+            "unsupported_availability_zone_ids",
+            "Availability Zone IDs to exclude when selecting EKS control-plane subnets. \
+             AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are \
+             account-local — the same physical zone can be `us-east-1e` in one account and \
+             `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting \
+             EKS control plane today (see \
+             https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per \
+             region when AWS deprecates more.",
+            Some(vec![
+                // us-east-1e
+                "use1-az3".to_string(),
+                // us-west-1b
+                "usw1-az2".to_string(),
+                // ca-central-1d
+                "cac1-az3".to_string(),
+            ]),
+        )));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         blocks.push(nested(variable_block(
@@ -1214,13 +1232,35 @@ fn advanced_settings_default_json(
         }
     }
 
-    serde_json::to_string(&value)
+    serde_json::to_string(&sort_json_object_keys(value))
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
                 reason: format!("failed to serialize advanced settings default: {err}"),
             })
         })
+}
+
+fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sort_json_object_keys)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, sort_json_object_keys(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
 }
 
 fn remove_kubernetes_exposure_default(object: &mut serde_json::Map<String, serde_json::Value>) {
@@ -1566,13 +1606,47 @@ fn provider_config_object(items: Vec<Structure>) -> Expression {
 
 fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
     match target {
+        // EKS: use the `exec` auth plugin instead of
+        // `data.aws_eks_cluster_auth.target.token` because that data source
+        // resolves the token at *plan* time. The token's lifetime is ~15
+        // minutes; a multi-step apply (cluster creation, IAM provisioning,
+        // then Helm install) routinely exceeds that and surfaces as "the
+        // server has asked for the client to provide credentials" mid-apply.
+        // `exec` regenerates the token per Kubernetes API call. The
+        // generated `kubernetes_kubeconfig` local already uses this pattern
+        // for the `kubectl` CLI output; mirroring it here keeps both paths
+        // honoring the same auth flow.
         TerraformTarget::Eks => vec![
             attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
             attr(
                 "cluster_ca_certificate",
                 expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
             ),
-            attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
+            // `exec` is expressed as an *attribute* (object literal), not a
+            // nested HCL block, because this same body is reused inside the
+            // `helm` provider as `kubernetes = { … }` (object form, which
+            // only takes attributes — `provider_config_object` drops
+            // anything that isn't an Attribute). The kubernetes provider
+            // accepts both block and attribute forms, so attribute form
+            // works in both places.
+            attr(
+                "exec",
+                expr::object([
+                    (
+                        "api_version",
+                        Expression::String(
+                            "client.authentication.k8s.io/v1beta1".to_string(),
+                        ),
+                    ),
+                    ("command", Expression::String("aws".to_string())),
+                    (
+                        "args",
+                        expr::raw(
+                            "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
+                        ),
+                    ),
+                ]),
+            ),
         ],
         TerraformTarget::Gke => vec![
             attr(

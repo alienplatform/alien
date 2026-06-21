@@ -34,10 +34,12 @@ pub enum ProjectCmd {
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
     let http = ctx.auth_http().await?;
-    let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    let workspace_name = ctx
+        .resolve_workspace_query_with_bootstrap(!args.json)
+        .await?;
 
     match args.cmd {
-        ProjectCmd::Ls => list_projects_task(&http, &workspace_name, args.json).await?,
+        ProjectCmd::Ls => list_projects_task(&http, workspace_name.as_deref(), args.json).await?,
     }
 
     Ok(())
@@ -45,19 +47,20 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
 
 async fn list_projects_task(
     http: &crate::auth::AuthHttp,
-    workspace: &str,
+    workspace: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let workspace_param = ListProjectsWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Workspace name is not valid".to_string(),
-        })?;
+    let mut request = http.sdk_client().list_projects();
+    if let Some(workspace) = workspace {
+        let workspace_param = ListProjectsWorkspace::try_from(workspace)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Workspace name is not valid".to_string(),
+            })?;
+        request = request.workspace(&workspace_param);
+    }
 
-    let response = http
-        .sdk_client()
-        .list_projects()
-        .workspace(&workspace_param)
+    let response = request
         .send()
         .await
         .into_sdk_error()

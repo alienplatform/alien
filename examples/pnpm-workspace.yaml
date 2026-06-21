@@ -5,6 +5,7 @@ packages:
   - data-connector-ts
   - event-pipeline-ts
   - webhook-api-ts
+  - nextjs-app
   - byoc-database
   - endpoint-agent
   - full-stack-microservices

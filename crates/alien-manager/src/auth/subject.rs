@@ -57,8 +57,17 @@ impl fmt::Debug for Subject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SubjectKind {
-    User { id: String, email: String },
-    ServiceAccount { id: String },
+    User {
+        id: String,
+        email: String,
+        /// Workspace name for embedders whose upstream API scopes user
+        /// requests by workspace name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_name: Option<String>,
+    },
+    ServiceAccount {
+        id: String,
+    },
 }
 
 /// Scopes that an incoming bearer to a manager HTTP endpoint can carry.

@@ -22,12 +22,12 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result,
+    RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
 use alien_error::Context;
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
-    BindingTarget,
+    BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
 
@@ -51,8 +51,8 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
         ));
 
         let generator = AwsRuntimePermissionsGenerator::new();
-        let context =
-            aws_terraform_permission_context().with_resource_name("management".to_string());
+        let context = aws_terraform_permission_context();
+        let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(profile) {
@@ -64,7 +64,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                     }
 
                     let policy = generator
-                        .generate_policy(&permission_set, BindingTarget::Stack, &context)
+                        .generate_policy(&permission_set, BindingTarget::Stack, &stack_context)
                         .context(ErrorData::GenericError {
                             message: format!(
                                 "failed to generate AWS Terraform management policy for permission set '{}'",
@@ -76,9 +76,15 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             }
 
             for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+                if permission_set_ref.id().ends_with("/provision") {
+                    continue;
+                }
                 let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                     continue;
                 };
+                if resource_entry.lifecycle != ResourceLifecycle::Live {
+                    continue;
+                }
                 let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 else {
@@ -87,15 +93,9 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 if permission_set.platforms.aws.is_none() {
                     continue;
                 }
-                let Some(resource_name) = resource_scoped_aws_resource_name(
-                    resource_id,
-                    resource_entry,
-                    &permission_set.id,
-                ) else {
-                    continue;
-                };
 
-                let resource_context = context.clone().with_resource_name(resource_name);
+                let resource_context =
+                    resource_scoped_aws_permission_context(resource_id, resource_entry, &context);
                 let policy = generator
                     .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
                     .context(ErrorData::GenericError {
@@ -211,19 +211,25 @@ fn resource_scoped_permission_refs(
         .collect()
 }
 
-fn resource_scoped_aws_resource_name(
+fn resource_scoped_aws_permission_context(
     resource_id: &str,
     resource_entry: &alien_core::ResourceEntry,
-    permission_set_id: &str,
-) -> Option<String> {
-    if permission_set_id == "kubernetes-public-endpoint/management" {
-        return Some(resource_id.to_string());
+    base_context: &PermissionContext,
+) -> PermissionContext {
+    let mut context = base_context
+        .clone()
+        .with_resource_id(resource_id.to_string());
+    context.resource_name = None;
+
+    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+        return context.with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
     }
 
-    resource_entry
-        .config
-        .downcast_ref::<KubernetesCluster>()
-        .map(kubernetes_cluster_name)
+    if let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() {
+        return context.with_resource_name(kubernetes_cluster_name(cluster));
+    }
+
+    context
 }
 
 fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
@@ -234,4 +240,60 @@ fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
         .unwrap_or_else(|| {
             "${var.kubernetes_cluster_mode == \"create\" ? format(\"%s-k8s\", local.resource_prefix) : var.eks_cluster_name}".to_string()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
+
+    fn live_worker_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_names_future_worker_lambda() {
+        let entry = live_worker_entry("jobs");
+        let context = resource_scoped_aws_permission_context(
+            "jobs",
+            &entry,
+            &aws_terraform_permission_context(),
+        );
+
+        assert_eq!(context.resource_id.as_deref(), Some("jobs"));
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${local.resource_prefix}-jobs")
+        );
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_does_not_inherit_management_name() {
+        let entry = ResourceEntry {
+            config: Resource::new(Storage::new("uploads".to_string()).build()),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        };
+        let context = resource_scoped_aws_permission_context(
+            "uploads",
+            &entry,
+            &aws_terraform_permission_context().with_resource_name("management"),
+        );
+
+        assert_eq!(context.resource_id.as_deref(), Some("uploads"));
+        assert_eq!(context.resource_name, None);
+    }
 }

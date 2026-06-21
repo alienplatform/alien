@@ -367,9 +367,9 @@ async fn test_plan_delete_on_failed() -> Result<()> {
     Ok(())
 }
 
-/// Tests that a config change during Provisioning plans a delete (not an update or ignore).
+/// Tests that a config change during Provisioning waits for the create to stabilize.
 #[tokio::test]
-async fn test_plan_provisioning_with_config_change_plans_delete() -> Result<()> {
+async fn test_plan_provisioning_with_config_change_defers() -> Result<()> {
     let func1_v1 = test_function_with_image("func1", "image-v1");
     let mut state = new_test_state();
 
@@ -390,12 +390,12 @@ async fn test_plan_provisioning_with_config_change_plans_delete() -> Result<()> 
     let plan = executor.plan(&state)?;
 
     assert!(
-        plan.deletes.contains(&"func1".to_string()),
-        "Config change during Provisioning should plan a delete"
+        plan.deletes.is_empty(),
+        "Config change during Provisioning should not interrupt an in-flight create"
     );
     assert!(
         plan.creates.is_empty(),
-        "Should not plan a create yet (create happens after delete completes)"
+        "Should not plan a create while the existing create is in flight"
     );
     assert!(plan.updates.is_empty(), "Should not plan an update");
 

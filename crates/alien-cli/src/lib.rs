@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod commands;
 pub mod config;
+pub mod deployment_resolver;
 pub mod deployment_tracking;
 pub mod error;
 pub mod execution_context;

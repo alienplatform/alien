@@ -734,9 +734,10 @@ impl LocalWorkerManager {
             Ok(())
         });
 
-        // Wait for the HTTP transport to actually be ready (up to 10 seconds)
-        // This prevents race conditions where tests start before the proxy is listening
-        let max_wait = std::time::Duration::from_secs(10);
+        // Wait for the HTTP transport to actually be ready. alien-runtime may
+        // first wait for app HTTP registration and task subscription before it
+        // opens the proxy listener.
+        let max_wait = std::time::Duration::from_secs(60);
         let start = std::time::Instant::now();
         let check_interval = std::time::Duration::from_millis(50);
 
@@ -1049,6 +1050,42 @@ impl LocalWorkerManager {
         }
 
         Ok(())
+    }
+
+    /// Stops all active worker and daemon runtimes.
+    ///
+    /// The monitor loop uses the shared shutdown signal, but each active
+    /// runtime has its own shutdown channel.
+    pub async fn shutdown_all(&self) {
+        let worker_ids = {
+            let workers = self.workers.lock().await;
+            workers.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for id in worker_ids {
+            if let Err(e) = self.stop_worker(&id).await {
+                warn!(
+                    worker_id = %id,
+                    error = ?e,
+                    "Failed to stop worker during shutdown"
+                );
+            }
+        }
+
+        let daemon_ids = {
+            let daemons = self.daemons.lock().await;
+            daemons.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for id in daemon_ids {
+            if let Err(e) = self.stop_daemon(&id).await {
+                warn!(
+                    daemon_id = %id,
+                    error = ?e,
+                    "Failed to stop daemon during shutdown"
+                );
+            }
+        }
     }
 
     /// Deletes a worker (stops runtime, removes extracted image directory and metadata).

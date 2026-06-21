@@ -10,6 +10,7 @@ use alien_core::{
 };
 use chrono::Utc;
 use indexmap::IndexMap;
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
 use tokio::sync::MutexGuard;
@@ -217,6 +218,12 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
     }
 }
 
+fn expected_secrets_sync_hash(snapshot_hash: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(snapshot_hash.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
@@ -378,7 +385,7 @@ async fn test_provisioning_syncs_secrets_before_live_compute() {
             .unwrap()
             .last_synced_env_vars_hash
             .as_deref(),
-        Some("hash_v1"),
+        Some(expected_secrets_sync_hash("hash_v1").as_str()),
         "Secrets should be synced before live compute is stepped"
     );
 }
@@ -410,7 +417,7 @@ async fn test_deploy_with_secrets_reaches_running() {
             .unwrap()
             .last_synced_env_vars_hash
             .as_deref(),
-        Some("hash_v1"),
+        Some(expected_secrets_sync_hash("hash_v1").as_str()),
     );
 }
 
@@ -445,7 +452,7 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        "hash_v1"
+        &expected_secrets_sync_hash("hash_v1")
     );
 
     // Run another step with same config (should skip sync)
@@ -463,7 +470,7 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        "hash_v1"
+        &expected_secrets_sync_hash("hash_v1")
     );
 
     // Should continue progressing (no error from skipped sync)
@@ -500,7 +507,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        "hash_v1"
+        &expected_secrets_sync_hash("hash_v1")
     );
 
     // Now change config to hash_v2
@@ -527,7 +534,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        "hash_v2"
+        &expected_secrets_sync_hash("hash_v2")
     );
 }
 
@@ -819,7 +826,7 @@ async fn test_delete_failed_retry_gate_returns_to_deleting() {
 /// E) Delete flow tests
 
 #[tokio::test]
-async fn test_delete_flow_happy_path_reaches_deleted() {
+async fn test_delete_flow_happy_path_reaches_teardown_required() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
@@ -833,15 +840,15 @@ async fn test_delete_flow_happy_path_reaches_deleted() {
     // Start delete
     start_delete(&mut state);
 
-    // Run delete to completion
-    state = run_to_completion(state, config).await;
+    // Normal manager/agent deletion removes runtime-owned resources and then
+    // stops at setup-owned teardown handoff.
+    state = run_until_status(state, config, &[DeploymentStatus::TeardownRequired]).await;
 
-    // Assert successful deletion
-    assert_eq!(state.status, DeploymentStatus::Deleted);
+    assert_eq!(state.status, DeploymentStatus::TeardownRequired);
 }
 
 #[tokio::test]
-async fn test_delete_failed_retry_gate() {
+async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     // Create a minimal test for delete retry pattern
     // In practice, TestWorkerController doesn't easily simulate delete failures,
     // but we can test the pattern conceptually by checking the handler exists
@@ -858,9 +865,9 @@ async fn test_delete_failed_retry_gate() {
     // Start delete
     start_delete(&mut state);
 
-    // Delete should succeed for Test platform, reaching Deleted
-    state = run_to_completion(state, config).await;
-    assert_eq!(state.status, DeploymentStatus::Deleted);
+    // Runtime delete should succeed and stop at setup-owned teardown handoff.
+    state = run_until_status(state, config, &[DeploymentStatus::TeardownRequired]).await;
+    assert_eq!(state.status, DeploymentStatus::TeardownRequired);
 }
 
 /// F) Interrupt-on-failure behavior
@@ -1136,10 +1143,11 @@ async fn test_deleted_is_noop() {
     let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack.clone());
 
-    // Get to Deleted
+    // Construct Deleted directly. The normal step loop intentionally parks at
+    // TeardownRequired so a setup-authority caller can delete setup-owned
+    // resources separately.
     state = run_to_completion(state, config.clone()).await;
-    start_delete(&mut state);
-    state = run_to_completion(state, config.clone()).await;
+    state.status = DeploymentStatus::Deleted;
     assert_eq!(state.status, DeploymentStatus::Deleted);
 
     // Set target_release for the step call (required even for Deleted state)

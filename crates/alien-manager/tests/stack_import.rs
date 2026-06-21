@@ -527,9 +527,8 @@ async fn happy_path_creates_imported_deployment() {
         "storage imports are already at their controller terminal state"
     );
 
-    // Persistence-side check: the SQLite store has the row with
-    // status=provisioning, the caller-supplied name, and stack_state
-    // populated.
+    // Persistence-side check: the SQLite store has the row with the
+    // setup-handoff status, the caller-supplied name, and stack_state populated.
     let persisted = fixture
         .deployment_store
         .get_deployment(
@@ -539,7 +538,7 @@ async fn happy_path_creates_imported_deployment() {
         .await
         .unwrap()
         .expect("deployment must persist");
-    assert_eq!(persisted.status, "provisioning");
+    assert_eq!(persisted.status, "initial-setup");
     assert_eq!(
         persisted.import_source,
         Some(ImportSourceKind::CloudFormation)
@@ -567,8 +566,8 @@ async fn happy_path_creates_imported_deployment() {
     );
     assert_eq!(persisted.deployment_group_id, fixture.deployment_group_id);
     assert!(
-        persisted.current_release_id.is_some(),
-        "imported deployment must pin the release that produced it"
+        persisted.desired_release_id.is_some(),
+        "imported deployment must target the release that produced it"
     );
     let deployment_token = persisted
         .deployment_token
@@ -636,7 +635,7 @@ async fn aws_import_persists_target_environment_info() {
     let body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
-        "remote-stack-management",
+        "management",
         "210987654321",
     );
 
@@ -669,7 +668,7 @@ async fn aws_cloudformation_import_accepts_stringified_booleans() {
     let mut body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
-        "remote-stack-management",
+        "management",
         "210987654321",
     );
     body.resources[0].import_data["managementPermissionsApplied"] =
@@ -687,7 +686,7 @@ async fn gcp_import_persists_target_environment_info() {
     let body = gcp_remote_management_import_request(
         "acme-prod",
         "us-central1",
-        "remote-stack-management",
+        "management",
         "customer-project",
         Some("123456789012"),
     );
@@ -726,7 +725,7 @@ async fn azure_import_persists_target_environment_info() {
     let body = azure_remote_management_import_request(
         "acme-prod",
         "eastus",
-        "remote-stack-management",
+        "management",
         "00000000-0000-0000-0000-000000000123",
         "00000000-0000-0000-0000-000000000456",
     );
@@ -817,7 +816,7 @@ async fn explicit_release_id_is_persisted() {
         .await
         .unwrap()
         .expect("deployment must persist");
-    assert_eq!(persisted.current_release_id, Some(release_id));
+    assert_eq!(persisted.desired_release_id, Some(release_id));
 }
 
 #[tokio::test]

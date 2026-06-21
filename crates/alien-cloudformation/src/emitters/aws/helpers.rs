@@ -7,9 +7,9 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, RemoteStackManagement,
-    ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount, Storage, Worker,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
+    RemoteStackManagement, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
+    Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -499,6 +499,12 @@ mod tests {
 pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
     let mut lambda_configurations = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
+        let resource_type = entry.config.resource_type();
+        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
+        if !ownership.should_emit_in_setup(entry.lifecycle) {
+            continue;
+        }
+
         let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
@@ -539,6 +545,12 @@ pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Optio
 pub fn storage_notification_dependencies(ctx: &EmitContext<'_>) -> Vec<String> {
     let mut dependencies = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
+        let resource_type = entry.config.resource_type();
+        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
+        if !ownership.should_emit_in_setup(entry.lifecycle) {
+            continue;
+        }
+
         let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };

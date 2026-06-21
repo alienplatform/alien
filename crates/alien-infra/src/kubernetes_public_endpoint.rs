@@ -18,6 +18,7 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::net::lookup_host;
 use tracing::info;
 
 #[cfg(feature = "aws")]
@@ -26,7 +27,6 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KubernetesPublicEndpointState {
@@ -390,17 +390,39 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     )
     .await?;
 
-    state.public_url = plan
-        .public_url
-        .clone()
-        .or_else(|| endpoint.as_ref().map(load_balancer_endpoint_url));
-    state.load_balancer_endpoint = endpoint;
+    let Some(endpoint) = endpoint else {
+        state.public_url = None;
+        state.load_balancer_endpoint = None;
+        return Ok(KubernetesEndpointAction::Waiting {
+            suggested_delay: ENDPOINT_WAIT,
+        });
+    };
 
-    if state.load_balancer_endpoint.is_none() {
+    if !load_balancer_endpoint_dns_resolves(&endpoint).await {
+        state.public_url = None;
+        state.load_balancer_endpoint = None;
         return Ok(KubernetesEndpointAction::Waiting {
             suggested_delay: ENDPOINT_WAIT,
         });
     }
+
+    let public_url = plan
+        .public_url
+        .clone()
+        .unwrap_or_else(|| load_balancer_endpoint_url(&endpoint));
+
+    if let Some(health_check_path) = target.health_check_path.as_deref() {
+        if !public_endpoint_health_check_succeeds(&public_url, health_check_path).await {
+            state.public_url = None;
+            state.load_balancer_endpoint = None;
+            return Ok(KubernetesEndpointAction::Waiting {
+                suggested_delay: ENDPOINT_WAIT,
+            });
+        }
+    }
+
+    state.public_url = Some(public_url);
+    state.load_balancer_endpoint = Some(endpoint);
 
     Ok(KubernetesEndpointAction::Ready)
 }
@@ -1187,19 +1209,22 @@ fn build_http_route(
     route
 }
 
+fn is_gke_gateway_route(route: &KubernetesRouteProfile) -> bool {
+    matches!(
+        route,
+        KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
+            provider: Some(KubernetesRouteProviderOptions::GkeGateway { .. }),
+            ..
+        })
+    )
+}
+
 fn gke_health_check_policy_name(
     target: &KubernetesPublicEndpointTarget<'_>,
     plan: &EndpointPlan,
     service_name: &str,
 ) -> Option<String> {
-    let is_gke_gateway = matches!(
-        &plan.route,
-        KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
-            provider: Some(KubernetesRouteProviderOptions::GkeGateway { .. }),
-            ..
-        })
-    );
-    if is_gke_gateway && target.health_check_path.is_some() {
+    if is_gke_gateway_route(&plan.route) && target.health_check_path.is_some() {
         Some(format!("{service_name}-health-check"))
     } else {
         None
@@ -1656,6 +1681,101 @@ fn load_balancer_endpoint_url(endpoint: &LoadBalancerEndpoint) -> String {
     }
 }
 
+async fn load_balancer_endpoint_dns_resolves(endpoint: &LoadBalancerEndpoint) -> bool {
+    let (host, port) = dns_lookup_target(&endpoint.dns_name);
+    let lookup_result = lookup_host((host.as_str(), port)).await;
+    match lookup_result {
+        Ok(addrs) => {
+            let addrs = addrs.collect::<Vec<_>>();
+            if !addrs.is_empty() {
+                return true;
+            }
+            info!(
+                dns_name = %endpoint.dns_name,
+                host = %host,
+                "Kubernetes public endpoint DNS resolved no addresses yet"
+            );
+            false
+        }
+        Err(err) => {
+            info!(
+                dns_name = %endpoint.dns_name,
+                host = %host,
+                error = %err,
+                "Kubernetes public endpoint DNS is not ready yet"
+            );
+            false
+        }
+    }
+}
+
+async fn public_endpoint_health_check_succeeds(public_url: &str, health_check_path: &str) -> bool {
+    let health_check_url = endpoint_health_check_url(public_url, health_check_path);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            info!(
+                url = %health_check_url,
+                error = %err,
+                "Kubernetes public endpoint health check client could not be built"
+            );
+            return false;
+        }
+    };
+
+    match client.get(&health_check_url).send().await {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            info!(
+                url = %health_check_url,
+                status = %response.status(),
+                "Kubernetes public endpoint health check is not ready yet"
+            );
+            false
+        }
+        Err(err) => {
+            info!(
+                url = %health_check_url,
+                error = %err,
+                "Kubernetes public endpoint health check request is not ready yet"
+            );
+            false
+        }
+    }
+}
+
+fn endpoint_health_check_url(public_url: &str, health_check_path: &str) -> String {
+    format!(
+        "{}{}",
+        public_url.trim_end_matches('/'),
+        health_check_path
+            .strip_prefix('/')
+            .map(|path| format!("/{path}"))
+            .unwrap_or_else(|| format!("/{health_check_path}"))
+    )
+}
+
+fn dns_lookup_target(endpoint: &str) -> (String, u16) {
+    let endpoint = endpoint.trim();
+    let (without_scheme, default_port) = if let Some(value) = endpoint.strip_prefix("https://") {
+        (value, 443)
+    } else if let Some(value) = endpoint.strip_prefix("http://") {
+        (value, 80)
+    } else {
+        (endpoint, 80)
+    };
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+    if let Some((host, port)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port.parse::<u16>() {
+            return (host.trim_end_matches('.').to_string(), port);
+        }
+    }
+    (host_port.trim_end_matches('.').to_string(), default_port)
+}
+
 fn delete_not_found_ok(result: alien_client_core::Result<()>, name: &str) -> Result<()> {
     match result {
         Ok(()) => {
@@ -1780,6 +1900,7 @@ fn aws_hosted_zone_id(profile: &KubernetesIngressRouteProfile) -> Option<String>
 mod tests {
     use super::*;
     use alien_core::{ContainerPort, ExposeProtocol};
+    use httpmock::prelude::*;
 
     fn endpoint_target() -> KubernetesPublicEndpointTarget<'static> {
         KubernetesPublicEndpointTarget {
@@ -2055,7 +2176,16 @@ mod tests {
         let ingress = build_ingress(&target, &plan, profile, "api-public", "api-ingress", None)
             .expect("ingress");
 
-        assert_eq!(ingress.metadata.annotations, None);
+        let annotations = ingress
+            .metadata
+            .annotations
+            .expect("ALB provider annotations");
+        assert_eq!(
+            annotations.get("alb.ingress.kubernetes.io/target-type"),
+            Some(&"ip".to_string())
+        );
+        assert!(!annotations.contains_key("alb.ingress.kubernetes.io/healthcheck-path"));
+        assert!(!annotations.contains_key("alb.ingress.kubernetes.io/success-codes"));
     }
 
     #[test]
@@ -2071,6 +2201,60 @@ mod tests {
         assert_eq!(
             state.effective_public_url().as_deref(),
             Some("http://k8s-api.example.elb.amazonaws.com")
+        );
+    }
+
+    #[test]
+    fn dns_lookup_target_handles_endpoint_url_forms() {
+        assert_eq!(
+            dns_lookup_target("k8s-api.example.elb.amazonaws.com"),
+            ("k8s-api.example.elb.amazonaws.com".to_string(), 80)
+        );
+        assert_eq!(
+            dns_lookup_target("http://k8s-api.example.elb.amazonaws.com:8080/health"),
+            ("k8s-api.example.elb.amazonaws.com".to_string(), 8080)
+        );
+        assert_eq!(
+            dns_lookup_target("https://api.example.com."),
+            ("api.example.com".to_string(), 443)
+        );
+    }
+
+    #[test]
+    fn endpoint_health_check_url_joins_path_forms() {
+        assert_eq!(
+            endpoint_health_check_url("http://8.8.8.8", "/health"),
+            "http://8.8.8.8/health"
+        );
+        assert_eq!(
+            endpoint_health_check_url("http://8.8.8.8/", "health"),
+            "http://8.8.8.8/health"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_endpoint_health_check_waits_for_success_response() {
+        let server = MockServer::start_async().await;
+        let _not_ready = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/not-ready");
+                then.status(503).body("not ready");
+            })
+            .await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/health");
+                then.status(200).body("ok");
+            })
+            .await;
+
+        assert!(
+            !public_endpoint_health_check_succeeds(&server.base_url(), "/not-ready").await,
+            "non-success health responses must keep the endpoint waiting"
+        );
+        assert!(
+            public_endpoint_health_check_succeeds(&server.base_url(), "/health").await,
+            "success health response should allow the endpoint to publish the URL"
         );
     }
 

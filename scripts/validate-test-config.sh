@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Validate that the generated alien-manager.toml works end-to-end.
+# Validate that the generated alien-manager.test.toml works end-to-end.
 #
-# Chain: Terraform (infra/test/) -> gen-env-test.sh -> alien-manager.toml -> manager boots.
+# Chain: Terraform (infra/test/) -> gen-env-test.sh -> alien-manager.test.toml -> manager boots.
 #
 # Usage: ./scripts/validate-test-config.sh
 # Requires: alien-manager binary on PATH (or cargo-built), .env.test, alien-manager.test.toml

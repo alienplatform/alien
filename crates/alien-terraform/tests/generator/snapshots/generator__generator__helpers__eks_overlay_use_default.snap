@@ -1,0 +1,897 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.9.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = ">= 4.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the management identity allowed to assume setup-created roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "unsupported_availability_zone_ids" {
+  type        = list(string)
+  description = "Availability Zone IDs to exclude when selecting EKS control-plane subnets. AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are account-local — the same physical zone can be `us-east-1e` in one account and `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting EKS control plane today (see https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per region when AWS deprecates more."
+  default = [
+    "use1-az3",
+    "usw1-az2",
+    "cac1-az3"
+  ]
+}
+
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  description = "Kubernetes namespace for runtime resources."
+  default     = "default"
+}
+
+variable "custom_domain_name" {
+  type        = string
+  description = "Optional custom domain for public Kubernetes routes. Leave empty to use the generated load balancer hostname."
+  default     = ""
+}
+
+variable "custom_domain_certificate_arn" {
+  type        = string
+  description = "ACM certificate ARN for custom_domain_name. Required when custom_domain_name is set."
+  default     = ""
+
+  validation {
+    condition     = var.custom_domain_certificate_arn == "" ? var.custom_domain_name == "" : can(regex("^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$", var.custom_domain_certificate_arn))
+    error_message = "custom_domain_certificate_arn must be a valid AWS ACM certificate ARN when custom_domain_name is set."
+  }
+}
+
+variable "eks_cluster_name" {
+  type        = string
+  description = "Existing EKS cluster name that Helm will install into."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "aws"
+  deployment_target            = "eks"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  generated_kubernetes_exposure = {
+    mode = "generated"
+    route = {
+      routeApi         = "ingress"
+      controller       = "eks.amazonaws.com/alb"
+      ingressClassName = "alb"
+      labels           = {}
+      annotations      = {}
+      provider = {
+        provider   = "awsAlb"
+        scheme     = "internet-facing"
+        targetType = "ip"
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
+      }
+    }
+    certificate = {
+      mode = "none"
+    }
+  }
+  kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
+  deployment_kubernetes_settings = merge(try(jsondecode(var.advanced_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure)) })
+  deployment_settings            = merge(jsondecode(var.advanced_settings_json), { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = null
+        cidrBlock           = null
+        internetGatewayId   = null
+        natGatewayId        = null
+        eipAllocationId     = null
+        publicSubnetIds     = []
+        privateSubnetIds    = []
+        publicRouteTableId  = null
+        privateRouteTableId = null
+        securityGroupId     = null
+        availabilityZones   = []
+        isByoVpc            = true
+      }
+    },
+    {
+      id   = "kubernetes"
+      type = "kubernetes-cluster"
+      importData = {
+        provider           = "eks"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        namespace          = var.kubernetes_namespace
+        clusterName        = local.kubernetes_cluster_name
+        clusterId          = local.kubernetes_cluster_name
+        cloudMetadataReady = true
+      }
+    },
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.data.bucket
+        bucketArn  = aws_s3_bucket.data.arn
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        roleName                = aws_iam_role.execution_sa.name
+        roleArn                 = aws_iam_role.execution_sa.arn
+        stackPermissionsApplied = true
+      }
+    }
+  ]
+  kubernetes_cluster_name   = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
+  kubernetes_kube_context   = local.kubernetes_cluster_name
+  kubernetes_kubeconfig     = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
+  eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
+  eks_oidc_provider_arn     = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
+  kubernetes_namespace      = var.kubernetes_namespace
+  helm_service_accounts = {
+    execution = {
+      annotations = {
+        "eks.amazonaws.com/role-arn" = aws_iam_role.execution_sa.arn
+      }
+      labels = {}
+    }
+  }
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
+}
+
+=== kubernetes.tf ===
+data "aws_availability_zones" "kubernetes_available" {
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
+}
+
+data "aws_eks_cluster" "kubernetes_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  name  = var.eks_cluster_name
+}
+
+data "aws_vpc" "kubernetes_default" {
+  count   = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  default = true
+}
+
+data "aws_availability_zones" "kubernetes_eks_supported" {
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
+}
+
+data "aws_subnets" "kubernetes_default" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+
+  filter {
+    name = "vpc-id"
+    values = [
+      data.aws_vpc.kubernetes_default[0].id
+    ]
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
+}
+
+data "aws_eks_cluster" "target" {
+  name = local.kubernetes_cluster_name
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+data "aws_eks_cluster_auth" "target" {
+  name = local.kubernetes_cluster_name
+}
+
+data "tls_certificate" "eks_oidc" {
+  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+data "aws_iam_openid_connect_provider" "eks_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+  thumbprint_list = [
+    data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
+  ]
+  tags = {
+    Name                         = "${local.resource_prefix}-eks-oidc"
+    "deployment-resource-prefix" = local.resource_prefix
+  }
+}
+
+resource "aws_vpc" "kubernetes" {
+  count                = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  cidr_block           = var.vpc_cidr == "" ? "10.251.0.0/16" : var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes"
+  }
+}
+
+resource "aws_internet_gateway" "kubernetes" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.kubernetes[0].id
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes"
+  }
+}
+
+resource "aws_subnet" "kubernetes_public" {
+  count                   = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id                  = aws_vpc.kubernetes[0].id
+  cidr_block              = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.kubernetes_available[0].names[count.index]
+  map_public_ip_on_launch = true
+  tags = {
+    Name                                                 = "${local.resource_prefix}-kubernetes-public"
+    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
+    "kubernetes.io/role/elb"                             = "1"
+  }
+}
+
+resource "aws_subnet" "kubernetes_private" {
+  count             = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id            = aws_vpc.kubernetes[0].id
+  cidr_block        = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index + 10)
+  availability_zone = data.aws_availability_zones.kubernetes_available[0].names[count.index]
+  tags = {
+    Name                                                 = "${local.resource_prefix}-kubernetes-private"
+    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
+    "kubernetes.io/role/internal-elb"                    = "1"
+  }
+}
+
+resource "aws_eip" "kubernetes_nat" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  domain = "vpc"
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes-nat"
+  }
+}
+
+resource "aws_nat_gateway" "kubernetes" {
+  count         = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  allocation_id = aws_eip.kubernetes_nat[0].id
+  subnet_id     = aws_subnet.kubernetes_public[0].id
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes"
+  }
+}
+
+resource "aws_route_table" "kubernetes_public" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.kubernetes[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.kubernetes[0].id
+  }
+
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes-public"
+  }
+}
+
+resource "aws_route_table" "kubernetes_private" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.kubernetes[0].id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.kubernetes[0].id
+  }
+
+  tags = {
+    Name = "$${local.resource_prefix}-kubernetes-private"
+  }
+}
+
+resource "aws_route_table_association" "kubernetes_public" {
+  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
+  subnet_id      = aws_subnet.kubernetes_public[count.index].id
+  route_table_id = aws_route_table.kubernetes_public[0].id
+}
+
+resource "aws_route_table_association" "kubernetes_private" {
+  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
+  subnet_id      = aws_subnet.kubernetes_private[count.index].id
+  route_table_id = aws_route_table.kubernetes_private[0].id
+}
+
+resource "aws_iam_role" "kubernetes_cluster" {
+  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name               = "${local.resource_prefix}-kubernetes-eks"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "eks.amazonaws.com" }, Action = ["sts:AssumeRole", "sts:TagSession"] }] })
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_cluster" {
+  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSClusterPolicy", "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy", "arn:aws:iam::aws:policy/AmazonEKSComputePolicy", "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy", "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy"]) : toset([])
+  role       = aws_iam_role.kubernetes_cluster[0].name
+  policy_arn = each.value
+}
+
+resource "aws_iam_role" "kubernetes_node" {
+  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name               = "${local.resource_prefix}-kubernetes-node"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_node" {
+  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly", "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy", "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy"]) : toset([])
+  role       = aws_iam_role.kubernetes_node[0].name
+  policy_arn = each.value
+}
+
+resource "aws_eks_cluster" "kubernetes" {
+  count                         = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name                          = "${local.resource_prefix}-k8s"
+  role_arn                      = aws_iam_role.kubernetes_cluster[0].arn
+  bootstrap_self_managed_addons = false
+
+  vpc_config {
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  compute_config {
+    enabled = true
+    node_pools = [
+      "system",
+      "general-purpose"
+    ]
+    node_role_arn = aws_iam_role.kubernetes_node[0].arn
+  }
+
+  kubernetes_network_config {
+    elastic_load_balancing {
+      enabled = true
+    }
+  }
+
+  storage_config {
+    block_storage {
+      enabled = true
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_cluster,
+    aws_iam_role_policy_attachment.kubernetes_node
+  ]
+}
+
+resource "aws_eks_addon" "kubernetes_vpc_cni" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "vpc-cni"
+}
+
+resource "aws_eks_addon" "kubernetes_kube_proxy" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "kube-proxy"
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+resource "aws_eks_addon" "kubernetes_coredns" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "coredns"
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+=== data.tf ===
+resource "aws_s3_bucket" "data" {
+  bucket        = "${local.resource_prefix}-data"
+  force_destroy = true
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "data"
+    "resource-type" = "storage"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket                  = aws_s3_bucket.data.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "data" {
+  bucket = aws_s3_bucket.data.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+=== execution_sa.tf ===
+data "aws_iam_policy_document" "execution_sa_assume_role" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "sts:AssumeRoleWithWebIdentity"
+    ]
+
+    principals {
+      type = "Federated"
+      identifiers = [
+        local.eks_oidc_provider_arn
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:sub"
+      values = [
+        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:aud"
+      values = [
+        "sts.amazonaws.com"
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role" "execution_sa" {
+  name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
+  assume_role_policy = data.aws_iam_policy_document.execution_sa_assume_role.json
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
+  }
+}
+
+resource "aws_iam_role_policy" "execution_sa_set_0" {
+  name   = "storage-data-read-0"
+  role   = aws_iam_role.execution_sa.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadS3Objects", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"] }] })
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    basePlatform                = local.deployment_base_platform
+  }
+  depends_on = [
+    aws_iam_openid_connect_provider.eks,
+    aws_vpc.kubernetes,
+    aws_internet_gateway.kubernetes,
+    aws_subnet.kubernetes_public,
+    aws_subnet.kubernetes_private,
+    aws_eip.kubernetes_nat,
+    aws_nat_gateway.kubernetes,
+    aws_route_table.kubernetes_public,
+    aws_route_table.kubernetes_private,
+    aws_route_table_association.kubernetes_public,
+    aws_route_table_association.kubernetes_private,
+    aws_iam_role.kubernetes_cluster,
+    aws_iam_role_policy_attachment.kubernetes_cluster,
+    aws_iam_role.kubernetes_node,
+    aws_iam_role_policy_attachment.kubernetes_node,
+    aws_eks_cluster.kubernetes,
+    aws_eks_addon.kubernetes_vpc_cni,
+    aws_eks_addon.kubernetes_kube_proxy,
+    aws_eks_addon.kubernetes_coredns,
+    aws_s3_bucket.data,
+    aws_s3_bucket_server_side_encryption_configuration.data,
+    aws_s3_bucket_ownership_controls.data,
+    aws_s3_bucket_public_access_block.data,
+    aws_s3_bucket_policy.data,
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "eks"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_namespace" {
+  value       = var.kubernetes_namespace
+  description = "Kubernetes namespace for runtime resources."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
+  sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "kubernetes_update_kubeconfig_command" {
+  value       = "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+  description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
+}
+
+=== README.md ===
+# Deployment setup - eks-use-default
+
+Target: `eks`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+Network settings:
+
+- `network_mode`: `create-new`, `use-existing`, or `use-default`.
+- `vpc_cidr`, `availability_zones`: used with `create-new`.
+- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
+
+Kubernetes settings:
+
+- `kubernetes_cluster_mode`: `create` or `existing`.
+- `kubernetes_namespace`: namespace for runtime resources.
+- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = "existing"`.
+- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="eks-use-default"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+
+## Kubernetes Operations
+
+Before inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:
+
+```bash
+AWS_PROFILE=<target-profile> aws sts get-caller-identity
+terraform output kubernetes_update_kubeconfig_command
+AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)
+kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events
+```
+
+Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.
+
+## Destroy Order
+
+If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+
+If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.

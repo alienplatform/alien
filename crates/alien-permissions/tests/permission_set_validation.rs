@@ -586,6 +586,7 @@ fn gcp_permissions(permission_set: &alien_core::PermissionSet) -> Vec<&str> {
 fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Result<()> {
     let storage_heartbeat = load_permission_set_by_id("storage/heartbeat")?;
     let storage_management = load_permission_set_by_id("storage/management")?;
+    let storage_trigger_management = load_permission_set_by_id("storage/trigger-management")?;
     let storage_provision = load_permission_set_by_id("storage/provision")?;
     let kv_heartbeat = load_permission_set_by_id("kv/heartbeat")?;
     let kv_management = load_permission_set_by_id("kv/management")?;
@@ -598,6 +599,7 @@ fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Res
     for permission_set in [
         &storage_heartbeat,
         &storage_management,
+        &storage_trigger_management,
         &storage_provision,
         &kv_heartbeat,
         &kv_management,

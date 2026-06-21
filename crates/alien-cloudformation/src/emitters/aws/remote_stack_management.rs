@@ -16,11 +16,13 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsRemoteStackManagementEmitter;
@@ -136,21 +138,25 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         }
 
         for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+            if permission_set_ref.id().ends_with("/provision") {
+                continue;
+            }
             let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                 continue;
             };
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
             let Some(permission_set) = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
-            if permission_set.platforms.aws.is_none()
-                || !resource_scoped_aws_permission_applies(&permission_set.id, resource_entry)
-            {
+            if permission_set.platforms.aws.is_none() {
                 continue;
             }
-
-            let resource_context = context.clone().with_resource_name(resource_id.to_string());
+            let resource_context =
+                resource_scoped_aws_permission_context(resource_id, resource_entry, &context);
             let policy = generator
                 .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
                 .context(ErrorData::GenericError {
@@ -292,9 +298,72 @@ fn resource_scoped_permission_refs(
         .collect()
 }
 
-fn resource_scoped_aws_permission_applies(
-    permission_set_id: &str,
-    _resource_entry: &alien_core::ResourceEntry,
-) -> bool {
-    permission_set_id == "kubernetes-public-endpoint/management"
+fn resource_scoped_aws_permission_context(
+    resource_id: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    base_context: &PermissionContext,
+) -> PermissionContext {
+    let mut context = base_context
+        .clone()
+        .with_resource_id(resource_id.to_string());
+    context.resource_name = None;
+
+    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+        return context.with_resource_name(format!("${{AWS::StackName}}-{resource_id}"));
+    }
+
+    if resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .is_some()
+    {
+        return context.with_resource_name(resource_id.to_string());
+    }
+
+    context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode};
+
+    fn live_worker_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_names_future_worker_lambda() {
+        let entry = live_worker_entry("jobs");
+        let context = resource_scoped_aws_permission_context("jobs", &entry, &permission_context());
+
+        assert_eq!(context.resource_id.as_deref(), Some("jobs"));
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${AWS::StackName}-jobs")
+        );
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_does_not_filter_by_permission_id() {
+        let entry = live_worker_entry("jobs");
+        let context = resource_scoped_aws_permission_context("jobs", &entry, &permission_context());
+
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${AWS::StackName}-jobs")
+        );
+    }
 }

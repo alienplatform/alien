@@ -124,7 +124,7 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
 pub async fn list_workspace_names(http: &crate::auth::AuthHttp) -> Result<Vec<String>> {
     let client = http.sdk_client();
     let response = client
-        .list_workspaces()
+        .list_memberships()
         .send()
         .await
         .into_sdk_error()
@@ -137,7 +137,7 @@ pub async fn list_workspace_names(http: &crate::auth::AuthHttp) -> Result<Vec<St
         .into_inner()
         .items
         .into_iter()
-        .map(|workspace| (*workspace.name).clone())
+        .map(|membership| (*membership.name).clone())
         .collect())
 }
 

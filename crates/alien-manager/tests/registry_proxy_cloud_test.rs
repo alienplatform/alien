@@ -436,7 +436,7 @@ impl CloudProxyTest {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
         deployment_store
             .reconcile(

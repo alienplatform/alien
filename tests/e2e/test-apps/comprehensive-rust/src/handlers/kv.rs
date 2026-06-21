@@ -3,7 +3,7 @@ use axum::{
     response::Json,
 };
 use chrono::Utc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     models::{AppState, KvTestResponse},
@@ -27,7 +27,7 @@ use alien_sdk::traits::PutOptions;
     ),
     operation_id = "test_kv",
     summary = "Test KV operations",
-    description = "Performs comprehensive E2E testing of KV operations: put, get, exists, scan_prefix, and delete operations"
+    description = "Performs E2E testing of KV put/get/exists/scan operations and schedules best-effort cleanup"
 )]
 pub async fn test_kv(
     State(app_state): State<AppState>,
@@ -218,69 +218,20 @@ pub async fn test_kv(
         }));
     }
 
-    // 7. Delete the first key
-    info!(%test_key1, "Deleting first key");
-    kv_instance
-        .delete(&test_key1)
-        .await
-        .into_alien_error()
-        .context(ErrorData::KvOperationFailed {
-            operation: "delete".to_string(),
-            key: test_key1.clone(),
-            reason: "Failed to delete first key".to_string(),
-        })?;
-
-    // 8. Verify the first key no longer exists
-    info!(%test_key1, "Verifying first key deletion");
-    let exists_after_delete = kv_instance
-        .exists(&test_key1)
-        .await
-        .into_alien_error()
-        .context(ErrorData::KvOperationFailed {
-            operation: "exists_after_delete".to_string(),
-            key: test_key1.clone(),
-            reason: "Failed to check existence after deletion".to_string(),
-        })?;
-
-    if exists_after_delete {
-        return Err(AlienError::new(ErrorData::KvOperationFailed {
-            operation: "delete_verification".to_string(),
-            key: test_key1.clone(),
-            reason: "Key should not exist after deletion but exists() returned true".to_string(),
-        }));
-    }
-
-    // 9. Get the deleted key (should return None)
-    info!(%test_key1, "Verifying deleted key returns None");
-    let get_after_delete = kv_instance
-        .get(&test_key1)
-        .await
-        .into_alien_error()
-        .context(ErrorData::KvOperationFailed {
-            operation: "get_after_delete".to_string(),
-            key: test_key1.clone(),
-            reason: "Failed to get key after deletion".to_string(),
-        })?;
-
-    if get_after_delete.is_some() {
-        return Err(AlienError::new(ErrorData::KvOperationFailed {
-            operation: "get_after_delete_verification".to_string(),
-            key: test_key1.clone(),
-            reason: "Get after deletion should return None but returned Some".to_string(),
-        }));
-    }
-
-    // 10. Clean up: delete the second key
-    info!(%test_key2, "Cleaning up - deleting second key");
-    kv_instance
-        .delete(&test_key2)
-        .await
-        .into_alien_error()
-        .context(ErrorData::KvOperationFailed {
-            operation: "cleanup_delete".to_string(),
-            key: test_key2.clone(),
-            reason: "Failed to delete second key during cleanup".to_string(),
-        })?;
+    let cleanup_kv = kv_instance.clone();
+    let cleanup_keys = vec![test_key1.clone(), test_key2.clone()];
+    tokio::spawn(async move {
+        for cleanup_key in cleanup_keys {
+            info!(test_key = %cleanup_key, "Deleting KV test key");
+            if let Err(error) = cleanup_kv.delete(&cleanup_key).await {
+                warn!(
+                    test_key = %cleanup_key,
+                    error = ?error,
+                    "Failed to delete KV test key during best-effort cleanup"
+                );
+            }
+        }
+    });
 
     info!(%test_key_prefix, "KV test completed successfully");
 

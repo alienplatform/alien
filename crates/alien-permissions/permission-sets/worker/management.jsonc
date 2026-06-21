@@ -49,7 +49,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -125,7 +125,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -158,7 +158,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -195,7 +195,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -232,7 +232,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -273,7 +273,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -311,7 +311,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -342,7 +342,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -377,7 +377,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }

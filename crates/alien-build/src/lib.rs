@@ -1972,10 +1972,7 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
 
-        if matches!(
-            file_name.as_ref(),
-            ".git" | ".alien" | "target" | "node_modules"
-        ) {
+        if is_ignored_source_cache_path(file_name.as_ref()) {
             continue;
         }
 
@@ -2005,6 +2002,13 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
     }
 
     Ok(())
+}
+
+fn is_ignored_source_cache_path(file_name: &str) -> bool {
+    matches!(
+        file_name,
+        ".git" | ".alien" | ".alien-build" | "target" | "node_modules"
+    ) || file_name.ends_with(".bun-build")
 }
 
 async fn find_cached_artifact_dir(
@@ -2486,12 +2490,37 @@ fn base_image_build_retry_delay(attempt: usize) -> Duration {
 
 fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
     match error {
-        dockdash::Error::ImagePull { source, .. } => source
-            .as_deref()
-            .map(is_retryable_image_pull_source)
-            .unwrap_or(false),
+        dockdash::Error::ImagePull { source, .. } => {
+            source
+                .as_deref()
+                .map(is_retryable_image_pull_source)
+                .unwrap_or(false)
+                || is_retryable_image_pull_text(&error.to_string())
+        }
         _ => false,
     }
+}
+
+fn is_retryable_image_pull_text(message: &str) -> bool {
+    const RETRYABLE_MARKERS: &[&str] = &[
+        "error sending request",
+        "client error (sendrequest)",
+        "connection error",
+        "connection aborted",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "timed out",
+        "unexpected eof",
+        "broken pipe",
+        "temporary failure in name resolution",
+        "dns error",
+    ];
+
+    let message = message.to_ascii_lowercase();
+    RETRYABLE_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
 }
 
 fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static)) -> bool {
@@ -2773,6 +2802,31 @@ mod tests {
         ])));
     }
 
+    #[test]
+    fn source_cache_hash_ignores_build_artifacts() {
+        let src = tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join(".alien-build")).unwrap();
+        std::fs::create_dir_all(src.path().join("node_modules")).unwrap();
+        std::fs::write(src.path().join("package.json"), "{}").unwrap();
+        std::fs::write(
+            src.path().join(".alien-build/__alien_bootstrap.ts"),
+            "generated",
+        )
+        .unwrap();
+        std::fs::write(
+            src.path().join(".18ba89dff9ff58bf-00000000.bun-build"),
+            "generated",
+        )
+        .unwrap();
+        std::fs::write(src.path().join("node_modules/module.js"), "dependency").unwrap();
+
+        let mut files = Vec::new();
+        collect_source_files(src.path(), src.path(), &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files, vec![PathBuf::from("package.json")]);
+    }
+
     fn docker_available() -> bool {
         Command::new("docker")
             .arg("info")
@@ -2817,6 +2871,19 @@ mod tests {
                     message: "Bad Gateway".to_string(),
                 },
             )),
+        };
+
+        assert!(is_retryable_dockdash_image_pull_error(&error));
+    }
+
+    #[test]
+    fn retryable_image_pull_detects_opaque_transport_errors() {
+        let error = dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/example/base:tag".to_string(),
+            message: "Failed to pull layer blob sha256:abc".to_string(),
+            source: Some(Box::new(std::io::Error::other(
+                "error sending request for url (https://ghcr.io/v2/example/base/blobs/sha256:abc): client error (SendRequest): connection error",
+            ))),
         };
 
         assert!(is_retryable_dockdash_image_pull_error(&error));
