@@ -79,6 +79,8 @@ fn emit_aws_network_heartbeat(
         resource_type: Network::RESOURCE_TYPE,
         controller_platform: Platform::Aws,
         backend: HeartbeatBackend::Aws,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Network(NetworkHeartbeatData::AwsVpc(
             AwsVpcNetworkHeartbeatData {

@@ -208,6 +208,8 @@ fn emit_kubernetes_secret_vault_heartbeat(
         resource_type: Vault::RESOURCE_TYPE,
         controller_platform: Platform::Kubernetes,
         backend: HeartbeatBackend::Kubernetes,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Vault(VaultHeartbeatData::KubernetesSecret(
             KubernetesSecretVaultHeartbeatData {

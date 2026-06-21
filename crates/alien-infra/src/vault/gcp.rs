@@ -237,6 +237,8 @@ fn emit_gcp_secret_manager_vault_heartbeat(
         resource_type: Vault::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Vault(VaultHeartbeatData::GcpSecretManager(
             GcpSecretManagerVaultHeartbeatData {

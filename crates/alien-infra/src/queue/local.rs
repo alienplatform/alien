@@ -217,6 +217,8 @@ fn emit_local_queue_heartbeat(
         resource_type: Queue::RESOURCE_TYPE,
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Queue(QueueHeartbeatData::Local(LocalQueueHeartbeatData {
             status: QueueHeartbeatStatus {

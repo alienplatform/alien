@@ -644,6 +644,8 @@ fn emit_azure_artifact_registry_heartbeat(
         resource_type: ArtifactRegistry::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
+            source: Default::default(),
+            alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ArtifactRegistry(
             ArtifactRegistryHeartbeatData::AzureContainerRegistry(
