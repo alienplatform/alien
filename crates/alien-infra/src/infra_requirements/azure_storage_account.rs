@@ -4,8 +4,8 @@ use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::{
-    AzureStorageSku, AzureStorageSkuName, Endpoints, ResourceControllerContext, StorageAccount,
-    StorageAccountCreateParameters, StorageAccountPropertiesCreateParameters,
+    Endpoints, ResourceControllerContext, StorageAccount, StorageAccountCreateParameters,
+    StorageAccountPropertiesCreateParameters,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -16,6 +16,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use azure_mgmt_storage::package_2023_05::models::{Sku, SkuName};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
@@ -575,7 +576,7 @@ impl AzureStorageAccountController {
         tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
         let mut params = StorageAccountCreateParameters::new(
-            AzureStorageSku::new(AzureStorageSkuName::StandardLrs),
+            Sku::new(SkuName::StandardLrs),
             azure_mgmt_storage::package_2023_05::models::storage_account_create_parameters::Kind::StorageV2,
             location.to_string(),
         );

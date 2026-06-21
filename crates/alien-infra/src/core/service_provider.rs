@@ -51,12 +51,7 @@ pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
 };
 pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 pub use azure_mgmt_network::package_2024_03::models::{
-    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
-    IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku,
-    NetworkSecurityGroup, NetworkSecurityGroupPropertiesFormat, PublicIpAddress,
-    PublicIpAddressPropertiesFormat, PublicIpAddressSku, Resource as AzureNetworkResource,
-    SecurityRule, SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat,
-    SubResource, Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
+    AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 pub use azure_mgmt_servicebus::package_2024_01::models::{
@@ -67,9 +62,8 @@ pub use azure_mgmt_servicebus::package_2024_01::models::{
 pub use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
     ContainerProperties as AzureBlobContainerProperties, Endpoints,
-    Resource as AzureStorageResource, Sku as AzureStorageSku, SkuName as AzureStorageSkuName,
-    StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
-    StorageAccountPropertiesCreateParameters, Table, TableProperties,
+    Resource as AzureStorageResource, StorageAccount, StorageAccountCreateParameters,
+    StorageAccountProperties, StorageAccountPropertiesCreateParameters, Table, TableProperties,
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};

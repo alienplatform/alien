@@ -8,13 +8,8 @@
 //! - Network Security Groups (NSGs) for traffic control
 
 use crate::core::{
-    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
-    AzureNetworkResource, IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat,
-    NatGatewaySku, NetworkSecurityGroup, NetworkSecurityGroupPropertiesFormat, OperationResult,
-    PublicIpAddress, PublicIpAddressPropertiesFormat, PublicIpAddressSku,
-    ResourceControllerContext, SecurityRule, SecurityRuleAccess, SecurityRuleDirection,
-    SecurityRulePropertiesFormat, SubResource, Subnet, SubnetPropertiesFormat, VirtualNetwork,
-    VirtualNetworkPropertiesFormat,
+    AddressSpace, NatGateway, NetworkSecurityGroup, OperationResult, PublicIpAddress,
+    ResourceControllerContext, Subnet, VirtualNetwork,
 };
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -25,6 +20,13 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
+use azure_mgmt_network::package_2024_03::models::{
+    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, IpAllocationMethod,
+    NatGatewayPropertiesFormat, NatGatewaySku, NetworkSecurityGroupPropertiesFormat,
+    PublicIpAddressPropertiesFormat, PublicIpAddressSku, Resource, SecurityRule,
+    SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat, SubResource,
+    SubnetPropertiesFormat, VirtualNetworkPropertiesFormat,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -33,8 +35,8 @@ use tracing::{debug, info, warn};
 const AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS: u32 = 60;
 const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
 
-fn managed_azure_network_resource(location: String) -> AzureNetworkResource {
-    let mut resource = AzureNetworkResource::new();
+fn managed_azure_network_resource(location: String) -> Resource {
+    let mut resource = Resource::new();
     resource.location = Some(location);
     resource.tags = Some(json!({ "managed-by": "runtime" }));
     resource
