@@ -262,7 +262,10 @@ impl GcpRemoteStackManagementController {
             .get_gcp_resource_manager_client(gcp_config)?;
 
         let current_policy = rm_client
-            .get_project_iam_policy(project_id.clone(), Some(GetPolicyOptions { requested_policy_version: Some(3) }))
+            .get_project_iam_policy(
+                project_id.clone(),
+                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
@@ -510,9 +513,7 @@ impl GcpRemoteStackManagementController {
             match rm_client
                 .get_project_iam_policy(
                     project_id.clone(),
-                    Some(GetPolicyOptions {
-                        requested_policy_version: Some(3),
-                    }),
+                    Some(GetPolicyOptions::new().set_requested_policy_version(3)),
                 )
                 .await
             {

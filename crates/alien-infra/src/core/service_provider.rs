@@ -105,6 +105,7 @@ pub use google_cloud_iam_admin_v1::model::{
     role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
     ServiceAccount,
 };
+pub use google_cloud_iam_v1::model::GetPolicyOptions;
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{
     SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
@@ -2079,14 +2080,6 @@ pub trait ResourceManagerApi: Send + Sync + std::fmt::Debug {
     async fn get_project_metadata(&self, project_id: String) -> Result<Project>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct GetPolicyOptions {
-    /// Maximum IAM policy version to return.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_policy_version: Option<i32>,
-}
-
 struct OfficialGcpResourceManagerClient {
     config: GcpClientConfig,
     client: OnceCell<Projects>,
@@ -2133,11 +2126,7 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
             .get_iam_policy()
             .set_resource(format!("projects/{project_id}"));
         if let Some(options) = options {
-            request = request.set_options(
-                google_cloud_iam_v1::model::GetPolicyOptions::new().set_requested_policy_version(
-                    options.requested_policy_version.unwrap_or_default(),
-                ),
-            );
+            request = request.set_options(options);
         }
 
         request

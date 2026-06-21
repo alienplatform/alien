@@ -336,9 +336,7 @@ impl GcpVaultController {
         let current_policy = rm_client
             .get_project_iam_policy(
                 gcp_config.project_id.clone(),
-                Some(GetPolicyOptions {
-                    requested_policy_version: Some(3),
-                }),
+                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
             )
             .await
             .context(ErrorData::CloudPlatformError {
