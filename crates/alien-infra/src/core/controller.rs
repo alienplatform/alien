@@ -754,6 +754,20 @@ pub trait ResourceController: Send + Sync + Debug {
         // Default implementation returns None for resources that don't expose binding parameters
         Ok(None)
     }
+
+    /// Resolves binding parameters when this resource is used as a dependency, with async access to
+    /// platform services. Unlike `get_binding_params` — a pure function over *persisted* state — an
+    /// implementor can re-resolve from a live source, needed when a resource keeps binding data out
+    /// of persisted state (e.g. an inline secret marked `#[serde(skip)]`; see the Local Postgres
+    /// override). `resource_id` is this dependency's id; the supplied `ctx` belongs to the dependent.
+    /// The default delegates to `get_binding_params`.
+    async fn resolve_binding_params(
+        &self,
+        _ctx: &ResourceControllerContext<'_>,
+        _resource_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        self.get_binding_params()
+    }
 }
 
 impl Clone for Box<dyn ResourceController> {

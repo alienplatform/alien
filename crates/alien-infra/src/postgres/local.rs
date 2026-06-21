@@ -243,6 +243,44 @@ impl LocalPostgresController {
             None => Ok(None),
         }
     }
+
+    async fn resolve_binding_params(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        // `binding` is `#[serde(skip)]`, so the controller a dependent deserializes via
+        // `get_internal_controller` has it as `None`. Re-resolve the connection details from the
+        // manager — the 0600 metadata file is the source of truth — so a linked out-of-process
+        // workload gets its `ALIEN_<NAME>_BINDING` env var without the inline password ever entering
+        // persisted control-plane state.
+        if self.binding.is_some() {
+            return self.get_binding_params();
+        }
+
+        let manager = ctx
+            .service_provider
+            .get_local_postgres_manager()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::LocalServicesNotAvailable {
+                    service_name: "postgres_manager".to_string(),
+                })
+            })?;
+
+        let binding = manager
+            .get_binding(resource_id)
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read binding for local Postgres '{}'", resource_id),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
+            ErrorData::ResourceStateSerializationFailed {
+                resource_id: resource_id.to_string(),
+                message: "Failed to serialize Postgres binding parameters".to_string(),
+            },
+        )?))
+    }
 }
 
 fn emit_local_postgres_heartbeat(

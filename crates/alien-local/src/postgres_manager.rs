@@ -13,7 +13,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::bindings::PostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use postgresql_embedded::{PostgreSQL, Settings, Status, VersionReq};
+use postgresql_embedded::{PostgreSQL, Settings, Status, VersionReq, BOOTSTRAP_SUPERUSER};
 use postgresql_extensions::repository::portal_corp::repository::PortalCorp;
 use postgresql_extensions::repository::{registry, Repository};
 use postgresql_extensions::{AvailableExtension, Version};
@@ -27,8 +27,11 @@ use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-/// Admin user created on every local database.
-const ADMIN_USER: &str = "alien";
+/// Admin user advertised in the binding. `postgresql_embedded` always names the bootstrap superuser
+/// `BOOTSTRAP_SUPERUSER` ("postgres") and ignores `Settings.username`, so the binding must report that
+/// exact role — any other name is a role that does not exist, and Postgres reports a missing role as
+/// "password authentication failed" under password auth, which looks like (but isn't) a bad password.
+const ADMIN_USER: &str = BOOTSTRAP_SUPERUSER;
 /// How often the monitor loop checks that each server is still up.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
