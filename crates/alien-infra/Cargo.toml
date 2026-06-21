@@ -33,6 +33,7 @@ gcp = [
     "alien-client-config/gcp",
     "dep:base64",
     "dep:google-cloud-api-serviceusage-v1",
+    "dep:google-cloud-artifactregistry-v1",
     "dep:google-cloud-auth",
     "dep:google-cloud-firestore-admin-v1",
     "dep:google-cloud-gax",
@@ -72,6 +73,7 @@ alien-client-config = { workspace = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
 google-cloud-api-serviceusage-v1 = { workspace = true, optional = true }
+google-cloud-artifactregistry-v1 = { workspace = true, optional = true }
 google-cloud-auth = { workspace = true, optional = true }
 google-cloud-firestore-admin-v1 = { workspace = true, optional = true }
 google-cloud-gax = { workspace = true, optional = true }

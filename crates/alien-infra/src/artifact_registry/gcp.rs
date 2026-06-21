@@ -2,7 +2,10 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienEr
 use alien_macros::controller;
 use tracing::{debug, info};
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    ArtifactRegistryRepository as Repository, ArtifactRegistryRepositoryFormat as RepositoryFormat,
+    ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
@@ -10,7 +13,6 @@ use alien_core::{
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_gcp_clients::artifactregistry::{Repository, RepositoryFormat};
 use alien_gcp_clients::iam::{CreateServiceAccountRequest, IamPolicy, ServiceAccount};
 use chrono::Utc;
 
@@ -131,12 +133,7 @@ impl GcpArtifactRegistryController {
                     suggested_delay: None,
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(
                     registry_id = %config.id,
                     "Repository not found, creating it"
@@ -164,7 +161,7 @@ impl GcpArtifactRegistryController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if operation.done == Some(true) {
+                if operation.done {
                     info!(
                         registry_id = %config.id,
                         "Repository created successfully"
@@ -174,7 +171,7 @@ impl GcpArtifactRegistryController {
                         suggested_delay: None,
                     })
                 } else {
-                    self.repository_operation_name = operation.name.clone();
+                    self.repository_operation_name = Some(operation.name.clone());
                     Ok(HandlerAction::Continue {
                         state: CreatingRepository,
                         suggested_delay: Some(std::time::Duration::from_secs(2)),
@@ -230,7 +227,7 @@ impl GcpArtifactRegistryController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if operation.done == Some(true) {
+        if operation.done {
             info!(
                 registry_id = %config.id,
                 "Repository created successfully"
@@ -563,12 +560,7 @@ impl GcpArtifactRegistryController {
                     "Repository deleted successfully"
                 );
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(
                     registry_id = %config.id,
                     "Repository already deleted"
@@ -908,7 +900,7 @@ fn emit_gcp_artifact_registry_heartbeat(
                 repository_id: repository_id.to_string(),
                 name: repository.name,
                 format: repository.format.map(|format| format!("{format:?}")),
-                mode: repository.mode.map(|mode| format!("{mode:?}")),
+                mode: repository.mode,
                 description: repository.description,
                 label_count: repository
                     .labels
@@ -941,10 +933,11 @@ fn emit_gcp_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockArtifactRegistryApi;
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
-    use alien_gcp_clients::artifactregistry::MockArtifactRegistryApi;
     use alien_gcp_clients::iam::{MockIamApi, ServiceAccount};
+    use google_cloud_longrunning::model::Operation;
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
@@ -1016,14 +1009,9 @@ mod tests {
             .returning(|_, _, _| Ok(Repository::default()));
 
         // Delete flow calls delete_repository
-        mock_ar.expect_delete_repository().returning(|_, _, _| {
-            Ok(alien_gcp_clients::longrunning::Operation {
-                name: None,
-                metadata: None,
-                done: Some(true),
-                result: None,
-            })
-        });
+        mock_ar
+            .expect_delete_repository()
+            .returning(|_, _, _| Ok(Operation::new().set_done(true)));
 
         Arc::new(mock_ar)
     }
