@@ -26,23 +26,20 @@ use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
 #[cfg(feature = "azure")]
-use alien_azure_clients::keyvault::{
-    AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient, KeyVaultManagementApi,
-    KeyVaultSecretsApi,
+use alien_core::{AzureClientConfig, AzureCredentials};
+#[cfg(feature = "azure")]
+use azure_core::{
+    credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
+    time::{Duration as AzureDuration, OffsetDateTime},
 };
 #[cfg(feature = "azure")]
-use alien_azure_clients::models::keyvault::{
-    AccessPolicyEntry, Permissions, PermissionsSecretsItem, Sku, SkuFamily, SkuName,
-    VaultCreateOrUpdateParameters, VaultProperties,
-};
+use azure_identity::{ClientSecretCredential, ClientSecretCredentialOptions};
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
-#[cfg(feature = "azure")]
-use alien_error::{AlienError, Context};
+use azure_security_keyvault_secrets::{SecretClient, SecretClientOptions};
 #[cfg(feature = "azure")]
 use base64::{engine::general_purpose, Engine as _};
 #[cfg(feature = "azure")]
-use reqwest::Client;
+use reqwest::{Method, StatusCode};
 #[cfg(feature = "azure")]
 use tracing::{info, warn};
 
@@ -431,9 +428,8 @@ impl VaultTestContext for GcpProviderTestContext {
 struct AzureProviderTestContext {
     vault: Arc<dyn Vault>,
     test_vault_name: String,
-    management_client: alien_azure_clients::keyvault::AzureKeyVaultManagementClient,
-    secrets_client: alien_azure_clients::keyvault::AzureKeyVaultSecretsClient,
-    subscription_id: String,
+    management_client: AzureKeyVaultManagementTestClient,
+    secrets_client: SecretClient,
     resource_group_name: String,
     created_secrets: std::sync::Mutex<HashSet<String>>,
 }
@@ -480,13 +476,18 @@ impl AsyncTestContext for AzureProviderTestContext {
             subscription_id, resource_group_name
         );
 
-        let management_client =
-            AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
-        let secrets_client =
-            AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let management_client = AzureKeyVaultManagementTestClient::new(config.clone())
+            .expect("Failed to create Azure Key Vault management test client");
+        let secrets_client = SecretClient::new(
+            &format!("https://{}.vault.azure.net", test_vault_name),
+            management_client.credential.clone(),
+            Some(SecretClientOptions::default()),
+        )
+        .expect("Failed to create official Azure Key Vault secrets test client");
 
         // Create the actual Azure Key Vault
-        Self::create_azure_key_vault(&management_client, &resource_group_name, &test_vault_name)
+        management_client
+            .create_vault(&resource_group_name, &test_vault_name)
             .await
             .unwrap_or_else(|e| {
                 panic!(
@@ -529,7 +530,6 @@ impl AsyncTestContext for AzureProviderTestContext {
             test_vault_name,
             management_client,
             secrets_client,
-            subscription_id,
             resource_group_name,
             created_secrets: std::sync::Mutex::new(HashSet::new()),
         }
@@ -576,152 +576,12 @@ impl VaultTestContext for AzureProviderTestContext {
 
 #[cfg(feature = "azure")]
 impl AzureProviderTestContext {
-    async fn create_azure_key_vault(
-        management_client: &AzureKeyVaultManagementClient,
-        resource_group_name: &str,
-        vault_name: &str,
-    ) -> Result<(), alien_client_core::Error> {
-        let tenant_id =
-            env::var("AZURE_MANAGEMENT_TENANT_ID").expect("AZURE_MANAGEMENT_TENANT_ID not set");
-        let tenant_uuid = Uuid::parse_str(&tenant_id).expect("Invalid tenant ID format");
-
-        // Get the service principal object ID for access policies
-        let management_principal_id =
-            Self::resolve_service_principal_object_id(management_client).await?;
-
-        // Create access policy for the service principal with secret permissions
-        let access_policy = AccessPolicyEntry {
-            object_id: management_principal_id,
-            tenant_id: tenant_uuid,
-            application_id: None,
-            permissions: Permissions {
-                secrets: vec![
-                    PermissionsSecretsItem::Get,
-                    PermissionsSecretsItem::Set,
-                    PermissionsSecretsItem::List,
-                    PermissionsSecretsItem::Delete,
-                ],
-                keys: vec![],         // Empty keys permissions
-                certificates: vec![], // Empty certificates permissions
-                storage: vec![],      // Empty storage permissions
-            },
-        };
-
-        let vault_properties = VaultProperties {
-            tenant_id: tenant_uuid,
-            sku: Sku {
-                name: SkuName::Standard,
-                family: SkuFamily::A,
-            },
-            access_policies: vec![access_policy], // Use access policies for Key Vault
-            enable_rbac_authorization: false,     // Disable RBAC to use access policies
-            enable_soft_delete: true,
-            enabled_for_deployment: false,
-            enabled_for_disk_encryption: false,
-            enabled_for_template_deployment: false,
-            private_endpoint_connections: vec![],
-            public_network_access: "Enabled".to_string(),
-            soft_delete_retention_in_days: 7,
-            vault_uri: None,
-            enable_purge_protection: None,
-            network_acls: None,
-            create_mode: None,
-            provisioning_state: None,
-            hsm_pool_resource_id: None,
-        };
-
-        let vault_params = VaultCreateOrUpdateParameters {
-            location: "East US".to_string(),
-            properties: vault_properties,
-            tags: {
-                let mut tags = HashMap::new();
-                tags.insert("Environment".to_string(), "Test".to_string());
-                tags.insert("Application".to_string(), "alien-test".to_string());
-                tags
-            },
-        };
-
-        info!("🔧 Creating Azure Key Vault: {}", vault_name);
-        management_client
-            .create_or_update_vault(
-                resource_group_name.to_string(),
-                vault_name.to_string(),
-                vault_params,
-            )
-            .await?;
-
-        info!("✅ Azure Key Vault created successfully: {}", vault_name);
-        Ok(())
-    }
-
-    /// Automatically resolve the service principal's object ID by decoding the JWT token
-    async fn resolve_service_principal_object_id(
-        management_client: &AzureKeyVaultManagementClient,
-    ) -> Result<String, alien_client_core::Error> {
-        info!("🔍 Auto-resolving object ID from JWT token...");
-
-        // Get a bearer token for Azure Resource Manager (this will contain the oid claim)
-        let bearer_token = management_client
-            .token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
-            .await
-            .context(alien_client_core::ErrorData::HttpRequestFailed {
-                message: "Failed to get bearer token".to_string(),
-            })?;
-
-        // Parse the JWT token to extract the payload (claims)
-        let parts: Vec<&str> = bearer_token.split('.').collect();
-        if parts.len() != 3 {
-            return Err(AlienError::new(
-                alien_client_core::ErrorData::InvalidClientConfig {
-                    message: "Invalid JWT token format - expected 3 parts".to_string(),
-                    errors: None,
-                },
-            ));
-        }
-
-        // Decode the payload (claims) part
-        let claims_b64 = parts[1];
-        let claims_bytes = general_purpose::URL_SAFE_NO_PAD
-            .decode(claims_b64)
-            .map_err(|e| {
-                AlienError::new(alien_client_core::ErrorData::DataLoadError {
-                    message: format!("Failed to decode JWT payload: {}", e),
-                })
-            })?;
-
-        // Parse the claims as JSON
-        let claims_json: serde_json::Value =
-            serde_json::from_slice(&claims_bytes).map_err(|e| {
-                AlienError::new(alien_client_core::ErrorData::DataLoadError {
-                    message: format!("Failed to parse JWT claims JSON: {}", e),
-                })
-            })?;
-
-        // Extract the oid (object ID) claim from the token
-        let object_id = claims_json
-            .get("oid")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                AlienError::new(alien_client_core::ErrorData::InvalidClientConfig {
-                    message: "JWT token does not contain 'oid' claim (object ID)".to_string(),
-                    errors: Some(format!("Available claims: {}", claims_json)),
-                })
-            })?;
-
-        info!("✅ Auto-resolved object ID from JWT: {}", object_id);
-        Ok(object_id.to_string())
-    }
-
     async fn cleanup_vault(&self) {
         info!("🧹 Cleaning up Azure Key Vault: {}", self.test_vault_name);
 
         match self
             .management_client
-            .delete_vault(
-                self.resource_group_name.clone(),
-                self.test_vault_name.clone(),
-            )
+            .delete_vault(&self.resource_group_name, &self.test_vault_name)
             .await
         {
             Ok(_) => {
@@ -731,13 +591,7 @@ impl AzureProviderTestContext {
                 );
             }
             Err(e) => {
-                if !matches!(
-                    e,
-                    alien_client_core::Error {
-                        error: Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }),
-                        ..
-                    }
-                ) {
+                if e.status != Some(StatusCode::NOT_FOUND) {
                     warn!(
                         "Failed to delete Azure Key Vault {} during cleanup: {:?}",
                         self.test_vault_name, e
@@ -755,10 +609,7 @@ impl AzureProviderTestContext {
 
         match self
             .secrets_client
-            .delete_secret(
-                format!("{}.vault.azure.net", self.test_vault_name),
-                secret_name.to_string(),
-            )
+            .delete_secret(&secret_name.replace('_', "-"), None)
             .await
         {
             Ok(_) => {
@@ -768,20 +619,277 @@ impl AzureProviderTestContext {
                 );
             }
             Err(e) => {
-                if !matches!(
-                    e,
-                    alien_client_core::Error {
-                        error: Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. }),
-                        ..
-                    }
-                ) {
-                    warn!(
-                        "Failed to delete secret {}/{} during cleanup: {:?}",
-                        self.test_vault_name, secret_name, e
-                    );
-                }
+                warn!(
+                    "Failed to delete secret {}/{} during cleanup: {:?}",
+                    self.test_vault_name, secret_name, e
+                );
             }
         }
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Clone)]
+struct AzureKeyVaultManagementTestClient {
+    config: AzureClientConfig,
+    credential: Arc<dyn TokenCredential>,
+    http_client: reqwest::Client,
+}
+
+#[cfg(feature = "azure")]
+impl AzureKeyVaultManagementTestClient {
+    fn new(config: AzureClientConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            credential: azure_credential_from_config(&config)?,
+            config,
+            http_client: reqwest::Client::new(),
+        })
+    }
+
+    async fn create_vault(
+        &self,
+        resource_group_name: &str,
+        vault_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        let principal_id = self.resolve_service_principal_object_id().await?;
+        let body = serde_json::json!({
+            "location": self.config.region.as_deref().unwrap_or("eastus"),
+            "tags": {
+                "Environment": "Test",
+                "Application": "alien-test",
+            },
+            "properties": {
+                "tenantId": self.config.tenant_id,
+                "sku": {
+                    "family": "A",
+                    "name": "standard",
+                },
+                "accessPolicies": [{
+                    "tenantId": self.config.tenant_id,
+                    "objectId": principal_id,
+                    "permissions": {
+                        "keys": [],
+                        "secrets": ["get", "set", "list", "delete"],
+                        "certificates": [],
+                        "storage": [],
+                    },
+                }],
+                "enableRbacAuthorization": false,
+                "enableSoftDelete": true,
+                "enabledForDeployment": false,
+                "enabledForDiskEncryption": false,
+                "enabledForTemplateDeployment": false,
+                "publicNetworkAccess": "Enabled",
+                "softDeleteRetentionInDays": 7,
+            },
+        });
+
+        info!("🔧 Creating Azure Key Vault: {}", vault_name);
+        self.request(
+            Method::PUT,
+            self.vault_url(resource_group_name, vault_name),
+            Some(body.to_string()),
+            vault_name,
+        )
+        .await?;
+        info!("✅ Azure Key Vault created successfully: {}", vault_name);
+        Ok(())
+    }
+
+    async fn delete_vault(
+        &self,
+        resource_group_name: &str,
+        vault_name: &str,
+    ) -> Result<(), AzureTestRestError> {
+        self.request(
+            Method::DELETE,
+            self.vault_url(resource_group_name, vault_name),
+            None,
+            vault_name,
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn vault_url(&self, resource_group_name: &str, vault_name: &str) -> String {
+        format!(
+            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}?api-version=2022-07-01",
+            self.config.subscription_id, resource_group_name, vault_name
+        )
+    }
+
+    async fn resolve_service_principal_object_id(&self) -> Result<String, AzureTestRestError> {
+        info!("🔍 Auto-resolving object ID from Azure ARM token...");
+        let token = self.bearer_token().await?;
+        let parts = token.token.secret().split('.').collect::<Vec<_>>();
+        if parts.len() != 3 {
+            return Err(AzureTestRestError::new(
+                None,
+                "Azure access token is not a valid JWT (expected 3 parts)".to_string(),
+            ));
+        }
+
+        let claims_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .map_err(|error| {
+                AzureTestRestError::new(
+                    None,
+                    format!("Failed to decode Azure JWT payload: {error}"),
+                )
+            })?;
+        let claims_json =
+            serde_json::from_slice::<serde_json::Value>(&claims_bytes).map_err(|error| {
+                AzureTestRestError::new(
+                    None,
+                    format!("Failed to parse Azure JWT claims JSON: {error}"),
+                )
+            })?;
+        let object_id = claims_json
+            .get("oid")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                AzureTestRestError::new(
+                    None,
+                    format!("Azure JWT token does not contain an oid claim: {claims_json}"),
+                )
+            })?;
+
+        info!("✅ Auto-resolved object ID from JWT: {}", object_id);
+        Ok(object_id.to_string())
+    }
+
+    async fn bearer_token(&self) -> Result<AccessToken, AzureTestRestError> {
+        self.credential
+            .get_token(&["https://management.azure.com/.default"], None)
+            .await
+            .map_err(|error| {
+                AzureTestRestError::new(None, format!("Failed to get Azure ARM token: {error}"))
+            })
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        url: String,
+        body: Option<String>,
+        vault_name: &str,
+    ) -> Result<String, AzureTestRestError> {
+        let token = self.bearer_token().await?;
+        let mut request = self
+            .http_client
+            .request(method, &url)
+            .bearer_auth(token.token.secret());
+
+        if let Some(body) = body {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
+        }
+
+        let response = request.send().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Azure Key Vault ARM request failed for '{vault_name}': {error}"),
+            )
+        })?;
+        let status = response.status();
+        let text = response.text().await.map_err(|error| {
+            AzureTestRestError::new(
+                None,
+                format!("Failed to read Azure Key Vault ARM response for '{vault_name}': {error}"),
+            )
+        })?;
+
+        if !status.is_success() {
+            return Err(AzureTestRestError::new(
+                Some(status),
+                format!(
+                    "Azure Key Vault ARM request for '{vault_name}' returned HTTP {}: {text}",
+                    status.as_u16()
+                ),
+            ));
+        }
+
+        Ok(text)
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct AzureTestRestError {
+    status: Option<StatusCode>,
+    message: String,
+}
+
+#[cfg(feature = "azure")]
+impl AzureTestRestError {
+    fn new(status: Option<StatusCode>, message: String) -> Self {
+        Self { status, message }
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::fmt::Display for AzureTestRestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+#[cfg(feature = "azure")]
+impl std::error::Error for AzureTestRestError {}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+struct StaticAzureAccessTokenCredential {
+    token: String,
+}
+
+#[cfg(feature = "azure")]
+#[async_trait]
+impl TokenCredential for StaticAzureAccessTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        if scopes.is_empty() {
+            return Err(azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Credential,
+                "no scopes specified",
+            ));
+        }
+
+        Ok(AccessToken::new(
+            self.token.clone(),
+            OffsetDateTime::now_utc() + AzureDuration::days(365),
+        ))
+    }
+}
+
+#[cfg(feature = "azure")]
+fn azure_credential_from_config(
+    config: &AzureClientConfig,
+) -> anyhow::Result<Arc<dyn TokenCredential>> {
+    match &config.credentials {
+        AzureCredentials::AccessToken { token } => Ok(Arc::new(StaticAzureAccessTokenCredential {
+            token: token.clone(),
+        })),
+        AzureCredentials::ServicePrincipal {
+            client_id,
+            client_secret,
+        } => ClientSecretCredential::new(
+            &config.tenant_id,
+            client_id.clone(),
+            Secret::new(client_secret.clone()),
+            Some(ClientSecretCredentialOptions::default()),
+        )
+        .map(|credential| credential as Arc<dyn TokenCredential>)
+        .map_err(|error| {
+            anyhow::anyhow!("Failed to build Azure service principal credentials: {error}")
+        }),
+        other => anyhow::bail!(
+            "alien-bindings Azure Key Vault live test setup supports service principal/access-token credentials only, got {other:?}"
+        ),
     }
 }
 
