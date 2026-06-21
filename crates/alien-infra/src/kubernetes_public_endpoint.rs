@@ -7,7 +7,7 @@ use alien_core::{
     KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesRouteProviderOptions, KubernetesTlsSecretRef, LoadBalancerEndpoint,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::{Secret, Service, ServicePort, ServiceSpec};
 use k8s_openapi::api::networking::v1::{
     HTTPIngressPath, HTTPIngressRuleValue, Ingress as K8sIngress, IngressBackend, IngressRule,
@@ -22,7 +22,7 @@ use tokio::net::lookup_host;
 use tracing::info;
 
 #[cfg(feature = "aws")]
-use crate::aws_sdk::{AcmTag, ImportCertificateRequest, ReimportCertificateRequest};
+use crate::aws_sdk::{AcmBlob, AcmTag, ImportCertificateRequest, ReimportCertificateRequest};
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
@@ -625,19 +625,23 @@ async fn publish_managed_acm_certificate(
     }
 
     let acm_client = ctx.service_provider.get_aws_acm_client(&aws_config).await?;
-    let tags = acm_tags(ctx.resource_prefix, target.resource_id, input.tags);
+    let tags = acm_tags(ctx.resource_prefix, target.resource_id, input.tags)?;
     let (leaf, chain) = split_certificate_chain(&input.certificate_chain);
 
     let certificate_arn = if let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() {
+        let request = ReimportCertificateRequest::builder()
+            .certificate_arn(certificate_arn.clone())
+            .certificate(AcmBlob::new(leaf.into_bytes()))
+            .private_key(AcmBlob::new(input.private_key.into_bytes()))
+            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Kubernetes public endpoint ACM reimport request".to_string(),
+                resource_id: Some(target.resource_id.to_string()),
+            })?;
         acm_client
-            .reimport_certificate(
-                ReimportCertificateRequest::builder()
-                    .certificate_arn(certificate_arn.clone())
-                    .certificate(leaf)
-                    .private_key(input.private_key)
-                    .maybe_certificate_chain(chain)
-                    .build(),
-            )
+            .reimport_certificate(request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to re-import Kubernetes public endpoint certificate to ACM"
@@ -646,22 +650,34 @@ async fn publish_managed_acm_certificate(
             })?;
         certificate_arn
     } else {
-        acm_client
-            .import_certificate(
-                ImportCertificateRequest::builder()
-                    .certificate(leaf)
-                    .private_key(input.private_key)
-                    .maybe_certificate_chain(chain)
-                    .tags(tags)
-                    .build(),
-            )
-            .await
+        let request = ImportCertificateRequest::builder()
+            .certificate(AcmBlob::new(leaf.into_bytes()))
+            .private_key(AcmBlob::new(input.private_key.into_bytes()))
+            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .set_tags(Some(tags))
+            .build()
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
+                message: "Invalid Kubernetes public endpoint ACM import request".to_string(),
+                resource_id: Some(target.resource_id.to_string()),
+            })?;
+        let response = acm_client.import_certificate(request).await.context(
+            ErrorData::CloudPlatformError {
                 message: "Failed to import Kubernetes public endpoint certificate to ACM"
                     .to_string(),
                 resource_id: Some(target.resource_id.to_string()),
+            },
+        )?;
+        response
+            .certificate_arn()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "ACM ImportCertificate response did not include certificateArn"
+                        .to_string(),
+                    resource_id: Some(target.resource_id.to_string()),
+                })
             })?
-            .certificate_arn
+            .to_string()
     };
 
     state.managed_acm_certificate_arn = Some(certificate_arn.clone());
@@ -1831,14 +1847,25 @@ fn acm_tags(
     resource_prefix: &str,
     resource_id: &str,
     mut custom_tags: HashMap<String, String>,
-) -> Vec<AcmTag> {
+) -> Result<Vec<AcmTag>> {
     for (key, value) in alien_core::standard_resource_tags(resource_prefix, resource_id) {
         custom_tags.insert(key, value);
     }
 
     custom_tags
         .into_iter()
-        .map(|(key, value)| AcmTag { key, value })
+        .map(|(key, value)| {
+            let tag_key = key.clone();
+            AcmTag::builder()
+                .key(key)
+                .value(value)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Invalid ACM tag '{tag_key}'"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+        })
         .collect()
 }
 
@@ -2433,8 +2460,17 @@ mod tests {
                 ("deployment".to_string(), "wrong".to_string()),
                 ("team".to_string(), "platform".to_string()),
             ]),
-        );
-        let tags: HashMap<_, _> = tags.into_iter().map(|tag| (tag.key, tag.value)).collect();
+        )
+        .expect("ACM tags should build");
+        let tags: HashMap<_, _> = tags
+            .iter()
+            .map(|tag| {
+                (
+                    tag.key().to_string(),
+                    tag.value().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
 
         assert_eq!(tags.get("deployment"), Some(&"stack-1".to_string()));
         assert_eq!(tags.get("resource"), Some(&"api".to_string()));

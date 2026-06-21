@@ -5,7 +5,8 @@ use tracing::{debug, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::aws_sdk::{
-    AcmTag, AddPermissionRequest, ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
+    AcmBlob, AcmTag, AddPermissionRequest,
+    ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
     ApiGatewayV2CreateApiRequest as CreateApiRequest,
     ApiGatewayV2CreateDomainNameRequest as CreateDomainNameRequest,
     ApiGatewayV2CreateIntegrationRequest as CreateIntegrationRequest,
@@ -619,24 +620,50 @@ impl AwsWorkerController {
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
         let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
             .into_iter()
-            .map(|(key, value)| AcmTag { key, value })
-            .collect();
+            .map(|(key, value)| {
+                let tag_key = key.clone();
+                AcmTag::builder()
+                    .key(key)
+                    .value(value)
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Invalid ACM tag '{tag_key}'"),
+                        resource_id: Some(worker_config.id.clone()),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let import_request = ImportCertificateRequest::builder()
+            .certificate(AcmBlob::new(leaf.into_bytes()))
+            .private_key(AcmBlob::new(private_key.clone().into_bytes()))
+            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .set_tags(Some(tags))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid ACM certificate import request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
         let response = acm_client
-            .import_certificate(
-                ImportCertificateRequest::builder()
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .tags(tags)
-                    .build(),
-            )
+            .import_certificate(import_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to import certificate to ACM".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        self.certificate_arn = Some(response.certificate_arn.clone());
+        self.certificate_arn = Some(
+            response
+                .certificate_arn()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "ACM ImportCertificate response did not include certificateArn"
+                            .to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })
+                })?
+                .to_string(),
+        );
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
@@ -1798,15 +1825,19 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        let reimport_request = ReimportCertificateRequest::builder()
+            .certificate_arn(certificate_arn)
+            .certificate(AcmBlob::new(leaf.into_bytes()))
+            .private_key(AcmBlob::new(private_key.clone().into_bytes()))
+            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid ACM certificate reimport request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
         acm_client
-            .reimport_certificate(
-                ReimportCertificateRequest::builder()
-                    .certificate_arn(certificate_arn)
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .build(),
-            )
+            .reimport_certificate(reimport_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to re-import renewed certificate to ACM".to_string(),
@@ -3995,25 +4026,25 @@ mod tests {
 
     fn create_acm_mock_for_creation() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
-        mock_acm.expect_import_certificate().returning(|_| {
-            Ok(ImportCertificateResponse {
-                certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                    .to_string(),
-            })
-        });
+        mock_acm
+            .expect_import_certificate()
+            .returning(|_| Ok(test_import_certificate_response()));
         Arc::new(mock_acm)
     }
 
     fn create_acm_mock_for_creation_and_deletion() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
-        mock_acm.expect_import_certificate().returning(|_| {
-            Ok(ImportCertificateResponse {
-                certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                    .to_string(),
-            })
-        });
+        mock_acm
+            .expect_import_certificate()
+            .returning(|_| Ok(test_import_certificate_response()));
         mock_acm.expect_delete_certificate().returning(|_| Ok(()));
         Arc::new(mock_acm)
+    }
+
+    fn test_import_certificate_response() -> ImportCertificateResponse {
+        ImportCertificateResponse::builder()
+            .certificate_arn("arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id")
+            .build()
     }
 
     fn create_apigatewayv2_mock_for_creation() -> Arc<MockApiGatewayV2Api> {
@@ -4633,12 +4664,7 @@ mod tests {
         mock_acm
             .expect_import_certificate()
             .times(1)
-            .returning(|_| {
-                Ok(ImportCertificateResponse {
-                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
-                        .to_string(),
-                })
-            });
+            .returning(|_| Ok(test_import_certificate_response()));
         mock_acm.expect_delete_certificate().returning(|_| Ok(()));
 
         // Validate API Gateway is created with the worker's name in the API name

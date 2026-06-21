@@ -5,7 +5,7 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienEr
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, SdkConfig};
 use aws_credential_types::Credentials;
-use aws_sdk_acm::{primitives::Blob as AwsAcmBlob, types::Tag as AwsAcmTag, Client as AcmClient};
+use aws_sdk_acm::Client as AcmClient;
 use aws_sdk_apigatewayv2::{
     types::{
         ApiMapping as AwsApiGatewayV2ApiMapping,
@@ -112,6 +112,17 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::error::{ErrorData, Result};
+
+pub use aws_sdk_acm::{
+    operation::import_certificate::{
+        ImportCertificateInput as ImportCertificateRequest,
+        ImportCertificateOutput as ImportCertificateResponse,
+    },
+    primitives::Blob as AcmBlob,
+    types::Tag as AcmTag,
+};
+
+pub type ReimportCertificateRequest = ImportCertificateRequest;
 
 /// Parameter metadata returned from SSM for vault heartbeat sampling.
 #[derive(Debug, Clone)]
@@ -260,48 +271,6 @@ pub struct CodeBuildProjectDescription {
     pub created: Option<f64>,
     /// Last modified timestamp as epoch seconds.
     pub last_modified: Option<f64>,
-}
-
-/// ACM resource tag.
-#[derive(Debug, Clone, Builder)]
-pub struct AcmTag {
-    /// Tag key.
-    pub key: String,
-    /// Tag value.
-    pub value: String,
-}
-
-/// ACM certificate import request.
-#[derive(Debug, Clone, Builder)]
-pub struct ImportCertificateRequest {
-    /// PEM encoded certificate to import.
-    pub certificate: String,
-    /// PEM encoded private key matching the certificate.
-    pub private_key: String,
-    /// Optional PEM encoded certificate chain.
-    pub certificate_chain: Option<String>,
-    /// Tags to attach to a newly imported certificate.
-    pub tags: Vec<AcmTag>,
-}
-
-/// ACM certificate import response.
-#[derive(Debug, Clone)]
-pub struct ImportCertificateResponse {
-    /// ARN of the imported certificate.
-    pub certificate_arn: String,
-}
-
-/// ACM certificate reimport request.
-#[derive(Debug, Clone, Builder)]
-pub struct ReimportCertificateRequest {
-    /// ARN of the imported ACM certificate to replace.
-    pub certificate_arn: String,
-    /// PEM encoded replacement certificate.
-    pub certificate: String,
-    /// PEM encoded private key matching the replacement certificate.
-    pub private_key: String,
-    /// Optional PEM encoded replacement certificate chain.
-    pub certificate_chain: Option<String>,
 }
 
 /// Lambda container image code configuration.
@@ -2895,51 +2864,51 @@ impl AcmApi for AcmClient {
         &self,
         request: ImportCertificateRequest,
     ) -> Result<ImportCertificateResponse> {
-        let certificate_arn = acm_result(
+        let response = acm_result(
             self.import_certificate()
-                .certificate(AwsAcmBlob::new(request.certificate.into_bytes()))
-                .private_key(AwsAcmBlob::new(request.private_key.into_bytes()))
-                .set_certificate_chain(
-                    request
-                        .certificate_chain
-                        .map(|chain| AwsAcmBlob::new(chain.into_bytes())),
-                )
-                .set_tags(Some(acm_tags(request.tags)?))
+                .set_certificate_arn(request.certificate_arn)
+                .set_certificate(request.certificate)
+                .set_private_key(request.private_key)
+                .set_certificate_chain(request.certificate_chain)
+                .set_tags(request.tags)
                 .send()
                 .await,
             "ImportCertificate",
             "Certificate",
             "new",
-        )?
-        .certificate_arn()
-        .map(ToString::to_string)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        )?;
+
+        if response.certificate_arn().is_none() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "ACM ImportCertificate response did not include certificateArn"
                     .to_string(),
+                resource_id: None,
+            }));
+        }
+
+        Ok(response)
+    }
+
+    async fn reimport_certificate(&self, request: ReimportCertificateRequest) -> Result<()> {
+        let certificate_arn = request.certificate_arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "ACM reimport request did not include certificateArn".to_string(),
                 resource_id: None,
             })
         })?;
 
-        Ok(ImportCertificateResponse { certificate_arn })
-    }
-
-    async fn reimport_certificate(&self, request: ReimportCertificateRequest) -> Result<()> {
         acm_result(
             self.import_certificate()
-                .certificate_arn(request.certificate_arn.clone())
-                .certificate(AwsAcmBlob::new(request.certificate.into_bytes()))
-                .private_key(AwsAcmBlob::new(request.private_key.into_bytes()))
-                .set_certificate_chain(
-                    request
-                        .certificate_chain
-                        .map(|chain| AwsAcmBlob::new(chain.into_bytes())),
-                )
+                .set_certificate_arn(request.certificate_arn)
+                .set_certificate(request.certificate)
+                .set_private_key(request.private_key)
+                .set_certificate_chain(request.certificate_chain)
+                .set_tags(request.tags)
                 .send()
                 .await,
             "ImportCertificate",
             "Certificate",
-            &request.certificate_arn,
+            &certificate_arn,
         )?;
         Ok(())
     }
@@ -6024,23 +5993,6 @@ where
                 }))
         }
     }
-}
-
-fn acm_tags(tags: Vec<AcmTag>) -> Result<Vec<AwsAcmTag>> {
-    tags.into_iter()
-        .map(|tag| {
-            let tag_key = tag.key.clone();
-            AwsAcmTag::builder()
-                .key(tag.key)
-                .value(tag.value)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Invalid ACM tag '{tag_key}'"),
-                    resource_id: None,
-                })
-        })
-        .collect()
 }
 
 fn acm_result<T, E>(
