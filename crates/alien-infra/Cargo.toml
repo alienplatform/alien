@@ -40,6 +40,7 @@ gcp = [
     "dep:google-cloud-iam-admin-v1",
     "dep:google-cloud-iam-v1",
     "dep:google-cloud-longrunning",
+    "dep:google-cloud-pubsub",
     "dep:google-cloud-resourcemanager-v3",
     "dep:google-cloud-scheduler-v1",
     "dep:google-cloud-type",
@@ -83,6 +84,7 @@ google-cloud-gax = { workspace = true, optional = true }
 google-cloud-iam-admin-v1 = { workspace = true, optional = true }
 google-cloud-iam-v1 = { workspace = true, optional = true }
 google-cloud-longrunning = { workspace = true, optional = true }
+google-cloud-pubsub = { workspace = true, optional = true }
 google-cloud-resourcemanager-v3 = { workspace = true, optional = true }
 google-cloud-scheduler-v1 = { workspace = true, optional = true }
 google-cloud-type = { workspace = true, optional = true }

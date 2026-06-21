@@ -29,7 +29,6 @@ use alien_gcp_clients::{
     cloudrun::{CloudRunApi, CloudRunClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
     gcs::{GcsApi, GcsClient},
-    pubsub::{PubSubApi, PubSubClient},
     GcpClientConfig,
 };
 use azure_core::{
@@ -68,6 +67,13 @@ use google_cloud_iam_admin_v1::{
     },
 };
 use google_cloud_longrunning::model::Operation;
+use google_cloud_pubsub::{
+    client::{SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin},
+    model::{
+        push_config::OidcToken as OfficialPubSubOidcToken, PushConfig as OfficialPushConfig,
+        Subscription as OfficialSubscription, Topic as OfficialTopic,
+    },
+};
 use google_cloud_resourcemanager_v3::{client::Projects, model::Project as OfficialGcpProject};
 use google_cloud_scheduler_v1::{
     client::CloudScheduler as OfficialCloudScheduler,
@@ -694,6 +700,534 @@ impl GcpIamApi for OfficialGcpIamClient {
                 message: "IAM patch_role request failed".to_string(),
                 resource_id: Some(role_name),
             })
+    }
+}
+
+#[cfg_attr(any(test, feature = "test-utils"), automock)]
+#[async_trait::async_trait]
+pub trait PubSubApi: Send + Sync + std::fmt::Debug {
+    async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic>;
+    async fn get_topic(&self, topic_id: String) -> Result<Topic>;
+    async fn delete_topic(&self, topic_id: String) -> Result<()>;
+    async fn set_topic_iam_policy(
+        &self,
+        topic_id: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy>;
+
+    async fn create_subscription(
+        &self,
+        subscription_id: String,
+        subscription: Subscription,
+    ) -> Result<Subscription>;
+    async fn get_subscription(&self, subscription_id: String) -> Result<Subscription>;
+    async fn delete_subscription(&self, subscription_id: String) -> Result<()>;
+    async fn set_subscription_iam_policy(
+        &self,
+        subscription_id: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy>;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Topic {
+    /// Pub/Sub topic resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Topic labels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, String>>,
+    /// Message storage policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_storage_policy: Option<MessageStoragePolicy>,
+    /// KMS key used for topic message encryption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kms_key_name: Option<String>,
+    /// Schema validation settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_settings: Option<SchemaSettings>,
+    /// Whether the topic satisfies physical zone separation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub satisfies_pzs: Option<bool>,
+    /// Message retention duration string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_retention_duration: Option<String>,
+    /// Topic state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscription {
+    /// Pub/Sub subscription resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Topic resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// Push delivery configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_config: Option<PushConfig>,
+    /// Ack deadline in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ack_deadline_seconds: Option<i32>,
+    /// Whether acknowledged messages are retained.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retain_acked_messages: Option<bool>,
+    /// Message retention duration string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_retention_duration: Option<String>,
+    /// Subscription labels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, String>>,
+    /// Whether message ordering is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_message_ordering: Option<bool>,
+    /// Expiration policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiration_policy: Option<Value>,
+    /// Pub/Sub filter expression.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    /// Dead letter policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_letter_policy: Option<DeadLetterPolicy>,
+    /// Retry policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_policy: Option<Value>,
+    /// Whether the subscription is detached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
+    /// Subscription state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Analytics Hub subscription info.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analytics_hub_subscription_info: Option<Value>,
+    /// BigQuery delivery config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bigquery_config: Option<Value>,
+    /// Cloud Storage delivery config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_storage_config: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct PushConfig {
+    /// Push endpoint URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_endpoint: Option<String>,
+    /// Push endpoint attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<HashMap<String, String>>,
+    /// OIDC authentication configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_token: Option<OidcToken>,
+    /// Pub/Sub wrapper configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pubsub_wrapper: Option<PubsubWrapper>,
+    /// No-wrapper configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_wrapper: Option<NoWrapper>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcToken {
+    /// Service account email used to mint the OIDC token.
+    pub service_account_email: String,
+    /// OIDC audience.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct PubsubWrapper {
+    /// Whether to write Pub/Sub metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_metadata: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct NoWrapper {
+    /// Whether to write Pub/Sub metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_metadata: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct DeadLetterPolicy {
+    /// Dead-letter topic resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_letter_topic: Option<String>,
+    /// Maximum delivery attempts before dead-lettering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_delivery_attempts: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageStoragePolicy {
+    /// Allowed persistence regions.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_persistence_regions: Vec<String>,
+    /// Whether in-transit enforcement is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforce_in_transit: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaSettings {
+    /// Schema resource name.
+    pub schema: String,
+    /// Schema encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    /// First allowed schema revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_revision_id: Option<String>,
+    /// Last allowed schema revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_revision_id: Option<String>,
+}
+
+struct OfficialGcpPubSubClient {
+    config: GcpClientConfig,
+    topic_admin: OnceCell<OfficialTopicAdmin>,
+    subscription_admin: OnceCell<OfficialSubscriptionAdmin>,
+    credentials: Credentials,
+    http_client: reqwest::Client,
+}
+
+impl std::fmt::Debug for OfficialGcpPubSubClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OfficialGcpPubSubClient")
+            .field("project_id", &self.config.project_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OfficialGcpPubSubClient {
+    fn new(config: GcpClientConfig) -> Result<Self> {
+        let credentials = gcp_credentials_from_alien_config(&config)?;
+        Ok(Self {
+            config,
+            topic_admin: OnceCell::new(),
+            subscription_admin: OnceCell::new(),
+            credentials,
+            http_client: reqwest::Client::new(),
+        })
+    }
+
+    async fn topic_admin(&self) -> Result<OfficialTopicAdmin> {
+        let client = self
+            .topic_admin
+            .get_or_try_init(|| async { pubsub_topic_admin_from_alien_config(&self.config).await })
+            .await?;
+        Ok(client.clone())
+    }
+
+    async fn subscription_admin(&self) -> Result<OfficialSubscriptionAdmin> {
+        let client = self
+            .subscription_admin
+            .get_or_try_init(|| async {
+                pubsub_subscription_admin_from_alien_config(&self.config).await
+            })
+            .await?;
+        Ok(client.clone())
+    }
+
+    fn topic_name(&self, topic_id: &str) -> String {
+        if topic_id.starts_with("projects/") {
+            topic_id.to_string()
+        } else {
+            format!("projects/{}/topics/{topic_id}", self.config.project_id)
+        }
+    }
+
+    fn subscription_name(&self, subscription_id: &str) -> String {
+        if subscription_id.starts_with("projects/") {
+            subscription_id.to_string()
+        } else {
+            format!(
+                "projects/{}/subscriptions/{subscription_id}",
+                self.config.project_id
+            )
+        }
+    }
+
+    async fn set_iam_policy(&self, resource: String, policy: IamPolicy) -> Result<IamPolicy> {
+        let url = format!(
+            "{}/{}:setIamPolicy",
+            pubsub_rest_endpoint(&self.config),
+            resource
+        );
+        let headers = match self
+            .credentials
+            .headers(Extensions::new())
+            .await
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to get GCP Pub/Sub authorization headers".to_string(),
+                resource_id: Some(resource.clone()),
+            })? {
+            CacheableResource::New { data, .. } => data,
+            CacheableResource::NotModified => {
+                return Err(AlienError::new(
+                    crate::error::ErrorData::CloudPlatformError {
+                        message: "GCP Pub/Sub authorization headers were not refreshed and no cached headers are available".to_string(),
+                        resource_id: Some(resource),
+                    },
+                ));
+            }
+        };
+
+        let body = json!({ "policy": gcp_iam_policy_to_official(policy)? });
+        let response = self
+            .http_client
+            .post(url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Pub/Sub setIamPolicy request failed".to_string(),
+                resource_id: Some(resource.clone()),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AlienError::new(
+                crate::error::ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Pub/Sub setIamPolicy for '{resource}' returned HTTP {}: {text}",
+                        status.as_u16()
+                    ),
+                    resource_id: Some(resource),
+                },
+            ));
+        }
+
+        response
+            .json::<google_cloud_iam_v1::model::Policy>()
+            .await
+            .map(gcp_iam_policy_from_official)
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to parse Pub/Sub setIamPolicy response".to_string(),
+                resource_id: None,
+            })
+    }
+}
+
+#[async_trait::async_trait]
+impl PubSubApi for OfficialGcpPubSubClient {
+    async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic> {
+        let mut official_topic = topic_to_official(topic)?;
+        if official_topic.name.is_empty() {
+            official_topic.name = self.topic_name(&topic_id);
+        }
+
+        match self
+            .topic_admin()
+            .await?
+            .create_topic()
+            .with_request(official_topic)
+            .send()
+            .await
+        {
+            Ok(topic) => Ok(topic_from_official(topic)),
+            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceConflict {
+                    resource_type: "Pub/Sub topic".to_string(),
+                    resource_name: self.topic_name(&topic_id),
+                    message: "create_topic reported the topic already exists".to_string(),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub create_topic request failed".to_string(),
+                        resource_id: Some(topic_id),
+                    }))
+            }
+        }
+    }
+
+    async fn get_topic(&self, topic_id: String) -> Result<Topic> {
+        match self
+            .topic_admin()
+            .await?
+            .get_topic()
+            .set_topic(self.topic_name(&topic_id))
+            .send()
+            .await
+        {
+            Ok(topic) => Ok(topic_from_official(topic)),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "Pub/Sub topic".to_string(),
+                    resource_name: self.topic_name(&topic_id),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub get_topic request failed".to_string(),
+                        resource_id: Some(topic_id),
+                    }))
+            }
+        }
+    }
+
+    async fn delete_topic(&self, topic_id: String) -> Result<()> {
+        match self
+            .topic_admin()
+            .await?
+            .delete_topic()
+            .set_topic(self.topic_name(&topic_id))
+            .send()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "Pub/Sub topic".to_string(),
+                    resource_name: self.topic_name(&topic_id),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub delete_topic request failed".to_string(),
+                        resource_id: Some(topic_id),
+                    }))
+            }
+        }
+    }
+
+    async fn set_topic_iam_policy(
+        &self,
+        topic_id: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy> {
+        self.set_iam_policy(self.topic_name(&topic_id), iam_policy)
+            .await
+    }
+
+    async fn create_subscription(
+        &self,
+        subscription_id: String,
+        subscription: Subscription,
+    ) -> Result<Subscription> {
+        let mut official_subscription = subscription_to_official(subscription)?;
+        if official_subscription.name.is_empty() {
+            official_subscription.name = self.subscription_name(&subscription_id);
+        }
+
+        match self
+            .subscription_admin()
+            .await?
+            .create_subscription()
+            .with_request(official_subscription)
+            .send()
+            .await
+        {
+            Ok(subscription) => Ok(subscription_from_official(subscription)),
+            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceConflict {
+                    resource_type: "Pub/Sub subscription".to_string(),
+                    resource_name: self.subscription_name(&subscription_id),
+                    message: "create_subscription reported the subscription already exists"
+                        .to_string(),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub create_subscription request failed".to_string(),
+                        resource_id: Some(subscription_id),
+                    }))
+            }
+        }
+    }
+
+    async fn get_subscription(&self, subscription_id: String) -> Result<Subscription> {
+        match self
+            .subscription_admin()
+            .await?
+            .get_subscription()
+            .set_subscription(self.subscription_name(&subscription_id))
+            .send()
+            .await
+        {
+            Ok(subscription) => Ok(subscription_from_official(subscription)),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "Pub/Sub subscription".to_string(),
+                    resource_name: self.subscription_name(&subscription_id),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub get_subscription request failed".to_string(),
+                        resource_id: Some(subscription_id),
+                    }))
+            }
+        }
+    }
+
+    async fn delete_subscription(&self, subscription_id: String) -> Result<()> {
+        match self
+            .subscription_admin()
+            .await?
+            .delete_subscription()
+            .set_subscription(self.subscription_name(&subscription_id))
+            .send()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "Pub/Sub subscription".to_string(),
+                    resource_name: self.subscription_name(&subscription_id),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Pub/Sub delete_subscription request failed".to_string(),
+                        resource_id: Some(subscription_id),
+                    }))
+            }
+        }
+    }
+
+    async fn set_subscription_iam_policy(
+        &self,
+        subscription_id: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy> {
+        self.set_iam_policy(self.subscription_name(&subscription_id), iam_policy)
+            .await
     }
 }
 
@@ -6216,10 +6750,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>> {
-        Ok(Arc::new(PubSubClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(OfficialGcpPubSubClient::new(config.clone())?))
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {
@@ -6617,6 +7148,54 @@ async fn iam_admin_client_from_alien_config(config: &GcpClientConfig) -> Result<
         })
 }
 
+async fn pubsub_topic_admin_from_alien_config(
+    config: &GcpClientConfig,
+) -> Result<OfficialTopicAdmin> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = OfficialTopicAdmin::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("pubsub"))
+    {
+        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
+    }
+
+    builder
+        .build()
+        .await
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official GCP Pub/Sub TopicAdmin client".to_string(),
+            resource_id: None,
+        })
+}
+
+async fn pubsub_subscription_admin_from_alien_config(
+    config: &GcpClientConfig,
+) -> Result<OfficialSubscriptionAdmin> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = OfficialSubscriptionAdmin::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("pubsub"))
+    {
+        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
+    }
+
+    builder
+        .build()
+        .await
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official GCP Pub/Sub SubscriptionAdmin client".to_string(),
+            resource_id: None,
+        })
+}
+
 async fn firestore_admin_client_from_alien_config(
     config: &GcpClientConfig,
 ) -> Result<FirestoreAdmin> {
@@ -6972,6 +7551,224 @@ fn service_account_resource_name(project_id: &str, service_account_name: &str) -
         service_account_name.to_string()
     } else {
         format!("projects/{project_id}/serviceAccounts/{service_account_name}")
+    }
+}
+
+fn pubsub_admin_endpoint(endpoint: &str) -> String {
+    endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .to_string()
+}
+
+fn pubsub_rest_endpoint(config: &GcpClientConfig) -> String {
+    config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("pubsub"))
+        .map(|endpoint| {
+            let endpoint = endpoint.trim_end_matches('/');
+            if endpoint.ends_with("/v1") {
+                endpoint.to_string()
+            } else {
+                format!("{endpoint}/v1")
+            }
+        })
+        .unwrap_or_else(|| "https://pubsub.googleapis.com/v1".to_string())
+}
+
+fn topic_to_official(topic: Topic) -> Result<OfficialTopic> {
+    let mut official = OfficialTopic::new();
+    if let Some(name) = topic.name {
+        official = official.set_name(name);
+    }
+    if let Some(labels) = topic.labels {
+        official = official.set_labels(labels);
+    }
+    if let Some(kms_key_name) = topic.kms_key_name {
+        official = official.set_kms_key_name(kms_key_name);
+    }
+    if topic.message_storage_policy.is_some()
+        || topic.schema_settings.is_some()
+        || topic.message_retention_duration.is_some()
+    {
+        return Err(AlienError::new(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Pub/Sub topic optional storage/schema/retention fields are not supported by the official adapter yet".to_string(),
+                resource_id: official.name.clone().into(),
+            },
+        ));
+    }
+    Ok(official)
+}
+
+fn topic_from_official(topic: OfficialTopic) -> Topic {
+    Topic {
+        name: none_if_empty(topic.name),
+        labels: if topic.labels.is_empty() {
+            None
+        } else {
+            Some(topic.labels)
+        },
+        message_storage_policy: topic
+            .message_storage_policy
+            .map(|policy| MessageStoragePolicy {
+                allowed_persistence_regions: policy.allowed_persistence_regions,
+                enforce_in_transit: Some(policy.enforce_in_transit),
+            }),
+        kms_key_name: none_if_empty(topic.kms_key_name),
+        schema_settings: topic.schema_settings.map(|settings| SchemaSettings {
+            schema: settings.schema,
+            encoding: settings.encoding.name().map(String::from),
+            first_revision_id: none_if_empty(settings.first_revision_id),
+            last_revision_id: none_if_empty(settings.last_revision_id),
+        }),
+        satisfies_pzs: Some(topic.satisfies_pzs),
+        message_retention_duration: topic.message_retention_duration.map(String::from),
+        state: topic.state.name().map(String::from),
+    }
+}
+
+fn subscription_to_official(subscription: Subscription) -> Result<OfficialSubscription> {
+    let mut official = OfficialSubscription::new();
+    if let Some(name) = subscription.name {
+        official = official.set_name(name);
+    }
+    if let Some(topic) = subscription.topic {
+        official = official.set_topic(topic);
+    }
+    if let Some(push_config) = subscription.push_config {
+        official = official.set_push_config(push_config_to_official(push_config)?);
+    }
+    if let Some(ack_deadline_seconds) = subscription.ack_deadline_seconds {
+        official = official.set_ack_deadline_seconds(ack_deadline_seconds);
+    }
+    if let Some(retain_acked_messages) = subscription.retain_acked_messages {
+        official = official.set_retain_acked_messages(retain_acked_messages);
+    }
+    if let Some(labels) = subscription.labels {
+        official = official.set_labels(labels);
+    }
+    if let Some(enable_message_ordering) = subscription.enable_message_ordering {
+        official = official.set_enable_message_ordering(enable_message_ordering);
+    }
+    if let Some(filter) = subscription.filter {
+        official = official.set_filter(filter);
+    }
+    if let Some(detached) = subscription.detached {
+        official = official.set_detached(detached);
+    }
+    if subscription.message_retention_duration.is_some()
+        || subscription.expiration_policy.is_some()
+        || subscription.dead_letter_policy.is_some()
+        || subscription.retry_policy.is_some()
+        || subscription.bigquery_config.is_some()
+        || subscription.cloud_storage_config.is_some()
+    {
+        return Err(AlienError::new(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Pub/Sub subscription optional retention/expiration/dead-letter/retry/export fields are not supported by the official adapter yet".to_string(),
+                resource_id: official.name.clone().into(),
+            },
+        ));
+    }
+
+    Ok(official)
+}
+
+fn subscription_from_official(subscription: OfficialSubscription) -> Subscription {
+    Subscription {
+        name: none_if_empty(subscription.name),
+        topic: none_if_empty(subscription.topic),
+        push_config: subscription.push_config.map(push_config_from_official),
+        ack_deadline_seconds: Some(subscription.ack_deadline_seconds),
+        retain_acked_messages: Some(subscription.retain_acked_messages),
+        message_retention_duration: subscription.message_retention_duration.map(String::from),
+        labels: if subscription.labels.is_empty() {
+            None
+        } else {
+            Some(subscription.labels)
+        },
+        enable_message_ordering: Some(subscription.enable_message_ordering),
+        expiration_policy: None,
+        filter: none_if_empty(subscription.filter),
+        dead_letter_policy: subscription
+            .dead_letter_policy
+            .map(|policy| DeadLetterPolicy {
+                dead_letter_topic: none_if_empty(policy.dead_letter_topic),
+                max_delivery_attempts: Some(policy.max_delivery_attempts),
+            }),
+        retry_policy: None,
+        detached: Some(subscription.detached),
+        state: subscription.state.name().map(String::from),
+        analytics_hub_subscription_info: None,
+        bigquery_config: None,
+        cloud_storage_config: None,
+    }
+}
+
+fn push_config_to_official(push_config: PushConfig) -> Result<OfficialPushConfig> {
+    let mut official = OfficialPushConfig::new();
+    if let Some(push_endpoint) = push_config.push_endpoint {
+        official = official.set_push_endpoint(push_endpoint);
+    }
+    if let Some(attributes) = push_config.attributes {
+        official = official.set_attributes(attributes);
+    }
+    if let Some(oidc_token) = push_config.oidc_token {
+        let mut official_oidc = OfficialPubSubOidcToken::new()
+            .set_service_account_email(oidc_token.service_account_email);
+        if let Some(audience) = oidc_token.audience {
+            official_oidc = official_oidc.set_audience(audience);
+        }
+        official = official.set_oidc_token(official_oidc);
+    }
+    if let Some(pubsub_wrapper) = push_config.pubsub_wrapper {
+        if pubsub_wrapper.write_metadata.is_some() {
+            return Err(AlienError::new(
+                crate::error::ErrorData::CloudPlatformError {
+                    message:
+                        "Pub/Sub pubsubWrapper.writeMetadata is not supported by the official API"
+                            .to_string(),
+                    resource_id: None,
+                },
+            ));
+        }
+        official = official
+            .set_pubsub_wrapper(google_cloud_pubsub::model::push_config::PubsubWrapper::new());
+    }
+    if let Some(no_wrapper) = push_config.no_wrapper {
+        let mut official_wrapper = google_cloud_pubsub::model::push_config::NoWrapper::new();
+        if let Some(write_metadata) = no_wrapper.write_metadata {
+            official_wrapper = official_wrapper.set_write_metadata(write_metadata);
+        }
+        official = official.set_no_wrapper(official_wrapper);
+    }
+    Ok(official)
+}
+
+fn push_config_from_official(push_config: OfficialPushConfig) -> PushConfig {
+    let oidc_token = push_config.oidc_token().map(|token| OidcToken {
+        service_account_email: token.service_account_email.clone(),
+        audience: none_if_empty(token.audience.clone()),
+    });
+    let pubsub_wrapper = push_config.pubsub_wrapper().map(|_wrapper| PubsubWrapper {
+        write_metadata: None,
+    });
+    let no_wrapper = push_config.no_wrapper().map(|wrapper| NoWrapper {
+        write_metadata: Some(wrapper.write_metadata),
+    });
+
+    PushConfig {
+        push_endpoint: none_if_empty(push_config.push_endpoint),
+        attributes: if push_config.attributes.is_empty() {
+            None
+        } else {
+            Some(push_config.attributes)
+        },
+        oidc_token,
+        pubsub_wrapper,
+        no_wrapper,
     }
 }
 

@@ -1,22 +1,26 @@
 // Stub module for future GCP Queue controller implementation.
 
-use crate::core::ResourceControllerContext;
+use crate::core::{IamPolicy, ResourceControllerContext, Subscription, Topic};
 use crate::error::{ErrorData, Result};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpPubSubQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_gcp_clients::iam::IamPolicy;
-use alien_gcp_clients::pubsub::{Subscription, Topic};
 use alien_macros::controller;
 use alien_permissions::generators::GcpBindingResourceKind;
 use chrono::Utc;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::info;
+
+fn is_remote_resource_not_found(error: &AlienError<ErrorData>) -> bool {
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
+}
 
 fn get_topic_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
@@ -264,12 +268,7 @@ impl GcpQueueController {
         if let Some(sub) = &self.subscription_name {
             match client.delete_subscription(sub.clone()).await {
                 Ok(()) => info!(subscription = %sub, "Pub/Sub subscription deleted"),
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_remote_resource_not_found(&e) => {
                     info!(subscription = %sub, "Pub/Sub subscription already deleted");
                 }
                 Err(e) => {
@@ -283,12 +282,7 @@ impl GcpQueueController {
         if let Some(topic) = &self.topic_name {
             match client.delete_topic(topic.clone()).await {
                 Ok(()) => info!(topic = %topic, "Pub/Sub topic deleted"),
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_remote_resource_not_found(&e) => {
                     info!(topic = %topic, "Pub/Sub topic already deleted");
                 }
                 Err(e) => {
@@ -365,18 +359,6 @@ fn gcp_iam_policy_for_kind(
             .filter(|binding| binding.resource_kind == Some(kind))
             .cloned()
             .map(crate::core::ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
-            .map(|binding| alien_gcp_clients::iam::Binding {
-                role: binding.role,
-                members: binding.members,
-                condition: binding
-                    .condition
-                    .map(|condition| alien_gcp_clients::iam::Expr {
-                        expression: condition.expression,
-                        title: condition.title,
-                        description: condition.description,
-                        location: condition.location,
-                    }),
-            })
             .collect(),
         etag: None,
         kind: None,
@@ -534,9 +516,9 @@ mod tests {
     use super::*;
     use crate::core::{
         controller_test::SingleControllerExecutor, MockGcpIamApi, MockPlatformServiceProvider,
+        MockPubSubApi,
     };
     use alien_core::{Platform, Queue, ResourceStatus};
-    use alien_gcp_clients::pubsub::{MockPubSubApi, Subscription, Topic};
     use std::sync::Arc;
 
     fn setup_mock_pubsub() -> Arc<MockPubSubApi> {

@@ -3,8 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget,
-    ResourcePermissionsHelper, SchedulerJob, SchedulerOidcToken,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget, IamPolicy,
+    OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerJob, SchedulerOidcToken,
+    Subscription, Topic,
 };
 
 use crate::core::ResourceControllerContext;
@@ -23,7 +24,6 @@ use alien_gcp_clients::compute::{
 };
 use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpClientConfig, GcpCloudRunWorkerHeartbeatData,
@@ -4161,12 +4161,9 @@ impl GcpWorkerController {
         )
         .await?;
 
-        let iam_policy = alien_gcp_clients::iam::IamPolicy {
+        let iam_policy = IamPolicy {
             version: Some(3),
-            bindings: all_bindings
-                .into_iter()
-                .map(legacy_gcp_binding_from_local)
-                .collect(),
+            bindings: all_bindings,
             etag: None,
             kind: None,
             resource_id: None,
@@ -5025,12 +5022,7 @@ impl GcpWorkerController {
                         "Push subscription deleted successfully"
                     );
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_remote_resource_not_found(&e) => {
                     info!(
                         worker=%worker_config.id,
                         subscription=%subscription_name,
@@ -5162,9 +5154,9 @@ impl GcpWorkerController {
             )
         };
 
-        let iam_policy = alien_gcp_clients::iam::IamPolicy::builder()
+        let iam_policy = IamPolicy::builder()
             .version(1)
-            .bindings(vec![alien_gcp_clients::iam::Binding {
+            .bindings(vec![GcpBinding {
                 role: "roles/pubsub.publisher".to_string(),
                 members: vec![gcs_service_agent],
                 condition: None,
@@ -5524,7 +5516,6 @@ mod tests {
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
-    use alien_gcp_clients::pubsub::MockPubSubApi;
     use httpmock::{prelude::*, Mock};
     use rstest::rstest;
 
@@ -5532,11 +5523,11 @@ mod tests {
         get_cloudrun_service_name, get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
         GCP_RESOURCE_NAME_MAX_LEN,
     };
-    use crate::core::MockPlatformServiceProvider;
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         PlatformServiceProvider,
     };
+    use crate::core::{MockPlatformServiceProvider, MockPubSubApi};
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
