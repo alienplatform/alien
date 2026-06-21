@@ -99,10 +99,10 @@ impl AwsKvController {
 
         match client.describe_table(table_name).await {
             Ok(Some(table)) => {
-                match table.table_status.as_deref() {
+                match table.table_status().map(|status| status.as_str()) {
                     Some("ACTIVE") => {
                         info!(table_name=%table_name, "DynamoDB table is now active");
-                        self.table_arn = table.table_arn;
+                        self.table_arn = table.table_arn().map(ToString::to_string);
 
                         // Enable TTL on the table
                         Ok(HandlerAction::Continue {
@@ -242,12 +242,12 @@ impl AwsKvController {
         // Heartbeat check: verify table still exists and is active
         match client.describe_table(table_name).await {
             Ok(Some(table)) => {
-                if table.table_status.as_deref() != Some("ACTIVE") {
+                if table.table_status().map(|status| status.as_str()) != Some("ACTIVE") {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(
                             "Table status changed from Active to {:?}",
-                            table.table_status
+                            table.table_status()
                         ),
                     }));
                 }
@@ -391,14 +391,14 @@ impl AwsKvController {
 
         match client.describe_table(table_name).await {
             Ok(Some(table)) => {
-                if table.table_status.as_deref() == Some("DELETING") {
+                if table.table_status().map(|status| status.as_str()) == Some("DELETING") {
                     debug!(table_name=%table_name, "DynamoDB table still deleting");
                     Ok(HandlerAction::Continue {
                         state: WaitingForTableDeletion,
                         suggested_delay: Some(Duration::from_secs(15)),
                     })
                 } else {
-                    warn!(table_name=%table_name, status=?table.table_status, "Unexpected table status during deletion");
+                    warn!(table_name=%table_name, status=?table.table_status(), "Unexpected table status during deletion");
                     Ok(HandlerAction::Continue {
                         state: WaitingForTableDeletion,
                         suggested_delay: Some(Duration::from_secs(10)),
@@ -512,12 +512,46 @@ fn emit_aws_dynamodb_kv_heartbeat(
     ttl_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let table_name = table
-        .table_name
-        .clone()
+        .table_name()
+        .map(ToString::to_string)
         .unwrap_or_else(|| resource_id.to_string());
-    let table_status = table.table_status.clone();
-    let item_count = table.item_count;
-    let table_size_bytes = table.table_size_bytes;
+    let table_arn = table.table_arn().map(ToString::to_string);
+    let table_status = table
+        .table_status()
+        .map(|status| status.as_str().to_string());
+    let billing_mode = table
+        .billing_mode_summary()
+        .and_then(|summary| summary.billing_mode())
+        .map(|mode| mode.as_str().to_string());
+    let item_count = nonnegative_i64_to_u64(table.item_count());
+    let table_size_bytes = nonnegative_i64_to_u64(table.table_size_bytes());
+    let stream_enabled = table
+        .stream_specification()
+        .map(|stream| stream.stream_enabled());
+    let stream_view_type = table
+        .stream_specification()
+        .and_then(|stream| stream.stream_view_type())
+        .map(|stream_type| stream_type.as_str().to_string());
+    let sse_status = table
+        .sse_description()
+        .and_then(|sse| sse.status())
+        .map(|status| status.as_str().to_string());
+    let sse_type = table
+        .sse_description()
+        .and_then(|sse| sse.sse_type())
+        .map(|sse_type| sse_type.as_str().to_string());
+    let table_class = table
+        .table_class_summary()
+        .and_then(|summary| summary.table_class())
+        .map(|table_class| table_class.as_str().to_string());
+    let ttl_status = ttl_description
+        .as_ref()
+        .and_then(|ttl| ttl.time_to_live_status())
+        .map(|status| status.as_str().to_string());
+    let ttl_attribute_name = ttl_description
+        .as_ref()
+        .and_then(|ttl| ttl.attribute_name())
+        .map(ToString::to_string);
     let collection_issues = ttl_issue.into_iter().collect::<Vec<_>>();
     let partial = !collection_issues.is_empty();
 
@@ -540,35 +574,45 @@ fn emit_aws_dynamodb_kv_heartbeat(
                 collection_issues,
             },
             name: table_name,
-            region: region_from_table_arn(table.table_arn.as_deref()),
-            table_arn: table.table_arn,
+            region: region_from_table_arn(table_arn.as_deref()),
+            table_arn,
             table_status,
-            billing_mode: table.billing_mode,
+            billing_mode,
             key_schema: table
-                .key_schema
-                .into_iter()
+                .key_schema()
+                .iter()
                 .map(|key| AwsDynamoDbKeySchemaElement {
-                    attribute_name: key.attribute_name,
-                    key_type: key.key_type,
+                    attribute_name: key.attribute_name().to_string(),
+                    key_type: key.key_type().as_str().to_string(),
                 })
                 .collect(),
-            global_secondary_index_count: table.global_secondary_index_count,
-            local_secondary_index_count: table.local_secondary_index_count,
+            global_secondary_index_count: usize_to_u32(table.global_secondary_indexes().len()),
+            local_secondary_index_count: usize_to_u32(table.local_secondary_indexes().len()),
             item_count,
             table_size_bytes,
-            stream_enabled: table.stream_enabled,
-            stream_view_type: table.stream_view_type,
-            ttl_status: ttl_description.as_ref().and_then(|ttl| ttl.status.clone()),
-            ttl_attribute_name: ttl_description.and_then(|ttl| ttl.attribute_name),
-            deletion_protection_enabled: table.deletion_protection_enabled,
-            sse_status: table.sse_status,
-            sse_type: table.sse_type,
-            table_class: table.table_class,
-            replica_count: table.replica_count,
-            restore_in_progress: table.restore_in_progress,
+            stream_enabled,
+            stream_view_type,
+            ttl_status,
+            ttl_attribute_name,
+            deletion_protection_enabled: table.deletion_protection_enabled(),
+            sse_status,
+            sse_type,
+            table_class,
+            replica_count: usize_to_u32(table.replicas().len()),
+            restore_in_progress: table
+                .restore_summary()
+                .map(|summary| summary.restore_in_progress()),
         })),
         raw: vec![],
     });
+}
+
+fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
+fn usize_to_u32(value: usize) -> Option<u32> {
+    u32::try_from(value).ok()
 }
 
 fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {

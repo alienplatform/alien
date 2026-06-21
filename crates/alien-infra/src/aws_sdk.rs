@@ -130,6 +130,10 @@ pub use aws_sdk_apigatewayv2::{
     },
 };
 
+pub use aws_sdk_dynamodb::types::{
+    TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
+};
+
 pub use aws_sdk_eventbridge::{
     operation::{
         put_rule::{PutRuleInput as PutRuleRequest, PutRuleOutput as PutRuleResponse},
@@ -193,63 +197,6 @@ pub struct DescribeSsmParametersResponse {
     pub parameters: Vec<SsmParameterMetadata>,
     /// Whether SSM returned a next token.
     pub has_more_parameters: bool,
-}
-
-/// DynamoDB key schema metadata used by infra heartbeat collection.
-#[derive(Debug, Clone)]
-pub struct DynamoDbKeySchemaElement {
-    /// Attribute name.
-    pub attribute_name: String,
-    /// Key type, such as HASH or RANGE.
-    pub key_type: String,
-}
-
-/// DynamoDB table metadata used by infra controllers.
-#[derive(Debug, Clone)]
-pub struct DynamoDbTableDescription {
-    /// Table name.
-    pub table_name: Option<String>,
-    /// Table ARN.
-    pub table_arn: Option<String>,
-    /// Table lifecycle status.
-    pub table_status: Option<String>,
-    /// Billing mode, such as PAY_PER_REQUEST.
-    pub billing_mode: Option<String>,
-    /// Table primary key schema.
-    pub key_schema: Vec<DynamoDbKeySchemaElement>,
-    /// Number of global secondary indexes.
-    pub global_secondary_index_count: Option<u32>,
-    /// Number of local secondary indexes.
-    pub local_secondary_index_count: Option<u32>,
-    /// Approximate item count.
-    pub item_count: Option<u64>,
-    /// Approximate table size in bytes.
-    pub table_size_bytes: Option<u64>,
-    /// Whether DynamoDB Streams are enabled.
-    pub stream_enabled: Option<bool>,
-    /// Stream view type.
-    pub stream_view_type: Option<String>,
-    /// Whether deletion protection is enabled.
-    pub deletion_protection_enabled: Option<bool>,
-    /// Server-side encryption status.
-    pub sse_status: Option<String>,
-    /// Server-side encryption type.
-    pub sse_type: Option<String>,
-    /// Table class.
-    pub table_class: Option<String>,
-    /// Number of replicas.
-    pub replica_count: Option<u32>,
-    /// Whether restore is in progress.
-    pub restore_in_progress: Option<bool>,
-}
-
-/// DynamoDB TTL metadata used by infra heartbeat collection.
-#[derive(Debug, Clone)]
-pub struct DynamoDbTtlDescription {
-    /// TTL status.
-    pub status: Option<String>,
-    /// TTL attribute name.
-    pub attribute_name: Option<String>,
 }
 
 /// CodeBuild project configuration used for create and update operations.
@@ -3286,7 +3233,7 @@ impl DynamoDbApi for DynamoDbClient {
 
     async fn describe_table(&self, table_name: &str) -> Result<Option<DynamoDbTableDescription>> {
         match self.describe_table().table_name(table_name).send().await {
-            Ok(output) => Ok(output.table().map(dynamodb_table_description)),
+            Ok(output) => Ok(output.table().cloned()),
             Err(err) if is_dynamodb_table_not_found(&err) => Ok(None),
             Err(err) => Err(err
                 .into_alien_error()
@@ -3331,9 +3278,7 @@ impl DynamoDbApi for DynamoDbClient {
             .send()
             .await
         {
-            Ok(output) => Ok(output
-                .time_to_live_description()
-                .map(dynamodb_ttl_description)),
+            Ok(output) => Ok(output.time_to_live_description().cloned()),
             Err(err) if is_dynamodb_ttl_table_not_found(&err) => Ok(None),
             Err(err) => Err(err
                 .into_alien_error()
@@ -5669,77 +5614,6 @@ fn notification_configuration_from_get_output(
         .set_lambda_function_configurations(output.lambda_function_configurations)
         .set_event_bridge_configuration(output.event_bridge_configuration)
         .build()
-}
-
-fn dynamodb_table_description(
-    table: &aws_sdk_dynamodb::types::TableDescription,
-) -> DynamoDbTableDescription {
-    DynamoDbTableDescription {
-        table_name: table.table_name().map(ToString::to_string),
-        table_arn: table.table_arn().map(ToString::to_string),
-        table_status: table
-            .table_status()
-            .map(|status| status.as_str().to_string()),
-        billing_mode: table
-            .billing_mode_summary()
-            .and_then(|summary| summary.billing_mode())
-            .map(|mode| mode.as_str().to_string()),
-        key_schema: table
-            .key_schema()
-            .iter()
-            .map(|key| DynamoDbKeySchemaElement {
-                attribute_name: key.attribute_name().to_string(),
-                key_type: key.key_type().as_str().to_string(),
-            })
-            .collect(),
-        global_secondary_index_count: usize_to_u32(table.global_secondary_indexes().len()),
-        local_secondary_index_count: usize_to_u32(table.local_secondary_indexes().len()),
-        item_count: nonnegative_i64_to_u64(table.item_count()),
-        table_size_bytes: nonnegative_i64_to_u64(table.table_size_bytes()),
-        stream_enabled: table
-            .stream_specification()
-            .map(|stream| stream.stream_enabled()),
-        stream_view_type: table
-            .stream_specification()
-            .and_then(|stream| stream.stream_view_type())
-            .map(|stream_type| stream_type.as_str().to_string()),
-        deletion_protection_enabled: table.deletion_protection_enabled(),
-        sse_status: table
-            .sse_description()
-            .and_then(|sse| sse.status())
-            .map(|status| status.as_str().to_string()),
-        sse_type: table
-            .sse_description()
-            .and_then(|sse| sse.sse_type())
-            .map(|sse_type| sse_type.as_str().to_string()),
-        table_class: table
-            .table_class_summary()
-            .and_then(|summary| summary.table_class())
-            .map(|table_class| table_class.as_str().to_string()),
-        replica_count: usize_to_u32(table.replicas().len()),
-        restore_in_progress: table
-            .restore_summary()
-            .map(|summary| summary.restore_in_progress()),
-    }
-}
-
-fn dynamodb_ttl_description(
-    ttl: &aws_sdk_dynamodb::types::TimeToLiveDescription,
-) -> DynamoDbTtlDescription {
-    DynamoDbTtlDescription {
-        status: ttl
-            .time_to_live_status()
-            .map(|status| status.as_str().to_string()),
-        attribute_name: ttl.attribute_name().map(ToString::to_string),
-    }
-}
-
-fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
-    value.and_then(|value| u64::try_from(value).ok())
-}
-
-fn usize_to_u32(value: usize) -> Option<u32> {
-    u32::try_from(value).ok()
 }
 
 fn smithy_datetime_to_chrono_utc(
