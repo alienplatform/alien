@@ -134,6 +134,11 @@ pub use aws_sdk_dynamodb::types::{
 
 pub use aws_sdk_ec2::{
     operation::{
+        attach_internet_gateway::AttachInternetGatewayInput as AttachInternetGatewayRequest,
+        create_internet_gateway::{
+            CreateInternetGatewayInput as CreateInternetGatewayRequest,
+            CreateInternetGatewayOutput as CreateInternetGatewayResponse,
+        },
         create_subnet::{
             CreateSubnetInput as CreateSubnetRequest, CreateSubnetOutput as CreateSubnetResponse,
         },
@@ -145,10 +150,11 @@ pub use aws_sdk_ec2::{
         describe_vpcs::{
             DescribeVpcsInput as DescribeVpcsRequest, DescribeVpcsOutput as DescribeVpcsResponse,
         },
+        detach_internet_gateway::DetachInternetGatewayInput as DetachInternetGatewayRequest,
     },
     types::{
-        Filter, IpPermission, IpRange, ResourceType as Ec2ResourceType, Subnet, Tag as Ec2Tag,
-        TagSpecification, Vpc,
+        Filter, InternetGateway, IpPermission, IpRange, ResourceType as Ec2ResourceType, Subnet,
+        Tag as Ec2Tag, TagSpecification, Vpc,
     },
 };
 
@@ -273,45 +279,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_support: Option<bool>,
     /// Enable DNS hostnames.
     pub enable_dns_hostnames: Option<bool>,
-}
-
-/// Request to create an internet gateway.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct CreateInternetGatewayRequest {
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating an internet gateway.
-#[derive(Debug, Clone)]
-pub struct CreateInternetGatewayResponse {
-    /// Created gateway.
-    pub internet_gateway: Option<InternetGateway>,
-}
-
-/// EC2 internet gateway metadata.
-#[derive(Debug, Clone)]
-pub struct InternetGateway {
-    /// Internet gateway ID.
-    pub internet_gateway_id: Option<String>,
-}
-
-/// Request to attach an internet gateway.
-#[derive(Debug, Clone, Builder)]
-pub struct AttachInternetGatewayRequest {
-    /// Internet gateway ID.
-    pub internet_gateway_id: String,
-    /// VPC ID.
-    pub vpc_id: String,
-}
-
-/// Request to detach an internet gateway.
-#[derive(Debug, Clone, Builder)]
-pub struct DetachInternetGatewayRequest {
-    /// Internet gateway ID.
-    pub internet_gateway_id: String,
-    /// VPC ID.
-    pub vpc_id: String,
 }
 
 /// Request to create a NAT gateway.
@@ -3429,21 +3396,16 @@ impl Ec2Api for Ec2Client {
         &self,
         request: CreateInternetGatewayRequest,
     ) -> Result<CreateInternetGatewayResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.create_internet_gateway()
                 .set_tag_specifications(request.tag_specifications)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "CreateInternetGateway",
             "InternetGateway",
             "*",
-        )?;
-
-        Ok(CreateInternetGatewayResponse {
-            internet_gateway: response.internet_gateway().map(|gateway| InternetGateway {
-                internet_gateway_id: gateway.internet_gateway_id().map(ToString::to_string),
-            }),
-        })
+        )
     }
 
     async fn delete_internet_gateway(&self, internet_gateway_id: &str) -> Result<()> {
@@ -3460,11 +3422,15 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn attach_internet_gateway(&self, request: AttachInternetGatewayRequest) -> Result<()> {
-        let internet_gateway_id = request.internet_gateway_id.clone();
+        let internet_gateway_id = request
+            .internet_gateway_id()
+            .unwrap_or("<unknown>")
+            .to_string();
         ec2_result(
             self.attach_internet_gateway()
-                .internet_gateway_id(request.internet_gateway_id)
-                .vpc_id(request.vpc_id)
+                .set_dry_run(request.dry_run)
+                .set_internet_gateway_id(request.internet_gateway_id)
+                .set_vpc_id(request.vpc_id)
                 .send()
                 .await,
             "AttachInternetGateway",
@@ -3475,11 +3441,15 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn detach_internet_gateway(&self, request: DetachInternetGatewayRequest) -> Result<()> {
-        let internet_gateway_id = request.internet_gateway_id.clone();
+        let internet_gateway_id = request
+            .internet_gateway_id()
+            .unwrap_or("<unknown>")
+            .to_string();
         ec2_result(
             self.detach_internet_gateway()
-                .internet_gateway_id(request.internet_gateway_id)
-                .vpc_id(request.vpc_id)
+                .set_dry_run(request.dry_run)
+                .set_internet_gateway_id(request.internet_gateway_id)
+                .set_vpc_id(request.vpc_id)
                 .send()
                 .await,
             "DetachInternetGateway",

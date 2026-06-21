@@ -799,16 +799,21 @@ impl AwsNetworkController {
         info!("Creating Internet Gateway");
 
         // Create Internet Gateway
+        let create_gateway_request = CreateInternetGatewayRequest::builder()
+            .set_tag_specifications(Some(self.create_tags(
+                ctx.resource_prefix,
+                &config.id,
+                "internet-gateway",
+            )))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build CreateInternetGateway request".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
         let igw_response = client
-            .create_internet_gateway(
-                CreateInternetGatewayRequest::builder()
-                    .tag_specifications(self.create_tags(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "internet-gateway",
-                    ))
-                    .build(),
-            )
+            .create_internet_gateway(create_gateway_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to create Internet Gateway".to_string(),
@@ -816,8 +821,9 @@ impl AwsNetworkController {
             })?;
 
         let igw_id = igw_response
-            .internet_gateway
-            .and_then(|igw| igw.internet_gateway_id)
+            .internet_gateway()
+            .and_then(|igw| igw.internet_gateway_id())
+            .map(ToString::to_string)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: "Internet Gateway created but no ID returned".to_string(),
@@ -828,13 +834,18 @@ impl AwsNetworkController {
         info!(igw_id = %igw_id, "Internet Gateway created, attaching to VPC");
 
         // Attach Internet Gateway to VPC
+        let attach_gateway_request = AttachInternetGatewayRequest::builder()
+            .internet_gateway_id(igw_id.clone())
+            .vpc_id(vpc_id.clone())
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build AttachInternetGateway request".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
         client
-            .attach_internet_gateway(
-                AttachInternetGatewayRequest::builder()
-                    .internet_gateway_id(igw_id.clone())
-                    .vpc_id(vpc_id.clone())
-                    .build(),
-            )
+            .attach_internet_gateway(attach_gateway_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to attach Internet Gateway to VPC".to_string(),
@@ -1966,21 +1977,24 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
         // Detach and delete Internet Gateway
         if let Some(igw_id) = &self.internet_gateway_id {
             if let Some(vpc_id) = &self.vpc_id {
                 info!(igw_id = %igw_id, vpc_id = %vpc_id, "Detaching Internet Gateway");
 
-                match client
-                    .detach_internet_gateway(
-                        DetachInternetGatewayRequest::builder()
-                            .internet_gateway_id(igw_id.clone())
-                            .vpc_id(vpc_id.clone())
-                            .build(),
-                    )
-                    .await
-                {
+                let detach_gateway_request = DetachInternetGatewayRequest::builder()
+                    .internet_gateway_id(igw_id.clone())
+                    .vpc_id(vpc_id.clone())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build DetachInternetGateway request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+
+                match client.detach_internet_gateway(detach_gateway_request).await {
                     Ok(_) => {
                         info!(igw_id = %igw_id, "Internet Gateway detached");
                     }
