@@ -68,11 +68,7 @@ use aws_sdk_iam::{
     Client as IamClient,
 };
 use aws_sdk_lambda::{
-    types::{
-        Architecture as AwsLambdaArchitecture,
-        EventSourceMappingConfiguration as AwsEventSourceMappingConfiguration,
-        FunctionResponseType, FunctionUrlAuthType, PackageType,
-    },
+    types::{Architecture as AwsLambdaArchitecture, FunctionUrlAuthType, PackageType},
     Client as LambdaClient,
 };
 use aws_sdk_s3::{
@@ -124,6 +120,15 @@ pub use aws_sdk_acm::{
 pub type ReimportCertificateRequest = ImportCertificateRequest;
 
 pub use aws_sdk_lambda::operation::{
+    create_event_source_mapping::{
+        CreateEventSourceMappingInput as CreateEventSourceMappingRequest,
+        CreateEventSourceMappingOutput as CreateEventSourceMappingResponse,
+    },
+    delete_event_source_mapping::DeleteEventSourceMappingOutput as DeleteEventSourceMappingResponse,
+    list_event_source_mappings::{
+        ListEventSourceMappingsInput as ListEventSourceMappingsRequest,
+        ListEventSourceMappingsOutput as ListEventSourceMappingsResponse,
+    },
     update_function_code::UpdateFunctionCodeInput as UpdateFunctionCodeRequest,
     update_function_configuration::UpdateFunctionConfigurationInput as UpdateFunctionConfigurationRequest,
 };
@@ -347,68 +352,6 @@ pub struct AddPermissionRequest {
 pub struct AddPermissionResponse {
     /// Serialized policy statement returned by Lambda.
     pub statement: Option<String>,
-}
-
-/// Lambda event-source mapping creation request.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateEventSourceMappingRequest {
-    /// Event source ARN.
-    pub event_source_arn: String,
-    /// Function name or ARN.
-    pub function_name: String,
-    /// Batch size.
-    pub batch_size: Option<i32>,
-    /// Whether the mapping is enabled.
-    pub enabled: Option<bool>,
-}
-
-/// Lambda event-source mapping list request.
-#[derive(Debug, Clone, Builder)]
-pub struct ListEventSourceMappingsRequest {
-    /// Event source ARN.
-    pub event_source_arn: Option<String>,
-    /// Function name or ARN.
-    pub function_name: Option<String>,
-    /// Pagination token.
-    pub marker: Option<String>,
-    /// Maximum items.
-    pub max_items: Option<i32>,
-}
-
-/// Lambda event-source mapping list response.
-#[derive(Debug, Clone)]
-pub struct ListEventSourceMappingsResponse {
-    /// Event source mappings.
-    pub event_source_mappings: Option<Vec<EventSourceMapping>>,
-    /// Pagination token.
-    pub next_marker: Option<String>,
-}
-
-/// Lambda event-source mapping metadata.
-#[derive(Debug, Clone)]
-pub struct EventSourceMapping {
-    /// Mapping UUID.
-    pub uuid: Option<String>,
-    /// Event source ARN.
-    pub event_source_arn: Option<String>,
-    /// Function ARN.
-    pub function_arn: Option<String>,
-    /// Batch size.
-    pub batch_size: Option<i32>,
-    /// Last modified timestamp as epoch seconds.
-    pub last_modified: Option<f64>,
-    /// Last processing result.
-    pub last_processing_result: Option<String>,
-    /// Mapping state.
-    pub state: Option<String>,
-    /// State transition reason.
-    pub state_transition_reason: Option<String>,
-    /// Maximum batching window in seconds.
-    pub maximum_batching_window_in_seconds: Option<i32>,
-    /// Function response types.
-    pub function_response_types: Option<Vec<String>>,
-    /// Maximum concurrency for SQS mappings.
-    pub maximum_concurrency: Option<i32>,
 }
 
 /// API Gateway V2 create API request.
@@ -1926,9 +1869,12 @@ pub trait LambdaApi: Send + Sync {
     async fn create_event_source_mapping(
         &self,
         request: CreateEventSourceMappingRequest,
-    ) -> Result<EventSourceMapping>;
+    ) -> Result<CreateEventSourceMappingResponse>;
     /// Delete an event-source mapping.
-    async fn delete_event_source_mapping(&self, uuid: &str) -> Result<EventSourceMapping>;
+    async fn delete_event_source_mapping(
+        &self,
+        uuid: &str,
+    ) -> Result<DeleteEventSourceMappingResponse>;
     /// List event-source mappings.
     async fn list_event_source_mappings(
         &self,
@@ -3059,24 +3005,61 @@ impl LambdaApi for LambdaClient {
     async fn create_event_source_mapping(
         &self,
         request: CreateEventSourceMappingRequest,
-    ) -> Result<EventSourceMapping> {
+    ) -> Result<CreateEventSourceMappingResponse> {
+        let resource_name = request
+            .event_source_arn
+            .as_deref()
+            .or(request.function_name.as_deref())
+            .unwrap_or("unknown")
+            .to_string();
         let output = lambda_result(
             self.create_event_source_mapping()
-                .event_source_arn(request.event_source_arn.clone())
-                .function_name(request.function_name.clone())
-                .set_batch_size(request.batch_size)
+                .set_event_source_arn(request.event_source_arn)
+                .set_function_name(request.function_name)
                 .set_enabled(request.enabled)
+                .set_batch_size(request.batch_size)
+                .set_filter_criteria(request.filter_criteria)
+                .set_maximum_batching_window_in_seconds(request.maximum_batching_window_in_seconds)
+                .set_parallelization_factor(request.parallelization_factor)
+                .set_starting_position(request.starting_position)
+                .set_starting_position_timestamp(request.starting_position_timestamp)
+                .set_destination_config(request.destination_config)
+                .set_maximum_record_age_in_seconds(request.maximum_record_age_in_seconds)
+                .set_bisect_batch_on_function_error(request.bisect_batch_on_function_error)
+                .set_maximum_retry_attempts(request.maximum_retry_attempts)
+                .set_tags(request.tags)
+                .set_tumbling_window_in_seconds(request.tumbling_window_in_seconds)
+                .set_topics(request.topics)
+                .set_queues(request.queues)
+                .set_source_access_configurations(request.source_access_configurations)
+                .set_self_managed_event_source(request.self_managed_event_source)
+                .set_function_response_types(request.function_response_types)
+                .set_amazon_managed_kafka_event_source_config(
+                    request.amazon_managed_kafka_event_source_config,
+                )
+                .set_self_managed_kafka_event_source_config(
+                    request.self_managed_kafka_event_source_config,
+                )
+                .set_scaling_config(request.scaling_config)
+                .set_document_db_event_source_config(request.document_db_event_source_config)
+                .set_kms_key_arn(request.kms_key_arn)
+                .set_metrics_config(request.metrics_config)
+                .set_logging_config(request.logging_config)
+                .set_provisioned_poller_config(request.provisioned_poller_config)
                 .send()
                 .await,
             "CreateEventSourceMapping",
             "EventSourceMapping",
-            &request.event_source_arn,
+            &resource_name,
         )?;
 
-        Ok(event_source_mapping_from_create_output(output))
+        Ok(output)
     }
 
-    async fn delete_event_source_mapping(&self, uuid: &str) -> Result<EventSourceMapping> {
+    async fn delete_event_source_mapping(
+        &self,
+        uuid: &str,
+    ) -> Result<DeleteEventSourceMappingResponse> {
         let output = lambda_result(
             self.delete_event_source_mapping().uuid(uuid).send().await,
             "DeleteEventSourceMapping",
@@ -3084,7 +3067,7 @@ impl LambdaApi for LambdaClient {
             uuid,
         )?;
 
-        Ok(event_source_mapping_from_delete_output(output))
+        Ok(output)
     }
 
     async fn list_event_source_mappings(
@@ -3110,15 +3093,7 @@ impl LambdaApi for LambdaClient {
             &resource_name,
         )?;
 
-        Ok(ListEventSourceMappingsResponse {
-            event_source_mappings: output.event_source_mappings.map(|mappings| {
-                mappings
-                    .into_iter()
-                    .map(event_source_mapping_from_aws)
-                    .collect()
-            }),
-            next_marker: output.next_marker,
-        })
+        Ok(output)
     }
 
     async fn put_function_concurrency(
@@ -6080,73 +6055,6 @@ fn function_configuration_from_get_output(
             .map(|status| status.as_str().to_string()),
         kms_key_arn: output.kms_key_arn,
     }
-}
-
-fn event_source_mapping_from_create_output(
-    output: aws_sdk_lambda::operation::create_event_source_mapping::CreateEventSourceMappingOutput,
-) -> EventSourceMapping {
-    EventSourceMapping {
-        uuid: output.uuid,
-        event_source_arn: output.event_source_arn,
-        function_arn: output.function_arn,
-        batch_size: output.batch_size,
-        last_modified: None,
-        last_processing_result: output.last_processing_result,
-        state: output.state,
-        state_transition_reason: output.state_transition_reason,
-        maximum_batching_window_in_seconds: output.maximum_batching_window_in_seconds,
-        function_response_types: output.function_response_types.map(function_response_types),
-        maximum_concurrency: output
-            .scaling_config
-            .and_then(|config| config.maximum_concurrency),
-    }
-}
-
-fn event_source_mapping_from_delete_output(
-    output: aws_sdk_lambda::operation::delete_event_source_mapping::DeleteEventSourceMappingOutput,
-) -> EventSourceMapping {
-    EventSourceMapping {
-        uuid: output.uuid,
-        event_source_arn: output.event_source_arn,
-        function_arn: output.function_arn,
-        batch_size: output.batch_size,
-        last_modified: None,
-        last_processing_result: output.last_processing_result,
-        state: output.state,
-        state_transition_reason: output.state_transition_reason,
-        maximum_batching_window_in_seconds: output.maximum_batching_window_in_seconds,
-        function_response_types: output.function_response_types.map(function_response_types),
-        maximum_concurrency: output
-            .scaling_config
-            .and_then(|config| config.maximum_concurrency),
-    }
-}
-
-fn event_source_mapping_from_aws(
-    mapping: AwsEventSourceMappingConfiguration,
-) -> EventSourceMapping {
-    EventSourceMapping {
-        uuid: mapping.uuid,
-        event_source_arn: mapping.event_source_arn,
-        function_arn: mapping.function_arn,
-        batch_size: mapping.batch_size,
-        last_modified: None,
-        last_processing_result: mapping.last_processing_result,
-        state: mapping.state,
-        state_transition_reason: mapping.state_transition_reason,
-        maximum_batching_window_in_seconds: mapping.maximum_batching_window_in_seconds,
-        function_response_types: mapping.function_response_types.map(function_response_types),
-        maximum_concurrency: mapping
-            .scaling_config
-            .and_then(|config| config.maximum_concurrency),
-    }
-}
-
-fn function_response_types(types: Vec<FunctionResponseType>) -> Vec<String> {
-    types
-        .iter()
-        .map(|response_type| response_type.as_str().to_string())
-        .collect()
 }
 
 fn lambda_result<T, E>(

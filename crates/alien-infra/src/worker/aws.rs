@@ -3771,13 +3771,18 @@ impl AwsWorkerController {
             })
         })?;
 
+        let list_request = ListEventSourceMappingsRequest::builder()
+            .event_source_arn(queue_arn.clone())
+            .function_name(worker_name.clone())
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda event source mapping list request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
         let existing_mappings = lambda_client
-            .list_event_source_mappings(ListEventSourceMappingsRequest {
-                event_source_arn: Some(queue_arn.clone()),
-                function_name: Some(worker_name.clone()),
-                marker: None,
-                max_items: None,
-            })
+            .list_event_source_mappings(list_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -3815,18 +3820,28 @@ impl AwsWorkerController {
             .function_name(worker_name.clone())
             .batch_size(1) // Always 1 message per invocation as per design
             .enabled(true)
-            .build();
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda event source mapping create request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
-        let response = match lambda_client.create_event_source_mapping(request).await {
-            Ok(response) => response,
+        let mapping_uuid = match lambda_client.create_event_source_mapping(request).await {
+            Ok(response) => response.uuid,
             Err(e) if is_remote_resource_conflict(&e) => {
+                let list_request = ListEventSourceMappingsRequest::builder()
+                    .event_source_arn(queue_arn.clone())
+                    .function_name(worker_name.clone())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid Lambda event source mapping list request".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
+
                 let existing_mappings = lambda_client
-                    .list_event_source_mappings(ListEventSourceMappingsRequest {
-                        event_source_arn: Some(queue_arn.clone()),
-                        function_name: Some(worker_name.clone()),
-                        marker: None,
-                        max_items: None,
-                    })
+                    .list_event_source_mappings(list_request)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -3853,6 +3868,7 @@ impl AwsWorkerController {
                             resource_id: Some(worker_config.id.clone()),
                         })
                     })?
+                    .uuid
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -3865,7 +3881,7 @@ impl AwsWorkerController {
             }
         };
 
-        if let Some(uuid) = response.uuid {
+        if let Some(uuid) = mapping_uuid {
             if !self.event_source_mappings.contains(&uuid) {
                 self.event_source_mappings.push(uuid.clone());
             }
