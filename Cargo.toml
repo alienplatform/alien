@@ -29,7 +29,7 @@ members = [
   "crates/alien-terraform",
   "crates/alien-helm",
   "crates/alien-manager",
-  "crates/alien-agent",
+  "crates/alien-operator",
   "crates/alien-deploy-cli",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",

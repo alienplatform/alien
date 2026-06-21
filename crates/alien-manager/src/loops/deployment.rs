@@ -308,12 +308,12 @@ impl DeploymentLoop {
             .as_ref()
             .expect("stored deployment carries stack_settings");
 
-        // Pull-mode deployments are entirely driven by the alien-agent running in the
+        // Pull-mode deployments are entirely driven by the alien-operator running in the
         // target environment. The manager must not attempt to provision or deploy them.
         if stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
             debug!(
                 deployment_id = %deployment_id,
-                "Skipping pull-mode deployment — handled by alien-agent"
+                "Skipping pull-mode deployment — handled by alien-operator"
             );
             return Ok(());
         }

@@ -401,7 +401,7 @@ async fn release_task_core(
 
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
         // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
-        // Local platform pushes to a cloud registry — the alien-agent pulls from it.
+        // Local platform pushes to a cloud registry — the alien-operator pulls from it.
         let pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
@@ -1476,7 +1476,7 @@ mod tests {
     use alien_core::ResourceLifecycle;
 
     fn daemon_with_image(image: &str) -> Daemon {
-        Daemon::new("agent".to_string())
+        Daemon::new("operator".to_string())
             .permissions("execution".to_string())
             .code(DaemonCode::Image {
                 image: image.to_string(),
@@ -1487,7 +1487,7 @@ mod tests {
     #[test]
     fn push_cache_applies_and_collects_for_daemons() {
         let local_dir = tempfile::tempdir().unwrap();
-        let artifact_dir = local_dir.path().join("agent-a1b2c3d4");
+        let artifact_dir = local_dir.path().join("operator-a1b2c3d4");
         std::fs::create_dir_all(&artifact_dir).unwrap();
         let local_path = artifact_dir.to_string_lossy().into_owned();
 
@@ -1496,8 +1496,8 @@ mod tests {
             .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
             .build();
         let cache = HashMap::from([(
-            "agent-a1b2c3d4".to_string(),
-            "registry.example.com/agent:tag".to_string(),
+            "operator-a1b2c3d4".to_string(),
+            "registry.example.com/operator:tag".to_string(),
         )]);
         let hits = apply_push_cache(&mut stack, &cache);
         assert_eq!(hits, 1, "daemon local path should hit the cache");
@@ -1508,7 +1508,7 @@ mod tests {
         assert_eq!(
             daemon.code,
             DaemonCode::Image {
-                image: "registry.example.com/agent:tag".to_string()
+                image: "registry.example.com/operator:tag".to_string()
             }
         );
 
@@ -1518,15 +1518,15 @@ mod tests {
             .build();
         let pushed = Stack::new("cache-test".to_string())
             .add(
-                daemon_with_image("registry.example.com/agent:pushed"),
+                daemon_with_image("registry.example.com/operator:pushed"),
                 ResourceLifecycle::Live,
             )
             .build();
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected);
         assert_eq!(
-            collected.get("agent-a1b2c3d4").map(String::as_str),
-            Some("registry.example.com/agent:pushed")
+            collected.get("operator-a1b2c3d4").map(String::as_str),
+            Some("registry.example.com/operator:pushed")
         );
     }
 

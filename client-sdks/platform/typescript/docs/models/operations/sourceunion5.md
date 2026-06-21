@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `operations.Source5`
+### `operations.DataSource5`
 
 ```typescript
-const value: operations.Source5 = {};
+const value: operations.DataSource5 = {};
 ```
 
 ### `any`

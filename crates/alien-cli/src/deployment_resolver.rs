@@ -29,11 +29,7 @@ use alien_manager_api::{Client, SdkResultExt};
 ///
 /// `is_dev` only affects the hint surfaced in error messages
 /// (`alien dev deployments ls` vs `alien deployments ls`).
-pub async fn resolve(
-    manager: &Client,
-    spec: &str,
-    is_dev: bool,
-) -> Result<DeploymentResponse> {
+pub async fn resolve(manager: &Client, spec: &str, is_dev: bool) -> Result<DeploymentResponse> {
     if spec.starts_with("dep_") {
         return resolve_by_id(manager, spec).await;
     }
@@ -94,10 +90,7 @@ async fn resolve_by_group_and_name(
         .into_iter()
         .filter(|d| {
             d.name.as_str() == name
-                && d.deployment_group
-                    .as_ref()
-                    .map(|dg| dg.name.as_str())
-                    == Some(group)
+                && d.deployment_group.as_ref().map(|dg| dg.name.as_str()) == Some(group)
         })
         .collect();
 

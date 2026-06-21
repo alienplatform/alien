@@ -431,8 +431,8 @@ fn emit_gcp_pubsub_queue_heartbeat(
         resource_type: Queue::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Queue(QueueHeartbeatData::GcpPubSub(
             GcpPubSubQueueHeartbeatData {

@@ -3057,7 +3057,13 @@ export type SyncReconcileRequestStackStateUnion =
   | any;
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const StateStatus = {
   Pending: "pending",
@@ -3080,7 +3086,13 @@ export const StateStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type StateStatus = ClosedEnum<typeof StateStatus>;
 
@@ -4378,7 +4390,13 @@ export type SyncReconcileRequestState = {
     | undefined;
   stackState?: SyncReconcileRequestStackState | any | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: StateStatus;
   targetRelease?: SyncReconcileRequestTargetRelease | any | null | undefined;
@@ -4915,12 +4933,12 @@ export type InvolvedObject9 = {
 
 export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type SyncReconcileRequestSource9 = {
+export type DataSource9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = SyncReconcileRequestSource9 | any;
+export type SourceUnion9 = DataSource9 | any;
 
 export type SyncReconcileRequestEvent12 = {
   count?: number | null | undefined;
@@ -4931,7 +4949,7 @@ export type SyncReconcileRequestEvent12 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource9 | any | null | undefined;
+  source?: DataSource9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -7354,12 +7372,12 @@ export type InvolvedObject8 = {
 
 export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type SyncReconcileRequestSource8 = {
+export type DataSource8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = SyncReconcileRequestSource8 | any;
+export type SourceUnion8 = DataSource8 | any;
 
 export type SyncReconcileRequestEvent11 = {
   count?: number | null | undefined;
@@ -7370,7 +7388,7 @@ export type SyncReconcileRequestEvent11 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource8 | any | null | undefined;
+  source?: DataSource8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -8408,12 +8426,12 @@ export type InvolvedObject7 = {
 
 export type InvolvedObjectUnion7 = InvolvedObject7 | any;
 
-export type SyncReconcileRequestSource7 = {
+export type DataSource7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = SyncReconcileRequestSource7 | any;
+export type SourceUnion7 = DataSource7 | any;
 
 export type SyncReconcileRequestEvent9 = {
   count?: number | null | undefined;
@@ -8424,7 +8442,7 @@ export type SyncReconcileRequestEvent9 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource7 | any | null | undefined;
+  source?: DataSource7 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -8670,12 +8688,12 @@ export type InvolvedObject6 = {
 
 export type InvolvedObjectUnion6 = InvolvedObject6 | any;
 
-export type SyncReconcileRequestSource6 = {
+export type DataSource6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = SyncReconcileRequestSource6 | any;
+export type SourceUnion6 = DataSource6 | any;
 
 export type SyncReconcileRequestEvent8 = {
   count?: number | null | undefined;
@@ -8688,7 +8706,7 @@ export type SyncReconcileRequestEvent8 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource6 | any | null | undefined;
+  source?: DataSource6 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -8835,12 +8853,12 @@ export type InvolvedObject5 = {
 
 export type InvolvedObjectUnion5 = InvolvedObject5 | any;
 
-export type SyncReconcileRequestSource5 = {
+export type DataSource5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = SyncReconcileRequestSource5 | any;
+export type SourceUnion5 = DataSource5 | any;
 
 export type SyncReconcileRequestEvent7 = {
   count?: number | null | undefined;
@@ -8853,7 +8871,7 @@ export type SyncReconcileRequestEvent7 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource5 | any | null | undefined;
+  source?: DataSource5 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -9000,12 +9018,12 @@ export type InvolvedObject4 = {
 
 export type InvolvedObjectUnion4 = InvolvedObject4 | any;
 
-export type SyncReconcileRequestSource4 = {
+export type DataSource4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = SyncReconcileRequestSource4 | any;
+export type SourceUnion4 = DataSource4 | any;
 
 export type SyncReconcileRequestEvent6 = {
   count?: number | null | undefined;
@@ -9018,7 +9036,7 @@ export type SyncReconcileRequestEvent6 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource4 | any | null | undefined;
+  source?: DataSource4 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -9329,12 +9347,12 @@ export type InvolvedObject3 = {
 
 export type InvolvedObjectUnion3 = InvolvedObject3 | any;
 
-export type SyncReconcileRequestSource3 = {
+export type DataSource3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = SyncReconcileRequestSource3 | any;
+export type SourceUnion3 = DataSource3 | any;
 
 export type SyncReconcileRequestEvent4 = {
   count?: number | null | undefined;
@@ -9345,7 +9363,7 @@ export type SyncReconcileRequestEvent4 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource3 | any | null | undefined;
+  source?: DataSource3 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -9560,12 +9578,12 @@ export type InvolvedObject2 = {
 
 export type InvolvedObjectUnion2 = InvolvedObject2 | any;
 
-export type SyncReconcileRequestSource2 = {
+export type DataSource2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = SyncReconcileRequestSource2 | any;
+export type SourceUnion2 = DataSource2 | any;
 
 export type SyncReconcileRequestEvent3 = {
   count?: number | null | undefined;
@@ -9578,7 +9596,7 @@ export type SyncReconcileRequestEvent3 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource2 | any | null | undefined;
+  source?: DataSource2 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -9964,12 +9982,12 @@ export type InvolvedObject1 = {
 
 export type InvolvedObjectUnion1 = InvolvedObject1 | any;
 
-export type SyncReconcileRequestSource1 = {
+export type DataSource1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = SyncReconcileRequestSource1 | any;
+export type SourceUnion1 = DataSource1 | any;
 
 export type SyncReconcileRequestEvent1 = {
   count?: number | null | undefined;
@@ -9980,7 +9998,7 @@ export type SyncReconcileRequestEvent1 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource1 | any | null | undefined;
+  source?: DataSource1 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -10769,7 +10787,14 @@ export type Raw = {
   truncated: boolean;
 };
 
+export const SourceEnum = {
+  Managed: "managed",
+  Observed: "observed",
+} as const;
+export type SourceEnum = ClosedEnum<typeof SourceEnum>;
+
 export type Heartbeat = {
+  alienResourceId?: string | null | undefined;
   backend: BackendEnum;
   /**
    * Represents the target cloud platform.
@@ -10798,11 +10823,18 @@ export type Heartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
+  /**
+   * For managed heartbeats this is the Alien resource id. For observed heartbeats this is the
+   *
+   * @remarks
+   * raw provider identity, such as a Kubernetes object identity.
+   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
    */
   resourceType: string;
+  source?: SourceEnum | undefined;
 };
 
 /**
@@ -20127,41 +20159,32 @@ export function involvedObjectUnion9ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource9$Outbound = {
+export type DataSource9$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource9$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource9$Outbound,
-  SyncReconcileRequestSource9
+export const DataSource9$outboundSchema: z.ZodType<
+  DataSource9$Outbound,
+  DataSource9
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource9ToJSON(
-  syncReconcileRequestSource9: SyncReconcileRequestSource9,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource9$outboundSchema.parse(
-      syncReconcileRequestSource9,
-    ),
-  );
+export function dataSource9ToJSON(dataSource9: DataSource9): string {
+  return JSON.stringify(DataSource9$outboundSchema.parse(dataSource9));
 }
 
 /** @internal */
-export type SourceUnion9$Outbound = SyncReconcileRequestSource9$Outbound | any;
+export type SourceUnion9$Outbound = DataSource9$Outbound | any;
 
 /** @internal */
 export const SourceUnion9$outboundSchema: z.ZodType<
   SourceUnion9$Outbound,
   SourceUnion9
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource9$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource9$outboundSchema), z.any()]);
 
 export function sourceUnion9ToJSON(sourceUnion9: SourceUnion9): string {
   return JSON.stringify(SourceUnion9$outboundSchema.parse(sourceUnion9));
@@ -20177,7 +20200,7 @@ export type SyncReconcileRequestEvent12$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource9$Outbound | any | null | undefined;
+  source?: DataSource9$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -20199,10 +20222,7 @@ export const SyncReconcileRequestEvent12$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource9$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource9$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -24639,41 +24659,32 @@ export function involvedObjectUnion8ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource8$Outbound = {
+export type DataSource8$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource8$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource8$Outbound,
-  SyncReconcileRequestSource8
+export const DataSource8$outboundSchema: z.ZodType<
+  DataSource8$Outbound,
+  DataSource8
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource8ToJSON(
-  syncReconcileRequestSource8: SyncReconcileRequestSource8,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource8$outboundSchema.parse(
-      syncReconcileRequestSource8,
-    ),
-  );
+export function dataSource8ToJSON(dataSource8: DataSource8): string {
+  return JSON.stringify(DataSource8$outboundSchema.parse(dataSource8));
 }
 
 /** @internal */
-export type SourceUnion8$Outbound = SyncReconcileRequestSource8$Outbound | any;
+export type SourceUnion8$Outbound = DataSource8$Outbound | any;
 
 /** @internal */
 export const SourceUnion8$outboundSchema: z.ZodType<
   SourceUnion8$Outbound,
   SourceUnion8
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource8$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource8$outboundSchema), z.any()]);
 
 export function sourceUnion8ToJSON(sourceUnion8: SourceUnion8): string {
   return JSON.stringify(SourceUnion8$outboundSchema.parse(sourceUnion8));
@@ -24689,7 +24700,7 @@ export type SyncReconcileRequestEvent11$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource8$Outbound | any | null | undefined;
+  source?: DataSource8$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -24711,10 +24722,7 @@ export const SyncReconcileRequestEvent11$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource8$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource8$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -27183,41 +27191,32 @@ export function involvedObjectUnion7ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource7$Outbound = {
+export type DataSource7$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource7$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource7$Outbound,
-  SyncReconcileRequestSource7
+export const DataSource7$outboundSchema: z.ZodType<
+  DataSource7$Outbound,
+  DataSource7
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource7ToJSON(
-  syncReconcileRequestSource7: SyncReconcileRequestSource7,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource7$outboundSchema.parse(
-      syncReconcileRequestSource7,
-    ),
-  );
+export function dataSource7ToJSON(dataSource7: DataSource7): string {
+  return JSON.stringify(DataSource7$outboundSchema.parse(dataSource7));
 }
 
 /** @internal */
-export type SourceUnion7$Outbound = SyncReconcileRequestSource7$Outbound | any;
+export type SourceUnion7$Outbound = DataSource7$Outbound | any;
 
 /** @internal */
 export const SourceUnion7$outboundSchema: z.ZodType<
   SourceUnion7$Outbound,
   SourceUnion7
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource7$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource7$outboundSchema), z.any()]);
 
 export function sourceUnion7ToJSON(sourceUnion7: SourceUnion7): string {
   return JSON.stringify(SourceUnion7$outboundSchema.parse(sourceUnion7));
@@ -27233,7 +27232,7 @@ export type SyncReconcileRequestEvent9$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource7$Outbound | any | null | undefined;
+  source?: DataSource7$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -27255,10 +27254,7 @@ export const SyncReconcileRequestEvent9$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource7$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource7$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -27865,41 +27861,32 @@ export function involvedObjectUnion6ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource6$Outbound = {
+export type DataSource6$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource6$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource6$Outbound,
-  SyncReconcileRequestSource6
+export const DataSource6$outboundSchema: z.ZodType<
+  DataSource6$Outbound,
+  DataSource6
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource6ToJSON(
-  syncReconcileRequestSource6: SyncReconcileRequestSource6,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource6$outboundSchema.parse(
-      syncReconcileRequestSource6,
-    ),
-  );
+export function dataSource6ToJSON(dataSource6: DataSource6): string {
+  return JSON.stringify(DataSource6$outboundSchema.parse(dataSource6));
 }
 
 /** @internal */
-export type SourceUnion6$Outbound = SyncReconcileRequestSource6$Outbound | any;
+export type SourceUnion6$Outbound = DataSource6$Outbound | any;
 
 /** @internal */
 export const SourceUnion6$outboundSchema: z.ZodType<
   SourceUnion6$Outbound,
   SourceUnion6
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource6$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource6$outboundSchema), z.any()]);
 
 export function sourceUnion6ToJSON(sourceUnion6: SourceUnion6): string {
   return JSON.stringify(SourceUnion6$outboundSchema.parse(sourceUnion6));
@@ -27917,7 +27904,7 @@ export type SyncReconcileRequestEvent8$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource6$Outbound | any | null | undefined;
+  source?: DataSource6$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -27941,10 +27928,7 @@ export const SyncReconcileRequestEvent8$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource6$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource6$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -28280,41 +28264,32 @@ export function involvedObjectUnion5ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource5$Outbound = {
+export type DataSource5$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource5$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource5$Outbound,
-  SyncReconcileRequestSource5
+export const DataSource5$outboundSchema: z.ZodType<
+  DataSource5$Outbound,
+  DataSource5
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource5ToJSON(
-  syncReconcileRequestSource5: SyncReconcileRequestSource5,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource5$outboundSchema.parse(
-      syncReconcileRequestSource5,
-    ),
-  );
+export function dataSource5ToJSON(dataSource5: DataSource5): string {
+  return JSON.stringify(DataSource5$outboundSchema.parse(dataSource5));
 }
 
 /** @internal */
-export type SourceUnion5$Outbound = SyncReconcileRequestSource5$Outbound | any;
+export type SourceUnion5$Outbound = DataSource5$Outbound | any;
 
 /** @internal */
 export const SourceUnion5$outboundSchema: z.ZodType<
   SourceUnion5$Outbound,
   SourceUnion5
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource5$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource5$outboundSchema), z.any()]);
 
 export function sourceUnion5ToJSON(sourceUnion5: SourceUnion5): string {
   return JSON.stringify(SourceUnion5$outboundSchema.parse(sourceUnion5));
@@ -28332,7 +28307,7 @@ export type SyncReconcileRequestEvent7$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource5$Outbound | any | null | undefined;
+  source?: DataSource5$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -28356,10 +28331,7 @@ export const SyncReconcileRequestEvent7$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource5$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource5$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -28693,41 +28665,32 @@ export function involvedObjectUnion4ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource4$Outbound = {
+export type DataSource4$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource4$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource4$Outbound,
-  SyncReconcileRequestSource4
+export const DataSource4$outboundSchema: z.ZodType<
+  DataSource4$Outbound,
+  DataSource4
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource4ToJSON(
-  syncReconcileRequestSource4: SyncReconcileRequestSource4,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource4$outboundSchema.parse(
-      syncReconcileRequestSource4,
-    ),
-  );
+export function dataSource4ToJSON(dataSource4: DataSource4): string {
+  return JSON.stringify(DataSource4$outboundSchema.parse(dataSource4));
 }
 
 /** @internal */
-export type SourceUnion4$Outbound = SyncReconcileRequestSource4$Outbound | any;
+export type SourceUnion4$Outbound = DataSource4$Outbound | any;
 
 /** @internal */
 export const SourceUnion4$outboundSchema: z.ZodType<
   SourceUnion4$Outbound,
   SourceUnion4
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource4$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource4$outboundSchema), z.any()]);
 
 export function sourceUnion4ToJSON(sourceUnion4: SourceUnion4): string {
   return JSON.stringify(SourceUnion4$outboundSchema.parse(sourceUnion4));
@@ -28745,7 +28708,7 @@ export type SyncReconcileRequestEvent6$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource4$Outbound | any | null | undefined;
+  source?: DataSource4$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -28769,10 +28732,7 @@ export const SyncReconcileRequestEvent6$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource4$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource4$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -29489,41 +29449,32 @@ export function involvedObjectUnion3ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource3$Outbound = {
+export type DataSource3$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource3$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource3$Outbound,
-  SyncReconcileRequestSource3
+export const DataSource3$outboundSchema: z.ZodType<
+  DataSource3$Outbound,
+  DataSource3
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource3ToJSON(
-  syncReconcileRequestSource3: SyncReconcileRequestSource3,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource3$outboundSchema.parse(
-      syncReconcileRequestSource3,
-    ),
-  );
+export function dataSource3ToJSON(dataSource3: DataSource3): string {
+  return JSON.stringify(DataSource3$outboundSchema.parse(dataSource3));
 }
 
 /** @internal */
-export type SourceUnion3$Outbound = SyncReconcileRequestSource3$Outbound | any;
+export type SourceUnion3$Outbound = DataSource3$Outbound | any;
 
 /** @internal */
 export const SourceUnion3$outboundSchema: z.ZodType<
   SourceUnion3$Outbound,
   SourceUnion3
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource3$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource3$outboundSchema), z.any()]);
 
 export function sourceUnion3ToJSON(sourceUnion3: SourceUnion3): string {
   return JSON.stringify(SourceUnion3$outboundSchema.parse(sourceUnion3));
@@ -29539,7 +29490,7 @@ export type SyncReconcileRequestEvent4$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource3$Outbound | any | null | undefined;
+  source?: DataSource3$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -29561,10 +29512,7 @@ export const SyncReconcileRequestEvent4$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource3$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource3$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -30058,41 +30006,32 @@ export function involvedObjectUnion2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource2$Outbound = {
+export type DataSource2$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource2$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource2$Outbound,
-  SyncReconcileRequestSource2
+export const DataSource2$outboundSchema: z.ZodType<
+  DataSource2$Outbound,
+  DataSource2
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource2ToJSON(
-  syncReconcileRequestSource2: SyncReconcileRequestSource2,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource2$outboundSchema.parse(
-      syncReconcileRequestSource2,
-    ),
-  );
+export function dataSource2ToJSON(dataSource2: DataSource2): string {
+  return JSON.stringify(DataSource2$outboundSchema.parse(dataSource2));
 }
 
 /** @internal */
-export type SourceUnion2$Outbound = SyncReconcileRequestSource2$Outbound | any;
+export type SourceUnion2$Outbound = DataSource2$Outbound | any;
 
 /** @internal */
 export const SourceUnion2$outboundSchema: z.ZodType<
   SourceUnion2$Outbound,
   SourceUnion2
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource2$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource2$outboundSchema), z.any()]);
 
 export function sourceUnion2ToJSON(sourceUnion2: SourceUnion2): string {
   return JSON.stringify(SourceUnion2$outboundSchema.parse(sourceUnion2));
@@ -30110,7 +30049,7 @@ export type SyncReconcileRequestEvent3$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource2$Outbound | any | null | undefined;
+  source?: DataSource2$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -30134,10 +30073,7 @@ export const SyncReconcileRequestEvent3$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource2$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource2$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -31022,41 +30958,32 @@ export function involvedObjectUnion1ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource1$Outbound = {
+export type DataSource1$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource1$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource1$Outbound,
-  SyncReconcileRequestSource1
+export const DataSource1$outboundSchema: z.ZodType<
+  DataSource1$Outbound,
+  DataSource1
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource1ToJSON(
-  syncReconcileRequestSource1: SyncReconcileRequestSource1,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource1$outboundSchema.parse(
-      syncReconcileRequestSource1,
-    ),
-  );
+export function dataSource1ToJSON(dataSource1: DataSource1): string {
+  return JSON.stringify(DataSource1$outboundSchema.parse(dataSource1));
 }
 
 /** @internal */
-export type SourceUnion1$Outbound = SyncReconcileRequestSource1$Outbound | any;
+export type SourceUnion1$Outbound = DataSource1$Outbound | any;
 
 /** @internal */
 export const SourceUnion1$outboundSchema: z.ZodType<
   SourceUnion1$Outbound,
   SourceUnion1
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource1$outboundSchema),
-  z.any(),
-]);
+> = z.union([z.lazy(() => DataSource1$outboundSchema), z.any()]);
 
 export function sourceUnion1ToJSON(sourceUnion1: SourceUnion1): string {
   return JSON.stringify(SourceUnion1$outboundSchema.parse(sourceUnion1));
@@ -31072,7 +30999,7 @@ export type SyncReconcileRequestEvent1$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource1$Outbound | any | null | undefined;
+  source?: DataSource1$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -31094,10 +31021,7 @@ export const SyncReconcileRequestEvent1$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource1$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => DataSource1$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -32621,7 +32545,13 @@ export function rawToJSON(raw: Raw): string {
 }
 
 /** @internal */
+export const SourceEnum$outboundSchema: z.ZodEnum<typeof SourceEnum> = z.enum(
+  SourceEnum,
+);
+
+/** @internal */
 export type Heartbeat$Outbound = {
+  alienResourceId?: string | null | undefined;
   backend: string;
   controllerPlatform: string;
   data:
@@ -32649,6 +32579,7 @@ export type Heartbeat$Outbound = {
   raw: Array<Raw$Outbound>;
   resourceId: string;
   resourceType: string;
+  source?: string | undefined;
 };
 
 /** @internal */
@@ -32656,6 +32587,7 @@ export const Heartbeat$outboundSchema: z.ZodType<
   Heartbeat$Outbound,
   Heartbeat
 > = z.object({
+  alienResourceId: z.nullable(z.string()).optional(),
   backend: BackendEnum$outboundSchema,
   controllerPlatform: HeartbeatControllerPlatform$outboundSchema,
   data: z.union([
@@ -32684,6 +32616,7 @@ export const Heartbeat$outboundSchema: z.ZodType<
   raw: z.array(z.lazy(() => Raw$outboundSchema)),
   resourceId: z.string(),
   resourceType: z.string(),
+  source: SourceEnum$outboundSchema.optional(),
 });
 
 export function heartbeatToJSON(heartbeat: Heartbeat): string {

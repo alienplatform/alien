@@ -20,9 +20,7 @@ const value: models.ManagerRetryResponseSetup = {
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
+      allowedSetupMethods: [],
     },
     environmentVariables: [
       {

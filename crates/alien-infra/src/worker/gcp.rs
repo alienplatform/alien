@@ -183,8 +183,8 @@ fn emit_gcp_cloud_run_worker_heartbeat(
         resource_type: Worker::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::GcpCloudRun(
             GcpCloudRunWorkerHeartbeatData {

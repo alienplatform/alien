@@ -9,7 +9,7 @@
 //! | alien-deploy-cli | `ManagerApiTransport`               | Manager API            |
 //! | alien-cli        | `ManagerApiTransport`               | Manager API            |
 //! | alien-terraform  | `ManagerApiTransport`               | Manager API            |
-//! | alien-agent      | `AgentTransport`                    | Local SQLite           |
+//! | alien-operator      | `OperatorTransport`                    | Local SQLite           |
 //!
 //! Lock acquire/release stays with the caller — only per-step reconcile is
 //! part of the trait.

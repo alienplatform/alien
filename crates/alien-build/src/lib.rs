@@ -3058,13 +3058,13 @@ mod tests {
     #[test]
     fn collect_push_targets_handles_daemons_like_other_compute() {
         let temp_root = tempdir().unwrap();
-        let agent_dir = temp_root.path().join("agent-image");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let daemon_dir = temp_root.path().join("daemon-image");
+        std::fs::create_dir_all(&daemon_dir).unwrap();
 
         let local_daemon = Daemon::new("agent".to_string())
             .permissions("execution".to_string())
             .code(DaemonCode::Image {
-                image: agent_dir.to_string_lossy().into_owned(),
+                image: daemon_dir.to_string_lossy().into_owned(),
             })
             .build();
         let remote_daemon = Daemon::new("collector".to_string())

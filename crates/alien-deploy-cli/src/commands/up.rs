@@ -3,7 +3,7 @@
 //! Push model (AWS, GCP, Azure): runs initial setup locally, then the manager
 //! continues reconciliation remotely.
 //!
-//! Pull model (Local, Kubernetes): installs and starts the alien-agent service.
+//! Pull model (Local, Kubernetes): installs and starts the alien-operator service.
 
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
@@ -73,7 +73,7 @@ pub struct UpArgs {
     pub platform: Option<String>,
 
     /// Base cloud platform for managed Kubernetes setup (aws, gcp, azure).
-    #[arg(long, env = "ALIEN_BASE_PLATFORM")]
+    #[arg(long, env = "OPERATOR_BASE_PLATFORM")]
     pub base_platform: Option<String>,
 
     /// Allow experimental platforms (kubernetes, local)
@@ -84,21 +84,21 @@ pub struct UpArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Encryption key for agent database (required for pull model)
-    #[arg(long, env = "AGENT_ENCRYPTION_KEY")]
+    /// Encryption key for operator database (required for pull model)
+    #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
     pub encryption_key: Option<String>,
 
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
 
-    /// Run the agent in the foreground instead of installing as a service.
+    /// Run the operator in the foreground instead of installing as a service.
     /// Useful for testing — Ctrl+C to stop.
     #[arg(long)]
     pub foreground: bool,
 
-    /// Data directory for agent state (foreground mode only).
-    /// Defaults to ~/.alien/agent-data.
+    /// Data directory for operator state (foreground mode only).
+    /// Defaults to ~/.alien/operator-data.
     #[arg(long)]
     pub data_dir: Option<String>,
 
@@ -118,9 +118,9 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
     pub kube_context: Option<String>,
 
-    /// alien-agent image for Kubernetes Helm installs.
-    #[arg(long, env = "ALIEN_AGENT_IMAGE")]
-    pub agent_image: Option<String>,
+    /// alien-operator image for Kubernetes Helm installs.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE")]
+    pub operator_image: Option<String>,
 
     /// TOML file containing deployment settings.
     #[arg(long)]
@@ -306,9 +306,9 @@ mod tests {
     #[test]
     fn split_image_tag_defaults_missing_tag_to_latest() {
         assert_eq!(
-            split_image_tag("ghcr.io/alienplatform/alien-agent").unwrap(),
+            split_image_tag("ghcr.io/alienplatform/alien-operator").unwrap(),
             (
-                "ghcr.io/alienplatform/alien-agent".to_string(),
+                "ghcr.io/alienplatform/alien-operator".to_string(),
                 "latest".to_string()
             )
         );
@@ -317,8 +317,11 @@ mod tests {
     #[test]
     fn split_image_tag_preserves_registry_port() {
         assert_eq!(
-            split_image_tag("localhost:5000/alien-agent:v1").unwrap(),
-            ("localhost:5000/alien-agent".to_string(), "v1".to_string())
+            split_image_tag("localhost:5000/alien-operator:v1").unwrap(),
+            (
+                "localhost:5000/alien-operator".to_string(),
+                "v1".to_string()
+            )
         );
     }
 
@@ -948,6 +951,8 @@ async fn initialize_deployment(
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
+        scope: None,
+        permission: None,
     };
 
     let response = client
@@ -1027,17 +1032,17 @@ async fn run_local_pull_model(
     platform: &str,
 ) -> Result<()> {
     let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
-        use super::agent::generate_encryption_key_public;
+        use super::operator::generate_encryption_key_public;
         generate_encryption_key_public()
     });
 
-    // Find or download the alien-agent binary
-    let binary_path = find_or_download_agent_binary().await?;
+    // Find or download the alien-operator binary
+    let binary_path = find_or_download_operator_binary().await?;
 
-    output::info(&format!("Agent binary: {}", binary_path.display()));
+    output::info(&format!("Operator binary: {}", binary_path.display()));
 
     if args.foreground {
-        return run_agent_foreground(
+        return run_operator_foreground(
             &binary_path,
             manager_url,
             token,
@@ -1048,10 +1053,10 @@ async fn run_local_pull_model(
         .await;
     }
 
-    output::info("Installing alien-agent as a system service...");
+    output::info("Installing alien-operator as a system service...");
 
-    // Delegate to the agent install logic
-    let install_args = super::agent::InstallArgs {
+    // Delegate to the operator install logic
+    let install_args = super::operator::InstallArgs {
         binary: Some(binary_path),
         sync_url: manager_url.to_string(),
         sync_token: token.to_string(),
@@ -1060,17 +1065,17 @@ async fn run_local_pull_model(
         encryption_key: Some(encryption_key),
     };
 
-    super::agent::install_service(install_args)?;
+    super::operator::install_service(install_args)?;
 
-    output::success("alien-agent installed and running as a system service.");
-    output::info("The agent will sync with the manager and deploy updates automatically.");
-    output::info("Use 'alien-deploy agent status' to check the service.");
+    output::success("alien-operator installed and running as a system service.");
+    output::info("The operator will sync with the manager and deploy updates automatically.");
+    output::info("Use 'alien-deploy operator status' to check the service.");
 
     Ok(())
 }
 
-/// Run the agent as a foreground child process (for testing).
-async fn run_agent_foreground(
+/// Run the operator as a foreground child process (for testing).
+async fn run_operator_foreground(
     binary_path: &std::path::Path,
     manager_url: &str,
     token: &str,
@@ -1080,7 +1085,7 @@ async fn run_agent_foreground(
 ) -> Result<()> {
     use std::io::Write;
 
-    output::info("Running agent in foreground (Ctrl+C to stop)...");
+    output::info("Running operator in foreground (Ctrl+C to stop)...");
 
     let data_dir = if let Some(dir) = data_dir_override {
         std::path::PathBuf::from(dir)
@@ -1088,10 +1093,10 @@ async fn run_agent_foreground(
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
             .join(".alien")
-            .join("agent-data")
+            .join("operator-data")
     };
 
-    // The agent rejects `--sync-token`/`--encryption-key` because argv is
+    // The operator rejects `--sync-token`/`--encryption-key` because argv is
     // visible in `ps` / `/proc/<pid>/cmdline`. Write each secret to its own
     // tempfile (0o600 on Unix) and pass the path via `--*-file`. The
     // `NamedTempFile`s must outlive the child process — drop deletes them.
@@ -1152,7 +1157,7 @@ async fn run_agent_foreground(
         .await
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: format!("Failed to run agent: {}", binary_path.display()),
+            message: format!("Failed to run operator: {}", binary_path.display()),
         })?;
 
     // Tempfiles drop here, after the child exits.
@@ -1161,7 +1166,7 @@ async fn run_agent_foreground(
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Agent exited with status: {}", status),
+            message: format!("Operator exited with status: {}", status),
         }));
     }
 
@@ -1177,7 +1182,7 @@ async fn run_kubernetes_pull_model(
     deployment_name: &str,
     stack_settings: &StackSettings,
 ) -> Result<()> {
-    output::info("Kubernetes platform detected — installing alien-agent with Helm.");
+    output::info("Kubernetes platform detected — installing alien-operator with Helm.");
     let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let namespace = args
         .namespace
@@ -1186,11 +1191,11 @@ async fn run_kubernetes_pull_model(
     let release = args
         .helm_release
         .clone()
-        .unwrap_or_else(|| "alien-agent".to_string());
-    let agent_image = args
-        .agent_image
+        .unwrap_or_else(|| "alien-operator".to_string());
+    let operator_image = args
+        .operator_image
         .clone()
-        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
     let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
     let values_file = write_kubernetes_helm_values(
@@ -1200,7 +1205,7 @@ async fn run_kubernetes_pull_model(
         deployment_id,
         deployment_name,
         stack_settings,
-        &agent_image,
+        &operator_image,
     )?;
 
     helm_upgrade_install(
@@ -1214,7 +1219,7 @@ async fn run_kubernetes_pull_model(
     .await?;
 
     output::success(&format!(
-        "alien-agent Helm release '{}' is installed in namespace '{}'.",
+        "alien-operator Helm release '{}' is installed in namespace '{}'.",
         release, namespace
     ));
     output::info(&format!("Deployment ID: {}", deployment_id));
@@ -1327,9 +1332,9 @@ fn write_kubernetes_helm_values(
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
-    agent_image: &str,
+    operator_image: &str,
 ) -> Result<PathBuf> {
-    let (repository, tag) = split_image_tag(agent_image)?;
+    let (repository, tag) = split_image_tag(operator_image)?;
     let mut helm_settings = stack_settings.clone();
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
@@ -1349,7 +1354,7 @@ fn write_kubernetes_helm_values(
                 "pullPolicy": "IfNotPresent",
             },
             "encryption": {
-                "key": super::agent::generate_encryption_key_public(),
+                "key": super::operator::generate_encryption_key_public(),
             }
         },
         "stackSettings": helm_settings,
@@ -1421,8 +1426,8 @@ async fn helm_upgrade_install(
 fn split_image_tag(image: &str) -> Result<(String, String)> {
     if image.contains('@') {
         return Err(AlienError::new(ErrorData::ValidationError {
-            field: "agent-image".to_string(),
-            message: "Kubernetes Helm installs require a tag-based agent image, not a digest"
+            field: "operator-image".to_string(),
+            message: "Kubernetes Helm installs require a tag-based operator image, not a digest"
                 .to_string(),
         }));
     }
@@ -1466,14 +1471,14 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
 /// Default releases URL for downloading binaries.
 const DEFAULT_RELEASES_URL: &str = "https://releases.alien.dev";
 
-/// Find the alien-agent binary locally, or download it from the releases URL.
-async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
+/// Find the alien-operator binary locally, or download it from the releases URL.
+async fn find_or_download_operator_binary() -> Result<std::path::PathBuf> {
     // Try to find it locally first
-    if let Ok(path) = super::agent::which_agent_binary() {
+    if let Ok(path) = super::operator::which_operator_binary() {
         return Ok(path);
     }
 
-    // Download to ~/.alien/bin/alien-agent
+    // Download to ~/.alien/bin/alien-operator
     let home = dirs::home_dir().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "Could not determine home directory".to_string(),
@@ -1489,30 +1494,33 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
             reason: "Failed to create ~/.alien/bin directory".to_string(),
         })?;
 
-    let binary_path = bin_dir.join("alien-agent");
+    let binary_path = bin_dir.join("alien-operator");
 
     let releases_url =
         std::env::var("ALIEN_RELEASES_URL").unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
 
     let (os, arch) = detect_os_arch()?;
     let url = format!(
-        "{}/alien-agent/latest/{}-{}/alien-agent",
+        "{}/alien-operator/latest/{}-{}/alien-operator",
         releases_url, os, arch
     );
 
-    output::info(&format!("Downloading alien-agent from {}...", url));
+    output::info(&format!("Downloading alien-operator from {}...", url));
 
     let response =
         reqwest::get(&url)
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: format!("Failed to download alien-agent from {}", url),
+                message: format!("Failed to download alien-operator from {}", url),
             })?;
 
     if !response.status().is_success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Failed to download alien-agent: HTTP {}", response.status()),
+            message: format!(
+                "Failed to download alien-operator: HTTP {}",
+                response.status()
+            ),
         }));
     }
 
@@ -1522,7 +1530,7 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: "Failed to read alien-agent download response".to_string(),
+                message: "Failed to read alien-operator download response".to_string(),
             })?;
 
     std::fs::write(&binary_path, &bytes)
@@ -1530,7 +1538,7 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
             file_path: binary_path.display().to_string(),
-            reason: "Failed to write alien-agent binary".to_string(),
+            reason: "Failed to write alien-operator binary".to_string(),
         })?;
 
     // Make executable on Unix
@@ -1542,11 +1550,11 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
             .context(ErrorData::FileOperationFailed {
                 operation: "chmod".to_string(),
                 file_path: binary_path.display().to_string(),
-                reason: "Failed to make alien-agent executable".to_string(),
+                reason: "Failed to make alien-operator executable".to_string(),
             })?;
     }
 
-    output::success("alien-agent downloaded successfully.");
+    output::success("alien-operator downloaded successfully.");
 
     Ok(binary_path)
 }

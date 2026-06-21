@@ -28,12 +28,12 @@ let value: CreateAPIKeyResponse = {
     deploymentSetupConfig: {
       metadata: {
         "key": "<value>",
+        "key1": "<value>",
+        "key2": "<value>",
       },
       policy: {
         allowedPlatforms: [],
-        allowedSetupMethods: [
-          "google-oauth",
-        ],
+        allowedSetupMethods: [],
       },
       environmentVariables: [],
     },

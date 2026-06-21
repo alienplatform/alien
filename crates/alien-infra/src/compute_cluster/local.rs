@@ -245,8 +245,8 @@ fn emit_local_compute_cluster_heartbeat(
         resource_type: ComputeCluster::RESOURCE_TYPE,
         controller_platform: alien_core::Platform::Local,
         backend: HeartbeatBackend::Local,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ComputeCluster(ComputeClusterHeartbeatData::Local(
             LocalComputeClusterHeartbeatData {

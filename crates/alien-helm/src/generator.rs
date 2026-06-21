@@ -86,10 +86,16 @@ pub struct OperatorManifestOptions<'a> {
     pub group_token: &'a str,
     pub encryption_key: &'a str,
     pub image: &'a str,
+    pub log_collector: Option<OperatorLogCollectorOptions<'a>>,
     pub namespace: &'a str,
     pub scope: OperatorScope,
     pub permission: OperatorPermission,
     pub release_name: &'a str,
+}
+
+pub struct OperatorLogCollectorOptions<'a> {
+    pub image: &'a str,
+    pub token: &'a str,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -128,6 +134,18 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert(
+        "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
+        whitelabeled_log_collector_serviceaccount_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-configmap.yaml".to_string(),
+        whitelabeled_log_collector_configmap_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-daemonset.yaml".to_string(),
+        whitelabeled_log_collector_daemonset_tpl(),
+    );
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
@@ -207,6 +225,10 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         &operator_name,
         options.group_token,
         options.encryption_key,
+        options
+            .log_collector
+            .as_ref()
+            .map(|collector| collector.token),
         &labels,
     ));
     docs.push(operator_identity_pvc_doc(
@@ -222,6 +244,31 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         observed_namespace,
         &labels,
     ));
+    if let Some(log_collector) = options.log_collector.as_ref() {
+        let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/component".to_string(),
+            "whitelabeled-log-collector".to_string(),
+        );
+        docs.push(operator_service_doc(namespace, &operator_name, &labels));
+        docs.push(operator_log_collector_service_account_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_configmap_doc(
+            namespace,
+            &operator_name,
+            observed_namespace,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_daemonset_doc(
+            namespace,
+            &operator_name,
+            log_collector.image,
+            &collector_labels,
+        ));
+    }
 
     Ok(ensure_trailing_newline(docs.join("---\n")))
 }
@@ -452,6 +499,7 @@ fn operator_secret_doc(
     operator_name: &str,
     group_token: &str,
     encryption_key: &str,
+    collector_token: Option<&str>,
     labels: &BTreeMap<String, String>,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "Secret", namespace, operator_name, labels);
@@ -462,6 +510,12 @@ fn operator_secret_doc(
         "  encryption-key: {}\n",
         yaml_string(encryption_key)
     ));
+    if let Some(collector_token) = collector_token {
+        yaml.push_str(&format!(
+            "  collector-token: {}\n",
+            yaml_string(collector_token)
+        ));
+    }
     yaml
 }
 
@@ -538,6 +592,15 @@ fn operator_deployment_doc(
         options.permission.as_str(),
     );
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    if options.log_collector.is_some() {
+        append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
+        append_env_value(&mut yaml, "OTLP_PORT", "8080");
+        append_env_value(
+            &mut yaml,
+            "COLLECTOR_TOKEN_FILE",
+            "/etc/operator/secrets/collector-token",
+        );
+    }
     append_env_value(
         &mut yaml,
         "SYNC_TOKEN_FILE",
@@ -549,6 +612,11 @@ fn operator_deployment_doc(
         "/etc/operator/secrets/encryption-key",
     );
     append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
+    if options.log_collector.is_some() {
+        yaml.push_str("          ports:\n");
+        yaml.push_str("            - name: http\n");
+        yaml.push_str("              containerPort: 8080\n");
+    }
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: credentials\n");
     yaml.push_str("              mountPath: /etc/operator/secrets\n");
@@ -581,6 +649,160 @@ fn operator_deployment_doc(
     yaml.push_str("        - name: tmp\n");
     yaml.push_str("          emptyDir:\n");
     yaml.push_str("            sizeLimit: 64Mi\n");
+    yaml
+}
+
+fn operator_service_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "Service", namespace, operator_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  type: ClusterIP\n");
+    yaml.push_str("  selector:\n");
+    append_operator_selector_labels(&mut yaml, labels, 4);
+    yaml.push_str("  ports:\n");
+    yaml.push_str("    - name: http\n");
+    yaml.push_str("      port: 8080\n");
+    yaml.push_str("      targetPort: http\n");
+    yaml
+}
+
+fn operator_log_collector_service_account_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, &name, labels);
+    yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_log_collector_configmap_doc(
+    namespace: &str,
+    operator_name: &str,
+    observed_namespace: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, &name, labels);
+    yaml.push_str("data:\n");
+    yaml.push_str("  collector.conf: |\n");
+    yaml.push_str("    [SERVICE]\n");
+    yaml.push_str("        Flush        2\n");
+    yaml.push_str("        Log_Level    info\n");
+    yaml.push_str("        Parsers_File parsers.conf\n");
+    yaml.push_str("        storage.path /buffers\n");
+    yaml.push_str("        storage.sync normal\n");
+    yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
+    yaml.push_str("    [INPUT]\n");
+    yaml.push_str("        Name              tail\n");
+    yaml.push_str(&format!(
+        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        observed_namespace
+    ));
+    yaml.push_str(&format!(
+        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
+        observed_namespace, operator_name
+    ));
+    yaml.push_str("        Path_Key          filename\n");
+    yaml.push_str("        Parser            cri\n");
+    yaml.push_str("        Tag               kube.*\n");
+    yaml.push_str(&format!(
+        "        DB                /buffers/{operator_name}-whitelabeled-log-collector.db\n"
+    ));
+    yaml.push_str("        Mem_Buf_Limit     64MB\n");
+    yaml.push_str("        Skip_Long_Lines   On\n");
+    yaml.push_str("        Read_from_Head    On\n");
+    yaml.push_str("        Refresh_Interval  5\n");
+    yaml.push_str("        storage.type      filesystem\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                kubernetes\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str("        Merge_Log           Off\n");
+    yaml.push_str("        Keep_Log            On\n");
+    yaml.push_str("        Labels              On\n");
+    yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [OUTPUT]\n");
+    yaml.push_str("        Name          http\n");
+    yaml.push_str(&format!(
+        "        Host          {operator_name}.{namespace}.svc.cluster.local\n"
+    ));
+    yaml.push_str("        Port          8080\n");
+    yaml.push_str("        URI           /internal/logs\n");
+    yaml.push_str("        Format        json\n");
+    yaml.push_str("        Json_Date_Key observed_at\n");
+    yaml.push_str("        Header        Authorization Bearer ${COLLECTOR_TOKEN}\n\n");
+    yaml.push_str("  parsers.conf: |\n");
+    yaml.push_str("    [PARSER]\n");
+    yaml.push_str("        Name        cri\n");
+    yaml.push_str("        Format      regex\n");
+    yaml.push_str(
+        "        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$\n",
+    );
+    yaml.push_str("        Time_Key    time\n");
+    yaml.push_str("        Time_Format %Y-%m-%dT%H:%M:%S.%L%z\n");
+    yaml
+}
+
+fn operator_log_collector_daemonset_doc(
+    namespace: &str,
+    operator_name: &str,
+    image: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, &name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  selector:\n");
+    yaml.push_str("    matchLabels:\n");
+    append_operator_selector_labels(&mut yaml, labels, 6);
+    yaml.push_str("  template:\n");
+    yaml.push_str("    metadata:\n");
+    yaml.push_str("      labels:\n");
+    append_operator_labels(&mut yaml, labels, 8);
+    yaml.push_str("    spec:\n");
+    yaml.push_str(&format!(
+        "      serviceAccountName: {}\n",
+        yaml_string(&name)
+    ));
+    yaml.push_str("      tolerations:\n");
+    yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      containers:\n");
+    yaml.push_str("        - name: collector\n");
+    yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
+    yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
+    yaml.push_str("          env:\n");
+    yaml.push_str("            - name: COLLECTOR_TOKEN\n");
+    yaml.push_str("              valueFrom:\n");
+    yaml.push_str("                secretKeyRef:\n");
+    yaml.push_str(&format!(
+        "                  name: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("                  key: collector-token\n");
+    yaml.push_str("          volumeMounts:\n");
+    yaml.push_str("            - name: config\n");
+    yaml.push_str("              mountPath: /collector/etc\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: varlog\n");
+    yaml.push_str("              mountPath: /var/log\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: buffers\n");
+    yaml.push_str("              mountPath: /buffers\n");
+    yaml.push_str("      volumes:\n");
+    yaml.push_str("        - name: config\n");
+    yaml.push_str("          configMap:\n");
+    yaml.push_str(&format!("            name: {}\n", yaml_string(&name)));
+    yaml.push_str("        - name: varlog\n");
+    yaml.push_str("          hostPath:\n");
+    yaml.push_str("            path: /var/log\n");
+    yaml.push_str("            type: Directory\n");
+    yaml.push_str("        - name: buffers\n");
+    yaml.push_str("          emptyDir: {}\n");
     yaml
 }
 
@@ -969,6 +1191,23 @@ runtime:
         repository: bitnami/kubectl
         tag: "1.32"
         pullPolicy: IfNotPresent
+
+logCollector:
+  enabled: false
+  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  image:
+    repository: registry.example.com/deployment/log-collector
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  scope:
+    deploymentLabelKey: ""
+    deploymentLabelValue: ""
 
 heartbeat:
   collection:
@@ -1698,6 +1937,32 @@ fn values_schema_json() -> String {
         "labels": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     },
+    "logCollector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "token": { "type": "string" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": { "type": "object" },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "deploymentLabelKey": { "type": "string" },
+            "deploymentLabelValue": { "type": "string" }
+          }
+        }
+      }
+    },
     "serviceAccounts": {
       "type": "object",
       "additionalProperties": {
@@ -2201,7 +2466,7 @@ roleRef:
 fn secret_tpl() -> String {
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -2218,6 +2483,9 @@ stringData:
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- end }}
+  {{- if .Values.logCollector.enabled }}
+  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -2355,7 +2623,7 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: ALIEN_BASE_PLATFORM
+            - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
@@ -2414,6 +2682,10 @@ spec:
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
+            {{- if .Values.logCollector.enabled }}
+            - name: COLLECTOR_TOKEN_FILE
+              value: /etc/deployment/secrets/collector-token
+            {{- end }}
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}
@@ -2455,6 +2727,12 @@ spec:
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
+            {{- if .Values.logCollector.enabled }}
+            - name: collector-token
+              mountPath: /etc/deployment/secrets/collector-token
+              subPath: collector-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
             - name: tmp
               mountPath: /tmp
@@ -2487,6 +2765,15 @@ spec:
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
+        {{- if .Values.logCollector.enabled }}
+        - name: collector-token
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: collector-token
+                path: collector-token
+            defaultMode: 384
+        {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
         - name: tmp
           emptyDir:
@@ -2504,7 +2791,7 @@ spec:
 }
 
 fn service_tpl() -> String {
-    r#"{{- if .Values.runtime.api.enabled }}
+    r#"{{- if or .Values.runtime.api.enabled .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -2520,6 +2807,154 @@ spec:
     - name: http
       port: {{ .Values.runtime.api.port }}
       targetPort: otlp
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+automountServiceAccountToken: true
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_configmap_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+data:
+  collector.conf: |
+    [SERVICE]
+        Flush        2
+        Log_Level    info
+        Parsers_File parsers.conf
+        storage.path /buffers
+        storage.sync normal
+        storage.backlog.mem_limit 64M
+
+    [INPUT]
+        Name              tail
+        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
+        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        Path_Key          filename
+        Parser            cri
+        Tag               kube.*
+        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        Mem_Buf_Limit     64MB
+        Skip_Long_Lines   On
+        Read_from_Head    On
+        Refresh_Interval  5
+        storage.type      filesystem
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           Off
+        Keep_Log            On
+        Labels              On
+        Annotations         Off
+
+    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
+    {{- end }}
+
+    [OUTPUT]
+        Name          http
+        Match         kube.*
+        Host          {{ include "deployment.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        Port          {{ .Values.runtime.api.port }}
+        URI           /internal/logs
+        Format        json
+        Json_Date_Key observed_at
+        Header        Authorization Bearer ${COLLECTOR_TOKEN}
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_daemonset_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: whitelabeled-log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/component: whitelabeled-log-collector
+    spec:
+      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: collector
+          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          args:
+            - -c
+            - /collector/etc/collector.conf
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deployment.fullname" . }}
+                  key: collector-token
+          volumeMounts:
+            - name: config
+              mountPath: /collector/etc
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: buffers
+              mountPath: /buffers
+          resources:
+            {{- toYaml .Values.logCollector.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        - name: buffers
+          emptyDir: {}
 {{- end }}
 "#
     .to_string()
@@ -3069,7 +3504,7 @@ fn sanitize_chart_name(value: &str) -> String {
     }
     let out = out.trim_matches('-');
     if out.is_empty() {
-        "alien-deployment".to_string()
+        "deployment".to_string()
     } else {
         out.chars()
             .take(63)
@@ -3119,6 +3554,25 @@ mod tests {
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             image: "registry.example.com/operator:test",
+            log_collector: None,
+            namespace: "demo",
+            scope: OperatorScope::single_namespace("demo"),
+            permission: OperatorPermission::Observe,
+            release_name: "acme-prod-eu",
+        })
+        .expect("operator manifest should render")
+    }
+
+    fn operator_test_manifest_with_log_collector() -> String {
+        generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: Some(OperatorLogCollectorOptions {
+                image: "acme-log-collector:dev",
+                token: "collector-secret",
+            }),
             namespace: "demo",
             scope: OperatorScope::single_namespace("demo"),
             permission: OperatorPermission::Observe,
@@ -3282,6 +3736,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn operator_manifest_can_include_log_collector_without_control_plane_credentials() {
+        let manifest = operator_test_manifest_with_log_collector();
+        let docs = parse_manifest_docs(&manifest);
+        let kinds = docs
+            .iter()
+            .map(|doc| yaml_str(doc, "kind").expect("doc should have kind"))
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"Service"));
+        assert!(kinds.contains(&"DaemonSet"));
+        assert!(manifest.contains("whitelabeled-log-collector"));
+        assert!(manifest.contains("/var/log/pods/demo_"));
+        assert!(manifest.contains("/internal/logs"));
+        assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
+        assert!(manifest.contains("collector-token"));
+        let upstream_collector_name = ["fluent", "-bit"].concat();
+        assert!(!manifest.contains(&upstream_collector_name));
+        assert!(!manifest.contains("void"));
+
+        let daemonset = docs_by_kind(&docs, "DaemonSet")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include collector DaemonSet");
+        let env = daemonset
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(YamlValue::as_sequence)
+            .and_then(|containers| containers.first())
+            .and_then(|container| container.get("env"))
+            .and_then(YamlValue::as_sequence)
+            .expect("collector container should include env");
+        let env_names = env
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(env_names, vec!["COLLECTOR_TOKEN"]);
+    }
+
     const TEST_RUNTIME_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -3328,6 +3823,43 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn log_collector_enabled_chart_lints_and_templates() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart should render");
+
+        let values = r#"
+logCollector:
+  enabled: true
+  token: test-collector-token
+  image:
+    repository: acme-log-collector
+    tag: dev
+    pullPolicy: IfNotPresent
+"#;
+
+        let files = chart.files.clone();
+        crate::test_utils::helm_template_and_validate(&files, Some(values))
+            .assert_ok("helm template log collector");
+        let rendered = crate::test_utils::helm_template(&files, Some(values));
+        rendered.assert_ok("helm render log collector");
+        assert!(rendered.stdout.contains("kind: DaemonSet"));
+        assert!(rendered.stdout.contains("whitelabeled-log-collector"));
+        assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
+        assert!(rendered.stdout.contains("/var/log/pods/default_"));
+        let upstream_collector_name = ["fluent", "-bit"].concat();
+        assert!(!rendered.stdout.contains(&upstream_collector_name));
+        assert!(!rendered.stdout.contains("void"));
     }
 
     #[test]
@@ -3508,7 +4040,7 @@ mod tests {
                     kubernetes_api_reachable: true,
                     namespace_ready: true,
                     rbac_ready: true,
-                    agent_ready: false,
+                    operator_ready: false,
                     cloud_metadata_ready: Some(true),
                     azure_application_gateway_for_containers: Some(
                         AzureApplicationGatewayForContainersBootstrap {

@@ -84,41 +84,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-agent"
-version = "1.7.1"
-dependencies = [
- "aegis",
- "alien-client-config",
- "alien-commands",
- "alien-core",
- "alien-deployment",
- "alien-error",
- "alien-infra",
- "alien-local",
- "alien-manager-api",
- "async-trait",
- "axum 0.8.8",
- "bon",
- "chrono",
- "clap",
- "fs2",
- "hostname 0.4.2",
- "libc",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "turso",
- "url",
- "uuid",
- "windows-service",
-]
-
-[[package]]
 name = "alien-aws-clients"
 version = "1.7.1"
 dependencies = [
@@ -503,7 +468,6 @@ dependencies = [
 name = "alien-deploy-cli"
 version = "1.7.1"
 dependencies = [
- "alien-agent",
  "alien-cli-common",
  "alien-core",
  "alien-deployment",
@@ -512,6 +476,7 @@ dependencies = [
  "alien-infra",
  "alien-local",
  "alien-manager-api",
+ "alien-operator",
  "async-trait",
  "aws-config",
  "aws-sdk-cloudformation",
@@ -867,6 +832,43 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "alien-operator"
+version = "1.7.1"
+dependencies = [
+ "aegis",
+ "alien-client-config",
+ "alien-commands",
+ "alien-core",
+ "alien-deployment",
+ "alien-error",
+ "alien-infra",
+ "alien-local",
+ "alien-manager-api",
+ "async-trait",
+ "axum 0.8.8",
+ "bon",
+ "chrono",
+ "clap",
+ "fs2",
+ "hostname 0.4.2",
+ "libc",
+ "opentelemetry-proto",
+ "prost 0.13.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "turso",
+ "url",
+ "uuid",
+ "windows-service",
 ]
 
 [[package]]
@@ -6096,9 +6098,12 @@ version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e046fd7660710fe5a05e8748e70d9058dc15c94ba914e7c4faa7c728f0e8ddc"
 dependencies = [
+ "base64 0.22.1",
+ "hex",
  "opentelemetry",
  "opentelemetry_sdk",
  "prost 0.13.5",
+ "serde",
  "tonic",
 ]
 

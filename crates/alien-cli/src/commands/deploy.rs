@@ -301,6 +301,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             environment_variables: None,
                             deployment_group_id: None,
                             environment_info: None,
+                            operator_scope: None,
+                            operator_permission: None,
                             setup_method: None,
                             setup_metadata: None,
                         })

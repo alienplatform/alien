@@ -98,7 +98,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -128,7 +128,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -242,6 +242,10 @@ run();
 * [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 
+### [OperatorManifests](docs/sdks/operatormanifests/README.md)
+
+* [renderOperatorManifest](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
+
 ### [Packages](docs/sdks/packages/README.md)
 
 * [list](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
@@ -277,6 +281,7 @@ run();
 
 ### [Resources](docs/sdks/resources/README.md)
 
+* [listInventory](docs/sdks/resources/README.md#listinventory)
 * [listOverview](docs/sdks/resources/README.md#listoverview)
 * [listDeployments](docs/sdks/resources/README.md#listdeployments)
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
@@ -290,10 +295,10 @@ run();
 
 ### [User](docs/sdks/user/README.md)
 
+* [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [getProfile](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 * [updateProfile](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 * [completeProfileSetup](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
-* [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [createWorkspace](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 * [listGitNamespaces](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
 * [syncGitNamespaces](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
@@ -394,6 +399,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
+- [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
@@ -417,6 +423,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
 - [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
+- [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
@@ -457,7 +464,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile({
+  const result = await alien.user.listMemberships({
     retries: {
       strategy: "backoff",
       backoff: {
@@ -496,7 +503,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -531,7 +538,7 @@ const alien = new Alien({
 
 async function run() {
   try {
-    const result = await alien.user.getProfile();
+    const result = await alien.user.listMemberships();
 
     console.log(result);
   } catch (error) {
@@ -598,7 +605,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }

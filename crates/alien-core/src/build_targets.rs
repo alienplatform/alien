@@ -65,8 +65,8 @@ pub enum SourceBinaryType {
     Cli,
     /// alien-terraform binary
     Terraform,
-    /// alien-agent binary
-    Agent,
+    /// alien-operator binary
+    Operator,
 }
 
 impl SourceBinaryType {
@@ -75,7 +75,7 @@ impl SourceBinaryType {
         match self {
             SourceBinaryType::Cli => "alien-deploy",
             SourceBinaryType::Terraform => "alien-terraform",
-            SourceBinaryType::Agent => "alien-agent",
+            SourceBinaryType::Operator => "alien-operator",
         }
     }
 }
@@ -85,7 +85,7 @@ impl std::fmt::Display for SourceBinaryType {
         match self {
             SourceBinaryType::Cli => write!(f, "cli"),
             SourceBinaryType::Terraform => write!(f, "terraform"),
-            SourceBinaryType::Agent => write!(f, "agent"),
+            SourceBinaryType::Operator => write!(f, "operator"),
         }
     }
 }

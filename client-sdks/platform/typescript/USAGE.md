@@ -7,7 +7,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }

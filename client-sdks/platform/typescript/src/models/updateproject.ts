@@ -115,11 +115,23 @@ export type UpdateProjectCloudformation = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type UpdateProjectAgentImage = {
+export type UpdateProjectOperatorImage = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
   /**
    * Image name (e.g., "acme-operator")
    */
@@ -177,7 +189,7 @@ export type UpdateProjectPackagesConfig = {
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  agentImage?: UpdateProjectAgentImage | null | undefined;
+  operatorImage?: UpdateProjectOperatorImage | null | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
@@ -361,27 +373,33 @@ export function updateProjectCloudformationToJSON(
 }
 
 /** @internal */
-export type UpdateProjectAgentImage$Outbound = {
+export type UpdateProjectOperatorImage$Outbound = {
+  brand?: string | null | undefined;
   displayName: string;
+  envPrefix?: string | null | undefined;
+  labelDomain?: string | null | undefined;
   name: string;
   enabled: boolean;
 };
 
 /** @internal */
-export const UpdateProjectAgentImage$outboundSchema: z.ZodType<
-  UpdateProjectAgentImage$Outbound,
-  UpdateProjectAgentImage
+export const UpdateProjectOperatorImage$outboundSchema: z.ZodType<
+  UpdateProjectOperatorImage$Outbound,
+  UpdateProjectOperatorImage
 > = z.object({
+  brand: z.nullable(z.string()).optional(),
   displayName: z.string(),
+  envPrefix: z.nullable(z.string()).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
   name: z.string(),
   enabled: z.boolean(),
 });
 
-export function updateProjectAgentImageToJSON(
-  updateProjectAgentImage: UpdateProjectAgentImage,
+export function updateProjectOperatorImageToJSON(
+  updateProjectOperatorImage: UpdateProjectOperatorImage,
 ): string {
   return JSON.stringify(
-    UpdateProjectAgentImage$outboundSchema.parse(updateProjectAgentImage),
+    UpdateProjectOperatorImage$outboundSchema.parse(updateProjectOperatorImage),
   );
 }
 
@@ -437,7 +455,7 @@ export function updateProjectTerraformToJSON(
 export type UpdateProjectPackagesConfig$Outbound = {
   cli?: UpdateProjectCli$Outbound | null | undefined;
   cloudformation?: UpdateProjectCloudformation$Outbound | null | undefined;
-  agentImage?: UpdateProjectAgentImage$Outbound | null | undefined;
+  operatorImage?: UpdateProjectOperatorImage$Outbound | null | undefined;
   helm?: UpdateProjectHelm$Outbound | null | undefined;
   terraform?: UpdateProjectTerraform$Outbound | null | undefined;
 };
@@ -451,8 +469,9 @@ export const UpdateProjectPackagesConfig$outboundSchema: z.ZodType<
   cloudformation: z.nullable(
     z.lazy(() => UpdateProjectCloudformation$outboundSchema),
   ).optional(),
-  agentImage: z.nullable(z.lazy(() => UpdateProjectAgentImage$outboundSchema))
-    .optional(),
+  operatorImage: z.nullable(
+    z.lazy(() => UpdateProjectOperatorImage$outboundSchema),
+  ).optional(),
   helm: z.nullable(z.lazy(() => UpdateProjectHelm$outboundSchema)).optional(),
   terraform: z.nullable(z.lazy(() => UpdateProjectTerraform$outboundSchema))
     .optional(),

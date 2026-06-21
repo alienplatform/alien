@@ -389,8 +389,8 @@ fn emit_azure_resource_group_heartbeat(
         resource_type: AzureResourceGroup::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::AzureResourceGroup(AzureResourceGroupHeartbeatData {
             status: AzureResourceGroupHeartbeatStatus {

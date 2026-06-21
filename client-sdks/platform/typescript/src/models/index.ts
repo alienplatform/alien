@@ -112,6 +112,8 @@ export * from "./projectscope.js";
 export * from "./release.js";
 export * from "./releaseauthorfilteritem.js";
 export * from "./releaselistitemresponse.js";
+export * from "./renderoperatormanifestrequest.js";
+export * from "./renderoperatormanifestresponse.js";
 export * from "./resolvemanagergcpoauthproviderrequest.js";
 export * from "./resolvemanagergcpoauthproviderresponse.js";
 export * from "./resolveresponse.js";

@@ -62,8 +62,8 @@ fn emit_azure_network_heartbeat(
         resource_type: Network::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-            source: Default::default(),
-            alien_resource_id: None,
+        source: Default::default(),
+        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Network(NetworkHeartbeatData::AzureVnet(
             AzureVnetNetworkHeartbeatData {

@@ -1,4 +1,4 @@
-//! Embedded configuration support for alien-deploy-cli and alien-agent binaries.
+//! Embedded configuration support for alien-deploy-cli and alien-operator binaries.
 //!
 //! The package builder appends a JSON-encoded config struct to the end of the
 //! binary, followed by a 4-byte little-endian length and 8-byte magic trailer.
@@ -8,7 +8,7 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Magic bytes at the end of a binary with embedded config.
-pub const MAGIC_BYTES: &[u8; 8] = b"ALIENCFG";
+pub const MAGIC_BYTES: &[u8; 8] = b"WLCFG001";
 
 /// Size of the footer: 4 bytes (length) + 8 bytes (magic).
 pub const FOOTER_SIZE: usize = 12;
@@ -42,10 +42,10 @@ pub struct DeployCliConfig {
     pub display_name: Option<String>,
 }
 
-/// Configuration embedded in alien-agent binaries.
+/// Configuration embedded in alien-operator binaries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentConfig {
+pub struct OperatorConfig {
     // --- Connection (for pre-configured/OSS binaries) ---
     /// Manager URL to connect to.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,19 +53,28 @@ pub struct AgentConfig {
     /// Authentication token for the manager API.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// Deployment ID this agent manages.
+    /// Deployment ID this operator manages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_id: Option<String>,
     /// Sync interval in seconds (default: 30).
     #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,
     // --- Branding (for rebranded binaries) ---
-    /// Binary name (e.g., "acme-agent").
+    /// Binary name (e.g., "acme-operator").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Human-friendly display name (e.g., "Acme Agent").
+    /// Short brand slug used for generated resource names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand: Option<String>,
+    /// Human-friendly display name (e.g., "Acme Operator").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Branded environment variable prefix (e.g., "ACME").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_prefix: Option<String>,
+    /// Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_domain: Option<String>,
 }
 
 fn default_sync_interval() -> u64 {
@@ -200,26 +209,34 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_agent_config() {
-        let config = AgentConfig {
+    fn test_roundtrip_operator_config() {
+        let config = OperatorConfig {
             manager_url: Some("https://manager.example.com".into()),
-            token: Some("ax_dep_agent123".into()),
+            token: Some("ax_dep_operator123".into()),
             deployment_id: Some("dep_abc".into()),
             sync_interval_secs: 60,
-            name: Some("acme-agent".into()),
-            display_name: Some("Acme Agent".into()),
+            name: Some("acme-operator".into()),
+            brand: Some("acme".into()),
+            display_name: Some("Acme Operator".into()),
+            env_prefix: Some("ACME".into()),
+            label_domain: Some("acme.dev".into()),
         };
 
-        let binary = b"agent binary";
+        let binary = b"operator binary";
         let embedded = append_embedded_config(binary, &config).unwrap();
 
-        let loaded: Option<AgentConfig> = load_embedded_config_from_path_bytes(&embedded).unwrap();
+        let loaded: Option<OperatorConfig> =
+            load_embedded_config_from_path_bytes(&embedded).unwrap();
         let loaded = loaded.unwrap();
 
         assert_eq!(loaded.manager_url, config.manager_url);
         assert_eq!(loaded.deployment_id, config.deployment_id);
         assert_eq!(loaded.sync_interval_secs, 60);
         assert_eq!(loaded.name, config.name);
+        assert_eq!(loaded.brand, config.brand);
+        assert_eq!(loaded.display_name, config.display_name);
+        assert_eq!(loaded.env_prefix, config.env_prefix);
+        assert_eq!(loaded.label_domain, config.label_domain);
     }
 
     /// Helper that works on in-memory bytes (for tests that don't need files).
