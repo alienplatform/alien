@@ -966,7 +966,6 @@ dependencies = [
 name = "alien-test"
 version = "1.7.1"
 dependencies = [
- "alien-azure-clients",
  "alien-bindings",
  "alien-build",
  "alien-client-config",
@@ -985,6 +984,8 @@ dependencies = [
  "async-trait",
  "aws-sdk-ecr",
  "aws-sdk-iam",
+ "azure_core",
+ "azure_identity",
  "base64 0.22.1",
  "chrono",
  "dockdash",

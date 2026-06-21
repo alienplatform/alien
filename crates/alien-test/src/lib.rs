@@ -20,6 +20,7 @@
 //! ```
 
 pub mod agent;
+mod azure_sdk;
 pub mod build_push;
 pub mod cleanup;
 pub mod config;

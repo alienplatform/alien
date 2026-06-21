@@ -1,18 +1,16 @@
 use std::sync::Arc;
 
-use alien_azure_clients::{
-    authorization::{AuthorizationApi, Scope},
-    models::authorization_role_assignments::{
-        RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-    },
-    AzureAuthorizationClient, AzureTokenCache,
-};
 use alien_core::{Platform, StackState, VaultOutputs};
 use anyhow::Context;
 use tokio::process::Command;
 use tracing::info;
 
-use crate::{config::AzureConfig, deployment::TestDeployment, manager::TestManager};
+use crate::{
+    azure_sdk::{AzureArmClient, RoleAssignment, RoleAssignmentProperties, Scope},
+    config::AzureConfig,
+    deployment::TestDeployment,
+    manager::TestManager,
+};
 
 /// Provision the `MANAGED_TEST_SECRET` in the deployment's preflight-managed
 /// `secrets` vault via the manager's vault API. This is an Alien-managed test
@@ -94,10 +92,7 @@ async fn ensure_local_azure_manager_vault_access(
         service_overrides: None,
     };
 
-    let auth_client = AzureAuthorizationClient::new(
-        reqwest::Client::new(),
-        AzureTokenCache::new(azure_config.clone()),
-    );
+    let arm_client = AzureArmClient::new(azure_config.clone())?;
     let scope_text = vault_scope.to_resource_id_string(&azure_config);
 
     // The local OSS Azure harness can run the manager with the target service
@@ -127,29 +122,25 @@ async fn ensure_local_azure_manager_vault_access(
             .as_bytes(),
         )
         .to_string();
-        let full_assignment_id = auth_client.build_role_assignment_id(&vault_scope, assignment_id);
+        let full_assignment_id = arm_client.role_assignment_id(&vault_scope, assignment_id);
 
-        auth_client
-            .create_or_update_role_assignment_by_id(
+        arm_client
+            .create_or_update_role_assignment(
                 full_assignment_id,
                 &RoleAssignment {
                     id: None,
                     name: None,
                     type_: None,
-                    properties: Some(RoleAssignmentProperties {
+                    properties: RoleAssignmentProperties {
                         principal_id: principal_id.clone(),
                         role_definition_id,
-                        scope: Some(scope_text.clone()),
-                        principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                        scope: scope_text.clone(),
+                        principal_type: "ServicePrincipal".to_string(),
                         condition: None,
                         condition_version: None,
                         delegated_managed_identity_resource_id: None,
                         description: Some("E2E local Azure manager vault API access".to_string()),
-                        created_by: None,
-                        created_on: None,
-                        updated_by: None,
-                        updated_on: None,
-                    }),
+                    },
                 },
             )
             .await

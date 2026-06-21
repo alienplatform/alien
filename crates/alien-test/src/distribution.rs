@@ -6,9 +6,6 @@
 
 use std::{collections::BTreeMap, env, future::Future, path::Path, sync::Arc, time::Duration};
 
-use alien_azure_clients::{
-    AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
-};
 use alien_core::{
     import::{
         data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
@@ -40,6 +37,7 @@ use tokio::{fs, process::Command};
 use tracing::{info, warn};
 
 use crate::{
+    azure_sdk::{AzureArmClient, AzureRestError, RoleAssignment, RoleAssignmentProperties, Scope},
     build_push::build_and_push_stack_for_registry,
     config::{
         AwsConfig, AzureConfig, GcpConfig, KubernetesClusterMode, KubernetesRuntimeConfig,
@@ -2445,12 +2443,6 @@ async fn grant_terraform_shared_env_join_permission(
         return Ok(());
     };
 
-    use alien_azure_clients::authorization::{AuthorizationApi, Scope};
-    use alien_azure_clients::models::authorization_role_assignments::{
-        RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-    };
-    use alien_azure_clients::AzureAuthorizationClient;
-
     let join_role_id = shared_env
         .join_role_definition_id
         .as_ref()
@@ -2477,10 +2469,7 @@ async fn grant_terraform_shared_env_join_permission(
         },
         service_overrides: None,
     };
-    let auth_client = AzureAuthorizationClient::new(
-        reqwest::Client::new(),
-        AzureTokenCache::new(azure_config.clone()),
-    );
+    let arm_client = AzureArmClient::new(azure_config.clone())?;
     let env_scope = Scope::Resource {
         resource_group_name: shared_env.resource_group.clone(),
         resource_provider: "Microsoft.App".to_string(),
@@ -2499,31 +2488,27 @@ async fn grant_terraform_shared_env_join_permission(
         .as_bytes(),
     )
     .to_string();
-    let full_assignment_id = auth_client.build_role_assignment_id(&env_scope, assignment_id);
+    let full_assignment_id = arm_client.role_assignment_id(&env_scope, assignment_id);
 
-    auth_client
-        .create_or_update_role_assignment_by_id(
+    arm_client
+        .create_or_update_role_assignment(
             full_assignment_id,
             &RoleAssignment {
                 id: None,
                 name: None,
                 type_: None,
-                properties: Some(RoleAssignmentProperties {
+                properties: RoleAssignmentProperties {
                     principal_id: management.principal_id.clone(),
                     role_definition_id: join_role_id.clone(),
-                    scope: Some(scope),
-                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                    scope,
+                    principal_type: "ServicePrincipal".to_string(),
                     condition: None,
                     condition_version: None,
                     delegated_managed_identity_resource_id: None,
                     description: Some(
                         "E2E test: Terraform management UAMI shared env access".into(),
                     ),
-                    created_by: None,
-                    created_on: None,
-                    updated_by: None,
-                    updated_on: None,
-                }),
+                },
             },
         )
         .await
@@ -2995,10 +2980,7 @@ async fn wait_for_azure_management_permissions(
         },
         service_overrides: None,
     };
-    let service_bus_client = AzureServiceBusManagementClient::new(
-        reqwest::Client::new(),
-        AzureTokenCache::new(azure_config),
-    );
+    let arm_client = AzureArmClient::new(azure_config)?;
     let probe_queue_name = format!(
         "{}-iam-probe",
         terraform_output_string(outputs, "deployment_resource_prefix")?
@@ -3009,22 +2991,21 @@ async fn wait_for_azure_management_permissions(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let create_result = service_bus_client
-            .create_or_update_queue(
-                service_bus.resource_group.clone(),
-                service_bus.namespace_name.clone(),
-                probe_queue_name.clone(),
-                alien_azure_clients::models::queue::SbQueueProperties::default(),
+        let create_result = arm_client
+            .create_or_update_service_bus_queue(
+                &service_bus.resource_group,
+                &service_bus.namespace_name,
+                &probe_queue_name,
             )
             .await;
 
         match create_result {
             Ok(_) => {
-                match service_bus_client
-                    .delete_queue(
-                        service_bus.resource_group.clone(),
-                        service_bus.namespace_name.clone(),
-                        probe_queue_name.clone(),
+                match arm_client
+                    .delete_service_bus_queue(
+                        &service_bus.resource_group,
+                        &service_bus.namespace_name,
+                        &probe_queue_name,
                     )
                     .await
                 {
@@ -3093,17 +3074,8 @@ where
         .with_context(|| format!("Failed to parse {resource_type} import data"))
 }
 
-fn azure_management_permission_probe_should_retry(error: &alien_azure_clients::Error) -> bool {
-    matches!(
-        error.code.as_str(),
-        "AUTHENTICATION_ERROR"
-            | "AUTHENTICATION_FAILED"
-            | "HTTP_RESPONSE_ERROR"
-            | "REMOTE_ACCESS_DENIED"
-            | "REMOTE_SERVICE_UNAVAILABLE"
-            | "TIMEOUT"
-            | "RATE_LIMIT_EXCEEDED"
-    )
+fn azure_management_permission_probe_should_retry(error: &AzureRestError) -> bool {
+    error.should_retry_permission_probe()
 }
 
 fn terraform_output_string(outputs: &Value, key: &str) -> anyhow::Result<String> {

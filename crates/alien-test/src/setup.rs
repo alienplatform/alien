@@ -615,11 +615,7 @@ async fn grant_shared_env_join_permission(
     manager: &Arc<TestManager>,
     shared_env: &crate::config::SharedContainerEnvConfig,
 ) -> anyhow::Result<()> {
-    use alien_azure_clients::authorization::{AuthorizationApi, Scope};
-    use alien_azure_clients::models::authorization_role_assignments::{
-        RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-    };
-    use alien_azure_clients::AzureAuthorizationClient;
+    use crate::azure_sdk::{AzureArmClient, RoleAssignment, RoleAssignmentProperties, Scope};
 
     let join_role_id = shared_env
         .join_role_definition_id
@@ -663,10 +659,8 @@ async fn grant_shared_env_join_permission(
         "Granting shared environment permissions for management UAMI"
     );
 
-    // Create role assignment using the Terraform-provisioned role definition
-    let token_cache = alien_azure_clients::AzureTokenCache::new(azure_config.clone());
-    let http_client = reqwest::Client::new();
-    let auth_client = AzureAuthorizationClient::new(http_client, token_cache);
+    // Create role assignment using the Terraform-provisioned role definition.
+    let arm_client = AzureArmClient::new(azure_config.clone())?;
 
     let env_scope = Scope::Resource {
         resource_group_name: shared_env.resource_group.clone(),
@@ -686,29 +680,25 @@ async fn grant_shared_env_join_permission(
     )
     .to_string();
 
-    let full_assignment_id = auth_client.build_role_assignment_id(&env_scope, assignment_id);
+    let full_assignment_id = arm_client.role_assignment_id(&env_scope, assignment_id);
 
-    auth_client
-        .create_or_update_role_assignment_by_id(
+    arm_client
+        .create_or_update_role_assignment(
             full_assignment_id,
             &RoleAssignment {
                 id: None,
                 name: None,
                 type_: None,
-                properties: Some(RoleAssignmentProperties {
+                properties: RoleAssignmentProperties {
                     principal_id: mgmt_principal_id.clone(),
                     role_definition_id: join_role_id.clone(),
-                    scope: Some(env_scope.to_scope_string(azure_config)),
-                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                    scope: env_scope.to_scope_string(azure_config),
+                    principal_type: "ServicePrincipal".to_string(),
                     condition: None,
                     condition_version: None,
                     delegated_managed_identity_resource_id: None,
                     description: Some("E2E test: management UAMI shared env access".into()),
-                    created_by: None,
-                    created_on: None,
-                    updated_by: None,
-                    updated_on: None,
-                }),
+                },
             },
         )
         .await

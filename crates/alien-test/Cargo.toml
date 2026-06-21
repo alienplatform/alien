@@ -23,10 +23,11 @@ alien-terraform = { workspace = true }
 alien-helm = { workspace = true }
 alien-permissions = { workspace = true }
 alien-bindings = { workspace = true, features = ["aws"] }
-alien-azure-clients = { workspace = true }
 alien-client-config = { workspace = true }
 aws-sdk-ecr = { workspace = true }
 aws-sdk-iam = { workspace = true }
+azure_core = { workspace = true }
+azure_identity = { workspace = true }
 google-cloud-auth = { workspace = true }
 google-cloud-gax = { workspace = true }
 google-cloud-resourcemanager-v3 = { workspace = true }
