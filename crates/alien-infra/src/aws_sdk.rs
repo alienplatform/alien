@@ -22,9 +22,7 @@ use aws_sdk_dynamodb::{
 };
 use aws_sdk_ec2::{
     types::{
-        AttributeBooleanValue as AwsEc2AttributeBooleanValue,
-        ConnectivityType as AwsEc2ConnectivityType, DomainType as AwsEc2DomainType,
-        IpPermission as AwsEc2IpPermission,
+        AttributeBooleanValue as AwsEc2AttributeBooleanValue, IpPermission as AwsEc2IpPermission,
     },
     Client as Ec2Client,
 };
@@ -134,15 +132,31 @@ pub use aws_sdk_dynamodb::types::{
 
 pub use aws_sdk_ec2::{
     operation::{
+        allocate_address::{
+            AllocateAddressInput as AllocateAddressRequest,
+            AllocateAddressOutput as AllocateAddressResponse,
+        },
         attach_internet_gateway::AttachInternetGatewayInput as AttachInternetGatewayRequest,
         create_internet_gateway::{
             CreateInternetGatewayInput as CreateInternetGatewayRequest,
             CreateInternetGatewayOutput as CreateInternetGatewayResponse,
         },
+        create_nat_gateway::{
+            CreateNatGatewayInput as CreateNatGatewayRequest,
+            CreateNatGatewayOutput as CreateNatGatewayResponse,
+        },
         create_subnet::{
             CreateSubnetInput as CreateSubnetRequest, CreateSubnetOutput as CreateSubnetResponse,
         },
         create_vpc::{CreateVpcInput as CreateVpcRequest, CreateVpcOutput as CreateVpcResponse},
+        delete_nat_gateway::{
+            DeleteNatGatewayInput as DeleteNatGatewayRequest,
+            DeleteNatGatewayOutput as DeleteNatGatewayResponse,
+        },
+        describe_nat_gateways::{
+            DescribeNatGatewaysInput as DescribeNatGatewaysRequest,
+            DescribeNatGatewaysOutput as DescribeNatGatewaysResponse,
+        },
         describe_subnets::{
             DescribeSubnetsInput as DescribeSubnetsRequest,
             DescribeSubnetsOutput as DescribeSubnetsResponse,
@@ -153,8 +167,8 @@ pub use aws_sdk_ec2::{
         detach_internet_gateway::DetachInternetGatewayInput as DetachInternetGatewayRequest,
     },
     types::{
-        Filter, InternetGateway, IpPermission, IpRange, ResourceType as Ec2ResourceType, Subnet,
-        Tag as Ec2Tag, TagSpecification, Vpc,
+        ConnectivityType, DomainType, Filter, InternetGateway, IpPermission, IpRange, NatGateway,
+        ResourceType as Ec2ResourceType, Subnet, Tag as Ec2Tag, TagSpecification, Vpc,
     },
 };
 
@@ -279,87 +293,6 @@ pub struct ModifyVpcAttributeRequest {
     pub enable_dns_support: Option<bool>,
     /// Enable DNS hostnames.
     pub enable_dns_hostnames: Option<bool>,
-}
-
-/// Request to create a NAT gateway.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateNatGatewayRequest {
-    /// Subnet ID.
-    pub subnet_id: String,
-    /// Elastic IP allocation ID.
-    pub allocation_id: Option<String>,
-    /// Connectivity type.
-    pub connectivity_type: Option<String>,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from creating a NAT gateway.
-#[derive(Debug, Clone)]
-pub struct CreateNatGatewayResponse {
-    /// Created NAT gateway.
-    pub nat_gateway: Option<NatGateway>,
-}
-
-/// EC2 NAT gateway metadata.
-#[derive(Debug, Clone)]
-pub struct NatGateway {
-    /// NAT gateway ID.
-    pub nat_gateway_id: Option<String>,
-    /// NAT gateway state.
-    pub state: Option<String>,
-}
-
-/// Response from deleting a NAT gateway.
-#[derive(Debug, Clone)]
-pub struct DeleteNatGatewayResponse {
-    /// NAT gateway ID.
-    pub nat_gateway_id: Option<String>,
-}
-
-/// Request to describe NAT gateways.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct DescribeNatGatewaysRequest {
-    /// NAT gateway IDs.
-    pub nat_gateway_ids: Option<Vec<String>>,
-    /// Optional filters.
-    pub filters: Option<Vec<Filter>>,
-    /// Maximum results.
-    pub max_results: Option<i32>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// Response from describing NAT gateways.
-#[derive(Debug, Clone)]
-pub struct DescribeNatGatewaysResponse {
-    /// NAT gateway set.
-    pub nat_gateway_set: Option<NatGatewaySet>,
-    /// Pagination token.
-    pub next_token: Option<String>,
-}
-
-/// EC2 NAT gateway set.
-#[derive(Debug, Clone)]
-pub struct NatGatewaySet {
-    /// NAT gateways.
-    pub items: Vec<NatGateway>,
-}
-
-/// Request to allocate an Elastic IP.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct AllocateAddressRequest {
-    /// Address domain.
-    pub domain: Option<String>,
-    /// Resource tags.
-    pub tag_specifications: Option<Vec<TagSpecification>>,
-}
-
-/// Response from allocating an Elastic IP.
-#[derive(Debug, Clone)]
-pub struct AllocateAddressResponse {
-    /// Allocation ID.
-    pub allocation_id: Option<String>,
 }
 
 /// Request to create a route table.
@@ -1454,7 +1387,10 @@ pub trait Ec2Api: Send + Sync {
         request: CreateNatGatewayRequest,
     ) -> Result<CreateNatGatewayResponse>;
     /// Delete a NAT gateway.
-    async fn delete_nat_gateway(&self, nat_gateway_id: &str) -> Result<DeleteNatGatewayResponse>;
+    async fn delete_nat_gateway(
+        &self,
+        request: DeleteNatGatewayRequest,
+    ) -> Result<DeleteNatGatewayResponse>;
     /// Describe NAT gateways.
     async fn describe_nat_gateways(
         &self,
@@ -3463,54 +3399,58 @@ impl Ec2Api for Ec2Client {
         &self,
         request: CreateNatGatewayRequest,
     ) -> Result<CreateNatGatewayResponse> {
-        let subnet_id = request.subnet_id.clone();
-        let response = ec2_result(
+        let subnet_id = request.subnet_id().unwrap_or("<unknown>").to_string();
+
+        ec2_result(
             self.create_nat_gateway()
-                .subnet_id(&subnet_id)
+                .set_availability_mode(request.availability_mode)
                 .set_allocation_id(request.allocation_id)
-                .set_connectivity_type(
-                    request
-                        .connectivity_type
-                        .as_deref()
-                        .map(AwsEc2ConnectivityType::from),
-                )
+                .set_client_token(request.client_token)
+                .set_dry_run(request.dry_run)
+                .set_subnet_id(request.subnet_id)
+                .set_vpc_id(request.vpc_id)
+                .set_availability_zone_addresses(request.availability_zone_addresses)
                 .set_tag_specifications(request.tag_specifications)
+                .set_connectivity_type(request.connectivity_type)
+                .set_private_ip_address(request.private_ip_address)
+                .set_secondary_allocation_ids(request.secondary_allocation_ids)
+                .set_secondary_private_ip_addresses(request.secondary_private_ip_addresses)
+                .set_secondary_private_ip_address_count(request.secondary_private_ip_address_count)
                 .send()
                 .await,
             "CreateNatGateway",
             "NatGateway",
             &subnet_id,
-        )?;
-
-        Ok(CreateNatGatewayResponse {
-            nat_gateway: response.nat_gateway().map(ec2_nat_gateway),
-        })
+        )
     }
 
-    async fn delete_nat_gateway(&self, nat_gateway_id: &str) -> Result<DeleteNatGatewayResponse> {
-        let response = ec2_result(
+    async fn delete_nat_gateway(
+        &self,
+        request: DeleteNatGatewayRequest,
+    ) -> Result<DeleteNatGatewayResponse> {
+        let nat_gateway_id = request.nat_gateway_id().unwrap_or("<unknown>").to_string();
+
+        ec2_result(
             self.delete_nat_gateway()
-                .nat_gateway_id(nat_gateway_id)
+                .set_dry_run(request.dry_run)
+                .set_nat_gateway_id(request.nat_gateway_id)
                 .send()
                 .await,
             "DeleteNatGateway",
             "NatGateway",
-            nat_gateway_id,
-        )?;
-
-        Ok(DeleteNatGatewayResponse {
-            nat_gateway_id: response.nat_gateway_id().map(ToString::to_string),
-        })
+            &nat_gateway_id,
+        )
     }
 
     async fn describe_nat_gateways(
         &self,
         request: DescribeNatGatewaysRequest,
     ) -> Result<DescribeNatGatewaysResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.describe_nat_gateways()
+                .set_dry_run(request.dry_run)
                 .set_nat_gateway_ids(request.nat_gateway_ids)
-                .set_filter(request.filters)
+                .set_filter(request.filter)
                 .set_max_results(request.max_results)
                 .set_next_token(request.next_token)
                 .send()
@@ -3518,38 +3458,29 @@ impl Ec2Api for Ec2Client {
             "DescribeNatGateways",
             "NatGateway",
             "*",
-        )?;
-
-        Ok(DescribeNatGatewaysResponse {
-            nat_gateway_set: Some(NatGatewaySet {
-                items: response
-                    .nat_gateways()
-                    .iter()
-                    .map(ec2_nat_gateway)
-                    .collect(),
-            }),
-            next_token: response.next_token().map(ToString::to_string),
-        })
+        )
     }
 
     async fn allocate_address(
         &self,
         request: AllocateAddressRequest,
     ) -> Result<AllocateAddressResponse> {
-        let response = ec2_result(
+        ec2_result(
             self.allocate_address()
-                .set_domain(request.domain.as_deref().map(AwsEc2DomainType::from))
+                .set_domain(request.domain)
+                .set_address(request.address)
+                .set_public_ipv4_pool(request.public_ipv4_pool)
+                .set_network_border_group(request.network_border_group)
+                .set_customer_owned_ipv4_pool(request.customer_owned_ipv4_pool)
                 .set_tag_specifications(request.tag_specifications)
+                .set_ipam_pool_id(request.ipam_pool_id)
+                .set_dry_run(request.dry_run)
                 .send()
                 .await,
             "AllocateAddress",
             "ElasticIP",
             "*",
-        )?;
-
-        Ok(AllocateAddressResponse {
-            allocation_id: response.allocation_id().map(ToString::to_string),
-        })
+        )
     }
 
     async fn release_address(&self, allocation_id: &str) -> Result<()> {
@@ -4446,13 +4377,6 @@ fn nonempty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
         None
     } else {
         Some(values)
-    }
-}
-
-fn ec2_nat_gateway(nat_gateway: &aws_sdk_ec2::types::NatGateway) -> NatGateway {
-    NatGateway {
-        nat_gateway_id: nat_gateway.nat_gateway_id().map(ToString::to_string),
-        state: nat_gateway.state().map(|state| state.as_str().to_string()),
     }
 }
 

@@ -23,13 +23,13 @@
 
 use crate::aws_sdk::{
     AllocateAddressRequest, AssociateRouteTableRequest, AttachInternetGatewayRequest,
-    AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
+    AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest, ConnectivityType,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2ResourceType,
-    Ec2Tag as Tag, Filter, IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest,
-    SecurityGroup, TagSpecification,
+    DeleteNatGatewayRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
+    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
+    DetachInternetGatewayRequest, DomainType, Ec2ResourceType, Ec2Tag as Tag, Filter, IpPermission,
+    IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, TagSpecification,
 };
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
@@ -1189,13 +1189,18 @@ impl AwsNetworkController {
         let eip_response = client
             .allocate_address(
                 AllocateAddressRequest::builder()
-                    .domain("vpc".to_string())
-                    .tag_specifications(self.create_tags(
+                    .domain(DomainType::Vpc)
+                    .set_tag_specifications(Some(self.create_tags(
                         ctx.resource_prefix,
                         &config.id,
                         "elastic-ip",
-                    ))
-                    .build(),
+                    )))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build Elastic IP allocation request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1203,12 +1208,15 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let allocation_id = eip_response.allocation_id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Elastic IP allocated but no allocation ID returned".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        let allocation_id = eip_response
+            .allocation_id()
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "Elastic IP allocated but no allocation ID returned".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
         self.eip_allocation_id = Some(allocation_id.clone());
 
@@ -1220,13 +1228,18 @@ impl AwsNetworkController {
                 CreateNatGatewayRequest::builder()
                     .subnet_id(public_subnet_id.clone())
                     .allocation_id(allocation_id)
-                    .connectivity_type("public".to_string())
-                    .tag_specifications(self.create_tags(
+                    .connectivity_type(ConnectivityType::Public)
+                    .set_tag_specifications(Some(self.create_tags(
                         ctx.resource_prefix,
                         &config.id,
                         "natgateway",
-                    ))
-                    .build(),
+                    )))
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build NAT Gateway creation request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1235,8 +1248,9 @@ impl AwsNetworkController {
             })?;
 
         let nat_gateway_id = nat_response
-            .nat_gateway
-            .and_then(|ng| ng.nat_gateway_id)
+            .nat_gateway()
+            .and_then(|ng| ng.nat_gateway_id())
+            .map(ToString::to_string)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: "NAT Gateway created but no ID returned".to_string(),
@@ -1278,8 +1292,13 @@ impl AwsNetworkController {
         let nat_response = client
             .describe_nat_gateways(
                 DescribeNatGatewaysRequest::builder()
-                    .nat_gateway_ids(vec![nat_gateway_id.clone()])
-                    .build(),
+                    .nat_gateway_ids(nat_gateway_id.clone())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to build NAT Gateway describe request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1287,17 +1306,14 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let nat_gateway = nat_response
-            .nat_gateway_set
-            .and_then(|set| set.items.into_iter().next())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "NAT Gateway not found".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        let nat_gateway = nat_response.nat_gateways().first().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "NAT Gateway not found".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
-        match nat_gateway.state.as_deref() {
+        match nat_gateway.state().map(|state| state.as_str()) {
             Some("available") => {
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway is available, adding route");
 
@@ -1784,7 +1800,16 @@ impl AwsNetworkController {
         if let Some(nat_gateway_id) = &self.nat_gateway_id {
             info!(nat_gateway_id = %nat_gateway_id, "Deleting NAT Gateway");
 
-            match client.delete_nat_gateway(nat_gateway_id).await {
+            let delete_request = DeleteNatGatewayRequest::builder()
+                .nat_gateway_id(nat_gateway_id.clone())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build NAT Gateway deletion request".to_string(),
+                    resource_id: None,
+                })?;
+
+            match client.delete_nat_gateway(delete_request).await {
                 Ok(_) => {
                     info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deletion initiated");
                 }
