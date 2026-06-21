@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
+use crate::core::{
+    EnvironmentVariableBuilder, HttpTarget, ResourcePermissionsHelper, SchedulerJob,
+    SchedulerOidcToken,
+};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -12,7 +15,6 @@ use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
     TrafficTargetAllocationType, VpcAccess, VpcEgress,
 };
-use alien_gcp_clients::cloudscheduler::{HttpTarget, SchedulerJob, SchedulerOidcToken};
 use alien_gcp_clients::compute::{
     Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
     ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
@@ -30,7 +32,7 @@ use alien_core::{
     ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
     ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -39,10 +41,23 @@ const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
 const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 
-fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+fn is_remote_resource_conflict<T>(error: &AlienError<T>) -> bool
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
     matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+        error.code.as_str(),
+        "REMOTE_RESOURCE_CONFLICT" | "CLOUD_RESOURCE_CONFLICT"
+    )
+}
+
+fn is_remote_resource_not_found<T>(error: &AlienError<T>) -> bool
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
     )
 }
 
@@ -3704,12 +3719,7 @@ impl GcpWorkerController {
                         "Cloud Scheduler job deleted successfully"
                     );
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_remote_resource_not_found(&e) => {
                     info!(
                         worker=%worker_config.id,
                         job=%job_name,
