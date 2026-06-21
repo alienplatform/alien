@@ -43,6 +43,7 @@ gcp = [
     "dep:google-cloud-pubsub",
     "dep:google-cloud-resourcemanager-v3",
     "dep:google-cloud-scheduler-v1",
+    "dep:google-cloud-storage",
     "dep:google-cloud-type",
     "dep:wkt",
 ]
@@ -87,6 +88,7 @@ google-cloud-longrunning = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
 google-cloud-resourcemanager-v3 = { workspace = true, optional = true }
 google-cloud-scheduler-v1 = { workspace = true, optional = true }
+google-cloud-storage = { workspace = true, optional = true }
 google-cloud-type = { workspace = true, optional = true }
 wkt = { workspace = true, optional = true }
 azure_core = { workspace = true, optional = true }

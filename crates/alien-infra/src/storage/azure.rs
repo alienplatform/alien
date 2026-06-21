@@ -586,6 +586,7 @@ mod tests {
         AzureBlobContainer, AzureBlobContainerProperties, MockBlobContainerApi,
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
+    use crate::error::ErrorData;
     use crate::storage::{fixtures::*, AzureStorageController};
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────

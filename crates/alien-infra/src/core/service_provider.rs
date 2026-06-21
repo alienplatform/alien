@@ -28,7 +28,6 @@ use alien_error::{AlienError, Context, ContextError as _, IntoAlienError, IntoAl
 use alien_gcp_clients::{
     cloudrun::{CloudRunApi, CloudRunClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
-    gcs::{GcsApi, GcsClient},
     GcpClientConfig,
 };
 use azure_core::{
@@ -80,6 +79,23 @@ use google_cloud_scheduler_v1::{
     model::{
         HttpMethod as OfficialSchedulerHttpMethod, HttpTarget as OfficialSchedulerHttpTarget,
         Job as OfficialSchedulerJob, OidcToken as OfficialSchedulerOidcToken,
+    },
+};
+use google_cloud_storage::{
+    client::StorageControl as OfficialStorageControl,
+    model::{
+        bucket::{
+            iam_config::UniformBucketLevelAccess as OfficialUniformBucketLevelAccess,
+            lifecycle::{
+                rule::{
+                    Action as OfficialLifecycleAction, Condition as OfficialLifecycleCondition,
+                },
+                Rule as OfficialLifecycleRule,
+            },
+            IamConfig as OfficialIamConfig, Lifecycle as OfficialLifecycle,
+            Versioning as OfficialVersioning,
+        },
+        Bucket as OfficialBucket, DeleteObjectRequest,
     },
 };
 use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
@@ -1228,6 +1244,775 @@ impl PubSubApi for OfficialGcpPubSubClient {
     ) -> Result<IamPolicy> {
         self.set_iam_policy(self.subscription_name(&subscription_id), iam_policy)
             .await
+    }
+}
+
+#[cfg_attr(any(test, feature = "test-utils"), automock)]
+#[async_trait::async_trait]
+pub trait GcsApi: Send + Sync + std::fmt::Debug {
+    async fn create_bucket(&self, bucket_name: String, bucket: Bucket) -> Result<Bucket>;
+    async fn get_bucket(&self, bucket_name: String) -> Result<Bucket>;
+    async fn update_bucket(&self, bucket_name: String, bucket_patch: Bucket) -> Result<Bucket>;
+    async fn delete_bucket(&self, bucket_name: String) -> Result<()>;
+    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<IamPolicy>;
+    async fn set_bucket_iam_policy(
+        &self,
+        bucket_name: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy>;
+    async fn empty_bucket(&self, bucket_name: String) -> Result<()>;
+    async fn insert_notification(
+        &self,
+        bucket_name: String,
+        notification: GcsNotification,
+    ) -> Result<GcsNotification>;
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse>;
+    async fn delete_notification(&self, bucket_name: String, notification_id: String)
+        -> Result<()>;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Bucket {
+    /// GCS bucket resource kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// GCS bucket identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// GCS bucket self link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+    /// Owning project number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_number: Option<String>,
+    /// Bucket name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Bucket creation time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_created: Option<String>,
+    /// Bucket update time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    /// Bucket metageneration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metageneration: Option<String>,
+    /// Bucket location.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Bucket storage class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+    /// Bucket ETag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Default event-based hold flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_event_based_hold: Option<bool>,
+    /// Retention policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_policy: Option<RetentionPolicy>,
+    /// IAM configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iam_configuration: Option<IamConfiguration>,
+    /// Bucket location type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    /// Recovery point objective.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpo: Option<String>,
+    /// Versioning configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub versioning: Option<Versioning>,
+    /// Website configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website: Option<Value>,
+    /// Logging configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<Value>,
+    /// Lifecycle configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<Lifecycle>,
+    /// Bucket labels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<HashMap<String, String>>,
+    /// Encryption configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<BucketEncryption>,
+    /// Soft delete policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_delete_policy: Option<SoftDeletePolicy>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionPolicy {
+    /// Time when the retention policy became effective.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_time: Option<String>,
+    /// Whether the policy is locked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_locked: Option<bool>,
+    /// Retention duration in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_period: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct BucketEncryption {
+    /// Default KMS key name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_kms_key_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct SoftDeletePolicy {
+    /// Soft delete retention duration in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_duration_seconds: Option<String>,
+    /// Time when the soft delete policy became effective.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_time: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct IamConfiguration {
+    /// Uniform bucket-level access configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uniform_bucket_level_access: Option<UniformBucketLevelAccess>,
+    /// Public access prevention mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_access_prevention: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct UniformBucketLevelAccess {
+    /// Whether uniform bucket-level access is enabled.
+    pub enabled: bool,
+    /// Time when the setting becomes locked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_time: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Versioning {
+    /// Whether object versioning is enabled.
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Lifecycle {
+    /// Lifecycle rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<Vec<LifecycleRule>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleRule {
+    /// Lifecycle action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<LifecycleAction>,
+    /// Lifecycle condition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<LifecycleCondition>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleAction {
+    /// Lifecycle action type.
+    #[serde(rename = "type")]
+    pub action_type: String,
+    /// Target storage class for SetStorageClass actions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleCondition {
+    /// Object age in days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<i32>,
+    /// Created-before date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<String>,
+    /// Whether the object is live.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_live: Option<bool>,
+    /// Number of newer versions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_newer_versions: Option<i32>,
+    /// Matching storage classes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matches_storage_class: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Object {
+    /// Object resource kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Object identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Object self link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+    /// Object name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Bucket name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<String>,
+    /// Object generation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+    /// Object metageneration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metageneration: Option<String>,
+    /// Object content type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// Object creation time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_created: Option<String>,
+    /// Object update time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    /// Object deletion time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_deleted: Option<String>,
+    /// Object storage class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+    /// Object size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// Object MD5 hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub md5_hash: Option<String>,
+    /// Object media link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_link: Option<String>,
+    /// Content encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_encoding: Option<String>,
+    /// Content disposition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_disposition: Option<String>,
+    /// Content language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_language: Option<String>,
+    /// Cache control header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<String>,
+    /// CRC32C checksum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crc32c: Option<String>,
+    /// Object ETag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Object metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListObjectsResponse {
+    /// Response resource kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Next page token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    /// Common prefixes.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prefixes: Vec<String>,
+    /// Object items.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Object>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListNotificationsResponse {
+    /// Response resource kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Notification items.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<GcsNotification>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GcsNotification {
+    /// Server-assigned notification ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Pub/Sub topic to publish to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// Event types that trigger notification publishing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_types: Vec<String>,
+    /// Notification payload format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_format: Option<String>,
+    /// Object name prefix filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_name_prefix: Option<String>,
+    /// Custom Pub/Sub message attributes.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom_attributes: HashMap<String, String>,
+}
+
+struct OfficialGcpGcsClient {
+    config: GcpClientConfig,
+    storage_control: OnceCell<OfficialStorageControl>,
+    credentials: Credentials,
+    http_client: reqwest::Client,
+}
+
+impl std::fmt::Debug for OfficialGcpGcsClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OfficialGcpGcsClient")
+            .field("project_id", &self.config.project_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OfficialGcpGcsClient {
+    fn new(config: GcpClientConfig) -> Result<Self> {
+        let credentials = gcp_credentials_from_alien_config(&config)?;
+        Ok(Self {
+            config,
+            storage_control: OnceCell::new(),
+            credentials,
+            http_client: reqwest::Client::new(),
+        })
+    }
+
+    async fn storage_control(&self) -> Result<OfficialStorageControl> {
+        let client = self
+            .storage_control
+            .get_or_try_init(|| async { gcs_storage_control_from_alien_config(&self.config).await })
+            .await?;
+        Ok(client.clone())
+    }
+
+    fn bucket_resource_name(&self, bucket_name: &str) -> String {
+        if bucket_name.starts_with("projects/") {
+            bucket_name.to_string()
+        } else {
+            format!("projects/_/buckets/{bucket_name}")
+        }
+    }
+
+    async fn auth_headers(&self, resource_id: Option<String>) -> Result<HeaderMap> {
+        match self
+            .credentials
+            .headers(Extensions::new())
+            .await
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to get GCP Cloud Storage authorization headers".to_string(),
+                resource_id: resource_id.clone(),
+            })? {
+            CacheableResource::New { data, .. } => Ok(data),
+            CacheableResource::NotModified => Err(AlienError::new(
+                crate::error::ErrorData::CloudPlatformError {
+                    message: "GCP Cloud Storage authorization headers were not refreshed and no cached headers are available".to_string(),
+                    resource_id,
+                },
+            )),
+        }
+    }
+
+    async fn send_gcs_json<T, B>(
+        &self,
+        request: reqwest::RequestBuilder,
+        operation: &str,
+        resource_id: Option<String>,
+        body: Option<&B>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize + ?Sized,
+    {
+        let headers = self.auth_headers(resource_id.clone()).await?;
+        let request = request.headers(headers);
+        let request = if let Some(body) = body {
+            request.json(body)
+        } else {
+            request
+        };
+        let response = request.send().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: format!("GCS {operation} request failed"),
+                resource_id: resource_id.clone(),
+            },
+        )?;
+
+        if !response.status().is_success() {
+            return Err(gcs_http_error(operation, resource_id, response).await);
+        }
+
+        response.json::<T>().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: format!("Failed to parse GCS {operation} response"),
+                resource_id,
+            },
+        )
+    }
+
+    async fn send_gcs_empty(
+        &self,
+        request: reqwest::RequestBuilder,
+        operation: &str,
+        resource_id: Option<String>,
+    ) -> Result<()> {
+        let headers = self.auth_headers(resource_id.clone()).await?;
+        let response = request
+            .headers(headers)
+            .send()
+            .await
+            .into_alien_error()
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: format!("GCS {operation} request failed"),
+                resource_id: resource_id.clone(),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(gcs_http_error(operation, resource_id, response).await);
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl GcsApi for OfficialGcpGcsClient {
+    async fn create_bucket(&self, bucket_name: String, bucket: Bucket) -> Result<Bucket> {
+        let official_bucket = bucket_to_official(bucket)?;
+        match self
+            .storage_control()
+            .await?
+            .create_bucket()
+            .set_parent(format!("projects/{}", self.config.project_id))
+            .set_bucket_id(bucket_name.clone())
+            .set_bucket(official_bucket)
+            .send()
+            .await
+        {
+            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceConflict {
+                    resource_type: "GCS bucket".to_string(),
+                    resource_name: bucket_name,
+                    message: "create_bucket reported the bucket already exists".to_string(),
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "GCS create_bucket request failed".to_string(),
+                        resource_id: Some(bucket_name),
+                    }))
+            }
+        }
+    }
+
+    async fn get_bucket(&self, bucket_name: String) -> Result<Bucket> {
+        match self
+            .storage_control()
+            .await?
+            .get_bucket()
+            .set_name(self.bucket_resource_name(&bucket_name))
+            .send()
+            .await
+        {
+            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "GCS bucket".to_string(),
+                    resource_name: bucket_name,
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "GCS get_bucket request failed".to_string(),
+                        resource_id: Some(bucket_name),
+                    }))
+            }
+        }
+    }
+
+    async fn update_bucket(&self, bucket_name: String, bucket_patch: Bucket) -> Result<Bucket> {
+        let update_mask = bucket_update_mask(&bucket_patch);
+        let mut official_bucket = bucket_to_official(bucket_patch)?;
+        if official_bucket.name.is_empty() {
+            official_bucket.name = self.bucket_resource_name(&bucket_name);
+        }
+
+        let mut request =
+            google_cloud_storage::model::UpdateBucketRequest::new().set_bucket(official_bucket);
+        if !update_mask.paths.is_empty() {
+            request = request.set_update_mask(update_mask);
+        }
+
+        match self
+            .storage_control()
+            .await?
+            .update_bucket()
+            .with_request(request)
+            .send()
+            .await
+        {
+            Ok(bucket) => Ok(bucket_from_official(bucket)),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "GCS bucket".to_string(),
+                    resource_name: bucket_name,
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "GCS update_bucket request failed".to_string(),
+                        resource_id: Some(bucket_name),
+                    }))
+            }
+        }
+    }
+
+    async fn delete_bucket(&self, bucket_name: String) -> Result<()> {
+        match self
+            .storage_control()
+            .await?
+            .delete_bucket()
+            .set_name(self.bucket_resource_name(&bucket_name))
+            .send()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
+                crate::error::ErrorData::CloudResourceNotFound {
+                    resource_type: "GCS bucket".to_string(),
+                    resource_name: bucket_name,
+                },
+            )),
+            Err(error) => {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "GCS delete_bucket request failed".to_string(),
+                        resource_id: Some(bucket_name),
+                    }))
+            }
+        }
+    }
+
+    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<IamPolicy> {
+        let policy = self
+            .storage_control()
+            .await?
+            .get_iam_policy()
+            .set_resource(self.bucket_resource_name(&bucket_name))
+            .send()
+            .await
+            .map(gcp_iam_policy_from_official)
+            .map_err(|error| {
+                if gax_error_is_not_found(&error) {
+                    AlienError::new(crate::error::ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket IAM policy".to_string(),
+                        resource_name: bucket_name.clone(),
+                    })
+                } else {
+                    error
+                        .into_alien_error()
+                        .context(crate::error::ErrorData::CloudPlatformError {
+                            message: "GCS get_bucket_iam_policy request failed".to_string(),
+                            resource_id: Some(bucket_name.clone()),
+                        })
+                }
+            })?;
+        Ok(policy)
+    }
+
+    async fn set_bucket_iam_policy(
+        &self,
+        bucket_name: String,
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy> {
+        let policy = gcp_iam_policy_to_official(iam_policy)?;
+        self.storage_control()
+            .await?
+            .set_iam_policy()
+            .set_resource(self.bucket_resource_name(&bucket_name))
+            .set_policy(policy)
+            .send()
+            .await
+            .map(gcp_iam_policy_from_official)
+            .map_err(|error| {
+                if gax_error_is_not_found(&error) {
+                    AlienError::new(crate::error::ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket IAM policy".to_string(),
+                        resource_name: bucket_name.clone(),
+                    })
+                } else {
+                    error
+                        .into_alien_error()
+                        .context(crate::error::ErrorData::CloudPlatformError {
+                            message: "GCS set_bucket_iam_policy request failed".to_string(),
+                            resource_id: Some(bucket_name.clone()),
+                        })
+                }
+            })
+    }
+
+    async fn empty_bucket(&self, bucket_name: String) -> Result<()> {
+        let mut page_token = String::new();
+        loop {
+            let response = match self
+                .storage_control()
+                .await?
+                .list_objects()
+                .set_parent(self.bucket_resource_name(&bucket_name))
+                .set_page_size(1000)
+                .set_page_token(page_token.clone())
+                .set_versions(true)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if gax_error_is_not_found(&error) => return Ok(()),
+                Err(error) => {
+                    return Err(error.into_alien_error().context(
+                        crate::error::ErrorData::CloudPlatformError {
+                            message: "GCS list_objects request failed while emptying bucket"
+                                .to_string(),
+                            resource_id: Some(bucket_name),
+                        },
+                    ));
+                }
+            };
+
+            for object in response.objects {
+                let generation = if object.generation == 0 {
+                    None
+                } else {
+                    Some(object.generation)
+                };
+                let mut request = DeleteObjectRequest::new()
+                    .set_bucket(self.bucket_resource_name(&bucket_name))
+                    .set_object(object.name.clone());
+                if let Some(generation) = generation {
+                    request = request.set_generation(generation);
+                }
+                match self
+                    .storage_control()
+                    .await?
+                    .delete_object()
+                    .with_request(request)
+                    .send()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error) if gax_error_is_not_found(&error) => {}
+                    Err(error) => {
+                        return Err(error.into_alien_error().context(
+                            crate::error::ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "GCS delete_object request failed while emptying bucket object '{}'",
+                                    object.name
+                                ),
+                                resource_id: Some(bucket_name),
+                            },
+                        ));
+                    }
+                }
+            }
+
+            if response.next_page_token.is_empty() {
+                break;
+            }
+            page_token = response.next_page_token;
+        }
+
+        Ok(())
+    }
+
+    async fn insert_notification(
+        &self,
+        bucket_name: String,
+        notification: GcsNotification,
+    ) -> Result<GcsNotification> {
+        let url = format!(
+            "{}/b/{}/notificationConfigs",
+            gcs_rest_endpoint(&self.config),
+            bucket_name
+        );
+        self.send_gcs_json(
+            self.http_client.post(url),
+            "insert_notification",
+            Some(bucket_name),
+            Some(&notification),
+        )
+        .await
+    }
+
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse> {
+        let url = format!(
+            "{}/b/{}/notificationConfigs",
+            gcs_rest_endpoint(&self.config),
+            bucket_name
+        );
+        self.send_gcs_json(
+            self.http_client.get(url),
+            "list_notifications",
+            Some(bucket_name),
+            Option::<&()>::None,
+        )
+        .await
+    }
+
+    async fn delete_notification(
+        &self,
+        bucket_name: String,
+        notification_id: String,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/b/{}/notificationConfigs/{}",
+            gcs_rest_endpoint(&self.config),
+            bucket_name,
+            notification_id
+        );
+        self.send_gcs_empty(
+            self.http_client.delete(url),
+            "delete_notification",
+            Some(bucket_name),
+        )
+        .await
     }
 }
 
@@ -6725,10 +7510,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>> {
-        Ok(Arc::new(GcsClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(OfficialGcpGcsClient::new(config.clone())?))
     }
 
     fn get_gcp_artifact_registry_client(
@@ -7196,6 +7978,30 @@ async fn pubsub_subscription_admin_from_alien_config(
         })
 }
 
+async fn gcs_storage_control_from_alien_config(
+    config: &GcpClientConfig,
+) -> Result<OfficialStorageControl> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = OfficialStorageControl::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("storage"))
+    {
+        builder = builder.with_endpoint(gcs_control_endpoint(endpoint));
+    }
+
+    builder
+        .build()
+        .await
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official GCP Cloud Storage client".to_string(),
+            resource_id: None,
+        })
+}
+
 async fn firestore_admin_client_from_alien_config(
     config: &GcpClientConfig,
 ) -> Result<FirestoreAdmin> {
@@ -7575,6 +8381,290 @@ fn pubsub_rest_endpoint(config: &GcpClientConfig) -> String {
             }
         })
         .unwrap_or_else(|| "https://pubsub.googleapis.com/v1".to_string())
+}
+
+fn gcs_control_endpoint(endpoint: &str) -> String {
+    endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/storage/v1")
+        .trim_end_matches("/upload/storage/v1")
+        .to_string()
+}
+
+fn gcs_rest_endpoint(config: &GcpClientConfig) -> String {
+    config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("storage"))
+        .map(|endpoint| endpoint.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| "https://storage.googleapis.com/storage/v1".to_string())
+}
+
+fn bucket_to_official(bucket: Bucket) -> Result<OfficialBucket> {
+    if bucket.website.is_some()
+        || bucket.logging.is_some()
+        || bucket.retention_policy.is_some()
+        || bucket.encryption.is_some()
+        || bucket.soft_delete_policy.is_some()
+    {
+        return Err(AlienError::new(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "GCS bucket website/logging/retention/encryption/soft-delete fields are not supported by the official adapter yet".to_string(),
+                resource_id: bucket.name,
+            },
+        ));
+    }
+
+    let mut official = OfficialBucket::new();
+    if let Some(name) = bucket.name {
+        official = official.set_name(name);
+    }
+    if let Some(location) = bucket.location {
+        official = official.set_location(location);
+    }
+    if let Some(storage_class) = bucket.storage_class {
+        official = official.set_storage_class(storage_class);
+    }
+    if let Some(default_event_based_hold) = bucket.default_event_based_hold {
+        official = official.set_default_event_based_hold(default_event_based_hold);
+    }
+    if let Some(location_type) = bucket.location_type {
+        official = official.set_location_type(location_type);
+    }
+    if let Some(rpo) = bucket.rpo {
+        official = official.set_rpo(rpo);
+    }
+    if let Some(versioning) = bucket.versioning {
+        official =
+            official.set_versioning(OfficialVersioning::new().set_enabled(versioning.enabled));
+    }
+    if let Some(labels) = bucket.labels {
+        official = official.set_labels(labels);
+    }
+    if let Some(lifecycle) = bucket.lifecycle {
+        official = official.set_lifecycle(lifecycle_to_official(lifecycle)?);
+    }
+    if let Some(iam_configuration) = bucket.iam_configuration {
+        official = official.set_iam_config(iam_configuration_to_official(iam_configuration));
+    }
+
+    Ok(official)
+}
+
+fn bucket_from_official(bucket: OfficialBucket) -> Bucket {
+    Bucket {
+        kind: Some("storage#bucket".to_string()),
+        id: none_if_empty(bucket.bucket_id.clone()).or_else(|| none_if_empty(bucket.name.clone())),
+        self_link: None,
+        project_number: none_if_empty(
+            bucket
+                .project
+                .strip_prefix("projects/")
+                .unwrap_or(&bucket.project)
+                .to_string(),
+        ),
+        name: none_if_empty(bucket.bucket_id.clone()).or_else(|| {
+            bucket
+                .name
+                .rsplit_once("/buckets/")
+                .map(|(_, bucket_name)| bucket_name.to_string())
+        }),
+        time_created: bucket.create_time.map(timestamp_to_string),
+        updated: bucket.update_time.map(timestamp_to_string),
+        metageneration: if bucket.metageneration == 0 {
+            None
+        } else {
+            Some(bucket.metageneration.to_string())
+        },
+        location: none_if_empty(bucket.location),
+        storage_class: none_if_empty(bucket.storage_class),
+        etag: none_if_empty(bucket.etag),
+        default_event_based_hold: Some(bucket.default_event_based_hold),
+        retention_policy: bucket.retention_policy.map(|policy| RetentionPolicy {
+            effective_time: policy.effective_time.map(timestamp_to_string),
+            is_locked: Some(policy.is_locked),
+            retention_period: policy
+                .retention_duration
+                .map(|duration| duration.seconds().to_string()),
+        }),
+        iam_configuration: bucket.iam_config.map(iam_configuration_from_official),
+        location_type: none_if_empty(bucket.location_type),
+        rpo: none_if_empty(bucket.rpo),
+        versioning: bucket.versioning.map(|versioning| Versioning {
+            enabled: versioning.enabled,
+        }),
+        website: None,
+        logging: None,
+        lifecycle: bucket.lifecycle.map(lifecycle_from_official),
+        labels: if bucket.labels.is_empty() {
+            None
+        } else {
+            Some(bucket.labels)
+        },
+        encryption: bucket.encryption.map(|encryption| BucketEncryption {
+            default_kms_key_name: none_if_empty(encryption.default_kms_key),
+        }),
+        soft_delete_policy: bucket.soft_delete_policy.map(|policy| SoftDeletePolicy {
+            retention_duration_seconds: policy
+                .retention_duration
+                .map(|duration| duration.seconds().to_string()),
+            effective_time: policy.effective_time.map(timestamp_to_string),
+        }),
+    }
+}
+
+fn lifecycle_to_official(lifecycle: Lifecycle) -> Result<OfficialLifecycle> {
+    let rules = lifecycle
+        .rule
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rule| {
+            let mut official = OfficialLifecycleRule::new();
+            if let Some(action) = rule.action {
+                let mut official_action =
+                    OfficialLifecycleAction::new().set_type(action.action_type);
+                if let Some(storage_class) = action.storage_class {
+                    official_action = official_action.set_storage_class(storage_class);
+                }
+                official = official.set_action(official_action);
+            }
+            if let Some(condition) = rule.condition {
+                official = official.set_condition(lifecycle_condition_to_official(condition)?);
+            }
+            Ok(official)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(OfficialLifecycle::new().set_rule(rules))
+}
+
+fn lifecycle_from_official(lifecycle: OfficialLifecycle) -> Lifecycle {
+    Lifecycle {
+        rule: Some(
+            lifecycle
+                .rule
+                .into_iter()
+                .map(|rule| LifecycleRule {
+                    action: rule.action.map(|action| LifecycleAction {
+                        action_type: action.r#type,
+                        storage_class: none_if_empty(action.storage_class),
+                    }),
+                    condition: rule.condition.map(|condition| LifecycleCondition {
+                        age: condition.age_days,
+                        created_before: condition.created_before.map(|date| {
+                            format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
+                        }),
+                        is_live: condition.is_live,
+                        num_newer_versions: condition.num_newer_versions,
+                        matches_storage_class: if condition.matches_storage_class.is_empty() {
+                            None
+                        } else {
+                            Some(condition.matches_storage_class)
+                        },
+                    }),
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn lifecycle_condition_to_official(
+    condition: LifecycleCondition,
+) -> Result<OfficialLifecycleCondition> {
+    let mut official = OfficialLifecycleCondition::new();
+    if let Some(age) = condition.age {
+        official = official.set_age_days(age);
+    }
+    if condition.created_before.is_some() {
+        return Err(AlienError::new(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "GCS lifecycle createdBefore conversion is not supported by the official adapter yet".to_string(),
+                resource_id: None,
+            },
+        ));
+    }
+    if let Some(is_live) = condition.is_live {
+        official = official.set_is_live(is_live);
+    }
+    if let Some(num_newer_versions) = condition.num_newer_versions {
+        official = official.set_num_newer_versions(num_newer_versions);
+    }
+    if let Some(matches_storage_class) = condition.matches_storage_class {
+        official = official.set_matches_storage_class(matches_storage_class);
+    }
+    Ok(official)
+}
+
+fn iam_configuration_to_official(iam_configuration: IamConfiguration) -> OfficialIamConfig {
+    let mut official = OfficialIamConfig::new();
+    if let Some(uniform_bucket_level_access) = iam_configuration.uniform_bucket_level_access {
+        official = official.set_uniform_bucket_level_access(
+            OfficialUniformBucketLevelAccess::new()
+                .set_enabled(uniform_bucket_level_access.enabled),
+        );
+    }
+    if let Some(public_access_prevention) = iam_configuration.public_access_prevention {
+        official = official.set_public_access_prevention(public_access_prevention);
+    }
+    official
+}
+
+fn iam_configuration_from_official(iam_configuration: OfficialIamConfig) -> IamConfiguration {
+    IamConfiguration {
+        uniform_bucket_level_access: iam_configuration.uniform_bucket_level_access.map(|access| {
+            UniformBucketLevelAccess {
+                enabled: access.enabled,
+                locked_time: access.lock_time.map(timestamp_to_string),
+            }
+        }),
+        public_access_prevention: none_if_empty(iam_configuration.public_access_prevention),
+    }
+}
+
+fn bucket_update_mask(bucket: &Bucket) -> wkt::FieldMask {
+    let mut paths = Vec::new();
+    if bucket.versioning.is_some() {
+        paths.push("versioning".to_string());
+    }
+    if bucket.lifecycle.is_some() {
+        paths.push("lifecycle".to_string());
+    }
+    if bucket.iam_configuration.is_some() {
+        paths.push("iam_config".to_string());
+    }
+    if bucket.labels.is_some() {
+        paths.push("labels".to_string());
+    }
+    wkt::FieldMask::default().set_paths(paths)
+}
+
+fn timestamp_to_string(timestamp: wkt::Timestamp) -> String {
+    String::from(timestamp)
+}
+
+async fn gcs_http_error(
+    operation: &str,
+    resource_id: Option<String>,
+    response: reqwest::Response,
+) -> AlienError<crate::error::ErrorData> {
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status == StatusCode::NOT_FOUND {
+        AlienError::new(crate::error::ErrorData::CloudResourceNotFound {
+            resource_type: format!("GCS {operation}"),
+            resource_name: resource_id.unwrap_or_else(|| "unknown".to_string()),
+        })
+    } else if status == StatusCode::CONFLICT {
+        AlienError::new(crate::error::ErrorData::CloudResourceConflict {
+            resource_type: format!("GCS {operation}"),
+            resource_name: resource_id.unwrap_or_else(|| "unknown".to_string()),
+            message: format!("HTTP {}: {text}", status.as_u16()),
+        })
+    } else {
+        AlienError::new(crate::error::ErrorData::CloudPlatformError {
+            message: format!("GCS {operation} returned HTTP {}: {text}", status.as_u16()),
+            resource_id,
+        })
+    }
 }
 
 fn topic_to_official(topic: Topic) -> Result<OfficialTopic> {

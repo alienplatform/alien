@@ -3,9 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget, IamPolicy,
-    OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerJob, SchedulerOidcToken,
-    Subscription, Topic,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, GcsNotification,
+    HttpTarget, IamPolicy, OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerJob,
+    SchedulerOidcToken, Subscription, Topic,
 };
 
 use crate::core::ResourceControllerContext;
@@ -22,7 +22,6 @@ use alien_gcp_clients::compute::{
     NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
     SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
 };
-use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::longrunning::OperationResult;
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{

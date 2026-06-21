@@ -3,19 +3,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    Binding, Bucket, GcsApi, IamConfiguration, IamPolicy, Lifecycle, LifecycleAction,
+    LifecycleCondition, LifecycleRule, ResourceControllerContext, UniformBucketLevelAccess,
+    Versioning,
+};
 use crate::error::{ErrorData, Result};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpCloudStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
-use alien_gcp_clients::gcs::{
-    Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
-    UniformBucketLevelAccess, Versioning,
-};
-use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -24,19 +22,11 @@ fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
-fn legacy_gcp_binding_from_local(binding: crate::core::Binding) -> Binding {
-    Binding {
-        role: binding.role,
-        members: binding.members,
-        condition: binding
-            .condition
-            .map(|condition| alien_gcp_clients::iam::Expr {
-                expression: condition.expression,
-                title: condition.title,
-                description: condition.description,
-                location: condition.location,
-            }),
-    }
+fn is_remote_resource_not_found(error: &AlienError<ErrorData>) -> bool {
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
 }
 
 #[controller]
@@ -552,12 +542,7 @@ impl GcpStorageController {
                                 resource_id: Some(config.id.clone()),
                             })?;
                     }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
+                    Err(e) if is_remote_resource_not_found(&e) => {
                         // Policy doesn't exist, nothing to remove
                         debug!(bucket = %bucket_name, "No IAM policy found to remove");
                     }
@@ -701,16 +686,13 @@ impl GcpStorageController {
             }
             Err(e) => {
                 // Check if it's a resource not found error (bucket doesn't exist)
-                match &e.error {
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. }) => {
-                        warn!(bucket = %bucket_name, "Bucket already deleted or never existed");
-                    }
-                    _ => {
-                        return Err(e).context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to delete bucket '{}'. Non-transient error; not treating as already-deleted.", bucket_name),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-                    }
+                if is_remote_resource_not_found(&e) {
+                    warn!(bucket = %bucket_name, "Bucket already deleted or never existed");
+                } else {
+                    return Err(e).context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete bucket '{}'. Non-transient error; not treating as already-deleted.", bucket_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
                 }
             }
         }
@@ -860,7 +842,7 @@ impl GcpStorageController {
         &self,
         ctx: &ResourceControllerContext<'_>,
         bucket_name: &str,
-        client: &Arc<dyn alien_gcp_clients::gcs::GcsApi>,
+        client: &Arc<dyn GcsApi>,
     ) -> Result<()> {
         use crate::core::ResourcePermissionsHelper;
 
@@ -895,9 +877,7 @@ impl GcpStorageController {
                 })?;
 
             // Merge new bindings with existing ones
-            existing_policy
-                .bindings
-                .extend(all_bindings.into_iter().map(legacy_gcp_binding_from_local));
+            existing_policy.bindings.extend(all_bindings);
 
             // GCP requires version 3 when any binding has a condition
             existing_policy.version = Some(3);
@@ -941,21 +921,19 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::gcs::{
-        Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
-        ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
-    };
     use rstest::{fixture, rstest};
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockGcpIamApi, MockPlatformServiceProvider, PlatformServiceProvider,
+        Binding, Bucket, IamConfiguration, IamPolicy, Lifecycle, LifecycleAction,
+        LifecycleCondition, LifecycleRule, MockGcpIamApi, MockGcsApi, MockPlatformServiceProvider,
+        PlatformServiceProvider, UniformBucketLevelAccess, Versioning,
     };
+    use crate::error::ErrorData;
     use crate::storage::GcpStorageController;
 
     // ─────────────── STORAGE FIXTURES ──────────────────────────
@@ -1113,12 +1091,10 @@ mod tests {
 
         // Mock empty bucket failure (bucket doesn't exist)
         mock_gcs.expect_empty_bucket().returning(|_| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "GCS Bucket".to_string(),
-                    resource_name: "test-bucket".to_string(),
-                },
-            ))
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "GCS Bucket".to_string(),
+                resource_name: "test-bucket".to_string(),
+            }))
         });
 
         // Mock successful bucket deletion
@@ -1289,12 +1265,10 @@ mod tests {
 
         // Mock bucket deletion failure (bucket doesn't exist)
         mock_gcs.expect_delete_bucket().returning(|_| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "GCS Bucket".to_string(),
-                    resource_name: "test-bucket".to_string(),
-                },
-            ))
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "GCS Bucket".to_string(),
+                resource_name: "test-bucket".to_string(),
+            }))
         });
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
