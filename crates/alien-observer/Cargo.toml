@@ -9,6 +9,7 @@ license-file.workspace = true
 [features]
 default = []
 aws = ["dep:alien-aws-clients"]
+gcp = ["dep:alien-gcp-clients"]
 kubernetes = ["dep:alien-k8s-clients"]
 test-utils = ["alien-k8s-clients/test-utils"]
 
@@ -17,6 +18,7 @@ alien-aws-clients = { workspace = true, optional = true }
 alien-client-core = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
+alien-gcp-clients = { workspace = true, optional = true }
 alien-k8s-clients = { workspace = true, optional = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }

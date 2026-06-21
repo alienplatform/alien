@@ -1,6 +1,8 @@
 #[cfg(feature = "aws")]
 mod aws;
 mod error;
+#[cfg(feature = "gcp")]
+mod gcp;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 
@@ -10,6 +12,8 @@ use async_trait::async_trait;
 #[cfg(feature = "aws")]
 pub use aws::{aws_raw_identity, AwsObserveContext, AwsObserver};
 pub use error::Result;
+#[cfg(feature = "gcp")]
+pub use gcp::{gcp_raw_identity, GcpObserveContext, GcpObserver};
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::{
     alien_resource_id_from_labels, raw_identity, KubernetesObserveContext, KubernetesObserver,
