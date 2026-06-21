@@ -38,13 +38,7 @@ use aws_sdk_ec2::{
     },
     Client as Ec2Client,
 };
-use aws_sdk_ecr::{
-    types::{
-        ImageScanningConfiguration as AwsEcrImageScanningConfiguration,
-        Repository as AwsEcrRepository,
-    },
-    Client as EcrClient,
-};
+use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_iam::{
     types::{
@@ -150,10 +144,14 @@ pub use aws_sdk_eventbridge::{
     types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
 };
 
-pub use aws_sdk_ecr::operation::describe_repositories::DescribeRepositoriesInput as DescribeEcrRepositoriesRequest;
+pub use aws_sdk_ecr::operation::describe_repositories::{
+    DescribeRepositoriesInput as DescribeEcrRepositoriesRequest,
+    DescribeRepositoriesOutput as DescribeEcrRepositoriesResponse,
+};
 pub use aws_sdk_ecr::types::{
     ReplicationConfiguration as EcrReplicationConfiguration,
     ReplicationDestination as EcrReplicationDestination, ReplicationRule as EcrReplicationRule,
+    Repository as EcrRepository,
 };
 
 pub use aws_sdk_lambda::operation::{
@@ -906,52 +904,6 @@ pub struct AvailabilityZoneSet {
 pub struct AvailabilityZone {
     /// Zone name.
     pub zone_name: Option<String>,
-}
-
-/// ECR repository metadata used for artifact registry heartbeats.
-#[derive(Debug, Clone)]
-pub struct EcrRepository {
-    /// Repository ARN.
-    pub repository_arn: String,
-    /// Registry account ID.
-    pub registry_id: String,
-    /// Repository name.
-    pub repository_name: String,
-    /// Repository URI.
-    pub repository_uri: String,
-    /// Repository creation timestamp as epoch seconds.
-    pub created_at: f64,
-    /// Image tag mutability mode.
-    pub image_tag_mutability: Option<String>,
-    /// Image scanning configuration.
-    pub image_scanning_configuration: Option<EcrImageScanningConfiguration>,
-    /// Encryption configuration.
-    pub encryption_configuration: Option<EcrEncryptionConfiguration>,
-}
-
-/// ECR image scanning configuration used for artifact registry heartbeats.
-#[derive(Debug, Clone)]
-pub struct EcrImageScanningConfiguration {
-    /// Whether images are scanned when pushed.
-    pub scan_on_push: Option<bool>,
-}
-
-/// ECR encryption configuration used for artifact registry heartbeats.
-#[derive(Debug, Clone)]
-pub struct EcrEncryptionConfiguration {
-    /// Encryption type.
-    pub encryption_type: String,
-    /// KMS key ARN when customer-managed KMS encryption is configured.
-    pub kms_key: Option<String>,
-}
-
-/// Response from listing ECR repositories.
-#[derive(Debug, Clone)]
-pub struct DescribeEcrRepositoriesResponse {
-    /// Repository metadata.
-    pub repositories: Vec<EcrRepository>,
-    /// Pagination token when more repositories are available.
-    pub next_token: Option<String>,
 }
 
 /// S3 bucket versioning status used by infra controllers.
@@ -3578,8 +3530,7 @@ impl EcrApi for EcrClient {
         &self,
         request: DescribeEcrRepositoriesRequest,
     ) -> Result<DescribeEcrRepositoriesResponse> {
-        let response = self
-            .describe_repositories()
+        self.describe_repositories()
             .set_registry_id(request.registry_id)
             .set_repository_names(request.repository_names)
             .set_next_token(request.next_token)
@@ -3590,18 +3541,7 @@ impl EcrApi for EcrClient {
             .context(ErrorData::CloudPlatformError {
                 message: "ECR DescribeRepositories API failed".to_string(),
                 resource_id: None,
-            })?;
-
-        let repositories = response
-            .repositories()
-            .iter()
-            .map(ecr_repository)
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(DescribeEcrRepositoriesResponse {
-            repositories,
-            next_token: response.next_token().map(ToString::to_string),
-        })
+            })
     }
 
     async fn describe_registry(&self) -> Result<EcrReplicationConfiguration> {
@@ -5243,65 +5183,6 @@ fn ec2_error_data(
             message: format!("{operation} reported {code}: {message}"),
         }),
         _ => None,
-    }
-}
-
-fn ecr_repository(repository: &AwsEcrRepository) -> Result<EcrRepository> {
-    let repository_name = repository.repository_name().ok_or_else(|| {
-        AlienError::new(ErrorData::CloudPlatformError {
-            message: "ECR DescribeRepositories response included a repository without a name"
-                .to_string(),
-            resource_id: None,
-        })
-    })?;
-
-    let required_field = |field_name: &str, value: Option<&str>| {
-        value.map(ToString::to_string).ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "ECR DescribeRepositories response for '{repository_name}' did not include {field_name}"
-                ),
-                resource_id: Some(repository_name.to_string()),
-            })
-        })
-    };
-
-    Ok(EcrRepository {
-        repository_arn: required_field("repository ARN", repository.repository_arn())?,
-        registry_id: required_field("registry ID", repository.registry_id())?,
-        repository_name: repository_name.to_string(),
-        repository_uri: required_field("repository URI", repository.repository_uri())?,
-        created_at: repository
-            .created_at()
-            .map(|created_at| created_at.secs() as f64)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "ECR DescribeRepositories response for '{repository_name}' did not include creation time"
-                    ),
-                    resource_id: Some(repository_name.to_string()),
-                })
-            })?,
-        image_tag_mutability: repository
-            .image_tag_mutability()
-            .map(|mutability| mutability.as_str().to_string()),
-        image_scanning_configuration: repository
-            .image_scanning_configuration()
-            .map(ecr_image_scanning_configuration),
-        encryption_configuration: repository
-            .encryption_configuration()
-            .map(|config| EcrEncryptionConfiguration {
-                encryption_type: config.encryption_type().as_str().to_string(),
-                kms_key: config.kms_key().map(ToString::to_string),
-            }),
-    })
-}
-
-fn ecr_image_scanning_configuration(
-    config: &AwsEcrImageScanningConfiguration,
-) -> EcrImageScanningConfiguration {
-    EcrImageScanningConfiguration {
-        scan_on_push: Some(config.scan_on_push()),
     }
 }
 

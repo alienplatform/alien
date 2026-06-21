@@ -824,11 +824,17 @@ impl AwsArtifactRegistryController {
                         .to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
-            let repositories = repositories_response
-                .repositories
-                .into_iter()
-                .filter(|repository| repository.repository_name.starts_with(&repository_prefix))
-                .collect::<Vec<_>>();
+            let mut repositories = Vec::new();
+            for repository in repositories_response.repositories() {
+                let repository_name = ecr_repository_required_string(
+                    repository,
+                    "repository name",
+                    repository.repository_name(),
+                )?;
+                if repository_name.starts_with(&repository_prefix) {
+                    repositories.push(repository.clone());
+                }
+            }
 
             emit_aws_artifact_registry_heartbeat(
                 ctx,
@@ -838,9 +844,9 @@ impl AwsArtifactRegistryController {
                 &repository_prefix,
                 self.pull_role_arn.clone(),
                 self.push_role_arn.clone(),
-                repositories_response.next_token.is_some(),
+                repositories_response.next_token().is_some(),
                 repositories,
-            );
+            )?;
         }
 
         Ok(HandlerAction::Continue {
@@ -1286,30 +1292,11 @@ fn emit_aws_artifact_registry_heartbeat(
     push_role_arn: Option<String>,
     repositories_truncated: bool,
     repositories: Vec<EcrRepository>,
-) {
+) -> Result<()> {
     let repository_data = repositories
-        .into_iter()
-        .map(|repository| AwsEcrRepositoryHeartbeatData {
-            repository_arn: repository.repository_arn,
-            registry_id: repository.registry_id,
-            repository_name: repository.repository_name,
-            repository_uri: repository.repository_uri,
-            created_at: repository.created_at,
-            image_tag_mutability: repository.image_tag_mutability,
-            scan_on_push: repository
-                .image_scanning_configuration
-                .and_then(|config| config.scan_on_push),
-            encryption_type: repository
-                .encryption_configuration
-                .as_ref()
-                .map(|config| config.encryption_type.clone()),
-            kms_key_present: repository
-                .encryption_configuration
-                .as_ref()
-                .and_then(|config| config.kms_key.as_ref())
-                .is_some(),
-        })
-        .collect::<Vec<_>>();
+        .iter()
+        .map(ecr_repository_heartbeat_data)
+        .collect::<Result<Vec<_>>>()?;
     let repository_count = repository_data.len() as u32;
 
     ctx.emit_heartbeat(ResourceHeartbeat {
@@ -1345,6 +1332,75 @@ fn emit_aws_artifact_registry_heartbeat(
         )),
         raw: vec![],
     });
+
+    Ok(())
+}
+
+fn ecr_repository_heartbeat_data(
+    repository: &EcrRepository,
+) -> Result<AwsEcrRepositoryHeartbeatData> {
+    let repository_name = ecr_repository_required_string(
+        repository,
+        "repository name",
+        repository.repository_name(),
+    )?;
+
+    Ok(AwsEcrRepositoryHeartbeatData {
+        repository_arn: ecr_repository_required_string(
+            repository,
+            "repository ARN",
+            repository.repository_arn(),
+        )?,
+        registry_id: ecr_repository_required_string(
+            repository,
+            "registry ID",
+            repository.registry_id(),
+        )?,
+        repository_name: repository_name.clone(),
+        repository_uri: ecr_repository_required_string(
+            repository,
+            "repository URI",
+            repository.repository_uri(),
+        )?,
+        created_at: repository
+            .created_at()
+            .map(|created_at| created_at.secs() as f64)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "ECR DescribeRepositories response for '{repository_name}' did not include creation time"
+                    ),
+                    resource_id: Some(repository_name.clone()),
+                })
+            })?,
+        image_tag_mutability: repository
+            .image_tag_mutability()
+            .map(|mutability| mutability.as_str().to_string()),
+        scan_on_push: repository
+            .image_scanning_configuration()
+            .map(|config| config.scan_on_push()),
+        encryption_type: repository
+            .encryption_configuration()
+            .map(|config| config.encryption_type().as_str().to_string()),
+        kms_key_present: repository
+            .encryption_configuration()
+            .and_then(|config| config.kms_key())
+            .is_some(),
+    })
+}
+
+fn ecr_repository_required_string(
+    repository: &EcrRepository,
+    field_name: &str,
+    value: Option<&str>,
+) -> Result<String> {
+    let resource_id = repository.repository_name().map(ToString::to_string);
+    value.map(ToString::to_string).ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("ECR DescribeRepositories response did not include {field_name}"),
+            resource_id,
+        })
+    })
 }
 
 #[cfg(test)]
