@@ -130,6 +130,8 @@ pub use aws_sdk_apigatewayv2::{
     },
 };
 
+pub use aws_sdk_codebuild::types::Project as CodeBuildProjectDescription;
+
 pub use aws_sdk_dynamodb::types::{
     TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
 };
@@ -222,51 +224,6 @@ pub struct CodeBuildProjectConfig {
     pub description: String,
     /// Resource tags.
     pub tags: HashMap<String, String>,
-}
-
-/// CodeBuild project metadata used by infra controllers.
-#[derive(Debug, Clone)]
-pub struct CodeBuildProjectDescription {
-    /// CodeBuild project name.
-    pub name: String,
-    /// CodeBuild project ARN.
-    pub arn: Option<String>,
-    /// Project description.
-    pub description: Option<String>,
-    /// Source type.
-    pub source_type: Option<String>,
-    /// Artifacts type.
-    pub artifacts_type: Option<String>,
-    /// Whether artifacts encryption is disabled.
-    pub artifacts_encryption_disabled: Option<bool>,
-    /// Environment type.
-    pub environment_type: Option<String>,
-    /// Environment image.
-    pub environment_image: Option<String>,
-    /// Compute type.
-    pub compute_type: Option<String>,
-    /// Image pull credentials type.
-    pub image_pull_credentials_type: Option<String>,
-    /// Whether privileged mode is enabled.
-    pub privileged_mode: Option<bool>,
-    /// Number of environment variables configured on the project.
-    pub environment_variable_count: u32,
-    /// Whether a service role is configured.
-    pub service_role_present: bool,
-    /// Whether an encryption key is configured.
-    pub encryption_key_present: bool,
-    /// CloudWatch logs status.
-    pub cloud_watch_logs_status: Option<String>,
-    /// S3 logs status.
-    pub s3_logs_status: Option<String>,
-    /// Build timeout in minutes.
-    pub timeout_in_minutes: Option<i32>,
-    /// Queued timeout in minutes.
-    pub queued_timeout_in_minutes: Option<i32>,
-    /// Created timestamp as epoch seconds.
-    pub created: Option<f64>,
-    /// Last modified timestamp as epoch seconds.
-    pub last_modified: Option<f64>,
 }
 
 /// Lambda function creation request used by worker controllers.
@@ -3334,7 +3291,7 @@ impl CodeBuildApi for CodeBuildClient {
 
         response
             .project()
-            .map(codebuild_project_description)
+            .cloned()
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
@@ -3371,7 +3328,7 @@ impl CodeBuildApi for CodeBuildClient {
 
         response
             .project()
-            .map(codebuild_project_description)
+            .cloned()
             .ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
@@ -3396,10 +3353,7 @@ impl CodeBuildApi for CodeBuildClient {
                 resource_id: None,
             })?;
 
-        Ok(response
-            .projects()
-            .first()
-            .map(codebuild_project_description))
+        Ok(response.projects().first().cloned())
     }
 
     async fn delete_project(&self, project_name: &str) -> Result<()> {
@@ -4648,51 +4602,6 @@ fn build_codebuild_project_request(
         description: config.description,
         tags,
     })
-}
-
-fn codebuild_project_description(
-    project: &aws_sdk_codebuild::types::Project,
-) -> CodeBuildProjectDescription {
-    let environment = project.environment();
-    let artifacts = project.artifacts();
-    let source = project.source();
-    let logs_config = project.logs_config();
-    let name = project.name().unwrap_or_default().to_string();
-
-    CodeBuildProjectDescription {
-        name,
-        arn: project.arn().map(ToString::to_string),
-        description: project.description().map(ToString::to_string),
-        source_type: source.map(|source| source.r#type().as_str().to_string()),
-        artifacts_type: artifacts.map(|artifacts| artifacts.r#type().as_str().to_string()),
-        artifacts_encryption_disabled: artifacts
-            .and_then(|artifacts| artifacts.encryption_disabled()),
-        environment_type: environment.map(|environment| environment.r#type().as_str().to_string()),
-        environment_image: environment.map(|environment| environment.image().to_string()),
-        compute_type: environment
-            .map(|environment| environment.compute_type().as_str().to_string()),
-        image_pull_credentials_type: environment
-            .and_then(|environment| environment.image_pull_credentials_type())
-            .map(|credentials_type| credentials_type.as_str().to_string()),
-        privileged_mode: environment.and_then(|environment| environment.privileged_mode()),
-        environment_variable_count: environment
-            .and_then(|environment| u32::try_from(environment.environment_variables().len()).ok())
-            .unwrap_or(0),
-        service_role_present: project.service_role().is_some(),
-        encryption_key_present: project.encryption_key().is_some(),
-        cloud_watch_logs_status: logs_config
-            .and_then(|logs_config| logs_config.cloud_watch_logs())
-            .map(|logs| logs.status().as_str().to_string()),
-        s3_logs_status: logs_config
-            .and_then(|logs_config| logs_config.s3_logs())
-            .map(|logs| logs.status().as_str().to_string()),
-        timeout_in_minutes: project.timeout_in_minutes(),
-        queued_timeout_in_minutes: project.queued_timeout_in_minutes(),
-        created: project.created().map(|created| created.as_secs_f64()),
-        last_modified: project
-            .last_modified()
-            .map(|last_modified| last_modified.as_secs_f64()),
-    }
 }
 
 #[async_trait]

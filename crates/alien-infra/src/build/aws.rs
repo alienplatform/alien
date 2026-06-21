@@ -102,7 +102,7 @@ impl AwsBuildController {
                     resource_id: Some(cfg.id.clone()),
                 })?;
 
-        self.project_arn = response.arn.clone();
+        self.project_arn = response.arn().map(ToString::to_string);
         self.project_name = Some(aws_project_name.clone());
 
         info!(name=%aws_project_name, arn=%self.project_arn.as_deref().unwrap_or("unknown"), "CodeBuild project created successfully");
@@ -184,8 +184,11 @@ impl AwsBuildController {
 
             // Check basic drift detection - compare compute type
             let expected_compute_type = map_compute_type(&config.compute_type);
-            if let Some(actual_compute_type) = &project.compute_type {
-                if actual_compute_type != &expected_compute_type {
+            if let Some(actual_compute_type) = project
+                .environment()
+                .map(|environment| environment.compute_type().as_str().to_string())
+            {
+                if actual_compute_type != expected_compute_type {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(
@@ -265,7 +268,7 @@ impl AwsBuildController {
                     resource_id: Some(current_config.id.clone()),
                 })?;
 
-        self.project_arn = response.arn.clone();
+        self.project_arn = response.arn().map(ToString::to_string);
         self.project_name = Some(aws_project_name.clone());
 
         info!(name=%aws_project_name, "CodeBuild project updated successfully");
@@ -461,7 +464,11 @@ fn emit_aws_build_heartbeat(
     resource_id: &str,
     project: &CodeBuildProjectDescription,
 ) {
-    let project_name = project.name.clone();
+    let project_name = project.name().unwrap_or_default().to_string();
+    let source = project.source();
+    let artifacts = project.artifacts();
+    let environment = project.environment();
+    let logs_config = project.logs_config();
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -484,25 +491,40 @@ fn emit_aws_build_heartbeat(
                     collection_issues: vec![],
                 },
                 project_name,
-                project_arn: project.arn.clone(),
-                description: project.description.clone(),
-                source_type: project.source_type.clone(),
-                artifacts_type: project.artifacts_type.clone(),
-                artifacts_encryption_disabled: project.artifacts_encryption_disabled,
-                environment_type: project.environment_type.clone(),
-                environment_image: project.environment_image.clone(),
-                compute_type: project.compute_type.clone(),
-                image_pull_credentials_type: project.image_pull_credentials_type.clone(),
-                privileged_mode: project.privileged_mode,
-                environment_variable_count: project.environment_variable_count,
-                service_role_present: project.service_role_present,
-                encryption_key_present: project.encryption_key_present,
-                cloud_watch_logs_status: project.cloud_watch_logs_status.clone(),
-                s3_logs_status: project.s3_logs_status.clone(),
-                timeout_in_minutes: project.timeout_in_minutes,
-                queued_timeout_in_minutes: project.queued_timeout_in_minutes,
-                created: project.created,
-                last_modified: project.last_modified,
+                project_arn: project.arn().map(ToString::to_string),
+                description: project.description().map(ToString::to_string),
+                source_type: source.map(|source| source.r#type().as_str().to_string()),
+                artifacts_type: artifacts.map(|artifacts| artifacts.r#type().as_str().to_string()),
+                artifacts_encryption_disabled: artifacts
+                    .and_then(|artifacts| artifacts.encryption_disabled()),
+                environment_type: environment
+                    .map(|environment| environment.r#type().as_str().to_string()),
+                environment_image: environment.map(|environment| environment.image().to_string()),
+                compute_type: environment
+                    .map(|environment| environment.compute_type().as_str().to_string()),
+                image_pull_credentials_type: environment
+                    .and_then(|environment| environment.image_pull_credentials_type())
+                    .map(|credentials_type| credentials_type.as_str().to_string()),
+                privileged_mode: environment.and_then(|environment| environment.privileged_mode()),
+                environment_variable_count: environment
+                    .and_then(|environment| {
+                        u32::try_from(environment.environment_variables().len()).ok()
+                    })
+                    .unwrap_or(0),
+                service_role_present: project.service_role().is_some(),
+                encryption_key_present: project.encryption_key().is_some(),
+                cloud_watch_logs_status: logs_config
+                    .and_then(|logs_config| logs_config.cloud_watch_logs())
+                    .map(|logs| logs.status().as_str().to_string()),
+                s3_logs_status: logs_config
+                    .and_then(|logs_config| logs_config.s3_logs())
+                    .map(|logs| logs.status().as_str().to_string()),
+                timeout_in_minutes: project.timeout_in_minutes(),
+                queued_timeout_in_minutes: project.queued_timeout_in_minutes(),
+                created: project.created().map(|created| created.as_secs_f64()),
+                last_modified: project
+                    .last_modified()
+                    .map(|last_modified| last_modified.as_secs_f64()),
             },
         )),
         raw: vec![],
@@ -516,6 +538,12 @@ mod tests {
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
     use std::sync::Arc;
+
+    use aws_sdk_codebuild::types::{
+        ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
+        EnvironmentType, ImagePullCredentialsType, LogsConfig, LogsConfigStatusType,
+        ProjectArtifacts, ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType,
+    };
 
     use crate::aws_sdk::{CodeBuildApi, CodeBuildProjectConfig, CodeBuildProjectDescription};
     use crate::error::Result;
@@ -561,31 +589,49 @@ mod tests {
         project_name: &str,
         compute_type: Option<String>,
     ) -> CodeBuildProjectDescription {
-        CodeBuildProjectDescription {
-            name: project_name.to_string(),
-            arn: Some(format!(
+        let source = ProjectSource::builder()
+            .r#type(SourceType::NoSource)
+            .build()
+            .expect("source should build");
+        let artifacts = ProjectArtifacts::builder()
+            .r#type(ArtifactsType::NoArtifacts)
+            .build()
+            .expect("artifacts should build");
+        let environment = ProjectEnvironment::builder()
+            .r#type(EnvironmentType::LinuxContainer)
+            .image("ghcr.io/alienplatform/alien-builder:latest")
+            .compute_type(AwsCodeBuildComputeType::from(
+                compute_type.as_deref().unwrap_or("BUILD_GENERAL1_SMALL"),
+            ))
+            .image_pull_credentials_type(ImagePullCredentialsType::ServiceRole)
+            .build()
+            .expect("environment should build");
+        let cloud_watch_logs = CloudWatchLogsConfig::builder()
+            .status(LogsConfigStatusType::Enabled)
+            .build()
+            .expect("cloudwatch logs should build");
+        let s3_logs = S3LogsConfig::builder()
+            .status(LogsConfigStatusType::Disabled)
+            .build()
+            .expect("s3 logs should build");
+        let logs_config = LogsConfig::builder()
+            .cloud_watch_logs(cloud_watch_logs)
+            .s3_logs(s3_logs)
+            .build();
+
+        CodeBuildProjectDescription::builder()
+            .name(project_name)
+            .arn(format!(
                 "arn:aws:codebuild:us-east-1:123456789012:project/{}",
                 project_name
-            )),
-            description: Some(format!("Runtime build project: {}", project_name)),
-            source_type: Some("NO_SOURCE".to_string()),
-            artifacts_type: Some("NO_ARTIFACTS".to_string()),
-            artifacts_encryption_disabled: None,
-            environment_type: Some("LINUX_CONTAINER".to_string()),
-            environment_image: Some("ghcr.io/alienplatform/alien-builder:latest".to_string()),
-            compute_type: compute_type.or_else(|| Some("BUILD_GENERAL1_SMALL".to_string())),
-            image_pull_credentials_type: Some("SERVICE_ROLE".to_string()),
-            privileged_mode: None,
-            environment_variable_count: 0,
-            service_role_present: true,
-            encryption_key_present: false,
-            cloud_watch_logs_status: Some("ENABLED".to_string()),
-            s3_logs_status: Some("DISABLED".to_string()),
-            timeout_in_minutes: None,
-            queued_timeout_in_minutes: None,
-            created: None,
-            last_modified: None,
-        }
+            ))
+            .description(format!("Runtime build project: {}", project_name))
+            .source(source)
+            .artifacts(artifacts)
+            .environment(environment)
+            .service_role("arn:aws:iam::123456789012:role/codebuild")
+            .logs_config(logs_config)
+            .build()
     }
 
     fn setup_mock_client(project_name: &str) -> Arc<dyn CodeBuildApi> {
