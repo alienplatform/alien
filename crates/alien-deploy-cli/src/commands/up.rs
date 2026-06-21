@@ -219,6 +219,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
                 public_subnet_name,
                 private_subnet_name,
                 application_gateway_subnet_name: None,
+                private_endpoint_subnet_name: None,
             },
         }
     }
@@ -1671,42 +1672,45 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize environment_info from manager".to_string(),
         })?;
 
-    // If there's a desired release, fetch the full release info
+    // If there's a desired release, fetch the full release info. A failed fetch must fail the
+    // setup, not silently degrade to a no-release deploy: swallowing it would report success while
+    // having installed nothing the caller asked for.
     let target_release = if let Some(ref release_id) = deployment.desired_release_id {
-        match client.get_release().id(release_id).send().await {
-            Ok(resp) => {
-                let rel = resp.into_inner();
-                let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ConfigurationError {
-                            message: format!(
-                                "Release {} has no stack for platform {}",
-                                release_id,
-                                platform.as_str()
-                            ),
-                        })
-                    })?;
-
-                // No stack rewriting — release already stores proxy URIs.
-                // Controllers use image URIs as-is.
-                let stack = serde_json::from_value(platform_stack_value)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: "Failed to parse release stack".to_string(),
-                    })?;
-
-                Some(ReleaseInfo {
-                    release_id: rel.id,
-                    version: None,
-                    description: None,
-                    stack,
+        let resp = client
+            .get_release()
+            .id(release_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to fetch desired release {release_id} from manager"),
+            })?;
+        let rel = resp.into_inner();
+        let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "Release {} has no stack for platform {}",
+                        release_id,
+                        platform.as_str()
+                    ),
                 })
-            }
-            Err(e) => {
-                output::warn(&format!("Could not fetch release {}: {}", release_id, e));
-                None
-            }
-        }
+            })?;
+
+        // No stack rewriting — release already stores proxy URIs.
+        // Controllers use image URIs as-is.
+        let stack = serde_json::from_value(platform_stack_value)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse release stack".to_string(),
+            })?;
+
+        Some(ReleaseInfo {
+            release_id: rel.id,
+            version: None,
+            description: None,
+            stack,
+        })
     } else {
         None
     };
@@ -1730,14 +1734,17 @@ pub async fn push_initial_setup(
     // push_initial_setup runs with *target* credentials, so re-collecting
     // ensures the environment_info reflects the actual target project.
     let environment_platform = base_platform.unwrap_or(platform);
-    match alien_deployment::collect_environment_info(environment_platform, &client_config).await {
-        Ok(env_info) => {
-            state.environment_info = Some(env_info);
-        }
-        Err(e) => {
-            tracing::warn!("Failed to collect target environment info: {e}");
-        }
-    }
+    // Fail fast rather than proceed with absent/stale environment info: a setup that silently drops
+    // the target environment would report success while the deployment's env_info is wrong. Wrap in
+    // DeploymentFailed (retryable/internal = inherit), not the hard-non-retryable ConfigurationError,
+    // so a transient cloud blip in collect_environment_info (live STS / project-metadata calls) stays
+    // retryable instead of becoming a permanent setup failure.
+    let env_info = alien_deployment::collect_environment_info(environment_platform, &client_config)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "target environment-info collection".to_string(),
+        })?;
+    state.environment_info = Some(env_info);
 
     // Reconstruct DeploymentConfig from stack_settings
     let mut stack_settings: StackSettings = deployment
@@ -1793,7 +1800,6 @@ pub async fn push_initial_setup(
     // it to release before proceeding. 2 minutes (60 × 2s) is sufficient because
     // the manager skips Pending/InitialSetup for push-mode deployments — if it
     // holds the lock, it checks push-mode + Pending and releases immediately.
-    // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
     acquire_deployment(client, deployment_id, &session)
         .await

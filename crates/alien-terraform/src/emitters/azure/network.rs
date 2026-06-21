@@ -48,6 +48,7 @@ impl TfEmitter for AzureNetworkEmitter {
                 public_subnet_name,
                 private_subnet_name,
                 application_gateway_subnet_name,
+                ..
             } => Ok(byo_topology(
                 label,
                 vnet_resource_id,

@@ -206,6 +206,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::Kv>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "postgres" => Box::new(
+                serde_json::from_value::<crate::resources::Postgres>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "network" => Box::new(
                 serde_json::from_value::<crate::resources::Network>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -259,6 +263,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "storage",
                         "queue",
                         "kv",
+                        "postgres",
                         "network",
                         "build",
                         "service-account",
@@ -538,6 +543,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::KvOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "postgres" => Box::new(
+                serde_json::from_value::<crate::resources::PostgresOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "network" => Box::new(
                 serde_json::from_value::<crate::resources::NetworkOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -596,6 +605,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "storage",
                         "queue",
                         "kv",
+                        "postgres",
                         "network",
                         "build",
                         "service-account",

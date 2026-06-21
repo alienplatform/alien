@@ -56,6 +56,7 @@ mod container_manager;
 mod error;
 mod kv_manager;
 mod local_bindings_provider;
+mod postgres_manager;
 mod queue_manager;
 mod storage_manager;
 pub mod trigger_service;
@@ -71,6 +72,7 @@ pub use container_manager::{
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;
+pub use postgres_manager::LocalPostgresManager;
 pub use queue_manager::LocalQueueManager;
 pub use storage_manager::LocalStorageManager;
 pub use vault_manager::LocalVaultManager;

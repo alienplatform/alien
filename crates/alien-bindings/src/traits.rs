@@ -398,6 +398,99 @@ pub trait Vault: Binding {
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
 }
 
+/// TLS mode used when building a Postgres connection string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SslMode {
+    /// Plain TCP, no TLS (Local).
+    Disable,
+    /// Use TLS if the server offers it, otherwise plain (BYO / External default).
+    Prefer,
+    /// Require TLS (cloud).
+    Require,
+}
+
+impl SslMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            SslMode::Disable => "disable",
+            SslMode::Prefer => "prefer",
+            SslMode::Require => "require",
+        }
+    }
+}
+
+/// Resolved connection details for a Postgres database.
+#[derive(Clone)]
+pub struct PostgresConnectionParams {
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    pub sslmode: SslMode,
+}
+
+// Hand-written Debug so the resolved password never reaches logs, error chains, or panic output
+// (`Binding`/`BindingsProviderApi` require Debug). Mirrors the KV providers' redacting Debug.
+impl std::fmt::Debug for PostgresConnectionParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresConnectionParams")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database", &self.database)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("sslmode", &self.sslmode)
+            .finish()
+    }
+}
+
+impl PostgresConnectionParams {
+    /// Builds a `postgres://` URL. Username and password are percent-encoded so a
+    /// generated password containing URL-special characters can never corrupt it.
+    pub fn connection_string(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}?sslmode={}",
+            encode_userinfo(&self.username),
+            encode_userinfo(&self.password),
+            self.host,
+            self.port,
+            // Encode the database path segment so this URL stays byte-identical to the TS
+            // resolver's `encodeUserinfo` (the same RFC 3986 unreserved-set encoding).
+            encode_userinfo(&self.database),
+            self.sslmode.as_str(),
+        )
+    }
+}
+
+/// Percent-encodes a URL userinfo component; the RFC 3986 unreserved set passes through.
+fn encode_userinfo(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
+
+/// Connection-only Postgres binding. Unlike every other resource, Postgres ships no
+/// gRPC service and wraps no operations (by design): every backend
+/// speaks the same wire protocol, so the binding returns connection details and the
+/// application uses its own driver.
+pub trait Postgres: Binding {
+    /// Resolved connection parameters.
+    fn connection_params(&self) -> PostgresConnectionParams;
+
+    /// `postgres://` connection string, derived from `connection_params` and never stored.
+    fn connection_string(&self) -> String {
+        self.connection_params().connection_string()
+    }
+}
+
 /// Represents options for put operations in KV stores.
 #[derive(Debug, Clone, Default)]
 pub struct PutOptions {
@@ -678,6 +771,9 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
     /// Given a binding identifier, builds a KV implementation.
     async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>>;
+
+    /// Given a binding identifier, builds a Postgres implementation.
+    async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>>;
 
     /// Given a binding identifier, builds a Queue implementation.
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;

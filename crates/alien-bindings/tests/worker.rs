@@ -1091,6 +1091,9 @@ impl AsyncTestContext for AzureProviderTestContext {
             alien_azure_clients::AzureCredentials::ManagedIdentity { client_id, .. } => {
                 panic!("ManagedIdentity credentials not supported in worker binding tests, client_id: {}", client_id)
             }
+            alien_azure_clients::AzureCredentials::VmManagedIdentity { .. } => {
+                panic!("VmManagedIdentity credentials not supported in worker binding tests")
+            }
         };
 
         env_map.insert("AZURE_CLIENT_ID".to_string(), azure_client_id);

@@ -252,10 +252,14 @@ impl EnvironmentVariableBuilder {
                 }));
             }
 
-            // Try to get binding params from internal controller first
+            // Use the async resolver, not the pure `get_binding_params`, so a resource that keeps
+            // binding data out of persisted state (e.g. Local Postgres) can re-resolve it live —
+            // `get_internal_controller` deserializes, which drops a `#[serde(skip)]` binding.
             let binding_params =
                 if let Some(dependency_controller) = resource_state.get_internal_controller()? {
-                    dependency_controller.get_binding_params()?
+                    dependency_controller
+                        .resolve_binding_params(ctx, binding_name)
+                        .await?
                 } else {
                     None
                 };
@@ -278,6 +282,7 @@ impl EnvironmentVariableBuilder {
                                 alien_core::ExternalBinding::ContainerAppsEnvironment(b) => {
                                     serde_json::to_value(b)
                                 }
+                                alien_core::ExternalBinding::Postgres(b) => serde_json::to_value(b),
                             }
                             .into_alien_error()
                             .context(
@@ -301,7 +306,6 @@ impl EnvironmentVariableBuilder {
                     .push((binding_name.to_string(), params.clone()));
 
                 let binding_env_vars = serialize_binding_as_env_var(binding_name, &params)
-                    .into_alien_error()
                     .context(ErrorData::ResourceConfigInvalid {
                         message: "Failed to serialize binding parameters".to_string(),
                         resource_id: Some(binding_name.to_string()),

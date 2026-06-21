@@ -1,0 +1,250 @@
+{
+  "id": "postgres/provision",
+  "description": "Allows provisioning and destroying Postgres databases",
+  "platforms": {
+    "aws": [
+      {
+        "label": "manage-aurora-cluster",
+        "description": "Create, modify and delete the Aurora cluster, instances and subnet group.",
+        "grant": {
+          "actions": [
+            "rds:CreateDBCluster",
+            "rds:DeleteDBCluster",
+            "rds:ModifyDBCluster",
+            "rds:CreateDBInstance",
+            "rds:DeleteDBInstance",
+            "rds:ModifyDBInstance",
+            "rds:CreateDBSubnetGroup",
+            "rds:DeleteDBSubnetGroup",
+            "rds:DescribeDBClusters",
+            "rds:DescribeDBInstances",
+            "rds:DescribeDBSubnetGroups",
+            "rds:AddTagsToResource",
+            "rds:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        "label": "manage-connection-secret",
+        "description": "Create and delete the generated connection-password secret.",
+        "grant": {
+          "actions": [
+            "secretsmanager:CreateSecret",
+            "secretsmanager:DeleteSecret",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:TagResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"]
+          }
+        }
+      },
+      {
+        // The Aurora cluster sits in a dedicated security group that admits 5432
+        // only from the stack security group. Creating it must stamp the Alien
+        // boundary tags so every later mutation can be tag-scoped.
+        "label": "create-database-security-group",
+        "description": "Create the dedicated database security group, tagged with the Alien boundary tags.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup", "ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The 5432-from-stack rule and teardown only touch the database security
+        // group this application already owns, so they are gated on its tags.
+        "label": "manage-database-security-group",
+        "description": "Add the 5432 ingress rule and delete the database security group owned by this application.",
+        "grant": {
+          "actions": [
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress",
+            "ec2:DeleteSecurityGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        // AWS requires Resource: "*" for these read-only discovery APIs; the
+        // controller resolves the database security group and the stack security
+        // group it must reference. Describe* carries no data-content access.
+        "label": "describe-security-groups",
+        "description": "Read security group metadata needed to create and wire the database security group.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "manage-cloud-sql-instance",
+        "description": "Create, update and delete the Cloud SQL instance and its database.",
+        "grant": {
+          "permissions": [
+            "cloudsql.instances.create",
+            "cloudsql.instances.update",
+            "cloudsql.instances.delete",
+            "cloudsql.instances.get",
+            "cloudsql.instances.list",
+            "cloudsql.databases.create",
+            "cloudsql.databases.delete",
+            "cloudsql.databases.get"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
+      {
+        "label": "create-connection-secret",
+        // `secretmanager.secrets.create` cannot be IAM-conditioned on the secret name: the
+        // secret does not exist yet at create time, so a `resource.name.startsWith(...)`
+        // condition would evaluate against a non-existent resource and fail closed. This
+        // mirrors `vault/data-write`, which likewise leaves `secrets.create` unconditioned.
+        "description": "Create the connection-password secret.",
+        "grant": {
+          "permissions": ["secretmanager.secrets.create"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
+      {
+        "label": "write-connection-secret",
+        // Versioning and deleting operate on an existing secret, so they ARE prefix-scoped to
+        // the stack/resource secret name — the management identity can never version or delete
+        // secrets outside its own deployment.
+        "description": "Version and delete the generated connection-password secret.",
+        "grant": {
+          "permissions": [
+            "secretmanager.secrets.delete",
+            "secretmanager.versions.add"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackPostgresSecretWrite",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourcePostgresSecretWrite",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      // No Key Vault secret grant here: the Azure controller stores the generated password in
+      // the shared deployment "secrets" vault, whose data-plane access is authored — vault-scoped,
+      // not resource-group-wide — by the secrets-vault preflight (management gets vault/data-write
+      // on it). An RG-scoped secret grant here would over-expose every Key Vault in the group.
+      {
+        "label": "manage-flexible-server",
+        "description": "Create and delete the Flexible Server plus the private-networking it owns: the Private Endpoint and its DNS zone group, the private DNS zone, and the zone's VNet link.",
+        "grant": {
+          // The controller creates AND deletes each of these for a Live (Alien-owned) server, so
+          // provision needs write+delete on all of them — including the private DNS zone, its VNet
+          // link, and the Private Endpoint's DNS zone group — or teardown leaves orphans. All are
+          // management-plane network actions (no dataActions); none expose secret contents.
+          "actions": [
+            "Microsoft.DBforPostgreSQL/flexibleServers/write",
+            "Microsoft.DBforPostgreSQL/flexibleServers/delete",
+            "Microsoft.DBforPostgreSQL/flexibleServers/read",
+            "Microsoft.Network/privateEndpoints/write",
+            "Microsoft.Network/privateEndpoints/delete",
+            "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/write",
+            "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/delete",
+            "Microsoft.Network/privateDnsZones/write",
+            "Microsoft.Network/privateDnsZones/delete",
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/write",
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

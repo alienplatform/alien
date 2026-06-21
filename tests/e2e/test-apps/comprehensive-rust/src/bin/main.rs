@@ -395,6 +395,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::vault::test_vault),
         )
         .route(
+            "/postgres-test/{binding_name}",
+            post(handlers::postgres::test_postgres),
+        )
+        .route(
             "/service-account-test/{binding_name}",
             post(handlers::service_account::test_service_account),
         )

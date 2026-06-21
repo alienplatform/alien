@@ -34,6 +34,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "vault",
             "container",
             "service-account",
+            "postgres",
         ]);
         let mut errors = Vec::new();
 

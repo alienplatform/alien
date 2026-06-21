@@ -2,7 +2,9 @@
 
 use crate::{
     error::{ErrorData, Result},
-    traits::{ArtifactRegistry, BindingsProviderApi, Build, Kv, Queue, Storage, Vault, Worker},
+    traits::{
+        ArtifactRegistry, BindingsProviderApi, Build, Kv, Postgres, Queue, Storage, Vault, Worker,
+    },
 };
 
 use alien_client_config::ClientConfigExt;
@@ -1191,6 +1193,39 @@ impl BindingsProviderApi for BindingsProvider {
         }?;
 
         self.put_cache("kv", binding_name, result.clone()).await;
+        Ok(result)
+    }
+
+    async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
+        if let Some(cached) = self
+            .get_cached::<Arc<dyn Postgres>>("postgres", binding_name)
+            .await
+        {
+            return Ok(cached);
+        }
+
+        use alien_core::bindings::PostgresBinding;
+
+        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
+            AlienError::new(ErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                reason: "Binding not found".to_string(),
+            })
+        })?;
+
+        let binding: PostgresBinding = serde_json::from_value(binding_json.clone())
+            .into_alien_error()
+            .context(ErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                reason: "Failed to parse Postgres binding".to_string(),
+            })?;
+
+        let result: Arc<dyn Postgres> = Arc::new(
+            crate::providers::postgres::local::LocalPostgres::from_binding(binding_name, &binding)?,
+        );
+
+        self.put_cache("postgres", binding_name, result.clone())
+            .await;
         Ok(result)
     }
 

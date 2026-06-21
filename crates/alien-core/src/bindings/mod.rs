@@ -19,6 +19,7 @@ mod build;
 mod container;
 mod container_apps_environment;
 mod kv;
+mod postgres;
 mod queue;
 mod service_account;
 mod storage;
@@ -39,6 +40,10 @@ pub use container_apps_environment::ContainerAppsEnvironmentBinding;
 pub use kv::{
     DynamodbKvBinding, FirestoreKvBinding, KvBinding, LocalKvBinding, RedisKvBinding,
     TableStorageKvBinding,
+};
+pub use postgres::{
+    AuroraPostgresBinding, CloudSqlPostgresBinding, ExternalPostgresBinding,
+    FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
 };
 pub use queue::{
     LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,

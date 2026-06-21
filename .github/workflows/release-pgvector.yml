@@ -1,0 +1,226 @@
+name: Release pgvector
+
+# Builds the pgvector extension once per (Postgres-major × target) and publishes to Alien's release
+# host, so `LocalPostgresManager` installs it at startup and `CREATE EXTENSION vector` works on Local.
+# Deliberately does NOT depend on `portalcorp/pgvector_compiled` (PG16-only, stale): Alien owns the matrix.
+#
+# Each artifact is ABI-matched to the embedded server: built against the SAME
+# `theseus-rs/postgresql-binaries` archive `postgresql_embedded` downloads at runtime. The zip carries
+# the three files the `postgresql_extensions` extractor maps by extension, so the installer (which
+# overrides only the download URL) extracts it unchanged.
+#
+# Published layout (mirrors release.yml + `latest`); manager fetches via CloudFront at
+#   releases.alien.dev/pgvector/v<ver>/<os>-<arch>/pg<major>/pgvector_compiled.zip
+# (see ALIEN_PGVECTOR_RELEASES_URL_DEFAULT / pgvector_target in crates/alien-local).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only; skip the S3 upload"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC for the alien-releases-upload role
+
+env:
+  # Keep this in lockstep with PGVECTOR_VERSION in crates/alien-local/src/postgres_manager.rs.
+  PGVECTOR_VERSION: "0.8.1"
+  # Majors must match the embedded-Postgres majors LocalPostgresManager supports.
+  PG_MAJORS: "15 16 17"
+
+jobs:
+  # ─── Linux (x86_64 + aarch64, native per runner; glibc, matching the embedded default) ───
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_major: [15, 16, 17]
+        target:
+          - { arch: x86_64, runner: depot-ubuntu-24.04-16, triple: x86_64-unknown-linux-gnu }
+          - { arch: aarch64, runner: depot-ubuntu-24.04-arm-16, triple: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential git curl jq
+
+      - name: Resolve embedded Postgres version
+        id: pg
+        run: |
+          # postgresql_embedded resolves "^<major>" to the newest theseus-rs patch; mirror that.
+          VERSION=$(curl -fsSL "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100" \
+            | jq -r --arg M "${{ matrix.pg_major }}" '.[].tag_name | select(startswith($M + "."))' \
+            | sort -V | tail -1)
+          test -n "$VERSION" || { echo "no theseus-rs release for PG ${{ matrix.pg_major }}"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch embedded Postgres binaries
+        run: |
+          V="${{ steps.pg.outputs.version }}"
+          curl -fsSL -o pg.tar.gz \
+            "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-${{ matrix.target.triple }}.tar.gz"
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          echo "PG_CONFIG=$PWD/pgdist/bin/pg_config" >> "$GITHUB_ENV"
+
+      - name: Build & install pgvector
+        run: |
+          git clone --depth 1 --branch "v${PGVECTOR_VERSION}" https://github.com/pgvector/pgvector.git
+          make -C pgvector PG_CONFIG="$PG_CONFIG"
+          make -C pgvector PG_CONFIG="$PG_CONFIG" install
+
+      - name: Package artifact
+        run: |
+          LIBDIR=$("$PG_CONFIG" --pkglibdir)
+          EXTDIR=$("$PG_CONFIG" --sharedir)/extension
+          mkdir -p out
+          cp "$LIBDIR/vector.so" out/
+          cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
+          (cd out && zip -j "pgvector_compiled.zip" vector.so vector.control vector--*.sql)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgvector-linux-${{ matrix.target.arch }}-pg${{ matrix.pg_major }}
+          retention-days: 1
+          path: out/pgvector_compiled.zip
+
+  # ─── macOS (aarch64 only, native; no Intel build, matching release.yml's target set) ───
+  build-darwin:
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_major: [15, 16, 17]
+    runs-on: depot-macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Resolve embedded Postgres version
+        id: pg
+        run: |
+          VERSION=$(curl -fsSL "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100" \
+            | jq -r --arg M "${{ matrix.pg_major }}" '.[].tag_name | select(startswith($M + "."))' \
+            | sort -V | tail -1)
+          test -n "$VERSION" || { echo "no theseus-rs release for PG ${{ matrix.pg_major }}"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch embedded Postgres binaries
+        run: |
+          V="${{ steps.pg.outputs.version }}"
+          curl -fsSL -o pg.tar.gz \
+            "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-aarch64-apple-darwin.tar.gz"
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          echo "PG_CONFIG=$PWD/pgdist/bin/pg_config" >> "$GITHUB_ENV"
+
+      - name: Build & install pgvector
+        run: |
+          git clone --depth 1 --branch "v${PGVECTOR_VERSION}" https://github.com/pgvector/pgvector.git
+          make -C pgvector PG_CONFIG="$PG_CONFIG"
+          make -C pgvector PG_CONFIG="$PG_CONFIG" install
+
+      - name: Package artifact
+        run: |
+          LIBDIR=$("$PG_CONFIG" --pkglibdir)
+          EXTDIR=$("$PG_CONFIG" --sharedir)/extension
+          mkdir -p out
+          cp "$LIBDIR/vector.dylib" out/ 2>/dev/null || cp "$LIBDIR/vector.so" out/vector.dylib
+          cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
+          (cd out && zip -j "pgvector_compiled.zip" vector.dylib vector.control vector--*.sql)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgvector-darwin-aarch64-pg${{ matrix.pg_major }}
+          retention-days: 1
+          path: out/pgvector_compiled.zip
+
+  # ─── Windows (x86_64 only; nmake against the MSVC embedded build) ───
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_major: [15, 16, 17]
+    runs-on: depot-windows-2025-16
+    timeout-minutes: 40
+    steps:
+      - name: Resolve embedded Postgres version
+        id: pg
+        shell: bash
+        run: |
+          VERSION=$(curl -fsSL "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100" \
+            | jq -r --arg M "${{ matrix.pg_major }}" '.[].tag_name | select(startswith($M + "."))' \
+            | sort -V | tail -1)
+          test -n "$VERSION" || { echo "no theseus-rs release for PG ${{ matrix.pg_major }}"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch embedded Postgres binaries
+        shell: bash
+        run: |
+          V="${{ steps.pg.outputs.version }}"
+          curl -fsSL -o pg.tar.gz \
+            "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-x86_64-pc-windows-msvc.tar.gz"
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          echo "PGROOT=$PWD/pgdist" >> "$GITHUB_ENV"
+
+      - name: Build pgvector (MSVC nmake)
+        shell: cmd
+        run: |
+          git clone --depth 1 --branch "v%PGVECTOR_VERSION%" https://github.com/pgvector/pgvector.git
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cd pgvector
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT%"
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT%" install
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "$PGROOT/lib/vector.dll" out/
+          cp "$PGROOT"/share/extension/vector.control "$PGROOT"/share/extension/vector--*.sql out/
+          (cd out && 7z a -tzip "pgvector_compiled.zip" vector.dll vector.control vector--*.sql)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgvector-windows-x86_64-pg${{ matrix.pg_major }}
+          retention-days: 1
+          path: out/pgvector_compiled.zip
+
+  # ─── Upload all 12 artifacts to S3 (versioned + latest), then invalidate CloudFront ───
+  upload:
+    needs: [build-linux, build-darwin, build-windows]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pgvector-*
+          path: ./artifacts
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
+          aws-region: us-east-1
+
+      - name: Upload to S3 (versioned + latest)
+        run: |
+          # Artifact names encode the axes: pgvector-<os>-<arch>-pg<major>. Re-key each one to
+          # the path the manager fetches, publishing both the pinned and the moving aliases.
+          for dir in ./artifacts/pgvector-*; do
+            name=$(basename "$dir")                      # pgvector-linux-x86_64-pg17
+            rest=${name#pgvector-}                        # linux-x86_64-pg17
+            major=${rest##*-pg}                           # 17
+            osarch=${rest%-pg*}                           # linux-x86_64
+            src="$dir/pgvector_compiled.zip"
+            for prefix in "v${PGVECTOR_VERSION}" latest; do
+              aws s3 cp "$src" \
+                "s3://alien-releases-prod/pgvector/${prefix}/${osarch}/pg${major}/pgvector_compiled.zip"
+            done
+          done
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/pgvector/*"

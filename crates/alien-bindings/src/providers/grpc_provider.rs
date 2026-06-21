@@ -6,8 +6,8 @@ use crate::{
         storage::grpc::GrpcStorage, vault::grpc::GrpcVault, worker::grpc::GrpcWorker,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
-        Storage, Vault, Worker,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue,
+        ServiceAccount, Storage, Vault, Worker,
     },
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -255,6 +255,24 @@ impl BindingsProviderApi for GrpcBindingsProvider {
         );
 
         Ok(kv)
+    }
+
+    async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>, Error> {
+        // Postgres is connection-only and ships no gRPC service, so resolve the binding in-process
+        // rather than proxying through the channel. Read from this provider's own `env` map (the one
+        // `new_with_env` injects), not `std::env`, so an injected binding is honored and the wasm32
+        // build — which has no process environment — still works.
+        let binding: alien_core::bindings::PostgresBinding =
+            alien_core::bindings::parse_binding_from_env(&self.env, binding_name).context(
+                ErrorData::BindingConfigInvalid {
+                    binding_name: binding_name.to_string(),
+                    reason: "Failed to read Postgres binding from environment".to_string(),
+                },
+            )?;
+
+        let postgres =
+            crate::providers::postgres::local::LocalPostgres::from_binding(binding_name, &binding)?;
+        Ok(Arc::new(postgres))
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>, Error> {

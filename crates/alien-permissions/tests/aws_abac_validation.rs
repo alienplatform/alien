@@ -15,6 +15,9 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "queue/provision",
     "storage/provision",
     "vault/provision",
+    // postgres/provision creates a runtime (system-generated) DB security group and authorizes
+    // 5432 ingress, so its mutating EC2 actions must carry the stack/resource tag conditions.
+    "postgres/provision",
 ];
 
 #[test]
@@ -482,7 +485,16 @@ fn wildcard_action_allowed(
 }
 
 fn action_is_forced_wildcard_read(action: &str) -> bool {
-    if matches!(action, "ec2:DescribeVpcAttribute" | "ec2:GetConsoleOutput") {
+    // A secret-value read is never benign on Resource "*" — it would read every secret in the
+    // account. It must always be ARN-scoped or condition-gated, so keep it out of the "Get*/List*/
+    // Describe* is a safe wildcard read" allowlist even though the name starts with "Get".
+    if matches!(
+        action,
+        "ec2:DescribeVpcAttribute"
+            | "ec2:GetConsoleOutput"
+            | "secretsmanager:GetSecretValue"
+            | "secretsmanager:BatchGetSecretValue"
+    ) {
         return false;
     }
 
@@ -499,13 +511,16 @@ fn action_is_documented_cross_account_exception(action: &str) -> bool {
     matches!(action, "ecr:GetAuthorizationToken")
 }
 
+/// Lambda VPC networking requires these ENI actions on Resource "*": ENIs carry service-generated
+/// IDs and `CreateNetworkInterface` has no resource to scope to at call time, so AWS's own
+/// `AWSLambdaVPCAccessExecutionRole` managed policy uses "*". Scoped to `worker/execute`: workers
+/// attach to the stack's private subnets to reach private-only resources (Postgres, compute-cluster),
+/// and the effective boundary is the subnet + security group the function is wired into, not an ENI ARN.
 fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action: &str) -> bool {
     if permission_set_id != "worker/execute" {
         return false;
     }
 
-    // AWS Lambda VPC execution-role docs require these EC2 ENI permissions
-    // with Resource "*"; Lambda uses them to manage Hyperplane ENIs.
     matches!(
         action,
         "ec2:CreateNetworkInterface"
