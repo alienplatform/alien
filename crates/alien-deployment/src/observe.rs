@@ -4,7 +4,10 @@ use alien_core::{
     ClientConfig, DeploymentConfig, KubernetesClientConfig, Platform, ResourceHeartbeat,
 };
 use alien_error::Context;
-use alien_observer::{KubernetesObserveContext, KubernetesObserver, ObserveScope, Observer};
+use alien_observer::{
+    AwsObserveContext, AwsObserver, KubernetesObserveContext, KubernetesObserver, ObserveScope,
+    Observer,
+};
 use tracing::debug;
 
 use crate::{ErrorData, Result};
@@ -16,8 +19,16 @@ pub async fn run_observe_pass(
     deployment_id: &str,
     _config: &DeploymentConfig,
 ) -> Result<Vec<ResourceHeartbeat>> {
-    if platform != Platform::Kubernetes {
-        return Ok(vec![]);
+    match platform {
+        Platform::Aws => {
+            return run_aws_observe_pass(client_config, deployment_id)
+                .await
+                .context(ErrorData::DeploymentError {
+                    message: "Failed to run AWS observe pass".to_string(),
+                });
+        }
+        Platform::Kubernetes => {}
+        _ => return Ok(vec![]),
     }
 
     let Some(kubernetes_config) = client_config.kubernetes_config() else {
@@ -67,6 +78,50 @@ pub async fn run_observe_pass(
         .await
         .context(ErrorData::DeploymentError {
             message: "Failed to run Kubernetes observe pass".to_string(),
+        })
+}
+
+async fn run_aws_observe_pass(
+    client_config: &ClientConfig,
+    deployment_id: &str,
+) -> Result<Vec<ResourceHeartbeat>> {
+    let Some(aws_config) = client_config.aws_config() else {
+        debug!("Skipping observe pass because client config is not AWS");
+        return Ok(vec![]);
+    };
+
+    let credentials = alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
+        .await
+        .context(ErrorData::DeploymentError {
+            message: "Failed to create AWS observer credentials".to_string(),
+        })?;
+    let http_client = reqwest::Client::new();
+    let tagging_client = std::sync::Arc::new(alien_aws_clients::ResourceGroupsTaggingClient::new(
+        http_client.clone(),
+        credentials.clone(),
+    ));
+    let cloudwatch_client = std::sync::Arc::new(alien_aws_clients::CloudWatchClient::new(
+        http_client,
+        credentials,
+    ));
+
+    let observer = AwsObserver::new(AwsObserveContext {
+        deployment_id: deployment_id.to_string(),
+        account_id: aws_config.account_id.clone(),
+        region: aws_config.region.clone(),
+        resource_groups_tagging_client: tagging_client,
+        cloudwatch_client,
+    });
+    let scope = ObserveScope {
+        namespace: aws_config.region.clone(),
+        label_selector: None,
+    };
+
+    observer
+        .discover(&scope)
+        .await
+        .context(ErrorData::DeploymentError {
+            message: "Failed to run AWS resource observer".to_string(),
         })
 }
 

@@ -1,3 +1,5 @@
+#[cfg(feature = "aws")]
+mod aws;
 mod error;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
@@ -5,6 +7,8 @@ mod kubernetes;
 use alien_core::{Platform, ResourceHeartbeat};
 use async_trait::async_trait;
 
+#[cfg(feature = "aws")]
+pub use aws::{aws_raw_identity, AwsObserveContext, AwsObserver};
 pub use error::Result;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::{
