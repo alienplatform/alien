@@ -23,10 +23,7 @@ use aws_sdk_dynamodb::{
 use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
-use aws_sdk_iam::{
-    types::{InstanceProfile as AwsIamInstanceProfile, Tag as AwsIamTag},
-    Client as IamClient,
-};
+use aws_sdk_iam::{types::Tag as AwsIamTag, Client as IamClient};
 use aws_sdk_lambda::{
     types::{Architecture as AwsLambdaArchitecture, PackageType},
     Client as LambdaClient,
@@ -392,22 +389,6 @@ pub struct CreateOpenIdConnectProviderResult {
     pub open_id_connect_provider_arn: String,
 }
 
-/// IAM tag collection wrapper matching existing controller test DTOs.
-#[derive(Debug, Clone)]
-pub struct Tags {
-    /// Tag members.
-    pub member: Vec<Tag>,
-}
-
-/// IAM tag metadata.
-#[derive(Debug, Clone)]
-pub struct Tag {
-    /// Tag key.
-    pub key: String,
-    /// Tag value.
-    pub value: String,
-}
-
 /// IAM inline role policy response.
 #[derive(Debug, Clone)]
 pub struct GetRolePolicyResponse {
@@ -424,107 +405,6 @@ pub struct GetRolePolicyResult {
     pub policy_name: String,
     /// Policy document.
     pub policy_document: String,
-}
-
-/// IAM instance profile creation request.
-#[derive(Debug, Clone, Builder)]
-pub struct CreateInstanceProfileRequest {
-    /// Instance profile name.
-    pub instance_profile_name: String,
-    /// Optional IAM path.
-    pub path: Option<String>,
-    /// Tags.
-    pub tags: Option<Vec<CreateRoleTag>>,
-}
-
-/// IAM create instance profile response.
-#[derive(Debug, Clone)]
-pub struct CreateInstanceProfileResponse {
-    /// Operation result.
-    pub create_instance_profile_result: CreateInstanceProfileResult,
-}
-
-/// IAM create instance profile result.
-#[derive(Debug, Clone)]
-pub struct CreateInstanceProfileResult {
-    /// Instance profile.
-    pub instance_profile: InstanceProfile,
-}
-
-/// IAM get instance profile response.
-#[derive(Debug, Clone)]
-pub struct GetInstanceProfileResponse {
-    /// Operation result.
-    pub get_instance_profile_result: GetInstanceProfileResult,
-}
-
-/// IAM get instance profile result.
-#[derive(Debug, Clone)]
-pub struct GetInstanceProfileResult {
-    /// Instance profile.
-    pub instance_profile: InstanceProfile,
-}
-
-/// IAM list instance profiles request.
-#[derive(Debug, Clone, Builder, Default)]
-pub struct ListInstanceProfilesRequest {
-    /// Path prefix.
-    pub path_prefix: Option<String>,
-    /// Pagination marker.
-    pub marker: Option<String>,
-    /// Maximum number of items.
-    pub max_items: Option<i32>,
-}
-
-/// IAM list instance profiles response.
-#[derive(Debug, Clone)]
-pub struct ListInstanceProfilesResponse {
-    /// Operation result.
-    pub list_instance_profiles_result: ListInstanceProfilesResult,
-}
-
-/// IAM list instance profiles result.
-#[derive(Debug, Clone)]
-pub struct ListInstanceProfilesResult {
-    /// Instance profiles wrapper.
-    pub instance_profiles: Option<InstanceProfiles>,
-    /// Whether the result is truncated.
-    pub is_truncated: Option<bool>,
-    /// Pagination marker.
-    pub marker: Option<String>,
-}
-
-/// IAM instance profile collection wrapper.
-#[derive(Debug, Clone)]
-pub struct InstanceProfiles {
-    /// Instance profile members.
-    pub member: Vec<InstanceProfile>,
-}
-
-/// IAM instance profile metadata.
-#[derive(Debug, Clone)]
-pub struct InstanceProfile {
-    /// IAM path.
-    pub path: String,
-    /// Instance profile name.
-    pub instance_profile_name: String,
-    /// Instance profile ID.
-    pub instance_profile_id: String,
-    /// Instance profile ARN.
-    pub arn: String,
-    /// Create timestamp.
-    pub create_date: String,
-    /// Roles.
-    pub roles: Option<InstanceProfileRoles>,
-    /// Tags.
-    pub tags: Option<Tags>,
-}
-
-/// IAM instance profile roles wrapper.
-#[derive(Debug, Clone)]
-pub struct InstanceProfileRoles {
-    /// Role members.
-    pub member: Vec<Role>,
 }
 
 /// Trust policy principal.
@@ -643,35 +523,6 @@ pub trait IamApi: Send + Sync {
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     /// List inline role policies.
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
-    /// Create an instance profile.
-    async fn create_instance_profile(
-        &self,
-        request: CreateInstanceProfileRequest,
-    ) -> Result<CreateInstanceProfileResponse>;
-    /// Get an instance profile.
-    async fn get_instance_profile(
-        &self,
-        instance_profile_name: &str,
-    ) -> Result<GetInstanceProfileResponse>;
-    /// Delete an instance profile.
-    async fn delete_instance_profile(&self, instance_profile_name: &str) -> Result<()>;
-    /// Add a role to an instance profile.
-    async fn add_role_to_instance_profile(
-        &self,
-        instance_profile_name: &str,
-        role_name: &str,
-    ) -> Result<()>;
-    /// Remove a role from an instance profile.
-    async fn remove_role_from_instance_profile(
-        &self,
-        instance_profile_name: &str,
-        role_name: &str,
-    ) -> Result<()>;
-    /// List instance profiles.
-    async fn list_instance_profiles(
-        &self,
-        request: ListInstanceProfilesRequest,
-    ) -> Result<ListInstanceProfilesResponse>;
 }
 
 /// Minimal ACM operations required by infra controllers.
@@ -1433,152 +1284,6 @@ impl IamApi for IamClient {
         )?;
 
         Ok(response)
-    }
-
-    async fn create_instance_profile(
-        &self,
-        request: CreateInstanceProfileRequest,
-    ) -> Result<CreateInstanceProfileResponse> {
-        let instance_profile_name = request.instance_profile_name.clone();
-        let tags = iam_tags(request.tags.unwrap_or_default(), &instance_profile_name)?;
-        let response = iam_result(
-            self.create_instance_profile()
-                .instance_profile_name(&instance_profile_name)
-                .set_path(request.path)
-                .set_tags(nonempty_vec(tags))
-                .send()
-                .await,
-            "CreateInstanceProfile",
-            "IAM InstanceProfile",
-            &instance_profile_name,
-        )?;
-
-        let instance_profile = response.instance_profile().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("IAM CreateInstanceProfile response for '{instance_profile_name}' did not include a profile"),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(CreateInstanceProfileResponse {
-            create_instance_profile_result: CreateInstanceProfileResult {
-                instance_profile: iam_instance_profile(instance_profile),
-            },
-        })
-    }
-
-    async fn get_instance_profile(
-        &self,
-        instance_profile_name: &str,
-    ) -> Result<GetInstanceProfileResponse> {
-        let response = iam_result(
-            self.get_instance_profile()
-                .instance_profile_name(instance_profile_name)
-                .send()
-                .await,
-            "GetInstanceProfile",
-            "IAM InstanceProfile",
-            instance_profile_name,
-        )?;
-
-        let instance_profile = response.instance_profile().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("IAM GetInstanceProfile response for '{instance_profile_name}' did not include a profile"),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(GetInstanceProfileResponse {
-            get_instance_profile_result: GetInstanceProfileResult {
-                instance_profile: iam_instance_profile(instance_profile),
-            },
-        })
-    }
-
-    async fn delete_instance_profile(&self, instance_profile_name: &str) -> Result<()> {
-        iam_result(
-            self.delete_instance_profile()
-                .instance_profile_name(instance_profile_name)
-                .send()
-                .await,
-            "DeleteInstanceProfile",
-            "IAM InstanceProfile",
-            instance_profile_name,
-        )?;
-        Ok(())
-    }
-
-    async fn add_role_to_instance_profile(
-        &self,
-        instance_profile_name: &str,
-        role_name: &str,
-    ) -> Result<()> {
-        let resource_name = format!("{instance_profile_name}/{role_name}");
-        iam_result(
-            self.add_role_to_instance_profile()
-                .instance_profile_name(instance_profile_name)
-                .role_name(role_name)
-                .send()
-                .await,
-            "AddRoleToInstanceProfile",
-            "IAM InstanceProfileRole",
-            &resource_name,
-        )?;
-        Ok(())
-    }
-
-    async fn remove_role_from_instance_profile(
-        &self,
-        instance_profile_name: &str,
-        role_name: &str,
-    ) -> Result<()> {
-        let resource_name = format!("{instance_profile_name}/{role_name}");
-        iam_result(
-            self.remove_role_from_instance_profile()
-                .instance_profile_name(instance_profile_name)
-                .role_name(role_name)
-                .send()
-                .await,
-            "RemoveRoleFromInstanceProfile",
-            "IAM InstanceProfileRole",
-            &resource_name,
-        )?;
-        Ok(())
-    }
-
-    async fn list_instance_profiles(
-        &self,
-        request: ListInstanceProfilesRequest,
-    ) -> Result<ListInstanceProfilesResponse> {
-        let resource_name = request
-            .path_prefix
-            .clone()
-            .unwrap_or_else(|| "*".to_string());
-        let response = iam_result(
-            self.list_instance_profiles()
-                .set_path_prefix(request.path_prefix)
-                .set_marker(request.marker)
-                .set_max_items(request.max_items)
-                .send()
-                .await,
-            "ListInstanceProfiles",
-            "IAM InstanceProfile",
-            &resource_name,
-        )?;
-
-        Ok(ListInstanceProfilesResponse {
-            list_instance_profiles_result: ListInstanceProfilesResult {
-                instance_profiles: Some(InstanceProfiles {
-                    member: response
-                        .instance_profiles()
-                        .iter()
-                        .map(iam_instance_profile)
-                        .collect(),
-                }),
-                is_truncated: Some(response.is_truncated()),
-                marker: response.marker().map(ToString::to_string),
-            },
-        })
     }
 }
 
@@ -3992,40 +3697,6 @@ fn iam_tags(tags: Vec<CreateRoleTag>, resource_name: &str) -> Result<Vec<AwsIamT
                 })
         })
         .collect()
-}
-
-fn iam_instance_profile(profile: &AwsIamInstanceProfile) -> InstanceProfile {
-    InstanceProfile {
-        path: profile.path().to_string(),
-        instance_profile_name: profile.instance_profile_name().to_string(),
-        instance_profile_id: profile.instance_profile_id().to_string(),
-        arn: profile.arn().to_string(),
-        create_date: smithy_datetime_debug(profile.create_date()),
-        roles: Some(InstanceProfileRoles {
-            member: profile.roles().to_vec(),
-        }),
-        tags: optional_iam_tags(profile.tags()),
-    }
-}
-
-fn optional_iam_tags(tags: &[AwsIamTag]) -> Option<Tags> {
-    if tags.is_empty() {
-        None
-    } else {
-        Some(Tags {
-            member: tags
-                .iter()
-                .map(|tag| Tag {
-                    key: tag.key().to_string(),
-                    value: tag.value().to_string(),
-                })
-                .collect(),
-        })
-    }
-}
-
-fn smithy_datetime_debug(date_time: &aws_sdk_iam::primitives::DateTime) -> String {
-    format!("{date_time:?}")
 }
 
 fn iam_result<T, E>(
