@@ -17,7 +17,7 @@ use crate::aws_sdk::{
     EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
     FunctionConfiguration, ImportCertificateRequest, IntegrationType, LambdaFunctionConfiguration,
     ListEventSourceMappingsRequest, NotificationConfiguration, ProtocolType, PutRuleRequest,
-    PutTargetsRequest, ReimportCertificateRequest, RuleState, SecurityPolicy,
+    PutTargetsRequest, ReimportCertificateRequest, RuleState, S3Event, SecurityPolicy,
     UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
@@ -89,14 +89,44 @@ fn replace_lambda_notification_config(
     notification_config: &mut NotificationConfiguration,
     replacement: LambdaFunctionConfiguration,
 ) {
-    if let Some(replacement_id) = replacement.id.as_ref() {
-        notification_config
-            .lambda_function_configurations
-            .retain(|config| config.id.as_ref() != Some(replacement_id));
-    }
-    notification_config
+    let mut lambda_function_configurations = notification_config
         .lambda_function_configurations
-        .push(replacement);
+        .take()
+        .unwrap_or_default();
+    if let Some(replacement_id) = replacement.id() {
+        lambda_function_configurations.retain(|config| config.id() != Some(replacement_id));
+    }
+    lambda_function_configurations.push(replacement);
+    notification_config.lambda_function_configurations = Some(lambda_function_configurations);
+}
+
+fn s3_trigger_events(events: &[String]) -> Vec<S3Event> {
+    events
+        .iter()
+        .map(|event| match event.as_str() {
+            "created" => S3Event::from("s3:ObjectCreated:*"),
+            "deleted" => S3Event::from("s3:ObjectRemoved:*"),
+            other => S3Event::from(format!("s3:{other}").as_str()),
+        })
+        .collect()
+}
+
+fn s3_lambda_notification_config(
+    statement_id: &str,
+    function_arn: &str,
+    events: &[String],
+    resource_id: &str,
+) -> Result<LambdaFunctionConfiguration> {
+    LambdaFunctionConfiguration::builder()
+        .id(statement_id)
+        .lambda_function_arn(function_arn)
+        .set_events(Some(s3_trigger_events(events)))
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Invalid S3 Lambda notification configuration".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        })
 }
 
 impl AwsWorkerController {
@@ -1531,24 +1561,9 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                // Map alien event types to S3 event types
-                let s3_events: Vec<String> = events
-                    .iter()
-                    .map(|e| match e.as_str() {
-                        "created" => "s3:ObjectCreated:*".to_string(),
-                        "deleted" => "s3:ObjectRemoved:*".to_string(),
-                        other => format!("s3:{}", other),
-                    })
-                    .collect();
-
                 replace_lambda_notification_config(
                     &mut notification_config,
-                    LambdaFunctionConfiguration {
-                        id: Some(statement_id.clone()),
-                        lambda_function_arn: function_arn.to_string(),
-                        events: s3_events,
-                        filter: None,
-                    },
+                    s3_lambda_notification_config(&statement_id, function_arn, events, &config.id)?,
                 );
 
                 s3_client
@@ -2815,7 +2830,7 @@ impl AwsWorkerController {
                     {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                            let empty_config = NotificationConfiguration::default();
+                            let empty_config = NotificationConfiguration::builder().build();
                             if let Err(e) = s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
                                 .await
@@ -2932,23 +2947,14 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    let s3_events: Vec<String> = events
-                        .iter()
-                        .map(|e| match e.as_str() {
-                            "created" => "s3:ObjectCreated:*".to_string(),
-                            "deleted" => "s3:ObjectRemoved:*".to_string(),
-                            other => format!("s3:{}", other),
-                        })
-                        .collect();
-
                     replace_lambda_notification_config(
                         &mut notification_config,
-                        LambdaFunctionConfiguration {
-                            id: Some(statement_id.clone()),
-                            lambda_function_arn: function_arn.to_string(),
-                            events: s3_events,
-                            filter: None,
-                        },
+                        s3_lambda_notification_config(
+                            &statement_id,
+                            function_arn,
+                            events,
+                            &current_config.id,
+                        )?,
                     );
 
                     s3_client
@@ -3315,7 +3321,7 @@ impl AwsWorkerController {
                     {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                            let empty_config = NotificationConfiguration::default();
+                            let empty_config = NotificationConfiguration::builder().build();
                             if let Err(e) = s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
                                 .await

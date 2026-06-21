@@ -67,11 +67,9 @@ use aws_sdk_s3::{
     },
     types::{
         BucketLifecycleConfiguration as AwsBucketLifecycleConfiguration, BucketLocationConstraint,
-        BucketVersioningStatus, CreateBucketConfiguration, Delete, Event as AwsS3Event,
-        ExpirationStatus, LambdaFunctionConfiguration as AwsLambdaFunctionConfiguration,
+        BucketVersioningStatus, CreateBucketConfiguration, Delete, ExpirationStatus,
         LifecycleExpiration as AwsLifecycleExpiration, LifecycleRule as AwsLifecycleRule,
-        LifecycleRuleFilter as AwsLifecycleRuleFilter,
-        NotificationConfiguration as AwsNotificationConfiguration, ObjectIdentifier,
+        LifecycleRuleFilter as AwsLifecycleRuleFilter, ObjectIdentifier,
         PublicAccessBlockConfiguration as AwsPublicAccessBlockConfiguration, Tag as S3Tag, Tagging,
         VersioningConfiguration,
     },
@@ -152,6 +150,9 @@ pub use aws_sdk_ecr::types::{
     ReplicationConfiguration as EcrReplicationConfiguration,
     ReplicationDestination as EcrReplicationDestination, ReplicationRule as EcrReplicationRule,
     Repository as EcrRepository,
+};
+pub use aws_sdk_s3::types::{
+    Event as S3Event, LambdaFunctionConfiguration, NotificationConfiguration,
 };
 
 pub use aws_sdk_lambda::operation::{
@@ -956,26 +957,6 @@ pub struct S3BucketMetadata {
     pub bucket_policy_present: Option<bool>,
     /// Whether bucket ACL metadata is present.
     pub bucket_acl_present: Option<bool>,
-}
-
-/// S3 bucket notification configuration used by worker storage triggers.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NotificationConfiguration {
-    /// Lambda notification configurations for the bucket.
-    pub lambda_function_configurations: Vec<LambdaFunctionConfiguration>,
-}
-
-/// Lambda target configuration for S3 bucket notifications.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LambdaFunctionConfiguration {
-    /// Optional notification ID.
-    pub id: Option<String>,
-    /// Lambda function ARN.
-    pub lambda_function_arn: String,
-    /// S3 event names.
-    pub events: Vec<String>,
-    /// Optional key filter. Currently preserved as opaque absence/presence only.
-    pub filter: Option<()>,
 }
 
 /// IAM role creation request used by infra controllers.
@@ -4637,9 +4618,9 @@ impl S3Api for S3Client {
             .send()
             .await
         {
-            Ok(output) => Ok(notification_configuration_from_aws(&output)),
+            Ok(output) => Ok(notification_configuration_from_get_output(output)),
             Err(err) if is_s3_get_notification_not_found(&err) => {
-                Ok(NotificationConfiguration::default())
+                Ok(NotificationConfiguration::builder().build())
             }
             Err(err) => Err(err
                 .into_alien_error()
@@ -4657,10 +4638,9 @@ impl S3Api for S3Client {
         bucket_name: &str,
         config: &NotificationConfiguration,
     ) -> Result<()> {
-        let configuration = notification_configuration_to_aws(config)?;
         self.put_bucket_notification_configuration()
             .bucket(bucket_name)
-            .notification_configuration(configuration)
+            .notification_configuration(config.clone())
             .send()
             .await
             .into_alien_error()
@@ -5770,56 +5750,15 @@ async fn delete_s3_objects(
     Ok(())
 }
 
-fn notification_configuration_from_aws(
-    output: &aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput,
+fn notification_configuration_from_get_output(
+    output: aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput,
 ) -> NotificationConfiguration {
-    NotificationConfiguration {
-        lambda_function_configurations: output
-            .lambda_function_configurations()
-            .iter()
-            .map(|configuration| LambdaFunctionConfiguration {
-                id: configuration.id().map(ToString::to_string),
-                lambda_function_arn: configuration.lambda_function_arn().to_string(),
-                events: configuration
-                    .events()
-                    .iter()
-                    .map(|event| event.as_str().to_string())
-                    .collect(),
-                filter: None,
-            })
-            .collect(),
-    }
-}
-
-fn notification_configuration_to_aws(
-    config: &NotificationConfiguration,
-) -> Result<AwsNotificationConfiguration> {
-    let lambda_function_configurations = config
-        .lambda_function_configurations
-        .iter()
-        .map(|configuration| {
-            AwsLambdaFunctionConfiguration::builder()
-                .set_id(configuration.id.clone())
-                .lambda_function_arn(&configuration.lambda_function_arn)
-                .set_events(Some(
-                    configuration
-                        .events
-                        .iter()
-                        .map(|event| AwsS3Event::from(event.as_str()))
-                        .collect(),
-                ))
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build S3 Lambda notification configuration".to_string(),
-                    resource_id: None,
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(AwsNotificationConfiguration::builder()
-        .set_lambda_function_configurations(Some(lambda_function_configurations))
-        .build())
+    NotificationConfiguration::builder()
+        .set_topic_configurations(output.topic_configurations)
+        .set_queue_configurations(output.queue_configurations)
+        .set_lambda_function_configurations(output.lambda_function_configurations)
+        .set_event_bridge_configuration(output.event_bridge_configuration)
+        .build()
 }
 
 fn dynamodb_table_description(
