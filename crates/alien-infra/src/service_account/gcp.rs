@@ -35,6 +35,14 @@ where
     )
 }
 
+fn none_if_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 #[controller]
 pub struct GcpServiceAccountController {
     /// The email of the created service account.
@@ -83,39 +91,42 @@ impl GcpServiceAccountController {
                 ctx.resource_prefix, config.id
             ),
         };
-        let service_account = GcpServiceAccount::builder()
-            .display_name(display_name)
-            .description(description)
-            .build();
+        let service_account = GcpServiceAccount::new()
+            .set_display_name(display_name)
+            .set_description(description);
 
-        let request = CreateServiceAccountRequest::builder()
-            .service_account(service_account)
-            .build();
+        let request = CreateServiceAccountRequest::new()
+            .set_name(format!("projects/{}", gcp_config.project_id))
+            .set_account_id(service_account_id.clone())
+            .set_service_account(service_account);
 
-        let created_sa = client
-            .create_service_account(service_account_id.clone(), request)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let created_sa = client.create_service_account(request).await.context(
+            ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create GCP service account '{}'",
                     service_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
-        let email = created_sa.email.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        let email = if created_sa.email.is_empty() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "Created service account missing email".to_string(),
                 resource_id: Some(config.id.clone()),
-            })
-        })?;
+            }));
+        } else {
+            created_sa.email
+        };
 
-        let unique_id = created_sa.unique_id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        let unique_id = if created_sa.unique_id.is_empty() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "Created service account missing unique_id".to_string(),
                 resource_id: Some(config.id.clone()),
-            })
-        })?;
+            }));
+        } else {
+            created_sa.unique_id
+        };
 
         info!(
             service_account_id = %service_account_id,
@@ -187,16 +198,14 @@ impl GcpServiceAccountController {
                 })?;
 
             // Check if service account email matches what we expect
-            if let Some(fetched_email) = &sa.email {
-                if fetched_email != service_account_email {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Service account email changed from {} to {}",
-                            service_account_email, fetched_email
-                        ),
-                    }));
-                }
+            if !sa.email.is_empty() && &sa.email != service_account_email {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Service account email changed from {} to {}",
+                        service_account_email, sa.email
+                    ),
+                }));
             }
 
             let service_account_policy = client
@@ -768,20 +777,27 @@ fn emit_gcp_service_account_heartbeat(
         .map(|binding| binding.role.clone())
         .collect::<Vec<_>>();
     let disabled = service_account.disabled;
-    let health = if disabled == Some(true) {
+    let health = if disabled {
         ObservedHealth::Unhealthy
     } else {
         ObservedHealth::Healthy
     };
-    let lifecycle = if disabled == Some(true) {
+    let lifecycle = if disabled {
         ProviderLifecycleState::Stopped
     } else {
         ProviderLifecycleState::Running
     };
-    let message = if disabled == Some(true) {
+    let message = if disabled {
         format!("GCP service account '{service_account_email}' is disabled")
     } else {
         format!("GCP service account '{service_account_email}' is reachable")
+    };
+    #[allow(deprecated)]
+    let etag = if service_account.etag.is_empty() {
+        None
+    } else {
+        use base64::Engine;
+        Some(base64::engine::general_purpose::STANDARD.encode(&service_account.etag))
     };
 
     ctx.emit_heartbeat(ResourceHeartbeat {
@@ -801,17 +817,19 @@ fn emit_gcp_service_account_heartbeat(
                     partial: false,
                     collection_issues: vec![],
                 },
-                name: service_account.name,
-                project_id: service_account.project_id,
-                unique_id: service_account.unique_id,
-                email: service_account
-                    .email
-                    .unwrap_or_else(|| service_account_email.to_string()),
-                display_name: service_account.display_name,
-                description: service_account.description,
-                oauth2_client_id: service_account.oauth2_client_id,
-                disabled,
-                etag: service_account.etag,
+                name: none_if_empty(service_account.name),
+                project_id: none_if_empty(service_account.project_id),
+                unique_id: none_if_empty(service_account.unique_id),
+                email: if service_account.email.is_empty() {
+                    service_account_email.to_string()
+                } else {
+                    service_account.email
+                },
+                display_name: none_if_empty(service_account.display_name),
+                description: none_if_empty(service_account.description),
+                oauth2_client_id: none_if_empty(service_account.oauth2_client_id),
+                disabled: Some(disabled),
+                etag,
                 project_binding_count: project_roles.len() as u32,
                 project_roles,
                 service_account_binding_count: service_account_roles.len() as u32,

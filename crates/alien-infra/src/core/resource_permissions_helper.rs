@@ -27,7 +27,7 @@ fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
         && existing.description == desired.description
         && existing.stage == desired.stage
         && existing_permissions == desired_permissions
-        && !existing.deleted.unwrap_or(false)
+        && !existing.deleted
 }
 
 fn is_gcp_not_found<T>(error: &AlienError<T>) -> bool
@@ -323,27 +323,22 @@ impl ResourcePermissionsHelper {
                 "Ensuring GCP custom role exists"
             );
 
-            let role_request = CreateRoleRequest::builder()
-                .role(
-                    Role::builder()
-                        .title(custom_role.title.clone())
-                        .description(custom_role.description.clone())
-                        .included_permissions(custom_role.included_permissions.clone())
-                        .stage(RoleLaunchStage::Ga)
-                        .build(),
-                )
-                .build();
+            let desired_role = Role::new()
+                .set_title(custom_role.title.clone())
+                .set_description(custom_role.description.clone())
+                .set_included_permissions(custom_role.included_permissions.clone())
+                .set_stage(RoleLaunchStage::Ga);
 
-            let updated_role = Role::builder()
-                .title(custom_role.title.clone())
-                .description(custom_role.description.clone())
-                .included_permissions(custom_role.included_permissions.clone())
-                .stage(RoleLaunchStage::Ga)
-                .build();
+            let role_request = CreateRoleRequest::new()
+                .set_parent(format!("projects/{}", gcp_config.project_id))
+                .set_role_id(role_id.clone())
+                .set_role(desired_role.clone());
+
+            let updated_role = desired_role;
 
             match iam_client.get_role(custom_role.name.clone()).await {
                 Ok(existing_role) => {
-                    if existing_role.deleted.unwrap_or(false) {
+                    if existing_role.deleted {
                         iam_client
                             .undelete_role(custom_role.name.clone())
                             .await
@@ -392,13 +387,12 @@ impl ResourcePermissionsHelper {
                     }
                 }
                 Err(e) if is_gcp_not_found(&e) => {
-                    iam_client
-                        .create_role(role_id.clone(), role_request)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
+                    iam_client.create_role(role_request).await.context(
+                        ErrorData::CloudPlatformError {
                             message: format!("Failed to create custom role '{}'", role_id),
                             resource_id: Some(permission_set_id.to_string()),
-                        })?;
+                        },
+                    )?;
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -440,18 +434,16 @@ impl ResourcePermissionsHelper {
                 })?;
 
             for role in response.roles {
-                let Some(role_name) = role.name else {
-                    continue;
-                };
+                let role_name = role.name;
                 if role_name.starts_with(&role_name_prefix) {
                     role_names.push(role_name);
                 }
             }
 
-            match response.next_page_token {
-                Some(token) if !token.is_empty() => page_token = Some(token),
-                _ => break,
+            if response.next_page_token.is_empty() {
+                break;
             }
+            page_token = Some(response.next_page_token);
         }
 
         for role_name in role_names {
@@ -1937,14 +1929,13 @@ mod tests {
 
     #[test]
     fn gcp_deleted_custom_role_does_not_match_desired_role() {
-        let desired = Role::builder()
-            .title("Role".to_string())
-            .description("Test role".to_string())
-            .included_permissions(vec!["storage.objects.get".to_string()])
-            .stage(RoleLaunchStage::Ga)
-            .build();
+        let desired = Role::new()
+            .set_title("Role")
+            .set_description("Test role")
+            .set_included_permissions(["storage.objects.get"])
+            .set_stage(RoleLaunchStage::Ga);
         let mut deleted_existing = desired.clone();
-        deleted_existing.deleted = Some(true);
+        deleted_existing.deleted = true;
 
         assert!(
             !gcp_custom_role_matches(&deleted_existing, &desired),

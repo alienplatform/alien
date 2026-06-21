@@ -90,39 +90,42 @@ impl GcpRemoteStackManagementController {
                 ctx.resource_prefix
             ),
         };
-        let service_account = GcpServiceAccount::builder()
-            .display_name(display_name)
-            .description(description)
-            .build();
+        let service_account = GcpServiceAccount::new()
+            .set_display_name(display_name)
+            .set_description(description);
 
-        let request = CreateServiceAccountRequest::builder()
-            .service_account(service_account)
-            .build();
+        let request = CreateServiceAccountRequest::new()
+            .set_name(format!("projects/{}", gcp_config.project_id))
+            .set_account_id(service_account_id.clone())
+            .set_service_account(service_account);
 
-        let created_sa = client
-            .create_service_account(service_account_id.clone(), request)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let created_sa = client.create_service_account(request).await.context(
+            ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create GCP management service account '{}'",
                     service_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
-        let email = created_sa.email.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        let email = if created_sa.email.is_empty() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "Created management service account missing email".to_string(),
                 resource_id: Some(config.id.clone()),
-            })
-        })?;
+            }));
+        } else {
+            created_sa.email
+        };
 
-        let unique_id = created_sa.unique_id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        let unique_id = if created_sa.unique_id.is_empty() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "Created management service account missing unique_id".to_string(),
                 resource_id: Some(config.id.clone()),
-            })
-        })?;
+            }));
+        } else {
+            created_sa.unique_id
+        };
 
         info!(
             service_account_id = %service_account_id,
@@ -445,16 +448,14 @@ impl GcpRemoteStackManagementController {
                 })?;
 
             // Check if service account email matches what we expect
-            if let Some(fetched_email) = &sa.email {
-                if fetched_email != service_account_email {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Management service account email changed from {} to {}",
-                            service_account_email, fetched_email
-                        ),
-                    }));
-                }
+            if !sa.email.is_empty() && &sa.email != service_account_email {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Management service account email changed from {} to {}",
+                        service_account_email, sa.email
+                    ),
+                }));
             }
         }
 

@@ -274,33 +274,36 @@ impl GcpArtifactRegistryController {
             "Creating pull service account for artifact registry"
         );
 
-        let service_account = ServiceAccount::builder()
-            .display_name(format!(
+        let service_account = ServiceAccount::new()
+            .set_display_name(format!(
                 "Runtime Artifact Registry pull SA for registry {}",
                 config.id
             ))
-            .description(format!(
+            .set_description(format!(
                 "Service account for pulling from artifact registry {}",
                 config.id
-            ))
-            .build();
+            ));
 
-        let request = CreateServiceAccountRequest::builder()
-            .service_account(service_account)
-            .build();
+        let request = CreateServiceAccountRequest::new()
+            .set_name(format!("projects/{}", gcp_cfg.project_id))
+            .set_account_id(pull_account_id.clone())
+            .set_service_account(service_account);
 
-        let response = iam_client
-            .create_service_account(pull_account_id.clone(), request)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let response = iam_client.create_service_account(request).await.context(
+            ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create pull service account '{}'",
                     pull_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
-        self.pull_service_account_email = response.email.clone();
+        self.pull_service_account_email = if response.email.is_empty() {
+            None
+        } else {
+            Some(response.email.clone())
+        };
 
         info!(
             account_id = %pull_account_id,
@@ -335,33 +338,36 @@ impl GcpArtifactRegistryController {
             "Creating push service account for artifact registry"
         );
 
-        let service_account = ServiceAccount::builder()
-            .display_name(format!(
+        let service_account = ServiceAccount::new()
+            .set_display_name(format!(
                 "Runtime Artifact Registry push SA for registry {}",
                 config.id
             ))
-            .description(format!(
+            .set_description(format!(
                 "Service account for pushing to artifact registry {}",
                 config.id
-            ))
-            .build();
+            ));
 
-        let request = CreateServiceAccountRequest::builder()
-            .service_account(service_account)
-            .build();
+        let request = CreateServiceAccountRequest::new()
+            .set_name(format!("projects/{}", gcp_cfg.project_id))
+            .set_account_id(push_account_id.clone())
+            .set_service_account(service_account);
 
-        let response = iam_client
-            .create_service_account(push_account_id.clone(), request)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let response = iam_client.create_service_account(request).await.context(
+            ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create push service account '{}'",
                     push_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
-        self.push_service_account_email = response.email.clone();
+        self.push_service_account_email = if response.email.is_empty() {
+            None
+        } else {
+            Some(response.email.clone())
+        };
 
         info!(
             account_id = %push_account_id,
@@ -945,23 +951,18 @@ mod tests {
     }
 
     fn create_successful_service_account_response(account_id: &str) -> ServiceAccount {
-        ServiceAccount {
-            name: Some(format!(
+        ServiceAccount::new()
+            .set_name(format!(
                 "projects/{}/serviceAccounts/{}",
                 TEST_PROJECT_ID, account_id
-            )),
-            project_id: Some(TEST_PROJECT_ID.to_string()),
-            unique_id: Some("123456789012".to_string()),
-            email: Some(format!(
+            ))
+            .set_project_id(TEST_PROJECT_ID)
+            .set_unique_id("123456789012")
+            .set_email(format!(
                 "{}@{}.iam.gserviceaccount.com",
                 account_id, TEST_PROJECT_ID
-            )),
-            display_name: Some(format!("Test service account {}", account_id)),
-            etag: Some("etag123".to_string()),
-            description: None,
-            oauth2_client_id: None,
-            disabled: None,
-        }
+            ))
+            .set_display_name(format!("Test service account {}", account_id))
     }
 
     fn setup_mock_client_for_creation_and_deletion() -> Arc<MockGcpIamApi> {
@@ -970,7 +971,11 @@ mod tests {
         // Mock successful service account creation (for both pull and push)
         mock_iam
             .expect_create_service_account()
-            .returning(|account_id, _| Ok(create_successful_service_account_response(&account_id)));
+            .returning(|request| {
+                Ok(create_successful_service_account_response(
+                    &request.account_id,
+                ))
+            });
 
         // Mock successful service account deletion (for both pull and push)
         mock_iam
@@ -986,7 +991,11 @@ mod tests {
         // Mock successful service account creation (for both pull and push)
         mock_iam
             .expect_create_service_account()
-            .returning(|account_id, _| Ok(create_successful_service_account_response(&account_id)));
+            .returning(|request| {
+                Ok(create_successful_service_account_response(
+                    &request.account_id,
+                ))
+            });
 
         // Mock successful service account retrieval for heartbeat checks
         mock_iam

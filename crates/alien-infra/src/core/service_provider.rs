@@ -100,12 +100,10 @@ use google_cloud_firestore_admin_v1::{
     client::FirestoreAdmin, model::Database as FirestoreDatabase,
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
-use google_cloud_iam_admin_v1::{
-    client::Iam as OfficialGcpIam,
-    model::{
-        role::RoleLaunchStage as OfficialGcpRoleLaunchStage, Role as OfficialGcpRole,
-        ServiceAccount as OfficialGcpServiceAccount,
-    },
+use google_cloud_iam_admin_v1::client::Iam as OfficialGcpIam;
+pub use google_cloud_iam_admin_v1::model::{
+    role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
+    ServiceAccount,
 };
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{
@@ -185,8 +183,7 @@ impl CredentialsProvider for StaticGcpAccessTokenCredentials {
 pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
     async fn create_service_account(
         &self,
-        account_id: String,
-        service_account: CreateServiceAccountRequest,
+        request: CreateServiceAccountRequest,
     ) -> Result<ServiceAccount>;
 
     async fn delete_service_account(&self, service_account_name: String) -> Result<()>;
@@ -211,7 +208,7 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
         iam_policy: IamPolicy,
     ) -> Result<IamPolicy>;
 
-    async fn create_role(&self, role_id: String, role: CreateRoleRequest) -> Result<Role>;
+    async fn create_role(&self, request: CreateRoleRequest) -> Result<Role>;
 
     async fn delete_role(&self, role_name: String) -> Result<Role>;
 
@@ -286,108 +283,6 @@ pub struct Expr {
     pub location: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceAccount {
-    /// Service account resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Project that owns the service account.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    /// Stable numeric service account ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unique_id: Option<String>,
-    /// Service account email address.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-    /// User-visible service account display name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    /// User-visible service account description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// OAuth 2.0 client ID for the service account.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oauth2_client_id: Option<String>,
-    /// Whether the service account is disabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Base64-encoded service account etag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub etag: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "snake_case")]
-pub struct CreateServiceAccountRequest {
-    /// Service account resource to create.
-    pub service_account: ServiceAccount,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RoleLaunchStage {
-    /// Alpha launch stage.
-    Alpha,
-    /// Beta launch stage.
-    Beta,
-    /// Generally available launch stage.
-    Ga,
-    /// Deprecated launch stage.
-    Deprecated,
-    /// Disabled launch stage.
-    Disabled,
-    /// EAP launch stage.
-    Eap,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Role {
-    /// Role resource name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// User-visible role title.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// User-visible role description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Permissions granted by the role.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub included_permissions: Vec<String>,
-    /// Role launch stage.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stage: Option<RoleLaunchStage>,
-    /// Base64-encoded role etag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub etag: Option<String>,
-    /// Whether the role is deleted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateRoleRequest {
-    /// Role resource to create.
-    pub role: Role,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct ListRolesResponse {
-    /// Roles returned by the list call.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roles: Vec<Role>,
-    /// Token for the next page, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_page_token: Option<String>,
-}
-
 struct OfficialGcpIamClient {
     config: GcpClientConfig,
     client: OnceCell<OfficialGcpIam>,
@@ -431,22 +326,22 @@ impl OfficialGcpIamClient {
 impl GcpIamApi for OfficialGcpIamClient {
     async fn create_service_account(
         &self,
-        account_id: String,
-        service_account: CreateServiceAccountRequest,
+        mut request: CreateServiceAccountRequest,
     ) -> Result<ServiceAccount> {
+        if request.name.is_empty() {
+            request.name = format!("projects/{}", self.config.project_id);
+        }
+        let account_id = request.account_id.clone();
+
         match self
             .client()
             .await?
             .create_service_account()
-            .set_name(format!("projects/{}", self.config.project_id))
-            .set_account_id(account_id.clone())
-            .set_service_account(service_account_to_official(
-                service_account.service_account,
-            )?)
+            .with_request(request)
             .send()
             .await
         {
-            Ok(service_account) => Ok(service_account_from_official(service_account)),
+            Ok(service_account) => Ok(service_account),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "GCP service account".to_string(),
@@ -508,7 +403,7 @@ impl GcpIamApi for OfficialGcpIamClient {
             .send()
             .await
         {
-            Ok(service_account) => Ok(service_account_from_official(service_account)),
+            Ok(service_account) => Ok(service_account),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "GCP service account".to_string(),
@@ -533,7 +428,7 @@ impl GcpIamApi for OfficialGcpIamClient {
         update_mask: Option<String>,
     ) -> Result<ServiceAccount> {
         let mut request = google_cloud_iam_admin_v1::model::PatchServiceAccountRequest::new()
-            .set_service_account(service_account_to_official(service_account)?);
+            .set_service_account(service_account);
         if let Some(update_mask) = update_mask {
             request = request.set_update_mask(field_mask_from_comma_separated(update_mask));
         }
@@ -544,7 +439,6 @@ impl GcpIamApi for OfficialGcpIamClient {
             .with_request(request)
             .send()
             .await
-            .map(service_account_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM patch_service_account request failed".to_string(),
@@ -596,18 +490,21 @@ impl GcpIamApi for OfficialGcpIamClient {
             })
     }
 
-    async fn create_role(&self, role_id: String, role: CreateRoleRequest) -> Result<Role> {
+    async fn create_role(&self, mut request: CreateRoleRequest) -> Result<Role> {
+        if request.parent.is_empty() {
+            request.parent = format!("projects/{}", self.config.project_id);
+        }
+        let role_id = request.role_id.clone();
+
         match self
             .client()
             .await?
             .create_role()
-            .set_parent(format!("projects/{}", self.config.project_id))
-            .set_role_id(role_id.clone())
-            .set_role(role_to_official(role.role)?)
+            .with_request(request)
             .send()
             .await
         {
-            Ok(role) => Ok(role_from_official(role)),
+            Ok(role) => Ok(role),
             Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceConflict {
                     resource_type: "GCP custom role".to_string(),
@@ -633,7 +530,6 @@ impl GcpIamApi for OfficialGcpIamClient {
             .set_name(self.role_name(&role_name))
             .send()
             .await
-            .map(role_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM delete_role request failed".to_string(),
@@ -648,7 +544,6 @@ impl GcpIamApi for OfficialGcpIamClient {
             .set_name(self.role_name(&role_name))
             .send()
             .await
-            .map(role_from_official)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM undelete_role request failed".to_string(),
@@ -665,7 +560,7 @@ impl GcpIamApi for OfficialGcpIamClient {
             .send()
             .await
         {
-            Ok(role) => Ok(role_from_official(role)),
+            Ok(role) => Ok(role),
             Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
                 crate::error::ErrorData::CloudResourceNotFound {
                     resource_type: "GCP custom role".to_string(),
@@ -704,15 +599,12 @@ impl GcpIamApi for OfficialGcpIamClient {
             request = request.set_show_deleted(show_deleted);
         }
 
-        request
-            .send()
-            .await
-            .map(list_roles_response_from_official)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
+        request.send().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
                 message: "IAM list_roles request failed".to_string(),
                 resource_id: Some(self.config.project_id.clone()),
-            })
+            },
+        )
     }
 
     async fn patch_role(
@@ -726,20 +618,17 @@ impl GcpIamApi for OfficialGcpIamClient {
             .await?
             .update_role()
             .set_name(self.role_name(&role_name))
-            .set_role(role_to_official(role)?);
+            .set_role(role);
         if let Some(update_mask) = update_mask {
             request = request.set_update_mask(field_mask_from_comma_separated(update_mask));
         }
 
-        request
-            .send()
-            .await
-            .map(role_from_official)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
+        request.send().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
                 message: "IAM patch_role request failed".to_string(),
                 resource_id: Some(role_name),
-            })
+            },
+        )
     }
 }
 
@@ -6534,170 +6423,6 @@ async fn gcs_http_error(
             message: format!("GCS {operation} returned HTTP {}: {text}", status.as_u16()),
             resource_id,
         })
-    }
-}
-
-fn service_account_to_official(
-    service_account: ServiceAccount,
-) -> Result<OfficialGcpServiceAccount> {
-    use base64::Engine;
-
-    let etag = service_account
-        .etag
-        .as_deref()
-        .map(|etag| {
-            base64::engine::general_purpose::STANDARD
-                .decode(etag)
-                .into_alien_error()
-                .context(crate::error::ErrorData::CloudPlatformError {
-                    message: "Failed to base64-decode GCP service account etag".to_string(),
-                    resource_id: service_account.name.clone(),
-                })
-        })
-        .transpose()?
-        .unwrap_or_default();
-
-    #[allow(deprecated)]
-    let mut official = OfficialGcpServiceAccount::new().set_etag(etag);
-    if let Some(name) = service_account.name {
-        official = official.set_name(name);
-    }
-    if let Some(project_id) = service_account.project_id {
-        official = official.set_project_id(project_id);
-    }
-    if let Some(unique_id) = service_account.unique_id {
-        official = official.set_unique_id(unique_id);
-    }
-    if let Some(email) = service_account.email {
-        official = official.set_email(email);
-    }
-    if let Some(display_name) = service_account.display_name {
-        official = official.set_display_name(display_name);
-    }
-    if let Some(description) = service_account.description {
-        official = official.set_description(description);
-    }
-    if let Some(oauth2_client_id) = service_account.oauth2_client_id {
-        official = official.set_oauth2_client_id(oauth2_client_id);
-    }
-    if let Some(disabled) = service_account.disabled {
-        official = official.set_disabled(disabled);
-    }
-
-    Ok(official)
-}
-
-fn service_account_from_official(service_account: OfficialGcpServiceAccount) -> ServiceAccount {
-    use base64::Engine;
-
-    #[allow(deprecated)]
-    let etag = if service_account.etag.is_empty() {
-        None
-    } else {
-        Some(base64::engine::general_purpose::STANDARD.encode(&service_account.etag))
-    };
-
-    ServiceAccount {
-        name: none_if_empty(service_account.name),
-        project_id: none_if_empty(service_account.project_id),
-        unique_id: none_if_empty(service_account.unique_id),
-        email: none_if_empty(service_account.email),
-        display_name: none_if_empty(service_account.display_name),
-        description: none_if_empty(service_account.description),
-        oauth2_client_id: none_if_empty(service_account.oauth2_client_id),
-        disabled: Some(service_account.disabled),
-        etag,
-    }
-}
-
-fn role_to_official(role: Role) -> Result<OfficialGcpRole> {
-    use base64::Engine;
-
-    let etag = role
-        .etag
-        .as_deref()
-        .map(|etag| {
-            base64::engine::general_purpose::STANDARD
-                .decode(etag)
-                .into_alien_error()
-                .context(crate::error::ErrorData::CloudPlatformError {
-                    message: "Failed to base64-decode GCP custom role etag".to_string(),
-                    resource_id: role.name.clone(),
-                })
-        })
-        .transpose()?
-        .unwrap_or_default();
-
-    let mut official = OfficialGcpRole::new()
-        .set_included_permissions(role.included_permissions)
-        .set_etag(etag);
-    if let Some(name) = role.name {
-        official = official.set_name(name);
-    }
-    if let Some(title) = role.title {
-        official = official.set_title(title);
-    }
-    if let Some(description) = role.description {
-        official = official.set_description(description);
-    }
-    if let Some(stage) = role.stage {
-        official = official.set_stage(role_launch_stage_to_official(stage));
-    }
-    if let Some(deleted) = role.deleted {
-        official = official.set_deleted(deleted);
-    }
-
-    Ok(official)
-}
-
-fn role_from_official(role: OfficialGcpRole) -> Role {
-    use base64::Engine;
-
-    Role {
-        name: none_if_empty(role.name),
-        title: none_if_empty(role.title),
-        description: none_if_empty(role.description),
-        included_permissions: role.included_permissions,
-        stage: role_launch_stage_from_official(role.stage),
-        etag: if role.etag.is_empty() {
-            None
-        } else {
-            Some(base64::engine::general_purpose::STANDARD.encode(&role.etag))
-        },
-        deleted: Some(role.deleted),
-    }
-}
-
-fn list_roles_response_from_official(
-    response: google_cloud_iam_admin_v1::model::ListRolesResponse,
-) -> ListRolesResponse {
-    ListRolesResponse {
-        roles: response.roles.into_iter().map(role_from_official).collect(),
-        next_page_token: none_if_empty(response.next_page_token),
-    }
-}
-
-fn role_launch_stage_to_official(stage: RoleLaunchStage) -> OfficialGcpRoleLaunchStage {
-    match stage {
-        RoleLaunchStage::Alpha => OfficialGcpRoleLaunchStage::Alpha,
-        RoleLaunchStage::Beta => OfficialGcpRoleLaunchStage::Beta,
-        RoleLaunchStage::Ga => OfficialGcpRoleLaunchStage::Ga,
-        RoleLaunchStage::Deprecated => OfficialGcpRoleLaunchStage::Deprecated,
-        RoleLaunchStage::Disabled => OfficialGcpRoleLaunchStage::Disabled,
-        RoleLaunchStage::Eap => OfficialGcpRoleLaunchStage::Eap,
-    }
-}
-
-fn role_launch_stage_from_official(stage: OfficialGcpRoleLaunchStage) -> Option<RoleLaunchStage> {
-    match stage {
-        OfficialGcpRoleLaunchStage::Alpha => Some(RoleLaunchStage::Alpha),
-        OfficialGcpRoleLaunchStage::Beta => Some(RoleLaunchStage::Beta),
-        OfficialGcpRoleLaunchStage::Ga => Some(RoleLaunchStage::Ga),
-        OfficialGcpRoleLaunchStage::Deprecated => Some(RoleLaunchStage::Deprecated),
-        OfficialGcpRoleLaunchStage::Disabled => Some(RoleLaunchStage::Disabled),
-        OfficialGcpRoleLaunchStage::Eap => Some(RoleLaunchStage::Eap),
-        OfficialGcpRoleLaunchStage::UnknownValue(_) => None,
-        _ => None,
     }
 }
 
