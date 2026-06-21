@@ -7,15 +7,7 @@ use aws_config::{BehaviorVersion, SdkConfig};
 use aws_credential_types::Credentials;
 use aws_sdk_acm::Client as AcmClient;
 use aws_sdk_apigatewayv2::Client as ApiGatewayV2Client;
-use aws_sdk_codebuild::{
-    types::{
-        ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
-        EnvironmentType, EnvironmentVariable as AwsCodeBuildEnvironmentVariable,
-        ImagePullCredentialsType, LogsConfig, LogsConfigStatusType, ProjectArtifacts,
-        ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType, Tag as CodeBuildTag,
-    },
-    Client as CodeBuildClient,
-};
+use aws_sdk_codebuild::Client as CodeBuildClient;
 use aws_sdk_dynamodb::{
     operation::{
         delete_table::DeleteTableError, describe_table::DescribeTableError,
@@ -130,7 +122,13 @@ pub use aws_sdk_apigatewayv2::{
     },
 };
 
-pub use aws_sdk_codebuild::types::Project as CodeBuildProjectDescription;
+pub use aws_sdk_codebuild::{
+    operation::{
+        create_project::CreateProjectInput as CodeBuildCreateProjectRequest,
+        update_project::UpdateProjectInput as CodeBuildUpdateProjectRequest,
+    },
+    types::Project as CodeBuildProjectDescription,
+};
 
 pub use aws_sdk_dynamodb::types::{
     TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
@@ -199,31 +197,6 @@ pub struct DescribeSsmParametersResponse {
     pub parameters: Vec<SsmParameterMetadata>,
     /// Whether SSM returned a next token.
     pub has_more_parameters: bool,
-}
-
-/// CodeBuild project configuration used for create and update operations.
-#[derive(Debug, Clone)]
-pub struct CodeBuildProjectConfig {
-    /// CodeBuild project name.
-    pub name: String,
-    /// Inline buildspec used by the project.
-    pub buildspec: String,
-    /// Environment type, such as LINUX_CONTAINER.
-    pub environment_type: String,
-    /// Build container image.
-    pub image: String,
-    /// Compute type, such as BUILD_GENERAL1_SMALL.
-    pub compute_type: String,
-    /// Image pull credentials type, such as SERVICE_ROLE.
-    pub image_pull_credentials_type: String,
-    /// Environment variables for the project.
-    pub environment_variables: Vec<(String, String)>,
-    /// IAM role ARN used by CodeBuild.
-    pub service_role: String,
-    /// Project description.
-    pub description: String,
-    /// Resource tags.
-    pub tags: HashMap<String, String>,
 }
 
 /// Lambda function creation request used by worker controllers.
@@ -1587,13 +1560,13 @@ pub trait CodeBuildApi: Send + Sync {
     /// Create a CodeBuild project.
     async fn create_project(
         &self,
-        config: CodeBuildProjectConfig,
+        request: CodeBuildCreateProjectRequest,
     ) -> Result<CodeBuildProjectDescription>;
 
     /// Update a CodeBuild project.
     async fn update_project(
         &self,
-        config: CodeBuildProjectConfig,
+        request: CodeBuildUpdateProjectRequest,
     ) -> Result<CodeBuildProjectDescription>;
 
     /// Get a project by name.
@@ -3266,21 +3239,34 @@ impl DynamoDbApi for DynamoDbClient {
 impl CodeBuildApi for CodeBuildClient {
     async fn create_project(
         &self,
-        config: CodeBuildProjectConfig,
+        request: CodeBuildCreateProjectRequest,
     ) -> Result<CodeBuildProjectDescription> {
-        let project_name = config.name.clone();
-        let request_parts = build_codebuild_project_request(config)?;
+        let project_name = request.name().unwrap_or("<unknown>").to_string();
 
         let response = self
             .create_project()
-            .name(&project_name)
-            .source(request_parts.source)
-            .artifacts(request_parts.artifacts)
-            .environment(request_parts.environment)
-            .logs_config(request_parts.logs_config)
-            .service_role(request_parts.service_role)
-            .description(request_parts.description)
-            .set_tags(Some(request_parts.tags))
+            .set_name(request.name)
+            .set_description(request.description)
+            .set_source(request.source)
+            .set_secondary_sources(request.secondary_sources)
+            .set_source_version(request.source_version)
+            .set_secondary_source_versions(request.secondary_source_versions)
+            .set_artifacts(request.artifacts)
+            .set_secondary_artifacts(request.secondary_artifacts)
+            .set_cache(request.cache)
+            .set_environment(request.environment)
+            .set_service_role(request.service_role)
+            .set_timeout_in_minutes(request.timeout_in_minutes)
+            .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
+            .set_encryption_key(request.encryption_key)
+            .set_tags(request.tags)
+            .set_vpc_config(request.vpc_config)
+            .set_badge_enabled(request.badge_enabled)
+            .set_logs_config(request.logs_config)
+            .set_file_system_locations(request.file_system_locations)
+            .set_build_batch_config(request.build_batch_config)
+            .set_concurrent_build_limit(request.concurrent_build_limit)
+            .set_auto_retry_limit(request.auto_retry_limit)
             .send()
             .await
             .into_alien_error()
@@ -3304,20 +3290,34 @@ impl CodeBuildApi for CodeBuildClient {
 
     async fn update_project(
         &self,
-        config: CodeBuildProjectConfig,
+        request: CodeBuildUpdateProjectRequest,
     ) -> Result<CodeBuildProjectDescription> {
-        let project_name = config.name.clone();
-        let request_parts = build_codebuild_project_request(config)?;
+        let project_name = request.name().unwrap_or("<unknown>").to_string();
 
         let response = self
             .update_project()
-            .name(&project_name)
-            .source(request_parts.source)
-            .artifacts(request_parts.artifacts)
-            .environment(request_parts.environment)
-            .logs_config(request_parts.logs_config)
-            .service_role(request_parts.service_role)
-            .description(request_parts.description)
+            .set_name(request.name)
+            .set_description(request.description)
+            .set_source(request.source)
+            .set_secondary_sources(request.secondary_sources)
+            .set_source_version(request.source_version)
+            .set_secondary_source_versions(request.secondary_source_versions)
+            .set_artifacts(request.artifacts)
+            .set_secondary_artifacts(request.secondary_artifacts)
+            .set_cache(request.cache)
+            .set_environment(request.environment)
+            .set_service_role(request.service_role)
+            .set_timeout_in_minutes(request.timeout_in_minutes)
+            .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
+            .set_encryption_key(request.encryption_key)
+            .set_tags(request.tags)
+            .set_vpc_config(request.vpc_config)
+            .set_badge_enabled(request.badge_enabled)
+            .set_logs_config(request.logs_config)
+            .set_file_system_locations(request.file_system_locations)
+            .set_build_batch_config(request.build_batch_config)
+            .set_concurrent_build_limit(request.concurrent_build_limit)
+            .set_auto_retry_limit(request.auto_retry_limit)
             .send()
             .await
             .into_alien_error()
@@ -4481,127 +4481,6 @@ impl S3Api for S3Client {
 
         Ok(())
     }
-}
-
-struct CodeBuildProjectRequestParts {
-    source: ProjectSource,
-    artifacts: ProjectArtifacts,
-    environment: ProjectEnvironment,
-    logs_config: LogsConfig,
-    service_role: String,
-    description: String,
-    tags: Vec<CodeBuildTag>,
-}
-
-fn build_codebuild_project_request(
-    config: CodeBuildProjectConfig,
-) -> Result<CodeBuildProjectRequestParts> {
-    let source = ProjectSource::builder()
-        .r#type(SourceType::NoSource)
-        .buildspec(config.buildspec)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to build CodeBuild source for project '{}'",
-                config.name
-            ),
-            resource_id: None,
-        })?;
-
-    let artifacts = ProjectArtifacts::builder()
-        .r#type(ArtifactsType::NoArtifacts)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to build CodeBuild artifacts for project '{}'",
-                config.name
-            ),
-            resource_id: None,
-        })?;
-
-    let environment_variables = config
-        .environment_variables
-        .into_iter()
-        .map(|(name, value)| {
-            AwsCodeBuildEnvironmentVariable::builder()
-                .name(name)
-                .value(value)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to build CodeBuild environment variable for project '{}'",
-                        config.name
-                    ),
-                    resource_id: None,
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let environment = ProjectEnvironment::builder()
-        .r#type(EnvironmentType::from(config.environment_type.as_str()))
-        .image(config.image)
-        .compute_type(AwsCodeBuildComputeType::from(config.compute_type.as_str()))
-        .image_pull_credentials_type(ImagePullCredentialsType::from(
-            config.image_pull_credentials_type.as_str(),
-        ))
-        .set_environment_variables(Some(environment_variables))
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to build CodeBuild environment for project '{}'",
-                config.name
-            ),
-            resource_id: None,
-        })?;
-
-    let cloud_watch_logs = CloudWatchLogsConfig::builder()
-        .status(LogsConfigStatusType::Enabled)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to build CodeBuild CloudWatch logs config for project '{}'",
-                config.name
-            ),
-            resource_id: None,
-        })?;
-
-    let s3_logs = S3LogsConfig::builder()
-        .status(LogsConfigStatusType::Disabled)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to build CodeBuild S3 logs config for project '{}'",
-                config.name
-            ),
-            resource_id: None,
-        })?;
-
-    let logs_config = LogsConfig::builder()
-        .cloud_watch_logs(cloud_watch_logs)
-        .s3_logs(s3_logs)
-        .build();
-
-    let tags = config
-        .tags
-        .into_iter()
-        .map(|(key, value)| CodeBuildTag::builder().key(key).value(value).build())
-        .collect::<Vec<_>>();
-
-    Ok(CodeBuildProjectRequestParts {
-        source,
-        artifacts,
-        environment,
-        logs_config,
-        service_role: config.service_role,
-        description: config.description,
-        tags,
-    })
 }
 
 #[async_trait]

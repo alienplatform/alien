@@ -1,7 +1,20 @@
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
-use crate::aws_sdk::{CodeBuildProjectConfig, CodeBuildProjectDescription};
+use aws_sdk_codebuild::{
+    operation::{
+        create_project::CreateProjectInput as CodeBuildCreateProjectRequest,
+        update_project::UpdateProjectInput as CodeBuildUpdateProjectRequest,
+    },
+    types::{
+        ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
+        EnvironmentType, EnvironmentVariable as AwsCodeBuildEnvironmentVariable,
+        ImagePullCredentialsType, LogsConfig, LogsConfigStatusType, ProjectArtifacts,
+        ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType, Tag as CodeBuildTag,
+    },
+};
+
+use crate::aws_sdk::CodeBuildProjectDescription;
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -85,13 +98,13 @@ impl AwsBuildController {
         // Store the computed environment variables in controller state
         self.build_env_vars = Some(env_vars.clone());
 
-        let project_config = build_codebuild_project_config(
+        let project_config = build_codebuild_create_project_request(
             ctx.resource_prefix,
             cfg,
             aws_project_name.clone(),
             role_arn,
             env_vars,
-        );
+        )?;
 
         let response =
             client
@@ -251,13 +264,13 @@ impl AwsBuildController {
         // Store the computed environment variables in controller state
         self.build_env_vars = Some(env_vars.clone());
 
-        let project_config = build_codebuild_project_config(
+        let project_config = build_codebuild_update_project_request(
             ctx.resource_prefix,
             current_config,
             aws_project_name.clone(),
             role_arn,
             env_vars,
-        );
+        )?;
 
         let response =
             client
@@ -432,31 +445,175 @@ impl AwsBuildController {
     }
 }
 
-fn build_codebuild_project_config(
+fn build_codebuild_create_project_request(
     resource_prefix: &str,
     build: &Build,
     project_name: String,
     service_role: String,
     environment_variables: HashMap<String, String>,
-) -> CodeBuildProjectConfig {
-    CodeBuildProjectConfig {
-        name: project_name,
-        buildspec: r#"version: 0.2
+) -> Result<CodeBuildCreateProjectRequest> {
+    let description = format!("Runtime build project: {}", build.id);
+    let tags = codebuild_tags(standard_resource_tags(resource_prefix, &build.id));
+    let (source, artifacts, environment, logs_config) =
+        codebuild_project_components(&project_name, build, environment_variables)?;
+
+    CodeBuildCreateProjectRequest::builder()
+        .name(project_name)
+        .description(description)
+        .source(source)
+        .artifacts(artifacts)
+        .environment(environment)
+        .service_role(service_role)
+        .set_tags(Some(tags))
+        .logs_config(logs_config)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to build CodeBuild create request for '{}'",
+                build.id
+            ),
+            resource_id: Some(build.id.clone()),
+        })
+}
+
+fn build_codebuild_update_project_request(
+    resource_prefix: &str,
+    build: &Build,
+    project_name: String,
+    service_role: String,
+    environment_variables: HashMap<String, String>,
+) -> Result<CodeBuildUpdateProjectRequest> {
+    let description = format!("Runtime build project: {}", build.id);
+    let tags = codebuild_tags(standard_resource_tags(resource_prefix, &build.id));
+    let (source, artifacts, environment, logs_config) =
+        codebuild_project_components(&project_name, build, environment_variables)?;
+
+    CodeBuildUpdateProjectRequest::builder()
+        .name(project_name)
+        .description(description)
+        .source(source)
+        .artifacts(artifacts)
+        .environment(environment)
+        .service_role(service_role)
+        .set_tags(Some(tags))
+        .logs_config(logs_config)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to build CodeBuild update request for '{}'",
+                build.id
+            ),
+            resource_id: Some(build.id.clone()),
+        })
+}
+
+fn codebuild_project_components(
+    project_name: &str,
+    build: &Build,
+    environment_variables: HashMap<String, String>,
+) -> Result<(
+    ProjectSource,
+    ProjectArtifacts,
+    ProjectEnvironment,
+    LogsConfig,
+)> {
+    let source = ProjectSource::builder()
+        .r#type(SourceType::NoSource)
+        .buildspec(
+            r#"version: 0.2
 phases:
   build:
     commands:
       - echo "Build script will be provided at runtime"
 "#
-        .to_string(),
-        environment_type: map_environment_type(&build.compute_type),
-        image: "ghcr.io/alienplatform/alien-builder:latest".to_string(),
-        compute_type: map_compute_type(&build.compute_type),
-        image_pull_credentials_type: "SERVICE_ROLE".to_string(),
-        environment_variables: environment_variables.into_iter().collect(),
-        service_role,
-        description: format!("Runtime build project: {}", build.id),
-        tags: standard_resource_tags(resource_prefix, &build.id),
-    }
+            .to_string(),
+        )
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to build CodeBuild source for project '{project_name}'"),
+            resource_id: Some(build.id.clone()),
+        })?;
+
+    let artifacts = ProjectArtifacts::builder()
+        .r#type(ArtifactsType::NoArtifacts)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to build CodeBuild artifacts for project '{project_name}'"),
+            resource_id: Some(build.id.clone()),
+        })?;
+
+    let environment_variables = environment_variables
+        .into_iter()
+        .map(|(name, value)| {
+            AwsCodeBuildEnvironmentVariable::builder()
+                .name(name)
+                .value(value)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to build CodeBuild environment variable for project '{project_name}'"
+                    ),
+                    resource_id: Some(build.id.clone()),
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let environment = ProjectEnvironment::builder()
+        .r#type(EnvironmentType::from(
+            map_environment_type(&build.compute_type).as_str(),
+        ))
+        .image("ghcr.io/alienplatform/alien-builder:latest")
+        .compute_type(AwsCodeBuildComputeType::from(
+            map_compute_type(&build.compute_type).as_str(),
+        ))
+        .image_pull_credentials_type(ImagePullCredentialsType::ServiceRole)
+        .set_environment_variables(Some(environment_variables))
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to build CodeBuild environment for project '{project_name}'"),
+            resource_id: Some(build.id.clone()),
+        })?;
+
+    let cloud_watch_logs = CloudWatchLogsConfig::builder()
+        .status(LogsConfigStatusType::Enabled)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to build CodeBuild CloudWatch logs config for project '{project_name}'"
+            ),
+            resource_id: Some(build.id.clone()),
+        })?;
+
+    let s3_logs = S3LogsConfig::builder()
+        .status(LogsConfigStatusType::Disabled)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to build CodeBuild S3 logs config for project '{project_name}'"
+            ),
+            resource_id: Some(build.id.clone()),
+        })?;
+
+    let logs_config = LogsConfig::builder()
+        .cloud_watch_logs(cloud_watch_logs)
+        .s3_logs(s3_logs)
+        .build();
+
+    Ok((source, artifacts, environment, logs_config))
+}
+
+fn codebuild_tags(tags: HashMap<String, String>) -> Vec<CodeBuildTag> {
+    tags.into_iter()
+        .map(|(key, value)| CodeBuildTag::builder().key(key).value(value).build())
+        .collect()
 }
 
 fn emit_aws_build_heartbeat(
@@ -545,7 +702,10 @@ mod tests {
         ProjectArtifacts, ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType,
     };
 
-    use crate::aws_sdk::{CodeBuildApi, CodeBuildProjectConfig, CodeBuildProjectDescription};
+    use crate::aws_sdk::{
+        CodeBuildApi, CodeBuildCreateProjectRequest, CodeBuildProjectDescription,
+        CodeBuildUpdateProjectRequest,
+    };
     use crate::error::Result;
     use alien_core::{Build, BuildOutputs, Platform, ResourceStatus};
     use rstest::rstest;
@@ -561,16 +721,32 @@ mod tests {
     impl CodeBuildApi for TestCodeBuildClient {
         async fn create_project(
             &self,
-            config: CodeBuildProjectConfig,
+            request: CodeBuildCreateProjectRequest,
         ) -> Result<CodeBuildProjectDescription> {
-            Ok(project_description(&config.name, Some(config.compute_type)))
+            let project_name = request
+                .name()
+                .expect("create request should include a name");
+            let compute_type = request
+                .environment()
+                .map(|environment| environment.compute_type())
+                .map(|compute_type| compute_type.as_str().to_string());
+
+            Ok(project_description(project_name, compute_type))
         }
 
         async fn update_project(
             &self,
-            config: CodeBuildProjectConfig,
+            request: CodeBuildUpdateProjectRequest,
         ) -> Result<CodeBuildProjectDescription> {
-            Ok(project_description(&config.name, Some(config.compute_type)))
+            let project_name = request
+                .name()
+                .expect("update request should include a name");
+            let compute_type = request
+                .environment()
+                .map(|environment| environment.compute_type())
+                .map(|compute_type| compute_type.as_str().to_string());
+
+            Ok(project_description(project_name, compute_type))
         }
 
         async fn get_project(
