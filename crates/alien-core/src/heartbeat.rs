@@ -633,6 +633,7 @@ pub struct LocalContainerHeartbeatData {
 pub struct AwsDaemonHeartbeatData {
     pub status: WorkloadHeartbeatStatus,
     pub horizon_cluster_id: String,
+    #[serde(default)]
     pub daemon_name: String,
     pub horizon_status: String,
     pub horizon_status_reason: Option<String>,
@@ -654,6 +655,7 @@ pub struct AwsDaemonHeartbeatData {
 pub struct GcpDaemonHeartbeatData {
     pub status: WorkloadHeartbeatStatus,
     pub horizon_cluster_id: String,
+    #[serde(default)]
     pub daemon_name: String,
     pub horizon_status: String,
     pub horizon_status_reason: Option<String>,
@@ -675,6 +677,7 @@ pub struct GcpDaemonHeartbeatData {
 pub struct AzureDaemonHeartbeatData {
     pub status: WorkloadHeartbeatStatus,
     pub horizon_cluster_id: String,
+    #[serde(default)]
     pub daemon_name: String,
     pub horizon_status: String,
     pub horizon_status_reason: Option<String>,
@@ -736,6 +739,7 @@ pub struct KubernetesDaemonHeartbeatData {
 #[serde(rename_all = "camelCase")]
 pub struct LocalDaemonHeartbeatData {
     pub status: WorkloadHeartbeatStatus,
+    #[serde(default)]
     pub daemon_name: String,
     pub runtime_id: String,
     pub pid: Option<u32>,
@@ -2172,6 +2176,32 @@ mod tests {
         let parsed: ResourceHeartbeat = serde_json::from_value(heartbeat_json).unwrap();
         assert_eq!(parsed.source, HeartbeatSource::Managed);
         assert_eq!(parsed.alien_resource_id, None);
+    }
+
+    #[test]
+    fn local_daemon_heartbeat_defaults_missing_daemon_name() {
+        let mut value =
+            serde_json::to_value(DaemonHeartbeatData::Local(LocalDaemonHeartbeatData {
+                status: workload_status(),
+                daemon_name: "agent".to_string(),
+                runtime_id: "local-agent".to_string(),
+                pid: None,
+                command_supported: false,
+                image_path_present: true,
+                restart_count: None,
+                exit_reason: None,
+                daemon_instance: None,
+                events: vec![],
+            }))
+            .unwrap();
+
+        value.as_object_mut().unwrap().remove("daemonName");
+
+        let parsed: DaemonHeartbeatData = serde_json::from_value(value).unwrap();
+        match parsed {
+            DaemonHeartbeatData::Local(data) => assert_eq!(data.daemon_name, ""),
+            other => panic!("expected local daemon heartbeat, got {other:?}"),
+        }
     }
 
     #[test]
