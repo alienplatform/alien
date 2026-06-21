@@ -3,14 +3,15 @@ use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{GetPolicyOptions, ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    GetPolicyOptions, IamPolicy, ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpSecretManagerVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
-use alien_gcp_clients::iam::IamPolicy;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     PermissionContext,

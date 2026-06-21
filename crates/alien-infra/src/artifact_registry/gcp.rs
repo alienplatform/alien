@@ -4,7 +4,8 @@ use tracing::{debug, info};
 
 use crate::core::{
     ArtifactRegistryRepository as Repository, ArtifactRegistryRepositoryFormat as RepositoryFormat,
-    ResourceControllerContext, ResourcePermissionsHelper,
+    CreateServiceAccountRequest, IamPolicy, ResourceControllerContext, ResourcePermissionsHelper,
+    ServiceAccount,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -13,7 +14,6 @@ use alien_core::{
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_gcp_clients::iam::{CreateServiceAccountRequest, IamPolicy, ServiceAccount};
 use chrono::Utc;
 
 /// Generates the prefixed GAR repository name for a given resource.
@@ -61,6 +61,16 @@ pub fn get_gcp_artifact_registry_push_service_account_id(
 
         format!("{}-push-{:x}", prefix.replace("-", ""), hash % 0xFFFF)
     }
+}
+
+fn is_gcp_not_found<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
 }
 
 /// GCP Artifact Registry controller.
@@ -459,12 +469,7 @@ impl GcpArtifactRegistryController {
                 Ok(_) => {
                     info!(email = %email, "Pull service account deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     info!(email = %email, "Pull service account already deleted");
                 }
                 Err(e) => {
@@ -503,12 +508,7 @@ impl GcpArtifactRegistryController {
                 Ok(_) => {
                     info!(email = %email, "Push service account deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     info!(email = %email, "Push service account already deleted");
                 }
                 Err(e) => {
@@ -865,7 +865,7 @@ fn emit_gcp_artifact_registry_heartbeat(
     location: &str,
     repository_id: &str,
     repository: Repository,
-    iam_policy: alien_gcp_clients::iam::IamPolicy,
+    iam_policy: IamPolicy,
     pull_service_account_email: Option<String>,
     push_service_account_email: Option<String>,
 ) {
@@ -933,10 +933,9 @@ fn emit_gcp_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockArtifactRegistryApi;
+    use crate::core::{MockArtifactRegistryApi, MockGcpIamApi};
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
-    use alien_gcp_clients::iam::{MockIamApi, ServiceAccount};
     use google_cloud_longrunning::model::Operation;
     use std::sync::Arc;
 
@@ -964,8 +963,8 @@ mod tests {
         }
     }
 
-    fn setup_mock_client_for_creation_and_deletion() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
+    fn setup_mock_client_for_creation_and_deletion() -> Arc<MockGcpIamApi> {
+        let mut mock_iam = MockGcpIamApi::new();
 
         // Mock successful service account creation (for both pull and push)
         mock_iam
@@ -980,8 +979,8 @@ mod tests {
         Arc::new(mock_iam)
     }
 
-    fn setup_mock_client_for_creation_and_update() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
+    fn setup_mock_client_for_creation_and_update() -> Arc<MockGcpIamApi> {
+        let mut mock_iam = MockGcpIamApi::new();
 
         // Mock successful service account creation (for both pull and push)
         mock_iam
@@ -1016,7 +1015,9 @@ mod tests {
         Arc::new(mock_ar)
     }
 
-    fn setup_mock_service_provider(mock_iam: Arc<MockIamApi>) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_service_provider(
+        mock_iam: Arc<MockGcpIamApi>,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mock_ar = setup_mock_ar_client_existing_repo();
         let mut mock_provider = MockPlatformServiceProvider::new();
 

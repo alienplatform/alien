@@ -24,6 +24,21 @@ fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
+fn legacy_gcp_binding_from_local(binding: crate::core::Binding) -> Binding {
+    Binding {
+        role: binding.role,
+        members: binding.members,
+        condition: binding
+            .condition
+            .map(|condition| alien_gcp_clients::iam::Expr {
+                expression: condition.expression,
+                title: condition.title,
+                description: condition.description,
+                location: condition.location,
+            }),
+    }
+}
+
 #[controller]
 pub struct GcpStorageController {
     /// The actual bucket name (includes stack name prefix).
@@ -880,7 +895,9 @@ impl GcpStorageController {
                 })?;
 
             // Merge new bindings with existing ones
-            existing_policy.bindings.extend(all_bindings);
+            existing_policy
+                .bindings
+                .extend(all_bindings.into_iter().map(legacy_gcp_binding_from_local));
 
             // GCP requires version 3 when any binding has a condition
             existing_policy.version = Some(3);
@@ -933,12 +950,11 @@ mod tests {
         Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
         ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
     };
-    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
     use rstest::{fixture, rstest};
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
+        MockGcpIamApi, MockPlatformServiceProvider, PlatformServiceProvider,
     };
     use crate::storage::GcpStorageController;
 
@@ -1111,8 +1127,8 @@ mod tests {
         Arc::new(mock_gcs)
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        Arc::new(MockIamApi::new())
+    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
+        Arc::new(MockGcpIamApi::new())
     }
 
     fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {

@@ -9,10 +9,8 @@ use alien_core::{
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_gcp_clients::{
-    iam::IamPolicy,
-    pubsub::{Subscription, Topic},
-};
+use alien_gcp_clients::iam::IamPolicy;
+use alien_gcp_clients::pubsub::{Subscription, Topic};
 use alien_macros::controller;
 use alien_permissions::generators::GcpBindingResourceKind;
 use chrono::Utc;
@@ -367,6 +365,18 @@ fn gcp_iam_policy_for_kind(
             .filter(|binding| binding.resource_kind == Some(kind))
             .cloned()
             .map(crate::core::ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
+            .map(|binding| alien_gcp_clients::iam::Binding {
+                role: binding.role,
+                members: binding.members,
+                condition: binding
+                    .condition
+                    .map(|condition| alien_gcp_clients::iam::Expr {
+                        expression: condition.expression,
+                        title: condition.title,
+                        description: condition.description,
+                        location: condition.location,
+                    }),
+            })
             .collect(),
         etag: None,
         kind: None,
@@ -522,9 +532,10 @@ fn nonnegative_i32_to_u32(value: Option<i32>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockGcpIamApi, MockPlatformServiceProvider,
+    };
     use alien_core::{Platform, Queue, ResourceStatus};
-    use alien_gcp_clients::iam::MockIamApi;
     use alien_gcp_clients::pubsub::{MockPubSubApi, Subscription, Topic};
     use std::sync::Arc;
 
@@ -542,8 +553,8 @@ mod tests {
         Arc::new(mock)
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        Arc::new(MockIamApi::new())
+    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
+        Arc::new(MockGcpIamApi::new())
     }
 
     fn setup_mock_provider(mock_pubsub: Arc<MockPubSubApi>) -> Arc<MockPlatformServiceProvider> {

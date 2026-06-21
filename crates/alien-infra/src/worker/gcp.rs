@@ -3,8 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    EnvironmentVariableBuilder, HttpTarget, ResourcePermissionsHelper, SchedulerJob,
-    SchedulerOidcToken,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget,
+    ResourcePermissionsHelper, SchedulerJob, SchedulerOidcToken,
 };
 
 use crate::core::ResourceControllerContext;
@@ -22,7 +22,6 @@ use alien_gcp_clients::compute::{
     SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::gcs::GcsNotification;
-use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
@@ -63,6 +62,21 @@ where
 
 fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
     left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
+}
+
+fn legacy_gcp_binding_from_local(binding: GcpBinding) -> alien_gcp_clients::iam::Binding {
+    alien_gcp_clients::iam::Binding {
+        role: binding.role,
+        members: binding.members,
+        condition: binding
+            .condition
+            .map(|condition| alien_gcp_clients::iam::Expr {
+                expression: condition.expression,
+                title: condition.title,
+                description: condition.description,
+                location: condition.location,
+            }),
+    }
 }
 
 fn gcs_notification_matches_existing(
@@ -4147,9 +4161,12 @@ impl GcpWorkerController {
         )
         .await?;
 
-        let iam_policy = IamPolicy {
+        let iam_policy = alien_gcp_clients::iam::IamPolicy {
             version: Some(3),
-            bindings: all_bindings,
+            bindings: all_bindings
+                .into_iter()
+                .map(legacy_gcp_binding_from_local)
+                .collect(),
             etag: None,
             kind: None,
             resource_id: None,
@@ -4545,8 +4562,6 @@ impl GcpWorkerController {
         service_name: &str,
         enable_public_access: bool,
     ) -> Result<()> {
-        use alien_gcp_clients::iam::Binding;
-
         let config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
@@ -4585,7 +4600,7 @@ impl GcpWorkerController {
                     }
                 } else {
                     policy.bindings.push(
-                        Binding::builder()
+                        alien_gcp_clients::iam::Binding::builder()
                             .role(invoker_role)
                             .members(vec![all_users_member])
                             .build(),
@@ -4601,7 +4616,11 @@ impl GcpWorkerController {
                 bindings_count = resource_bindings.len(),
                 "Adding resource-scoped permissions to IAM policy"
             );
-            policy.bindings.extend(resource_bindings);
+            policy.bindings.extend(
+                resource_bindings
+                    .into_iter()
+                    .map(legacy_gcp_binding_from_local),
+            );
         }
 
         // Step 4: Apply the consolidated policy in one operation
@@ -4625,7 +4644,7 @@ impl GcpWorkerController {
         &self,
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
-        all_bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
+        all_bindings: &mut Vec<GcpBinding>,
     ) -> Result<()> {
         use alien_permissions::{generators::GcpRuntimePermissionsGenerator, PermissionContext};
 
@@ -4753,9 +4772,8 @@ impl GcpWorkerController {
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &alien_permissions::generators::GcpRuntimePermissionsGenerator,
         permission_context: &alien_permissions::PermissionContext,
-        all_bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
+        all_bindings: &mut Vec<GcpBinding>,
     ) -> Result<()> {
-        use alien_gcp_clients::iam::{Binding, Expr};
         use alien_permissions::BindingTarget;
 
         // Get the service account email for this profile
@@ -4789,10 +4807,10 @@ impl GcpWorkerController {
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
             for binding in selected_bindings {
-                all_bindings.push(Binding {
+                all_bindings.push(GcpBinding {
                     role: binding.role,
                     members: vec![member.clone()],
-                    condition: binding.condition.map(|cond| Expr {
+                    condition: binding.condition.map(|cond| GcpExpr {
                         title: Some(cond.title),
                         description: Some(cond.description),
                         expression: cond.expression,
@@ -5146,7 +5164,7 @@ impl GcpWorkerController {
 
         let iam_policy = alien_gcp_clients::iam::IamPolicy::builder()
             .version(1)
-            .bindings(vec![Binding {
+            .bindings(vec![alien_gcp_clients::iam::Binding {
                 role: "roles/pubsub.publisher".to_string(),
                 members: vec![gcs_service_agent],
                 condition: None,
@@ -5495,6 +5513,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::core::MockGcpIamApi;
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Ingress, Platform,
@@ -5503,7 +5522,6 @@ mod tests {
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
-    use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use alien_gcp_clients::pubsub::MockPubSubApi;
@@ -5708,8 +5726,11 @@ mod tests {
             .build()
     }
 
-    fn create_empty_iam_policy() -> IamPolicy {
-        IamPolicy::builder().version(1).bindings(vec![]).build()
+    fn create_empty_iam_policy() -> alien_gcp_clients::iam::IamPolicy {
+        alien_gcp_clients::iam::IamPolicy::builder()
+            .version(1)
+            .bindings(vec![])
+            .build()
     }
 
     fn setup_mock_client_for_creation_and_update(
@@ -5869,8 +5890,8 @@ mod tests {
         Arc::new(mock_cloudrun)
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        Arc::new(MockIamApi::new())
+    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
+        Arc::new(MockGcpIamApi::new())
     }
 
     fn setup_mock_service_provider(

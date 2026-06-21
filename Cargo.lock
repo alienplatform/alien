@@ -665,11 +665,13 @@ dependencies = [
  "google-cloud-auth",
  "google-cloud-firestore-admin-v1",
  "google-cloud-gax",
+ "google-cloud-iam-admin-v1",
  "google-cloud-iam-v1",
  "google-cloud-longrunning",
  "google-cloud-resourcemanager-v3",
  "google-cloud-scheduler-v1",
  "google-cloud-type",
+ "google-cloud-wkt",
  "heck 0.5.0",
  "http 1.4.0",
  "httpmock",
@@ -4641,6 +4643,25 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-opentelemetry",
+]
+
+[[package]]
+name = "google-cloud-iam-admin-v1"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7be0aaef1f1a710368727643b2f73010089b27609de11254f052ed22d0b7899"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-iam-v1",
+ "google-cloud-type",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tracing",
 ]
 
 [[package]]

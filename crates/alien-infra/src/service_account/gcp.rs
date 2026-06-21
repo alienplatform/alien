@@ -1,7 +1,10 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{GetPolicyOptions, ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    Binding, CreateServiceAccountRequest, GetPolicyOptions, IamPolicy, ResourceControllerContext,
+    ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
@@ -10,9 +13,6 @@ use alien_core::{
     ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_gcp_clients::iam::{
-    Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
-};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -23,6 +23,16 @@ use chrono::Utc;
 /// Generates the GCP service account ID from the ServiceAccount name.
 fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn is_gcp_not_found<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
 }
 
 #[controller]
@@ -306,12 +316,7 @@ impl GcpServiceAccountController {
                 Ok(_) => {
                     info!(config_id = %config.id, email = %service_account_email, "Service account deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     info!(config_id = %config.id, email = %service_account_email, "Service account already deleted");
                 }
                 Err(e) => {

@@ -37,11 +37,13 @@ gcp = [
     "dep:google-cloud-auth",
     "dep:google-cloud-firestore-admin-v1",
     "dep:google-cloud-gax",
+    "dep:google-cloud-iam-admin-v1",
     "dep:google-cloud-iam-v1",
     "dep:google-cloud-longrunning",
     "dep:google-cloud-resourcemanager-v3",
     "dep:google-cloud-scheduler-v1",
     "dep:google-cloud-type",
+    "dep:wkt",
 ]
 azure = [
     "dep:alien-azure-clients",
@@ -78,11 +80,13 @@ google-cloud-artifactregistry-v1 = { workspace = true, optional = true }
 google-cloud-auth = { workspace = true, optional = true }
 google-cloud-firestore-admin-v1 = { workspace = true, optional = true }
 google-cloud-gax = { workspace = true, optional = true }
+google-cloud-iam-admin-v1 = { workspace = true, optional = true }
 google-cloud-iam-v1 = { workspace = true, optional = true }
 google-cloud-longrunning = { workspace = true, optional = true }
 google-cloud-resourcemanager-v3 = { workspace = true, optional = true }
 google-cloud-scheduler-v1 = { workspace = true, optional = true }
 google-cloud-type = { workspace = true, optional = true }
+wkt = { workspace = true, optional = true }
 azure_core = { workspace = true, optional = true }
 azure_identity = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }

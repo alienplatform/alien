@@ -6,22 +6,18 @@
 use std::collections::HashSet;
 
 use crate::core::{
-    azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext, Scope,
+    azure_permissions_helper::AzurePermissionsHelper, Binding, CreateRoleRequest, Expr, IamPolicy,
+    ResourceControllerContext, Role, RoleLaunchStage, Scope,
 };
 use crate::error::{ErrorData, Result};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
 use tracing::{debug, info, warn};
 
-fn gcp_custom_role_matches(
-    existing: &alien_gcp_clients::iam::Role,
-    desired: &alien_gcp_clients::iam::Role,
-) -> bool {
+fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
     let mut existing_permissions = existing.included_permissions.clone();
     let mut desired_permissions = desired.included_permissions.clone();
     existing_permissions.sort();
@@ -32,6 +28,16 @@ fn gcp_custom_role_matches(
         && existing.stage == desired.stage
         && existing_permissions == desired_permissions
         && !existing.deleted.unwrap_or(false)
+}
+
+fn is_gcp_not_found<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
 }
 
 /// Helper for applying resource-scoped permissions across all platforms
@@ -317,22 +323,22 @@ impl ResourcePermissionsHelper {
                 "Ensuring GCP custom role exists"
             );
 
-            let role_request = alien_gcp_clients::iam::CreateRoleRequest::builder()
+            let role_request = CreateRoleRequest::builder()
                 .role(
-                    alien_gcp_clients::iam::Role::builder()
+                    Role::builder()
                         .title(custom_role.title.clone())
                         .description(custom_role.description.clone())
                         .included_permissions(custom_role.included_permissions.clone())
-                        .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
+                        .stage(RoleLaunchStage::Ga)
                         .build(),
                 )
                 .build();
 
-            let updated_role = alien_gcp_clients::iam::Role::builder()
+            let updated_role = Role::builder()
                 .title(custom_role.title.clone())
                 .description(custom_role.description.clone())
                 .included_permissions(custom_role.included_permissions.clone())
-                .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
+                .stage(RoleLaunchStage::Ga)
                 .build();
 
             match iam_client.get_role(custom_role.name.clone()).await {
@@ -385,12 +391,7 @@ impl ResourcePermissionsHelper {
                             })?;
                     }
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     iam_client
                         .create_role(role_id.clone(), role_request)
                         .await
@@ -466,12 +467,7 @@ impl ResourcePermissionsHelper {
                         "Deleted GCP custom role"
                     );
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     info!(
                         role_id = %role_id,
                         "GCP custom role already deleted"
@@ -622,10 +618,7 @@ impl ResourcePermissionsHelper {
             .map(|email| format!("deleted:serviceAccount:{email}?"))
     }
 
-    fn gcp_conditions_match(
-        left: &Option<alien_gcp_clients::iam::Expr>,
-        right: &Option<alien_gcp_clients::iam::Expr>,
-    ) -> bool {
+    fn gcp_conditions_match(left: &Option<Expr>, right: &Option<Expr>) -> bool {
         match (left, right) {
             (None, None) => true,
             (Some(left), Some(right)) => {
@@ -1593,7 +1586,7 @@ impl ResourcePermissionsHelper {
         all_bindings.push(Binding {
             role: binding.role,
             members: vec![member.to_string()],
-            condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+            condition: binding.condition.map(|cond| Expr {
                 expression: cond.expression,
                 title: Some(cond.title),
                 description: Some(cond.description),
@@ -1608,7 +1601,7 @@ impl ResourcePermissionsHelper {
         Binding {
             role: binding.role,
             members: binding.members,
-            condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+            condition: binding.condition.map(|cond| Expr {
                 expression: cond.expression,
                 title: Some(cond.title),
                 description: Some(cond.description),
@@ -1944,11 +1937,11 @@ mod tests {
 
     #[test]
     fn gcp_deleted_custom_role_does_not_match_desired_role() {
-        let desired = alien_gcp_clients::iam::Role::builder()
+        let desired = Role::builder()
             .title("Role".to_string())
             .description("Test role".to_string())
             .included_permissions(vec!["storage.objects.get".to_string()])
-            .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
+            .stage(RoleLaunchStage::Ga)
             .build();
         let mut deleted_existing = desired.clone();
         deleted_existing.deleted = Some(true);

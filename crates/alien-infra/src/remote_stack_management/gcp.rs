@@ -1,7 +1,10 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{GetPolicyOptions, ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    Binding, CreateServiceAccountRequest, Expr, GetPolicyOptions, IamPolicy,
+    ResourceControllerContext, ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
@@ -11,9 +14,6 @@ use alien_core::{
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_gcp_clients::iam::{
-    Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
-};
 use alien_macros::controller;
 #[cfg(test)]
 use alien_permissions::generators::GcpIamBinding;
@@ -26,6 +26,16 @@ use chrono::Utc;
 /// Generates the GCP service account ID for RemoteStackManagement.
 fn get_gcp_management_service_account_id(prefix: &str) -> String {
     format!("{}-management", prefix)
+}
+
+fn is_gcp_not_found<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    matches!(
+        error.code.as_str(),
+        "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
+    )
 }
 
 #[controller]
@@ -223,7 +233,7 @@ impl GcpRemoteStackManagementController {
                 new_bindings.push(Binding {
                     role: binding.role,
                     members: binding.members,
-                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                    condition: binding.condition.map(|cond| Expr {
                         expression: cond.expression,
                         title: Some(cond.title),
                         description: Some(cond.description),
@@ -590,12 +600,7 @@ impl GcpRemoteStackManagementController {
                 Ok(_) => {
                     info!(config_id = %config.id, email = %service_account_email, "Management service account deleted successfully");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if is_gcp_not_found(&e) => {
                     info!(config_id = %config.id, email = %service_account_email, "Management service account already deleted");
                 }
                 Err(e) => {
@@ -810,7 +815,7 @@ impl GcpRemoteStackManagementController {
                     new_bindings.push(Binding {
                         role: binding.role,
                         members: binding.members,
-                        condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                        condition: binding.condition.map(|cond| Expr {
                             expression: cond.expression,
                             title: Some(cond.title),
                             description: Some(cond.description),
