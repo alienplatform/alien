@@ -1,6 +1,9 @@
 mod core;
 pub use core::*;
 
+mod gcp_compute;
+pub use gcp_compute::*;
+
 mod error;
 pub use error::*;
 

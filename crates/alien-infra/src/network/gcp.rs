@@ -9,6 +9,11 @@
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::gcp_compute::{
+    Firewall, FirewallAllowed, FirewallDirection, NatIpAllocateOption, Network as GcpNetwork,
+    NetworkRoutingConfig, Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode,
+    SourceIpRangesToNat, SourceSubnetworkIpRangesToNat, Subnetwork,
+};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
@@ -16,10 +21,6 @@ use alien_core::{
     ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_gcp_clients::compute::{
-    Firewall, FirewallAllowed, FirewallDirection, Network as GcpNetwork, NetworkRoutingConfig,
-    Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode, SourceIpRangesToNat, Subnetwork,
-};
 use alien_macros::controller;
 use chrono::Utc;
 use tracing::{debug, info};
@@ -745,10 +746,8 @@ impl GcpNetworkController {
         // Add Cloud NAT configuration to router
         let nat_config = RouterNat::builder()
             .name(cloud_nat_name.clone())
-            .nat_ip_allocate_option(alien_gcp_clients::compute::NatIpAllocateOption::AutoOnly)
-            .source_subnetwork_ip_ranges_to_nat(
-                alien_gcp_clients::compute::SourceSubnetworkIpRangesToNat::ListOfSubnetworks,
-            )
+            .nat_ip_allocate_option(NatIpAllocateOption::AutoOnly)
+            .source_subnetwork_ip_ranges_to_nat(SourceSubnetworkIpRangesToNat::ListOfSubnetworks)
             .subnetworks(vec![RouterNatSubnetworkToNat::builder()
                 .name(subnetwork_self_link)
                 .source_ip_ranges_to_nat(vec![SourceIpRangesToNat::AllIpRanges])

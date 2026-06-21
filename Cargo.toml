@@ -190,6 +190,22 @@ form_urlencoded = "1.2.1"
 google-cloud-auth = "1.13.0"
 google-cloud-api-serviceusage-v1 = "1.12.0"
 google-cloud-artifactregistry-v1 = "1.11.0"
+google-cloud-compute-v1 = { version = "3.2.0", default-features = false, features = [
+  "default-rustls-provider",
+  "backend-services",
+  "firewalls",
+  "global-addresses",
+  "global-forwarding-rules",
+  "global-operations",
+  "networks",
+  "region-network-endpoint-groups",
+  "region-operations",
+  "routers",
+  "ssl-certificates",
+  "subnetworks",
+  "target-https-proxies",
+  "url-maps",
+] }
 google-cloud-firestore-admin-v1 = "1.12.0"
 google-cloud-gax = "1.11.0"
 google-cloud-longrunning = "1.11.0"

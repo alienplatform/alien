@@ -9,6 +9,7 @@ use crate::aws_sdk::{
     LambdaApi, S3Api, SqsApi, SsmApi,
 };
 use crate::error::Result;
+use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
     DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
@@ -27,7 +28,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError, IntoAlienErrorDirect};
 use alien_gcp_clients::{
     cloudrun::{CloudRunApi, CloudRunClient},
-    compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
     GcpClientConfig,
 };
 use azure_core::{
@@ -7536,10 +7536,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {
-        Ok(Arc::new(GcpComputeClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(OfficialGcpComputeClient::new(config.clone())))
     }
 
     fn get_gcp_cloud_scheduler_client(
@@ -9145,7 +9142,7 @@ fn gax_error_is_conflict(error: &google_cloud_gax::error::Error) -> bool {
             .is_some_and(|code| code == http::StatusCode::CONFLICT.as_u16())
 }
 
-fn gcp_credentials_from_alien_config(config: &GcpClientConfig) -> Result<Credentials> {
+pub(crate) fn gcp_credentials_from_alien_config(config: &GcpClientConfig) -> Result<Credentials> {
     gcp_credentials_from_alien_credentials(&config.credentials)
 }
 

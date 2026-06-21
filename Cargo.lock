@@ -663,6 +663,7 @@ dependencies = [
  "google-cloud-api-serviceusage-v1",
  "google-cloud-artifactregistry-v1",
  "google-cloud-auth",
+ "google-cloud-compute-v1",
  "google-cloud-firestore-admin-v1",
  "google-cloud-gax",
  "google-cloud-iam-admin-v1",
@@ -4567,6 +4568,25 @@ dependencies = [
  "time",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "google-cloud-compute-v1"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1009ac3a8ff59b293c3c960f5322f3cfe09146e42f5d40ce7c421013aa9ebf7"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-lro",
+ "google-cloud-rpc",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tracing",
 ]
 
 [[package]]

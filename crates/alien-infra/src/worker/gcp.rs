@@ -10,17 +10,17 @@ use crate::core::{
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::gcp_compute::{
+    Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
+    ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
+    NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
+    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
+};
 use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
     TrafficTargetAllocationType, VpcAccess, VpcEgress,
-};
-use alien_gcp_clients::compute::{
-    Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
-    ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
-    NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
-    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
@@ -5505,6 +5505,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::core::MockGcpIamApi;
+    use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Ingress, Platform,
@@ -5512,7 +5513,6 @@ mod tests {
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
-    use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use httpmock::{prelude::*, Mock};
@@ -5627,7 +5627,7 @@ mod tests {
         }
     }
 
-    fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockComputeApi> {
+    fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockGcpComputeApi> {
         fn completed_compute_operation() -> Operation {
             Operation {
                 name: Some("test-compute-operation".to_string()),
@@ -5636,7 +5636,7 @@ mod tests {
             }
         }
 
-        let mut mock = MockComputeApi::new();
+        let mut mock = MockGcpComputeApi::new();
         mock.expect_insert_ssl_certificate()
             .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_region_network_endpoint_group()
@@ -5886,7 +5886,7 @@ mod tests {
 
     fn setup_mock_service_provider(
         mock_cloudrun: Arc<MockCloudRunApi>,
-        mock_compute: Option<Arc<MockComputeApi>>,
+        mock_compute: Option<Arc<MockGcpComputeApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
