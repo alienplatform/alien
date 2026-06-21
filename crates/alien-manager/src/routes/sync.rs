@@ -707,6 +707,16 @@ mod tests {
     }
 
     #[test]
+    fn accepts_observe_only_running_state_without_desired_release() {
+        let deployment = deployment_record_with_state("pending", None);
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Running;
+
+        assert!(!agent_state.has_desired());
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
     fn returns_current_state_when_retry_is_pending() {
         let mut deployment = deployment_record_with_state(
             "provisioning-failed",
@@ -801,6 +811,13 @@ mod tests {
 
         assert_eq!(deployment_target_release_id(&deployment), Some("rel_test"));
         assert!(deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn observe_only_deployment_does_not_need_target() {
+        let deployment = deployment_record_with_state("running", None);
+
+        assert!(!deployment_needs_target(&deployment));
     }
 
     #[test]

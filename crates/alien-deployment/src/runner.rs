@@ -146,6 +146,17 @@ async fn run_step_loop_inner(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    if !state.has_desired() {
+        return Ok(RunnerResult {
+            loop_result: LoopResult {
+                stop_reason: LoopStopReason::NoWork,
+                outcome: LoopOutcome::Neutral,
+                final_status: state.status,
+            },
+            steps_executed: 0,
+        });
+    }
+
     for step_count in 1..=policy.max_steps {
         // Pre-step terminal check
         if !should_step_retryable_failure(state) {
@@ -667,6 +678,39 @@ mod tests {
 
         assert_eq!(result.steps_executed, 0);
         assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn observe_only_state_stops_without_transport_or_steps() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.status = DeploymentStatus::Running;
+        state.target_release = None;
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_running_refresh_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("observe-only deployment should stop before step execution");
+
+        assert_eq!(result.steps_executed, 0);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::NoWork);
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Neutral);
+        assert_eq!(result.loop_result.final_status, DeploymentStatus::Running);
         assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
     }
 
