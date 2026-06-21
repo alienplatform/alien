@@ -69,8 +69,7 @@ use aws_sdk_s3::{
         BucketLifecycleConfiguration as AwsBucketLifecycleConfiguration, BucketLocationConstraint,
         BucketVersioningStatus, CreateBucketConfiguration, Delete, ExpirationStatus,
         LifecycleExpiration as AwsLifecycleExpiration, LifecycleRule as AwsLifecycleRule,
-        LifecycleRuleFilter as AwsLifecycleRuleFilter, ObjectIdentifier,
-        PublicAccessBlockConfiguration as AwsPublicAccessBlockConfiguration, Tag as S3Tag, Tagging,
+        LifecycleRuleFilter as AwsLifecycleRuleFilter, ObjectIdentifier, Tag as S3Tag, Tagging,
         VersioningConfiguration,
     },
     Client as S3Client,
@@ -153,6 +152,7 @@ pub use aws_sdk_ecr::types::{
 };
 pub use aws_sdk_s3::types::{
     Event as S3Event, LambdaFunctionConfiguration, NotificationConfiguration,
+    PublicAccessBlockConfiguration as S3PublicAccessBlock,
 };
 
 pub use aws_sdk_lambda::operation::{
@@ -914,19 +914,6 @@ pub enum S3VersioningStatus {
     Enabled,
     /// Bucket versioning is suspended.
     Suspended,
-}
-
-/// S3 public access block configuration used by infra controllers.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct S3PublicAccessBlock {
-    /// Whether public ACLs are blocked.
-    pub block_public_acls: Option<bool>,
-    /// Whether public ACLs are ignored.
-    pub ignore_public_acls: Option<bool>,
-    /// Whether public bucket policies are blocked.
-    pub block_public_policy: Option<bool>,
-    /// Whether public buckets are restricted.
-    pub restrict_public_buckets: Option<bool>,
 }
 
 /// S3 lifecycle rule configuration used by infra controllers.
@@ -4226,16 +4213,9 @@ impl S3Api for S3Client {
         bucket_name: &str,
         config: S3PublicAccessBlock,
     ) -> Result<()> {
-        let configuration = AwsPublicAccessBlockConfiguration::builder()
-            .set_block_public_acls(config.block_public_acls)
-            .set_ignore_public_acls(config.ignore_public_acls)
-            .set_block_public_policy(config.block_public_policy)
-            .set_restrict_public_buckets(config.restrict_public_buckets)
-            .build();
-
         self.put_public_access_block()
             .bucket(bucket_name)
-            .public_access_block_configuration(configuration)
+            .public_access_block_configuration(config)
             .send()
             .await
             .into_alien_error()
@@ -4433,9 +4413,7 @@ impl S3Api for S3Client {
             .send()
             .await
         {
-            Ok(output) => output
-                .public_access_block_configuration()
-                .map(s3_public_access_block),
+            Ok(output) => output.public_access_block_configuration,
             Err(err) if is_s3_get_public_access_block_not_found(&err) => None,
             Err(err) => {
                 return Err(err
@@ -5679,17 +5657,6 @@ where
     error
         .and_then(ProvideErrorMetadata::code)
         .is_some_and(|code| codes.contains(&code))
-}
-
-fn s3_public_access_block(
-    configuration: &AwsPublicAccessBlockConfiguration,
-) -> S3PublicAccessBlock {
-    S3PublicAccessBlock {
-        block_public_acls: configuration.block_public_acls(),
-        ignore_public_acls: configuration.ignore_public_acls(),
-        block_public_policy: configuration.block_public_policy(),
-        restrict_public_buckets: configuration.restrict_public_buckets(),
-    }
 }
 
 fn s3_versioning_status(status: &BucketVersioningStatus) -> S3VersioningStatus {

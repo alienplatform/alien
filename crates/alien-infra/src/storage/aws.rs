@@ -789,19 +789,19 @@ fn emit_aws_s3_storage_heartbeat(
                 block_public_acls: metadata
                     .public_access_block
                     .as_ref()
-                    .and_then(|configuration| configuration.block_public_acls),
+                    .and_then(|configuration| configuration.block_public_acls()),
                 ignore_public_acls: metadata
                     .public_access_block
                     .as_ref()
-                    .and_then(|configuration| configuration.ignore_public_acls),
+                    .and_then(|configuration| configuration.ignore_public_acls()),
                 block_public_policy: metadata
                     .public_access_block
                     .as_ref()
-                    .and_then(|configuration| configuration.block_public_policy),
+                    .and_then(|configuration| configuration.block_public_policy()),
                 restrict_public_buckets: metadata
                     .public_access_block
                     .as_ref()
-                    .and_then(|configuration| configuration.restrict_public_buckets),
+                    .and_then(|configuration| configuration.restrict_public_buckets()),
                 bucket_policy_present: metadata.bucket_policy_present,
                 bucket_acl_present: metadata.bucket_acl_present,
             },
@@ -811,12 +811,12 @@ fn emit_aws_s3_storage_heartbeat(
 }
 
 fn public_access_block_config(blocked: bool) -> S3PublicAccessBlock {
-    S3PublicAccessBlock {
-        block_public_acls: Some(blocked),
-        ignore_public_acls: Some(blocked),
-        block_public_policy: Some(blocked),
-        restrict_public_buckets: Some(blocked),
-    }
+    S3PublicAccessBlock::builder()
+        .block_public_acls(blocked)
+        .ignore_public_acls(blocked)
+        .block_public_policy(blocked)
+        .restrict_public_buckets(blocked)
+        .build()
 }
 
 fn lifecycle_rule_configs(config: &Storage) -> Vec<S3LifecycleRuleConfig> {
@@ -1341,10 +1341,10 @@ mod tests {
         mock_s3
             .expect_put_public_access_block()
             .withf(|_bucket_name, config| {
-                config.block_public_acls == Some(false)
-                    && config.block_public_policy == Some(false)
-                    && config.ignore_public_acls == Some(false)
-                    && config.restrict_public_buckets == Some(false)
+                config.block_public_acls() == Some(false)
+                    && config.block_public_policy() == Some(false)
+                    && config.ignore_public_acls() == Some(false)
+                    && config.restrict_public_buckets() == Some(false)
             })
             .returning(|_, _| Ok(()));
 
