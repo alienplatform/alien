@@ -17,10 +17,11 @@ use crate::gcp_cloudrun::{
     Service, TrafficTarget, TrafficTargetAllocationType, VpcAccess, VpcEgress,
 };
 use crate::gcp_compute::{
-    Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
-    ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
-    NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
-    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
+    Address, AddressType, Backend, BackendService, BackendServiceLoadBalancingScheme,
+    BackendServiceProtocol, BalancingMode, ForwardingRule, ForwardingRuleLoadBalancingScheme,
+    ForwardingRuleProtocol, NetworkEndpointGroup, NetworkEndpointGroupCloudRun,
+    NetworkEndpointType, Operation as ComputeOperation, SslCertificate, SslCertificateSelfManaged,
+    SslCertificateType, TargetHttpsProxy, UrlMap,
 };
 use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -329,7 +330,7 @@ impl GcpWorkerController {
         resource_id: &str,
         operation_label: &str,
     ) -> Result<()> {
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -340,7 +341,7 @@ impl GcpWorkerController {
             }));
         }
 
-        if operation.is_done() {
+        if crate::gcp_compute::operation_is_done(&operation) {
             self.compute_operation_name = None;
             self.compute_operation_region = None;
             return Ok(());
@@ -385,7 +386,7 @@ impl GcpWorkerController {
             resource_id: Some(resource_id.to_string()),
         })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(
                 operation_name=%operation_name,
                 operation=%operation_label,
@@ -394,7 +395,7 @@ impl GcpWorkerController {
             return Ok(false);
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -774,17 +775,15 @@ impl GcpWorkerController {
         let ssl_cert_name =
             get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "cert");
 
-        let ssl_certificate = SslCertificate::builder()
-            .name(ssl_cert_name.clone())
-            .description(format!("SSL certificate for worker {}", worker_config.id))
-            .r#type("SELF_MANAGED".to_string())
-            .self_managed(
-                SslCertificateSelfManaged::builder()
-                    .certificate(certificate_chain.clone())
-                    .private_key(private_key.clone())
-                    .build(),
-            )
-            .build();
+        let ssl_certificate = SslCertificate::new()
+            .set_name(ssl_cert_name.clone())
+            .set_description(format!("SSL certificate for worker {}", worker_config.id))
+            .set_type(SslCertificateType::SelfManaged)
+            .set_self_managed(
+                SslCertificateSelfManaged::new()
+                    .set_certificate(certificate_chain.clone())
+                    .set_private_key(private_key.clone()),
+            );
 
         let operation = compute_client
             .insert_ssl_certificate(ssl_certificate)
@@ -880,16 +879,14 @@ impl GcpWorkerController {
         // Create serverless NEG pointing to Cloud Run service
         // According to GCP API: https://docs.cloud.google.com/compute/docs/reference/rest/v1/networkEndpointGroups
         // For serverless NEGs, we must specify cloud_run, app_engine, or cloud_function
-        let cloud_run_config = NetworkEndpointGroupCloudRun::builder()
-            .service(service_name.clone())
-            .build();
+        let cloud_run_config =
+            NetworkEndpointGroupCloudRun::new().set_service(service_name.clone());
 
-        let neg = NetworkEndpointGroup::builder()
-            .name(neg_name.clone())
-            .description(format!("Serverless NEG for worker {}", worker_config.id))
-            .network_endpoint_type(NetworkEndpointType::Serverless)
-            .cloud_run(cloud_run_config)
-            .build();
+        let neg = NetworkEndpointGroup::new()
+            .set_name(neg_name.clone())
+            .set_description(format!("Serverless NEG for worker {}", worker_config.id))
+            .set_network_endpoint_type(NetworkEndpointType::Serverless)
+            .set_cloud_run(cloud_run_config);
 
         let operation = compute_client
             .insert_region_network_endpoint_group(gcp_config.region.clone(), neg)
@@ -986,16 +983,14 @@ impl GcpWorkerController {
         );
 
         // Create backend service with serverless NEG (no health check for serverless)
-        let backend_service = BackendService::builder()
-            .name(backend_service_name.clone())
-            .description(format!("Backend service for worker {}", worker_config.id))
-            .protocol(BackendServiceProtocol::Https)
-            .load_balancing_scheme(LoadBalancingScheme::External)
-            .backends(vec![Backend::builder()
-                .group(neg_url)
-                .balancing_mode(BalancingMode::Utilization)
-                .build()])
-            .build();
+        let backend_service = BackendService::new()
+            .set_name(backend_service_name.clone())
+            .set_description(format!("Backend service for worker {}", worker_config.id))
+            .set_protocol(BackendServiceProtocol::Https)
+            .set_load_balancing_scheme(BackendServiceLoadBalancingScheme::External)
+            .set_backends([Backend::new()
+                .set_group(neg_url)
+                .set_balancing_mode(BalancingMode::Utilization)]);
 
         let operation = compute_client
             .insert_backend_service(backend_service)
@@ -1092,11 +1087,10 @@ impl GcpWorkerController {
         );
 
         // Create URL map routing to backend service
-        let url_map = UrlMap::builder()
-            .name(url_map_name.clone())
-            .description(format!("URL map for worker {}", worker_config.id))
-            .default_service(backend_service_url)
-            .build();
+        let url_map = UrlMap::new()
+            .set_name(url_map_name.clone())
+            .set_description(format!("URL map for worker {}", worker_config.id))
+            .set_default_service(backend_service_url);
 
         let operation = compute_client.insert_url_map(url_map).await.context(
             ErrorData::CloudPlatformError {
@@ -1199,12 +1193,11 @@ impl GcpWorkerController {
         );
 
         // Create HTTPS proxy with SSL certificate
-        let https_proxy = TargetHttpsProxy::builder()
-            .name(proxy_name.clone())
-            .description(format!("HTTPS proxy for worker {}", worker_config.id))
-            .url_map(url_map_url)
-            .ssl_certificates(vec![ssl_cert_url])
-            .build();
+        let https_proxy = TargetHttpsProxy::new()
+            .set_name(proxy_name.clone())
+            .set_description(format!("HTTPS proxy for worker {}", worker_config.id))
+            .set_url_map(url_map_url)
+            .set_ssl_certificates([ssl_cert_url]);
 
         let operation = compute_client
             .insert_target_https_proxy(https_proxy)
@@ -1289,11 +1282,10 @@ impl GcpWorkerController {
             get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "ip");
 
         // Create global static IP address
-        let address = Address::builder()
-            .name(address_name.clone())
-            .description(format!("Global IP for worker {}", worker_config.id))
-            .address_type(AddressType::External)
-            .build();
+        let address = Address::new()
+            .set_name(address_name.clone())
+            .set_description(format!("Global IP for worker {}", worker_config.id))
+            .set_address_type(AddressType::External);
 
         let operation = compute_client
             .insert_global_address(address)
@@ -1401,15 +1393,14 @@ impl GcpWorkerController {
         );
 
         // Create forwarding rule exposing HTTPS endpoint
-        let forwarding_rule = ForwardingRule::builder()
-            .name(forwarding_rule_name.clone())
-            .description(format!("Forwarding rule for worker {}", worker_config.id))
-            .ip_address(ip_address)
-            .ip_protocol(ForwardingRuleProtocol::Tcp)
-            .port_range("443-443".to_string())
-            .target(proxy_url)
-            .load_balancing_scheme(LoadBalancingScheme::External)
-            .build();
+        let forwarding_rule = ForwardingRule::new()
+            .set_name(forwarding_rule_name.clone())
+            .set_description(format!("Forwarding rule for worker {}", worker_config.id))
+            .set_ip_address(ip_address)
+            .set_ip_protocol(ForwardingRuleProtocol::Tcp)
+            .set_port_range("443-443")
+            .set_target(proxy_url)
+            .set_load_balancing_scheme(ForwardingRuleLoadBalancingScheme::External);
 
         let operation = compute_client
             .insert_global_forwarding_rule(forwarding_rule)
@@ -2126,17 +2117,15 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let ssl_certificate = SslCertificate::builder()
-            .name(ssl_cert_name.clone())
-            .description(format!("Renewed SSL certificate for worker {}", cfg.id))
-            .r#type("SELF_MANAGED".to_string())
-            .self_managed(
-                SslCertificateSelfManaged::builder()
-                    .certificate(certificate_chain.clone())
-                    .private_key(private_key.clone())
-                    .build(),
-            )
-            .build();
+        let ssl_certificate = SslCertificate::new()
+            .set_name(ssl_cert_name.clone())
+            .set_description(format!("Renewed SSL certificate for worker {}", cfg.id))
+            .set_type(SslCertificateType::SelfManaged)
+            .set_self_managed(
+                SslCertificateSelfManaged::new()
+                    .set_certificate(certificate_chain.clone())
+                    .set_private_key(private_key.clone()),
+            );
 
         match compute_client.insert_ssl_certificate(ssl_certificate).await {
             Ok(_) => {}
@@ -5552,11 +5541,9 @@ mod tests {
 
     fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockGcpComputeApi> {
         fn completed_compute_operation() -> Operation {
-            Operation {
-                name: Some("test-compute-operation".to_string()),
-                status: Some(OperationStatus::Done),
-                ..Default::default()
-            }
+            Operation::new()
+                .set_name("test-compute-operation")
+                .set_status(OperationStatus::Done)
         }
 
         let mut mock = MockGcpComputeApi::new();
@@ -5572,12 +5559,8 @@ mod tests {
             .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_global_address()
             .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_get_global_address().returning(|_| {
-            Ok(Address {
-                address: Some("203.0.113.1".to_string()),
-                ..Default::default()
-            })
-        });
+        mock.expect_get_global_address()
+            .returning(|_| Ok(Address::new().set_address("203.0.113.1")));
         mock.expect_insert_global_forwarding_rule()
             .returning(|_| Ok(completed_compute_operation()));
         mock.expect_delete_global_forwarding_rule()

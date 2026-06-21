@@ -1,7 +1,6 @@
 use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 use alien_core::GcpClientConfig;
 use alien_error::AlienError;
-use bon::Builder;
 use google_cloud_compute_v1::{
     client::{
         BackendServices as OfficialBackendServices, Firewalls as OfficialFirewalls,
@@ -13,23 +12,40 @@ use google_cloud_compute_v1::{
         SslCertificates as OfficialSslCertificates, Subnetworks as OfficialSubnetworks,
         TargetHttpsProxies as OfficialTargetHttpsProxies, UrlMaps as OfficialUrlMaps,
     },
-    model::{
-        Address as OfficialAddress, BackendService as OfficialBackendService,
-        Firewall as OfficialFirewall, ForwardingRule as OfficialForwardingRule,
-        Network as OfficialNetwork, NetworkEndpointGroup as OfficialNetworkEndpointGroup,
-        Router as OfficialRouter, SslCertificate as OfficialSslCertificate,
-        Subnetwork as OfficialSubnetwork,
-        TargetHttpsProxiesSetSslCertificatesRequest as OfficialSetSslCertificatesRequest,
-        TargetHttpsProxy as OfficialTargetHttpsProxy, UrlMap as OfficialUrlMap,
-    },
+    model::TargetHttpsProxiesSetSslCertificatesRequest as OfficialSetSslCertificatesRequest,
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use http::StatusCode;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
+
+pub use google_cloud_compute_v1::model::{
+    address::AddressType,
+    backend::BalancingMode,
+    backend_service::{
+        LoadBalancingScheme as BackendServiceLoadBalancingScheme,
+        Protocol as BackendServiceProtocol,
+    },
+    firewall::{Allowed as FirewallAllowed, Direction as FirewallDirection},
+    forwarding_rule::{
+        IPProtocol as ForwardingRuleProtocol,
+        LoadBalancingScheme as ForwardingRuleLoadBalancingScheme,
+    },
+    network_endpoint_group::NetworkEndpointType,
+    network_routing_config::RoutingMode,
+    operation::Status as OperationStatus,
+    router_nat::NatIpAllocateOption,
+    router_nat::SourceSubnetworkIpRangesToNat,
+    router_nat_subnetwork_to_nat::SourceIpRangesToNat,
+    ssl_certificate::Type as SslCertificateType,
+    Address, Backend, BackendService, Firewall, ForwardingRule, Network, NetworkEndpointGroup,
+    NetworkEndpointGroupCloudRun, NetworkRoutingConfig, Operation, Router, RouterNat,
+    RouterNatSubnetworkToNat, SslCertificate,
+    SslCertificateSelfManagedSslCertificate as SslCertificateSelfManaged, Subnetwork,
+    TargetHttpsProxy, UrlMap,
+};
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
@@ -138,528 +154,15 @@ pub trait GcpComputeApi: Send + Sync + std::fmt::Debug {
     ) -> CloudClientResult<Operation>;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Operation {
-    /// Unique identifier defined by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
-    /// Name of the operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Type of operation, such as insert or delete.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation_type: Option<String>,
-    /// URL of the resource modified by this operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_link: Option<String>,
-    /// Server-defined URL for this operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// User that requested the operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
-    /// Current operation status.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<OperationStatus>,
-    /// Progress from 0 to 100 when provided by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub progress: Option<i32>,
-    /// Operation start timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_time: Option<String>,
-    /// Operation end timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_time: Option<String>,
-    /// Operation insert timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub insert_time: Option<String>,
-    /// Zone URL for zonal operations.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub zone: Option<String>,
-    /// Region URL for regional operations.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
-    /// Human-readable operation description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// HTTP status code for failed operations.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_error_status_code: Option<i32>,
-    /// HTTP error message for failed operations.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_error_message: Option<String>,
-    /// Structured operation error details.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<OperationError>,
-    /// Resource kind.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+pub fn operation_is_done(operation: &Operation) -> bool {
+    matches!(operation.status, Some(OperationStatus::Done))
 }
 
-impl Operation {
-    pub fn is_done(&self) -> bool {
-        matches!(self.status, Some(OperationStatus::Done))
-    }
-
-    pub fn has_error(&self) -> bool {
-        self.error
-            .as_ref()
-            .is_some_and(|error| !error.errors.is_empty())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum OperationStatus {
-    Pending,
-    Running,
-    Done,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct OperationError {
-    /// Individual errors returned by Compute Engine.
-    #[builder(default)]
-    #[serde(default)]
-    pub errors: Vec<OperationErrorItem>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct OperationErrorItem {
-    /// Compute Engine error code.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    /// Request location related to the error.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-    /// Human-readable error message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Network {
-    /// Unique identifier defined by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
-    /// Network name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Network description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Server-defined network URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// Whether Compute Engine should auto-create subnetworks.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_create_subnetworks: Option<bool>,
-    /// Network routing configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub routing_config: Option<NetworkRoutingConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkRoutingConfig {
-    /// Routing mode for this VPC network.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub routing_mode: Option<RoutingMode>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RoutingMode {
-    Regional,
-    Global,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Subnetwork {
-    /// Unique identifier defined by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
-    /// Subnetwork name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Subnetwork description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Server-defined subnetwork URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// Parent network URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network: Option<String>,
-    /// Primary IPv4 CIDR range.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ip_cidr_range: Option<String>,
-    /// Whether private Google access is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub private_ip_google_access: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Router {
-    /// Unique identifier defined by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
-    /// Router name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Router description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Server-defined router URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// Parent region URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
-    /// Parent network URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network: Option<String>,
-    /// NAT configurations on this router.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nats: Vec<RouterNat>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct RouterNat {
-    /// NAT configuration name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Source subnetwork range selector.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_subnetwork_ip_ranges_to_nat: Option<SourceSubnetworkIpRangesToNat>,
-    /// Subnetworks covered by this NAT configuration.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub subnetworks: Vec<RouterNatSubnetworkToNat>,
-    /// NAT IP allocation option.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nat_ip_allocate_option: Option<NatIpAllocateOption>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum SourceSubnetworkIpRangesToNat {
-    AllSubnetworksAllIpRanges,
-    AllSubnetworksAllPrimaryIpRanges,
-    ListOfSubnetworks,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum NatIpAllocateOption {
-    AutoOnly,
-    ManualOnly,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct RouterNatSubnetworkToNat {
-    /// Subnetwork URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Source IP ranges to NAT.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_ip_ranges_to_nat: Vec<SourceIpRangesToNat>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum SourceIpRangesToNat {
-    AllIpRanges,
-    PrimaryIpRange,
-    ListOfSecondaryIpRanges,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Firewall {
-    /// Unique identifier defined by Compute Engine.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
-    /// Firewall rule name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Firewall rule description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Network URL this rule applies to.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network: Option<String>,
-    /// Rule priority.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<i32>,
-    /// Traffic direction.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direction: Option<FirewallDirection>,
-    /// Allowed traffic.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed: Vec<FirewallAllowed>,
-    /// Source CIDR ranges.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_ranges: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum FirewallDirection {
-    Ingress,
-    Egress,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct FirewallAllowed {
-    /// IP protocol.
-    #[serde(rename = "IPProtocol", skip_serializing_if = "Option::is_none")]
-    pub ip_protocol: Option<String>,
-    /// Ports to allow.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ports: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct BackendService {
-    /// Backend service name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Backend service description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Server-defined backend service URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_link: Option<String>,
-    /// Backends attached to this service.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub backends: Vec<Backend>,
-    /// Protocol used by the backend service.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<BackendServiceProtocol>,
-    /// Load balancing scheme.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_balancing_scheme: Option<LoadBalancingScheme>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Backend {
-    /// Backend group URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-    /// Balancing mode.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub balancing_mode: Option<BalancingMode>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum BalancingMode {
-    Utilization,
-    Rate,
-    Connection,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum BackendServiceProtocol {
-    Http,
-    Https,
-    Http2,
-    Tcp,
-    Ssl,
-    Grpc,
-    Unspecified,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum LoadBalancingScheme {
-    External,
-    Internal,
-    InternalSelfManaged,
-    InternalManaged,
-    ExternalManaged,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct UrlMap {
-    /// URL map name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// URL map description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Default backend service URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_service: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct TargetHttpsProxy {
-    /// Target HTTPS proxy name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Target HTTPS proxy description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// URL map URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url_map: Option<String>,
-    /// SSL certificate URLs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ssl_certificates: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct SslCertificate {
-    /// SSL certificate name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// SSL certificate description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Certificate type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub r#type: Option<String>,
-    /// Self-managed certificate data.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_managed: Option<SslCertificateSelfManaged>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct SslCertificateSelfManaged {
-    /// PEM certificate chain.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate: Option<String>,
-    /// PEM private key.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub private_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct Address {
-    /// Address name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Address description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Reserved IP address.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-    /// Address type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address_type: Option<AddressType>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum AddressType {
-    External,
-    Internal,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct ForwardingRule {
-    /// Forwarding rule name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Forwarding rule description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// IP address for this forwarding rule.
-    #[serde(rename = "IPAddress", skip_serializing_if = "Option::is_none")]
-    pub ip_address: Option<String>,
-    /// IP protocol.
-    #[serde(rename = "IPProtocol", skip_serializing_if = "Option::is_none")]
-    pub ip_protocol: Option<ForwardingRuleProtocol>,
-    /// Port range.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_range: Option<String>,
-    /// Target URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    /// Load balancing scheme.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_balancing_scheme: Option<LoadBalancingScheme>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ForwardingRuleProtocol {
-    Tcp,
-    Udp,
-    Esp,
-    Ah,
-    Sctp,
-    Icmp,
-    L3Default,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkEndpointGroup {
-    /// Network endpoint group name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Network endpoint group description.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Endpoint group type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_endpoint_type: Option<NetworkEndpointType>,
-    /// Cloud Run endpoint configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cloud_run: Option<NetworkEndpointGroupCloudRun>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkEndpointGroupCloudRun {
-    /// Cloud Run service name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service: Option<String>,
-    /// Cloud Run service tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tag: Option<String>,
-    /// URL mask for multi-service routing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url_mask: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum NetworkEndpointType {
-    GceVmIpPort,
-    NonGcpPrivateIpPort,
-    InternetIpPort,
-    InternetFqdnPort,
-    Serverless,
-    PrivateServiceConnect,
+pub fn operation_has_error(operation: &Operation) -> bool {
+    operation
+        .error
+        .as_ref()
+        .is_some_and(|error| !error.errors.is_empty())
 }
 
 pub struct OfficialGcpComputeClient {
@@ -828,7 +331,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "network", &network_name))
-            .and_then(from_official)
     }
 
     async fn insert_network(&self, network: Network) -> CloudClientResult<Operation> {
@@ -837,11 +339,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialNetwork>(network)?)
+            .set_body(network)
             .send()
             .await
             .map_err(|error| compute_error(error, "network", &name))
-            .and_then(from_official)
     }
 
     async fn delete_network(&self, network_name: String) -> CloudClientResult<Operation> {
@@ -853,7 +354,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "network", &network_name))
-            .and_then(from_official)
     }
 
     async fn get_subnetwork(
@@ -870,7 +370,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "subnetwork", &subnetwork_name))
-            .and_then(from_official)
     }
 
     async fn insert_subnetwork(
@@ -884,11 +383,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .insert()
             .set_project(self.config.project_id.clone())
             .set_region(region)
-            .set_body(to_official::<_, OfficialSubnetwork>(subnetwork)?)
+            .set_body(subnetwork)
             .send()
             .await
             .map_err(|error| compute_error(error, "subnetwork", &name))
-            .and_then(from_official)
     }
 
     async fn delete_subnetwork(
@@ -905,7 +403,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "subnetwork", &subnetwork_name))
-            .and_then(from_official)
     }
 
     async fn get_router(&self, region: String, router_name: String) -> CloudClientResult<Router> {
@@ -918,7 +415,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "router", &router_name))
-            .and_then(from_official)
     }
 
     async fn insert_router(&self, region: String, router: Router) -> CloudClientResult<Operation> {
@@ -928,11 +424,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .insert()
             .set_project(self.config.project_id.clone())
             .set_region(region)
-            .set_body(to_official::<_, OfficialRouter>(router)?)
+            .set_body(router)
             .send()
             .await
             .map_err(|error| compute_error(error, "router", &name))
-            .and_then(from_official)
     }
 
     async fn patch_router(
@@ -947,11 +442,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .set_project(self.config.project_id.clone())
             .set_region(region)
             .set_router(router_name.clone())
-            .set_body(to_official::<_, OfficialRouter>(router)?)
+            .set_body(router)
             .send()
             .await
             .map_err(|error| compute_error(error, "router", &router_name))
-            .and_then(from_official)
     }
 
     async fn delete_router(
@@ -968,7 +462,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "router", &router_name))
-            .and_then(from_official)
     }
 
     async fn insert_firewall(&self, firewall: Firewall) -> CloudClientResult<Operation> {
@@ -977,11 +470,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialFirewall>(firewall)?)
+            .set_body(firewall)
             .send()
             .await
             .map_err(|error| compute_error(error, "firewall", &name))
-            .and_then(from_official)
     }
 
     async fn delete_firewall(&self, firewall_name: String) -> CloudClientResult<Operation> {
@@ -993,7 +485,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "firewall", &firewall_name))
-            .and_then(from_official)
     }
 
     async fn get_global_operation(&self, operation_name: String) -> CloudClientResult<Operation> {
@@ -1005,7 +496,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "globalOperation", &operation_name))
-            .and_then(from_official)
     }
 
     async fn get_region_operation(
@@ -1022,7 +512,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "regionOperation", &operation_name))
-            .and_then(from_official)
     }
 
     async fn insert_backend_service(
@@ -1034,11 +523,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialBackendService>(backend_service)?)
+            .set_body(backend_service)
             .send()
             .await
             .map_err(|error| compute_error(error, "backendService", &name))
-            .and_then(from_official)
     }
 
     async fn delete_backend_service(
@@ -1053,7 +541,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "backendService", &backend_service_name))
-            .and_then(from_official)
     }
 
     async fn insert_url_map(&self, url_map: UrlMap) -> CloudClientResult<Operation> {
@@ -1062,11 +549,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialUrlMap>(url_map)?)
+            .set_body(url_map)
             .send()
             .await
             .map_err(|error| compute_error(error, "urlMap", &name))
-            .and_then(from_official)
     }
 
     async fn delete_url_map(&self, url_map_name: String) -> CloudClientResult<Operation> {
@@ -1078,7 +564,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "urlMap", &url_map_name))
-            .and_then(from_official)
     }
 
     async fn insert_target_https_proxy(
@@ -1090,13 +575,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialTargetHttpsProxy>(
-                target_https_proxy,
-            )?)
+            .set_body(target_https_proxy)
             .send()
             .await
             .map_err(|error| compute_error(error, "targetHttpsProxy", &name))
-            .and_then(from_official)
     }
 
     async fn set_target_https_proxy_ssl_certificates(
@@ -1115,7 +597,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "targetHttpsProxy", &target_https_proxy_name))
-            .and_then(from_official)
     }
 
     async fn delete_target_https_proxy(
@@ -1130,7 +611,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "targetHttpsProxy", &target_https_proxy_name))
-            .and_then(from_official)
     }
 
     async fn insert_ssl_certificate(
@@ -1142,11 +622,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialSslCertificate>(ssl_certificate)?)
+            .set_body(ssl_certificate)
             .send()
             .await
             .map_err(|error| compute_error(error, "sslCertificate", &name))
-            .and_then(from_official)
     }
 
     async fn delete_ssl_certificate(
@@ -1161,7 +640,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "sslCertificate", &ssl_certificate_name))
-            .and_then(from_official)
     }
 
     async fn get_global_address(&self, address_name: String) -> CloudClientResult<Address> {
@@ -1173,7 +651,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "globalAddress", &address_name))
-            .and_then(from_official)
     }
 
     async fn insert_global_address(&self, address: Address) -> CloudClientResult<Operation> {
@@ -1182,11 +659,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialAddress>(address)?)
+            .set_body(address)
             .send()
             .await
             .map_err(|error| compute_error(error, "globalAddress", &name))
-            .and_then(from_official)
     }
 
     async fn delete_global_address(&self, address_name: String) -> CloudClientResult<Operation> {
@@ -1198,7 +674,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "globalAddress", &address_name))
-            .and_then(from_official)
     }
 
     async fn insert_global_forwarding_rule(
@@ -1210,11 +685,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .await?
             .insert()
             .set_project(self.config.project_id.clone())
-            .set_body(to_official::<_, OfficialForwardingRule>(forwarding_rule)?)
+            .set_body(forwarding_rule)
             .send()
             .await
             .map_err(|error| compute_error(error, "globalForwardingRule", &name))
-            .and_then(from_official)
     }
 
     async fn delete_global_forwarding_rule(
@@ -1229,7 +703,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .send()
             .await
             .map_err(|error| compute_error(error, "globalForwardingRule", &forwarding_rule_name))
-            .and_then(from_official)
     }
 
     async fn insert_region_network_endpoint_group(
@@ -1243,13 +716,10 @@ impl GcpComputeApi for OfficialGcpComputeClient {
             .insert()
             .set_project(self.config.project_id.clone())
             .set_region(region)
-            .set_body(to_official::<_, OfficialNetworkEndpointGroup>(
-                network_endpoint_group,
-            )?)
+            .set_body(network_endpoint_group)
             .send()
             .await
             .map_err(|error| compute_error(error, "regionNetworkEndpointGroup", &name))
-            .and_then(from_official)
     }
 
     async fn delete_region_network_endpoint_group(
@@ -1272,7 +742,6 @@ impl GcpComputeApi for OfficialGcpComputeClient {
                     &network_endpoint_group_name,
                 )
             })
-            .and_then(from_official)
     }
 }
 
@@ -1386,30 +855,6 @@ impl_compute_client_builder!(
     google_cloud_compute_v1::builder::region_network_endpoint_groups::ClientBuilder,
     OfficialRegionNetworkEndpointGroups
 );
-
-fn to_official<T, U>(value: T) -> CloudClientResult<U>
-where
-    T: Serialize,
-    U: DeserializeOwned,
-{
-    let value = serde_json::to_value(value).map_err(generic_compute_conversion_error)?;
-    serde_json::from_value(value).map_err(generic_compute_conversion_error)
-}
-
-fn from_official<T, U>(value: T) -> CloudClientResult<U>
-where
-    T: Serialize,
-    U: DeserializeOwned,
-{
-    let value = serde_json::to_value(value).map_err(generic_compute_conversion_error)?;
-    serde_json::from_value(value).map_err(generic_compute_conversion_error)
-}
-
-fn generic_compute_conversion_error(error: serde_json::Error) -> AlienError<CloudClientErrorData> {
-    AlienError::new(CloudClientErrorData::GenericError {
-        message: format!("Failed to convert GCP Compute model: {error}"),
-    })
-}
 
 fn compute_error(
     error: google_cloud_gax::error::Error,

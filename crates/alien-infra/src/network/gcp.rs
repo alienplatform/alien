@@ -355,14 +355,13 @@ impl GcpNetworkController {
 
         // Create custom-mode VPC (we control subnets)
         let network_description = format!("Runtime-managed VPC for {}", ctx.resource_prefix);
-        let network = GcpNetwork::builder()
-            .name(network_name.clone())
-            .description(network_description.clone())
-            .auto_create_subnetworks(false)
-            .routing_config(NetworkRoutingConfig {
-                routing_mode: Some(RoutingMode::Regional),
-            })
-            .build();
+        let network = GcpNetwork::new()
+            .set_name(network_name.clone())
+            .set_description(network_description.clone())
+            .set_auto_create_subnetworks(false)
+            .set_routing_config(
+                NetworkRoutingConfig::new().set_routing_mode(RoutingMode::Regional),
+            );
 
         let operation = match compute_client.insert_network(network).await {
             Ok(operation) => operation,
@@ -441,7 +440,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Network creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -449,7 +448,7 @@ impl GcpNetworkController {
             });
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -508,16 +507,15 @@ impl GcpNetworkController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let subnetwork = Subnetwork::builder()
-            .name(subnetwork_name.clone())
-            .description(format!(
+        let subnetwork = Subnetwork::new()
+            .set_name(subnetwork_name.clone())
+            .set_description(format!(
                 "Runtime-managed subnet for {}",
                 ctx.resource_prefix
             ))
-            .network(network_self_link)
-            .ip_cidr_range(cidr_block)
-            .private_ip_google_access(true)
-            .build();
+            .set_network(network_self_link)
+            .set_ip_cidr_range(cidr_block)
+            .set_private_ip_google_access(true);
 
         let operation = compute_client
             .insert_subnetwork(region.clone(), subnetwork)
@@ -563,7 +561,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Subnetwork creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -571,7 +569,7 @@ impl GcpNetworkController {
             });
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -626,14 +624,13 @@ impl GcpNetworkController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let router = Router::builder()
-            .name(router_name.clone())
-            .description(format!(
+        let router = Router::new()
+            .set_name(router_name.clone())
+            .set_description(format!(
                 "Runtime-managed router for {}",
                 ctx.resource_prefix
             ))
-            .network(network_self_link)
-            .build();
+            .set_network(network_self_link);
 
         let operation = compute_client
             .insert_router(region.clone(), router)
@@ -679,7 +676,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Router creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -687,7 +684,7 @@ impl GcpNetworkController {
             });
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -744,15 +741,15 @@ impl GcpNetworkController {
             })?;
 
         // Add Cloud NAT configuration to router
-        let nat_config = RouterNat::builder()
-            .name(cloud_nat_name.clone())
-            .nat_ip_allocate_option(NatIpAllocateOption::AutoOnly)
-            .source_subnetwork_ip_ranges_to_nat(SourceSubnetworkIpRangesToNat::ListOfSubnetworks)
-            .subnetworks(vec![RouterNatSubnetworkToNat::builder()
-                .name(subnetwork_self_link)
-                .source_ip_ranges_to_nat(vec![SourceIpRangesToNat::AllIpRanges])
-                .build()])
-            .build();
+        let nat_config = RouterNat::new()
+            .set_name(cloud_nat_name.clone())
+            .set_nat_ip_allocate_option(NatIpAllocateOption::AutoOnly)
+            .set_source_subnetwork_ip_ranges_to_nat(
+                SourceSubnetworkIpRangesToNat::ListOfSubnetworks,
+            )
+            .set_subnetworks([RouterNatSubnetworkToNat::new()
+                .set_name(subnetwork_self_link)
+                .set_source_ip_ranges_to_nat([SourceIpRangesToNat::AllIpRanges])]);
 
         router.nats = vec![nat_config];
 
@@ -800,7 +797,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Cloud NAT creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -808,7 +805,7 @@ impl GcpNetworkController {
             });
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -851,28 +848,21 @@ impl GcpNetworkController {
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
         // Create firewall rule allowing internal traffic
-        let firewall = Firewall::builder()
-            .name(firewall_name.clone())
-            .description(format!(
+        let firewall = Firewall::new()
+            .set_name(firewall_name.clone())
+            .set_description(format!(
                 "Allow internal traffic for {}",
                 ctx.resource_prefix
             ))
-            .network(network_self_link)
-            .direction(FirewallDirection::Ingress)
-            .source_ranges(vec![cidr_block])
-            .allowed(vec![
-                FirewallAllowed::builder()
-                    .ip_protocol("tcp".to_string())
-                    .build(),
-                FirewallAllowed::builder()
-                    .ip_protocol("udp".to_string())
-                    .build(),
-                FirewallAllowed::builder()
-                    .ip_protocol("icmp".to_string())
-                    .build(),
+            .set_network(network_self_link)
+            .set_direction(FirewallDirection::Ingress)
+            .set_source_ranges([cidr_block])
+            .set_allowed([
+                FirewallAllowed::new().set_ip_protocol("tcp"),
+                FirewallAllowed::new().set_ip_protocol("udp"),
+                FirewallAllowed::new().set_ip_protocol("icmp"),
             ])
-            .priority(1000)
-            .build();
+            .set_priority(1000);
 
         let operation = compute_client.insert_firewall(firewall).await.context(
             ErrorData::InfrastructureError {
@@ -916,7 +906,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Firewall creation still in progress");
             return Ok(HandlerAction::Stay {
                 max_times: 60,
@@ -924,7 +914,7 @@ impl GcpNetworkController {
             });
         }
 
-        if operation.has_error() {
+        if crate::gcp_compute::operation_has_error(&operation) {
             let error_msg = operation
                 .error
                 .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
@@ -1137,7 +1127,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
                 max_times: 60,
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
@@ -1248,7 +1238,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
                 max_times: 60,
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
@@ -1326,7 +1316,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
                 max_times: 60,
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
@@ -1404,7 +1394,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
                 max_times: 60,
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
@@ -1480,7 +1470,7 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        if !operation.is_done() {
+        if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
                 max_times: 60,
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
