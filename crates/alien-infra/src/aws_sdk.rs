@@ -68,7 +68,7 @@ use aws_sdk_iam::{
     Client as IamClient,
 };
 use aws_sdk_lambda::{
-    types::{Architecture as AwsLambdaArchitecture, FunctionUrlAuthType, PackageType},
+    types::{Architecture as AwsLambdaArchitecture, PackageType},
     Client as LambdaClient,
 };
 use aws_sdk_s3::{
@@ -120,6 +120,9 @@ pub use aws_sdk_acm::{
 pub type ReimportCertificateRequest = ImportCertificateRequest;
 
 pub use aws_sdk_lambda::operation::{
+    add_permission::{
+        AddPermissionInput as AddPermissionRequest, AddPermissionOutput as AddPermissionResponse,
+    },
     create_event_source_mapping::{
         CreateEventSourceMappingInput as CreateEventSourceMappingRequest,
         CreateEventSourceMappingOutput as CreateEventSourceMappingResponse,
@@ -328,30 +331,6 @@ pub struct FunctionConfiguration {
     pub last_update_status: Option<String>,
     /// KMS key ARN.
     pub kms_key_arn: Option<String>,
-}
-
-/// Lambda add-permission request.
-#[derive(Debug, Clone, Builder)]
-pub struct AddPermissionRequest {
-    /// Statement ID.
-    pub statement_id: String,
-    /// Permission action.
-    pub action: String,
-    /// Principal granted permission.
-    pub principal: String,
-    /// Optional function URL auth type condition.
-    pub function_url_auth_type: Option<String>,
-    /// Optional source ARN condition.
-    pub source_arn: Option<String>,
-    /// Optional source account condition.
-    pub source_account: Option<String>,
-}
-
-/// Lambda add-permission response.
-#[derive(Debug, Clone)]
-pub struct AddPermissionResponse {
-    /// Serialized policy statement returned by Lambda.
-    pub statement: Option<String>,
 }
 
 /// API Gateway V2 create API request.
@@ -1842,11 +1821,7 @@ pub trait LambdaApi: Send + Sync {
         request: CreateFunctionRequest,
     ) -> Result<FunctionConfiguration>;
     /// Add an invocation permission statement.
-    async fn add_permission(
-        &self,
-        function_name: &str,
-        request: AddPermissionRequest,
-    ) -> Result<AddPermissionResponse>;
+    async fn add_permission(&self, request: AddPermissionRequest) -> Result<AddPermissionResponse>;
     /// Update Lambda function code.
     async fn update_function_code(
         &self,
@@ -2860,35 +2835,35 @@ impl LambdaApi for LambdaClient {
         Ok(function_configuration_from_create_output(output))
     }
 
-    async fn add_permission(
-        &self,
-        function_name: &str,
-        request: AddPermissionRequest,
-    ) -> Result<AddPermissionResponse> {
+    async fn add_permission(&self, request: AddPermissionRequest) -> Result<AddPermissionResponse> {
+        let function_name = request.function_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "AddPermission request did not include functionName".to_string(),
+                resource_id: None,
+            })
+        })?;
         let output = lambda_result(
             self.add_permission()
-                .function_name(function_name)
-                .statement_id(request.statement_id.clone())
-                .action(request.action)
-                .principal(request.principal)
-                .set_function_url_auth_type(
-                    request
-                        .function_url_auth_type
-                        .as_deref()
-                        .map(FunctionUrlAuthType::from),
-                )
+                .set_function_name(request.function_name)
+                .set_statement_id(request.statement_id)
+                .set_action(request.action)
+                .set_principal(request.principal)
                 .set_source_arn(request.source_arn)
                 .set_source_account(request.source_account)
+                .set_event_source_token(request.event_source_token)
+                .set_qualifier(request.qualifier)
+                .set_revision_id(request.revision_id)
+                .set_principal_org_id(request.principal_org_id)
+                .set_function_url_auth_type(request.function_url_auth_type)
+                .set_invoked_via_function_url(request.invoked_via_function_url)
                 .send()
                 .await,
             "AddPermission",
             "LambdaFunction",
-            function_name,
+            &function_name,
         )?;
 
-        Ok(AddPermissionResponse {
-            statement: output.statement,
-        })
+        Ok(output)
     }
 
     async fn update_function_code(

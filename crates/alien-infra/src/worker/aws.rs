@@ -1104,13 +1104,19 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
 
         let request = AddPermissionRequest::builder()
-            .statement_id("ApiGatewayInvoke".to_string())
-            .action("lambda:InvokeFunction".to_string())
-            .principal("apigateway.amazonaws.com".to_string())
-            .build();
+            .function_name(aws_worker_name.clone())
+            .statement_id("ApiGatewayInvoke")
+            .action("lambda:InvokeFunction")
+            .principal("apigateway.amazonaws.com")
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda API Gateway permission request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         client
-            .add_permission(&aws_worker_name, request)
+            .add_permission(request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to add API Gateway permission".to_string(),
@@ -1437,16 +1443,19 @@ impl AwsWorkerController {
                 let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
                 let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
+                    .function_name(worker_name)
                     .statement_id(statement_id.clone())
-                    .action("lambda:InvokeFunction".to_string())
-                    .principal("s3.amazonaws.com".to_string())
+                    .action("lambda:InvokeFunction")
+                    .principal("s3.amazonaws.com")
                     .source_arn(format!("arn:aws:s3:::{}", bucket_name))
-                    .build();
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid Lambda S3 permission request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
+                match lambda_client.add_permission(permission_request).await {
                     Ok(_) => {}
                     Err(e) if is_remote_resource_conflict(&e) => {
                         info!(
@@ -1596,16 +1605,19 @@ impl AwsWorkerController {
                 let statement_id = format!("{}-eb-{}", worker_name, index);
                 let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
+                    .function_name(worker_name)
                     .statement_id(statement_id.clone())
-                    .action("lambda:InvokeFunction".to_string())
-                    .principal("events.amazonaws.com".to_string())
+                    .action("lambda:InvokeFunction")
+                    .principal("events.amazonaws.com")
                     .source_arn(rule_arn)
-                    .build();
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Invalid Lambda EventBridge permission request".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
+                match lambda_client.add_permission(permission_request).await {
                     Ok(_) => {}
                     Err(e) if is_remote_resource_conflict(&e) => {
                         info!(
@@ -2812,16 +2824,19 @@ impl AwsWorkerController {
                     let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                     let permission_request = AddPermissionRequest::builder()
+                        .function_name(worker_name)
                         .statement_id(statement_id.clone())
-                        .action("lambda:InvokeFunction".to_string())
-                        .principal("s3.amazonaws.com".to_string())
+                        .action("lambda:InvokeFunction")
+                        .principal("s3.amazonaws.com")
                         .source_arn(format!("arn:aws:s3:::{}", bucket_name))
-                        .build();
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Invalid Lambda S3 permission request".to_string(),
+                            resource_id: Some(current_config.id.clone()),
+                        })?;
 
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
-                    {
+                    match lambda_client.add_permission(permission_request).await {
                         Ok(_) => {}
                         Err(e) if is_remote_resource_conflict(&e) => {
                             info!(
@@ -2928,16 +2943,19 @@ impl AwsWorkerController {
                     let statement_id = format!("{}-eb-{}", worker_name, index);
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                     let permission_request = AddPermissionRequest::builder()
+                        .function_name(worker_name)
                         .statement_id(statement_id.clone())
-                        .action("lambda:InvokeFunction".to_string())
-                        .principal("events.amazonaws.com".to_string())
+                        .action("lambda:InvokeFunction")
+                        .principal("events.amazonaws.com")
                         .source_arn(rule_arn)
-                        .build();
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Invalid Lambda EventBridge permission request".to_string(),
+                            resource_id: Some(current_config.id.clone()),
+                        })?;
 
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
-                    {
+                    match lambda_client.add_permission(permission_request).await {
                         Ok(_) => {}
                         Err(e) if is_remote_resource_conflict(&e) => {
                             info!(
@@ -4232,7 +4250,7 @@ mod tests {
         if has_url {
             mock_lambda
                 .expect_add_permission()
-                .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
+                .returning(|_| Ok(AddPermissionResponse::builder().build()));
 
             let worker_name_for_self_binding = worker_name.clone();
             mock_lambda
@@ -4300,7 +4318,7 @@ mod tests {
         if has_url {
             mock_lambda
                 .expect_add_permission()
-                .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
+                .returning(|_| Ok(AddPermissionResponse::builder().build()));
 
             // Mock update_function_configuration for self-binding env var update
             let worker_name_for_config_update = worker_name.clone();
@@ -4675,12 +4693,12 @@ mod tests {
         // Validate API Gateway permission is added with the correct apigateway principal
         mock_lambda
             .expect_add_permission()
-            .withf(|_, request| {
-                request.statement_id == "ApiGatewayInvoke"
-                    && request.action == "lambda:InvokeFunction"
-                    && request.principal == "apigateway.amazonaws.com"
+            .withf(|request| {
+                request.statement_id.as_deref() == Some("ApiGatewayInvoke")
+                    && request.action.as_deref() == Some("lambda:InvokeFunction")
+                    && request.principal.as_deref() == Some("apigateway.amazonaws.com")
             })
-            .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
+            .returning(|_| Ok(AddPermissionResponse::builder().build()));
 
         // Mock self-binding env var update
         let worker_name_for_config_update = worker_name.clone();
