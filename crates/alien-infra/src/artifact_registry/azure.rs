@@ -4,8 +4,7 @@ use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    registry_properties, sku, AzureContainerRegistryResource, OperationResult, Registry,
-    RegistryProperties, ResourceControllerContext, Sku,
+    AzureContainerRegistryResource, OperationResult, Registry, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -13,6 +12,9 @@ use alien_core::{
     ArtifactRegistryOutputs, AzureContainerRegistryHeartbeatData, HeartbeatBackend, ObservedHealth,
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
+};
+use azure_mgmt_containerregistry::package_2023_11_preview::models::{
+    registry_properties, sku, RegistryProperties, Sku,
 };
 use chrono::Utc;
 

@@ -44,9 +44,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     RoleDefinitionProperties,
 };
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::{
-    encryption_property, network_rule_set, registry_properties, sku, EncryptionProperty,
-    KeyVaultProperties, NetworkRuleSet, Policies, Registry, RegistryProperties,
-    Resource as AzureContainerRegistryResource, Sku,
+    Registry, Resource as AzureContainerRegistryResource,
 };
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     Vault as AzureKeyVault, VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
