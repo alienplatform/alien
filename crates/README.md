@@ -36,16 +36,14 @@
 | [alien-sdk](./alien-sdk/) | Public Rust SDK for Alien applications — re-exports alien-bindings |
 | [alien-agent](./alien-agent/) | Pull-model agent — syncs with manager, runs deployments in remote environments |
 
-## Cloud Clients
+## Cloud Client Support
 
-Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cloud auth (AWS SigV4, GCP JWT/Bearer, Azure token). Not wrappers around official cloud SDKs — minimal dependencies, WASM-compatible, trait-based for testability.
+Shared cloud-client utilities and configuration used by the official AWS, GCP, Azure, and Kubernetes SDK integrations.
 
 | Crate | Description |
 |-------|-------------|
 | [alien-client-core](./alien-client-core/) | Shared HTTP utilities, retry logic, and response handling |
 | [alien-client-config](./alien-client-config/) | Credential loading and configuration across AWS, GCP, Azure, Kubernetes |
-| [alien-gcp-clients](./alien-gcp-clients/) | GCP — Cloud Run, GCS, Firestore, Pub/Sub, IAM, Artifact Registry, Compute, and more |
-| [alien-azure-clients](./alien-azure-clients/) | Azure — Container Apps, Blob, Service Bus, Key Vault, VMSS, Managed Identity, and more |
 
 ## CLI
 
