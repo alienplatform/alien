@@ -53,6 +53,44 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub azure_location: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorPermission {
+    /// Namespaced, read-only workload observation.
+    Observe,
+}
+
+impl OperatorPermission {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorScope {
+    pub namespaces: Vec<String>,
+}
+
+impl OperatorScope {
+    pub fn single_namespace(namespace: impl Into<String>) -> Self {
+        Self {
+            namespaces: vec![namespace.into()],
+        }
+    }
+}
+
+pub struct OperatorManifestOptions<'a> {
+    pub manager_url: &'a str,
+    pub group_token: &'a str,
+    pub encryption_key: &'a str,
+    pub image: &'a str,
+    pub namespace: &'a str,
+    pub scope: OperatorScope,
+    pub permission: OperatorPermission,
+    pub release_name: &'a str,
+}
+
 /// Generate a Helm chart for `stack`.
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
     let chart_name = sanitize_chart_name(&options.chart_name);
@@ -142,6 +180,49 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         name: chart_name,
         files,
     })
+}
+
+pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
+    validate_runtime_encryption_key(options.encryption_key)?;
+    validate_operator_scope(&options.scope)?;
+
+    let base_name = sanitize_chart_name(options.release_name);
+    let operator_name = format!("{base_name}-operator");
+    let identity_pvc_name = format!("{operator_name}-identity");
+    let namespace = options.namespace;
+    let observed_namespace = &options.scope.namespaces[0];
+    let labels = operator_labels(&base_name);
+
+    let mut docs = Vec::new();
+    docs.push(operator_service_account_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
+    docs.push(operator_role_doc(namespace, &operator_name, &labels));
+    docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
+    docs.push(operator_secret_doc(
+        namespace,
+        &operator_name,
+        options.group_token,
+        options.encryption_key,
+        &labels,
+    ));
+    docs.push(operator_identity_pvc_doc(
+        namespace,
+        &identity_pvc_name,
+        &labels,
+    ));
+    docs.push(operator_deployment_doc(
+        namespace,
+        &operator_name,
+        &identity_pvc_name,
+        &options,
+        observed_namespace,
+        &labels,
+    ));
+
+    Ok(ensure_trailing_newline(docs.join("---\n")))
 }
 
 /// Render one complete values file from registered deployment state.
@@ -260,6 +341,297 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
     Err(AlienError::new(ErrorData::GenericError {
         message: "runtime encryption key must be exactly 64 hex characters".to_string(),
     }))
+}
+
+fn validate_operator_scope(scope: &OperatorScope) -> Result<()> {
+    match scope.namespaces.as_slice() {
+        [namespace] if !namespace.trim().is_empty() => Ok(()),
+        [_] => Err(AlienError::new(ErrorData::GenericError {
+            message: "operator scope namespace must not be empty".to_string(),
+        })),
+        [] => Err(AlienError::new(ErrorData::GenericError {
+            message: "operator scope must include one namespace".to_string(),
+        })),
+        _ => Err(AlienError::new(ErrorData::GenericError {
+            message: "operator manifest supports exactly one namespace in v1".to_string(),
+        })),
+    }
+}
+
+fn operator_labels(base_name: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("app.kubernetes.io/name".to_string(), "operator".to_string()),
+        (
+            "app.kubernetes.io/instance".to_string(),
+            base_name.to_string(),
+        ),
+        (
+            "app.kubernetes.io/component".to_string(),
+            "operator".to_string(),
+        ),
+        (
+            "app.kubernetes.io/managed-by".to_string(),
+            "kubectl".to_string(),
+        ),
+    ])
+}
+
+fn operator_service_account_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, operator_name, labels);
+    yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        operator_name,
+        labels,
+    );
+    yaml.push_str(
+        r#"rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+"#,
+    );
+    yaml
+}
+
+fn operator_rolebinding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        operator_name,
+        labels,
+    );
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(namespace),
+        yaml_string(operator_name)
+    ));
+    yaml
+}
+
+fn operator_secret_doc(
+    namespace: &str,
+    operator_name: &str,
+    group_token: &str,
+    encryption_key: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "Secret", namespace, operator_name, labels);
+    yaml.push_str("type: Opaque\n");
+    yaml.push_str("stringData:\n");
+    yaml.push_str(&format!("  sync-token: {}\n", yaml_string(group_token)));
+    yaml.push_str(&format!(
+        "  encryption-key: {}\n",
+        yaml_string(encryption_key)
+    ));
+    yaml
+}
+
+fn operator_identity_pvc_doc(
+    namespace: &str,
+    pvc_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml =
+        operator_metadata_doc("v1", "PersistentVolumeClaim", namespace, pvc_name, labels);
+    yaml.push_str(
+        r#"spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: "1Gi"
+"#,
+    );
+    yaml
+}
+
+fn operator_deployment_doc(
+    namespace: &str,
+    operator_name: &str,
+    identity_pvc_name: &str,
+    options: &OperatorManifestOptions<'_>,
+    observed_namespace: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  replicas: 1\n");
+    yaml.push_str("  selector:\n");
+    yaml.push_str("    matchLabels:\n");
+    append_operator_selector_labels(&mut yaml, labels, 6);
+    yaml.push_str("  template:\n");
+    yaml.push_str("    metadata:\n");
+    yaml.push_str("      labels:\n");
+    append_operator_labels(&mut yaml, labels, 8);
+    yaml.push_str("    spec:\n");
+    yaml.push_str(&format!(
+        "      serviceAccountName: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("      automountServiceAccountToken: true\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        runAsNonRoot: true\n");
+    yaml.push_str("        runAsUser: 1000\n");
+    yaml.push_str("        runAsGroup: 1000\n");
+    yaml.push_str("        fsGroup: 1000\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
+    yaml.push_str("      containers:\n");
+    yaml.push_str("        - name: operator\n");
+    yaml.push_str(&format!(
+        "          image: {}\n",
+        yaml_string(options.image)
+    ));
+    yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [\"ALL\"]\n");
+    yaml.push_str("          env:\n");
+    append_env_value(&mut yaml, "PLATFORM", "kubernetes");
+    append_env_value(&mut yaml, "SYNC_URL", options.manager_url);
+    append_env_value(&mut yaml, "OPERATOR_NAME", options.release_name);
+    append_env_value(&mut yaml, "KUBERNETES_NAMESPACE", namespace);
+    append_env_value(&mut yaml, "OPERATOR_SCOPE", observed_namespace);
+    append_env_value(
+        &mut yaml,
+        "OPERATOR_PERMISSION",
+        options.permission.as_str(),
+    );
+    append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    append_env_value(
+        &mut yaml,
+        "SYNC_TOKEN_FILE",
+        "/etc/operator/secrets/sync-token",
+    );
+    append_env_value(
+        &mut yaml,
+        "OPERATOR_ENCRYPTION_KEY_FILE",
+        "/etc/operator/secrets/encryption-key",
+    );
+    append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
+    yaml.push_str("          volumeMounts:\n");
+    yaml.push_str("            - name: credentials\n");
+    yaml.push_str("              mountPath: /etc/operator/secrets\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: identity\n");
+    yaml.push_str("              mountPath: /var/lib/operator\n");
+    yaml.push_str("            - name: tmp\n");
+    yaml.push_str("              mountPath: /tmp\n");
+    yaml.push_str("          resources:\n");
+    yaml.push_str("            requests:\n");
+    yaml.push_str("              cpu: 50m\n");
+    yaml.push_str("              memory: 128Mi\n");
+    yaml.push_str("            limits:\n");
+    yaml.push_str("              cpu: 500m\n");
+    yaml.push_str("              memory: 512Mi\n");
+    yaml.push_str("      volumes:\n");
+    yaml.push_str("        - name: credentials\n");
+    yaml.push_str("          secret:\n");
+    yaml.push_str(&format!(
+        "            secretName: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("            defaultMode: 384\n");
+    yaml.push_str("        - name: identity\n");
+    yaml.push_str("          persistentVolumeClaim:\n");
+    yaml.push_str(&format!(
+        "            claimName: {}\n",
+        yaml_string(identity_pvc_name)
+    ));
+    yaml.push_str("        - name: tmp\n");
+    yaml.push_str("          emptyDir:\n");
+    yaml.push_str("            sizeLimit: 64Mi\n");
+    yaml
+}
+
+fn operator_metadata_doc(
+    api_version: &str,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = String::new();
+    yaml.push_str(&format!("apiVersion: {}\n", yaml_string(api_version)));
+    yaml.push_str(&format!("kind: {}\n", yaml_string(kind)));
+    yaml.push_str("metadata:\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(name)));
+    yaml.push_str(&format!("  namespace: {}\n", yaml_string(namespace)));
+    yaml.push_str("  labels:\n");
+    append_operator_labels(&mut yaml, labels, 4);
+    yaml
+}
+
+fn append_operator_selector_labels(
+    yaml: &mut String,
+    labels: &BTreeMap<String, String>,
+    indent: usize,
+) {
+    for key in ["app.kubernetes.io/name", "app.kubernetes.io/instance"] {
+        if let Some(value) = labels.get(key) {
+            yaml.push_str(&format!(
+                "{}{}: {}\n",
+                " ".repeat(indent),
+                yaml_key(key),
+                yaml_string(value)
+            ));
+        }
+    }
+}
+
+fn append_operator_labels(yaml: &mut String, labels: &BTreeMap<String, String>, indent: usize) {
+    for (key, value) in labels {
+        yaml.push_str(&format!(
+            "{}{}: {}\n",
+            " ".repeat(indent),
+            yaml_key(key),
+            yaml_string(value)
+        ));
+    }
+}
+
+fn append_env_value(yaml: &mut String, name: &str, value: &str) {
+    yaml.push_str(&format!("            - name: {}\n", yaml_string(name)));
+    yaml.push_str(&format!("              value: {}\n", yaml_string(value)));
 }
 
 /// Result of dispatching every stack resource through the
@@ -2740,6 +3112,177 @@ mod tests {
         ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode,
         WorkerPublicEndpoint, WorkerTrigger,
     };
+    use serde::Deserialize;
+    use serde_yaml::Value as YamlValue;
+
+    fn operator_test_manifest() -> String {
+        generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            namespace: "demo",
+            scope: OperatorScope::single_namespace("demo"),
+            permission: OperatorPermission::Observe,
+            release_name: "acme-prod-eu",
+        })
+        .expect("operator manifest should render")
+    }
+
+    fn parse_manifest_docs(manifest: &str) -> Vec<YamlValue> {
+        serde_yaml::Deserializer::from_str(manifest)
+            .map(|doc| YamlValue::deserialize(doc).expect("manifest doc should parse as YAML"))
+            .filter(|doc| !doc.is_null())
+            .collect()
+    }
+
+    fn yaml_str<'a>(value: &'a YamlValue, key: &str) -> Option<&'a str> {
+        value.get(key).and_then(YamlValue::as_str)
+    }
+
+    fn yaml_path<'a>(value: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValue> {
+        path.iter().try_fold(value, |current, key| current.get(key))
+    }
+
+    fn docs_by_kind(docs: &[YamlValue], kind: &str) -> Vec<YamlValue> {
+        docs.iter()
+            .filter(|doc| yaml_str(doc, "kind") == Some(kind))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn operator_manifest_renders_flat_namespaced_documents() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let kinds = docs
+            .iter()
+            .map(|doc| yaml_str(doc, "kind").expect("doc should have kind"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            vec![
+                "ServiceAccount",
+                "Role",
+                "RoleBinding",
+                "Secret",
+                "PersistentVolumeClaim",
+                "Deployment"
+            ]
+        );
+        assert!(
+            docs_by_kind(&docs, "ClusterRole").is_empty(),
+            "operator manifest must not grant cluster-scoped RBAC"
+        );
+        assert!(
+            docs_by_kind(&docs, "ClusterRoleBinding").is_empty(),
+            "operator manifest must not bind cluster-scoped RBAC"
+        );
+        for doc in docs {
+            assert_eq!(
+                yaml_path(&doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
+                Some("demo"),
+                "every operator document should be namespaced"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_manifest_role_is_read_only_and_does_not_read_secrets() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Role");
+        let rules = role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .expect("Role should include rules");
+
+        for rule in rules {
+            let verbs = rule
+                .get("verbs")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include verbs")
+                .iter()
+                .map(|verb| verb.as_str().expect("verb should be string"))
+                .collect::<Vec<_>>();
+            assert_eq!(verbs, vec!["get", "list", "watch"]);
+
+            let resources = rule
+                .get("resources")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include resources")
+                .iter()
+                .map(|resource| resource.as_str().expect("resource should be string"))
+                .collect::<Vec<_>>();
+            assert!(
+                !resources.contains(&"secrets"),
+                "observe Operator must not read customer Secrets"
+            );
+            assert!(
+                !resources.contains(&"pods/log"),
+                "logs must flow through the log collector, not Kubernetes API tailing"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_manifest_deployment_uses_group_token_and_persistent_identity() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Deployment");
+        let env = deployment
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(YamlValue::as_sequence)
+            .and_then(|containers| containers.first())
+            .and_then(|container| container.get("env"))
+            .and_then(YamlValue::as_sequence)
+            .expect("operator container should include env");
+        let env_names = env
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(env_names.contains(&"OPERATOR_SCOPE"));
+        assert!(env_names.contains(&"OPERATOR_PERMISSION"));
+        assert!(env_names.contains(&"SYNC_TOKEN_FILE"));
+        assert!(
+            !env_names.contains(&"DEPLOYMENT_ID"),
+            "first boot must self-register and then persist deployment identity"
+        );
+
+        assert_eq!(
+            deployment
+                .get("spec")
+                .and_then(|spec| spec.get("template"))
+                .and_then(|template| template.get("spec"))
+                .and_then(|spec| spec.get("volumes"))
+                .and_then(YamlValue::as_sequence)
+                .and_then(|volumes| volumes.get(1))
+                .and_then(|volume| volume.get("persistentVolumeClaim"))
+                .and_then(|claim| claim.get("claimName"))
+                .and_then(YamlValue::as_str),
+            Some("acme-prod-eu-operator-identity")
+        );
+
+        let secret = docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Secret");
+        assert_eq!(
+            secret
+                .get("stringData")
+                .and_then(|data| data.get("sync-token"))
+                .and_then(YamlValue::as_str),
+            Some("ax_dg_test")
+        );
+    }
 
     const TEST_RUNTIME_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
