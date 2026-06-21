@@ -187,7 +187,7 @@ fn emit_gcp_cloud_run_worker_heartbeat(
         container
             .resources
             .as_ref()
-            .and_then(|resources| resources.limits.as_ref())
+            .map(|resources| &resources.limits)
     });
     let scaling = service.scaling.as_ref();
 
@@ -214,21 +214,32 @@ fn emit_gcp_cloud_run_worker_heartbeat(
                         .map(|config| config.region.clone())
                         .unwrap_or_default(),
                 ),
-                uri: service.uri.clone(),
+                uri: if service.uri.is_empty() {
+                    None
+                } else {
+                    Some(service.uri.clone())
+                },
                 urls: service.urls.clone(),
-                latest_created_revision: service.latest_created_revision.clone(),
-                latest_ready_revision: service.latest_ready_revision.clone(),
-                generation: service
-                    .generation
-                    .as_deref()
-                    .and_then(|generation| generation.parse::<i64>().ok()),
-                observed_generation: service
-                    .observed_generation
-                    .as_deref()
-                    .and_then(|generation| generation.parse::<i64>().ok()),
+                latest_created_revision: if service.latest_created_revision.is_empty() {
+                    None
+                } else {
+                    Some(service.latest_created_revision.clone())
+                },
+                latest_ready_revision: if service.latest_ready_revision.is_empty() {
+                    None
+                } else {
+                    Some(service.latest_ready_revision.clone())
+                },
+                generation: (service.generation != 0).then_some(service.generation),
+                observed_generation: (service.observed_generation != 0)
+                    .then_some(service.observed_generation),
                 traffic_count: service.traffic.len() as u32,
-                min_instance_count: scaling.and_then(|scaling| scaling.min_instance_count),
-                max_instance_count: scaling.and_then(|scaling| scaling.max_instance_count),
+                min_instance_count: scaling
+                    .map(|scaling| scaling.min_instance_count)
+                    .filter(|count| *count != 0),
+                max_instance_count: scaling
+                    .map(|scaling| scaling.max_instance_count)
+                    .filter(|count| *count != 0),
                 container_image: container.map(|container| container.image.clone()),
                 cpu_limit: limits.and_then(|limits| limits.get("cpu").cloned()),
                 memory_limit: limits.and_then(|limits| limits.get("memory").cloned()),
@@ -456,12 +467,13 @@ impl GcpWorkerController {
                 resource_id: Some(cfg.id.clone()),
             })?;
 
-        let operation_name = operation.name.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
+        if operation.name.is_empty() {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "Cloud Run create operation returned without name".to_string(),
                 resource_id: Some(cfg.id.clone()),
-            })
-        })?;
+            }));
+        }
+        let operation_name = operation.name;
 
         info!(name=%service_name, operation=%operation_name, "Cloud Run service creation initiated");
 
@@ -507,9 +519,9 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
-        if operation.done.unwrap_or(false) {
+        if operation.done {
             // Check if there was an error
-            if let Some(OperationResult::Error { error }) = &operation.result {
+            if let Some(OperationResult::Error(error)) = &operation.result {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!("Operation failed: {} (code: {})", error.message, error.code),
                     resource_id: Some(ctx.desired_config.id().to_string()),
@@ -571,13 +583,10 @@ impl GcpWorkerController {
         // "RoutesReady" and "ConfigurationsReady" are Succeeded, the service is
         // effectively ready for traffic.
         let has_condition_succeeded = |name: &str| -> bool {
-            service.conditions.iter().any(|c| {
-                c.r#type.as_deref() == Some(name)
-                    && c.state
-                        .as_ref()
-                        .map(|s| s == &ConditionState::ConditionSucceeded)
-                        .unwrap_or(false)
-            })
+            service
+                .conditions
+                .iter()
+                .any(|c| c.r#type == name && c.state == ConditionState::ConditionSucceeded)
         };
 
         let is_ready = has_condition_succeeded("Ready")
@@ -592,10 +601,14 @@ impl GcpWorkerController {
                 .map(|c| {
                     format!(
                         "{}={:?} (reason={:?}, message={})",
-                        c.r#type.as_deref().unwrap_or("?"),
+                        if c.r#type.is_empty() {
+                            "?"
+                        } else {
+                            c.r#type.as_str()
+                        },
                         c.state,
-                        c.reason,
-                        c.message.as_deref().unwrap_or("")
+                        c.reasons,
+                        c.message
                     )
                 })
                 .collect();
@@ -613,7 +626,11 @@ impl GcpWorkerController {
             });
         }
 
-        let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
+        let cloud_run_url = if service.uri.is_empty() {
+            service.urls.first().cloned()
+        } else {
+            Some(service.uri.clone())
+        };
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
@@ -1957,13 +1974,10 @@ impl GcpWorkerController {
         // Cloud Run v2 may not return a "Ready" condition, so also accept both
         // sub-conditions as Succeeded.
         let has_condition_succeeded = |name: &str| -> bool {
-            service.conditions.iter().any(|c| {
-                c.r#type.as_deref() == Some(name)
-                    && c.state
-                        .as_ref()
-                        .map(|s| s == &ConditionState::ConditionSucceeded)
-                        .unwrap_or(false)
-            })
+            service
+                .conditions
+                .iter()
+                .any(|c| c.r#type == name && c.state == ConditionState::ConditionSucceeded)
         };
 
         let is_ready = has_condition_succeeded("Ready")
@@ -1984,18 +1998,16 @@ impl GcpWorkerController {
         if let Some(template) = &service.template {
             if let Some(container) = template.containers.first() {
                 if let Some(resources) = &container.resources {
-                    if let Some(limits) = &resources.limits {
-                        if let Some(current_memory) = limits.get("memory") {
-                            let expected_memory = format!("{}Mi", worker_config.memory_mb);
-                            if current_memory != &expected_memory {
-                                return Err(AlienError::new(ErrorData::ResourceDrift {
-                                    resource_id: worker_config.id.clone(),
-                                    message: format!(
-                                        "Service memory configuration has drifted. Expected: {}, but found: {}",
-                                        expected_memory, current_memory
-                                    ),
-                                }));
-                            }
+                    if let Some(current_memory) = resources.limits.get("memory") {
+                        let expected_memory = format!("{}Mi", worker_config.memory_mb);
+                        if current_memory != &expected_memory {
+                            return Err(AlienError::new(ErrorData::ResourceDrift {
+                                resource_id: worker_config.id.clone(),
+                                message: format!(
+                                    "Service memory configuration has drifted. Expected: {}, but found: {}",
+                                    expected_memory, current_memory
+                                ),
+                            }));
                         }
                     }
                 }
@@ -2258,12 +2270,13 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
-        let operation_name = operation.name.ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
+        if operation.name.is_empty() {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: ctx.desired_config.id().to_string(),
                 message: "Cloud Run update operation returned without name".to_string(),
-            })
-        })?;
+            }));
+        }
+        let operation_name = operation.name;
 
         info!(name=%service_name, operation=%operation_name, "Cloud Run service update initiated");
 
@@ -2308,9 +2321,9 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
-        if operation.done.unwrap_or(false) {
+        if operation.done {
             // Check if there was an error
-            if let Some(OperationResult::Error { error }) = &operation.result {
+            if let Some(OperationResult::Error(error)) = &operation.result {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
                         "Update operation failed: {} (code: {})",
@@ -2368,13 +2381,10 @@ impl GcpWorkerController {
         // Check if the service is ready. Cloud Run v2 may not return a "Ready"
         // condition, so also accept both sub-conditions as Succeeded.
         let has_condition_succeeded = |name: &str| -> bool {
-            service.conditions.iter().any(|c| {
-                c.r#type.as_deref() == Some(name)
-                    && c.state
-                        .as_ref()
-                        .map(|s| s == &ConditionState::ConditionSucceeded)
-                        .unwrap_or(false)
-            })
+            service
+                .conditions
+                .iter()
+                .any(|c| c.r#type == name && c.state == ConditionState::ConditionSucceeded)
         };
 
         let is_ready = has_condition_succeeded("Ready")
@@ -3832,12 +3842,13 @@ impl GcpWorkerController {
         {
             Ok(operation) => {
                 // Service exists and deletion was initiated
-                let operation_name = operation.name.ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceControllerConfigError {
+                if operation.name.is_empty() {
+                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                         resource_id: ctx.desired_config.id().to_string(),
                         message: "Cloud Run delete operation returned without name".to_string(),
-                    })
-                })?;
+                    }));
+                }
+                let operation_name = operation.name;
 
                 info!(name=%service_name, operation=%operation_name, "Cloud Run service deletion initiated");
 
@@ -3910,9 +3921,9 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
-        if operation.done.unwrap_or(false) {
+        if operation.done {
             // Check if there was an error
-            if let Some(OperationResult::Error { error }) = &operation.result {
+            if let Some(OperationResult::Error(error)) = &operation.result {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
                         "Delete operation failed: {} (code: {})",
@@ -4352,11 +4363,7 @@ impl GcpWorkerController {
 
         let env: Vec<EnvVar> = env_vars
             .into_iter()
-            .map(|(name, value)| EnvVar {
-                name,
-                value: Some(value),
-                value_source: None,
-            })
+            .map(|(name, value)| EnvVar::new().set_name(name).set_value(value))
             .collect();
 
         // Build resource requirements
@@ -4364,32 +4371,29 @@ impl GcpWorkerController {
         limits.insert("memory".to_string(), format!("{}Mi", cfg.memory_mb));
         // Cloud Run automatically allocates CPU based on memory
 
-        let resources = ResourceRequirements {
-            limits: Some(limits),
-            cpu_idle: Some(true),          // Allow CPU throttling when idle
-            startup_cpu_boost: Some(true), // Boost CPU during startup
-        };
+        let resources = ResourceRequirements::new()
+            .set_limits(limits)
+            .set_cpu_idle(true) // Allow CPU throttling when idle
+            .set_startup_cpu_boost(true); // Boost CPU during startup
 
         // Build container port
-        let ports = vec![ContainerPort {
-            name: Some("http1".to_string()),
-            // NOTE: This must match the alien-runtime port on alien-build/src/lib.rs
-            container_port: Some(8080),
-        }];
+        // NOTE: This must match the alien-runtime port on alien-build/src/lib.rs
+        let ports = vec![ContainerPort::new()
+            .set_name("http1")
+            .set_container_port(8080)];
 
         // Build container
-        let container = Container::builder()
-            .name("worker".to_string())
-            .image(image)
-            .env(env)
-            .resources(resources)
-            .ports(ports)
-            .build();
+        let container = Container::new()
+            .set_name("worker")
+            .set_image(image)
+            .set_env(env)
+            .set_resources(resources)
+            .set_ports(ports);
 
         // Map ingress settings
         let ingress = match cfg.ingress {
-            Ingress::Public => CloudRunIngress::IngressTrafficAll,
-            Ingress::Private => CloudRunIngress::IngressTrafficInternal,
+            Ingress::Public => CloudRunIngress::All,
+            Ingress::Private => CloudRunIngress::InternalOnly,
         };
 
         // Get VPC access configuration if a Network resource exists
@@ -4399,45 +4403,46 @@ impl GcpWorkerController {
         }
 
         // Build revision template
-        let template = RevisionTemplate::builder()
-            .labels(HashMap::from([("worker".to_string(), cfg.id.clone())]))
-            .scaling(
-                RevisionScaling::builder()
-                    .min_instance_count(0) // Scale to zero
-                    .maybe_max_instance_count(cfg.concurrency_limit.map(|c| c as i32))
-                    .build(),
-            )
-            .timeout(format!("{}s", cfg.timeout_seconds))
-            .maybe_service_account(service_account)
-            .containers(vec![container])
-            .execution_environment(CloudRunExecutionEnvironment::ExecutionEnvironmentGen2)
-            .max_instance_request_concurrency(1000) // Cloud Run default
-            .maybe_vpc_access(vpc_access)
-            .build();
+        let mut scaling = RevisionScaling::new().set_min_instance_count(0); // Scale to zero
+        if let Some(concurrency_limit) = cfg.concurrency_limit {
+            scaling = scaling.set_max_instance_count(concurrency_limit as i32);
+        }
+
+        let mut template = RevisionTemplate::new()
+            .set_labels([("worker", cfg.id.as_str())])
+            .set_scaling(scaling)
+            .set_timeout(wkt::Duration::clamp(cfg.timeout_seconds as i64, 0))
+            .set_containers([container])
+            .set_execution_environment(CloudRunExecutionEnvironment::Gen2)
+            .set_max_instance_request_concurrency(1000); // Cloud Run default
+        if let Some(service_account) = service_account {
+            template = template.set_service_account(service_account);
+        }
+        if let Some(vpc_access) = vpc_access {
+            template = template.set_vpc_access(vpc_access);
+        }
 
         // Build traffic target
-        let traffic = vec![TrafficTarget::builder()
-            .r#type(TrafficTargetAllocationType::TrafficTargetAllocationTypeLatest)
-            .percent(100)
-            .build()];
+        let traffic = vec![TrafficTarget::new()
+            .set_type(TrafficTargetAllocationType::Latest)
+            .set_percent(100)];
 
         // Build service
         // When ingress is public, disable the IAM invoker check instead of adding
         // allUsers to IAM policy. This works even when the GCP organization has
         // domain-restricted sharing enabled (which blocks allUsers in IAM).
         let is_public = cfg.ingress == Ingress::Public;
-        let service = Service::builder()
-            .description(format!("Runtime worker: {}", cfg.id))
-            .labels(HashMap::from([
-                ("resource-type".to_string(), "worker".to_string()),
-                ("resource".to_string(), cfg.id.clone()),
-                ("deployment".to_string(), ctx.resource_prefix.to_string()),
-            ]))
-            .ingress(ingress)
-            .template(template)
-            .traffic(traffic)
-            .invoker_iam_disabled(is_public)
-            .build();
+        let service = Service::new()
+            .set_description(format!("Runtime worker: {}", cfg.id))
+            .set_labels([
+                ("resource-type", "worker".to_string()),
+                ("resource", cfg.id.clone()),
+                ("deployment", ctx.resource_prefix.to_string()),
+            ])
+            .set_ingress(ingress)
+            .set_template(template)
+            .set_traffic(traffic)
+            .set_invoker_iam_disabled(is_public);
 
         Ok(service)
     }
@@ -4473,16 +4478,14 @@ impl GcpWorkerController {
         };
 
         // Build Direct VPC Egress configuration using network interfaces
-        let network_interface = NetworkInterface::builder()
-            .network(network_name)
-            .subnetwork(subnetwork_name)
-            .build();
+        let network_interface = NetworkInterface::new()
+            .set_network(network_name)
+            .set_subnetwork(subnetwork_name);
 
         Ok(Some(
-            VpcAccess::builder()
-                .egress(VpcEgress::AllTraffic)
-                .network_interfaces(vec![network_interface])
-                .build(),
+            VpcAccess::new()
+                .set_egress(VpcEgress::AllTraffic)
+                .set_network_interfaces([network_interface]),
         ))
     }
 
@@ -5429,8 +5432,7 @@ mod tests {
 
     use crate::core::{IamPolicy, MockGcpIamApi};
     use crate::gcp_cloudrun::{
-        Condition, ConditionState, MockCloudRunApi, Operation as LongRunningOperation,
-        OperationResult, Service,
+        Condition, ConditionState, MockCloudRunApi, Operation as LongRunningOperation, Service,
     };
     use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -5596,43 +5598,34 @@ mod tests {
     }
 
     fn create_successful_service_response(service_name: &str) -> Service {
-        Service::builder()
-            .name(format!(
+        Service::new()
+            .set_name(format!(
                 "projects/test-project/locations/us-central1/services/{}",
                 service_name
             ))
-            .uri(format!("https://{}-abcd1234-uc.a.run.app", service_name))
-            .urls(vec![format!(
-                "https://{}-abcd1234-uc.a.run.app",
-                service_name
-            )])
-            .conditions(vec![Condition::builder()
-                .r#type("Ready".to_string())
-                .state(ConditionState::ConditionSucceeded)
-                .build()])
-            .build()
+            .set_uri(format!("https://{}-abcd1234-uc.a.run.app", service_name))
+            .set_urls([format!("https://{}-abcd1234-uc.a.run.app", service_name)])
+            .set_conditions([Condition::new()
+                .set_type("Ready")
+                .set_state(ConditionState::ConditionSucceeded)])
     }
 
     fn create_successful_operation_response(operation_name: &str) -> LongRunningOperation {
-        LongRunningOperation::builder()
-            .name(format!(
+        LongRunningOperation::new()
+            .set_name(format!(
                 "projects/test-project/locations/us-central1/operations/{}",
                 operation_name
             ))
-            .done(false)
-            .build()
+            .set_done(false)
     }
 
     fn create_completed_operation_response(operation_name: &str) -> LongRunningOperation {
-        LongRunningOperation::builder()
-            .name(format!("projects/test-project/locations/us-central1/operations/{}", operation_name))
-            .done(true)
-            .result(OperationResult::Response {
-                response: serde_json::json!({
-                    "name": format!("projects/test-project/locations/us-central1/services/test-{}", operation_name)
-                })
-            })
-            .build()
+        LongRunningOperation::new()
+            .set_name(format!(
+                "projects/test-project/locations/us-central1/operations/{}",
+                operation_name
+            ))
+            .set_done(true)
     }
 
     fn create_empty_iam_policy() -> IamPolicy {
@@ -5913,7 +5906,7 @@ mod tests {
         let function_name_for_get = function_name.to_string();
         mock_cloudrun.expect_get_service().returning(move |_, _| {
             let mut service = create_successful_service_response(&function_name_for_get);
-            service.uri = Some(mock_url.clone());
+            service.uri = mock_url.clone();
             service.urls = vec![mock_url.clone()];
             Ok(service)
         });
@@ -5966,7 +5959,7 @@ mod tests {
             .expect_get_service()
             .returning(move |_, _| {
                 let mut service = create_successful_service_response(&function_name_for_get);
-                service.uri = Some(mock_url.clone());
+                service.uri = mock_url.clone();
                 service.urls = vec![mock_url.clone()];
                 Ok(service)
             })
@@ -6382,10 +6375,8 @@ mod tests {
                     if let Some(container) = containers.first() {
                         // Check memory configuration
                         if let Some(resources) = &container.resources {
-                            if let Some(limits) = &resources.limits {
-                                if let Some(memory) = limits.get("memory") {
-                                    return memory == "512Mi";
-                                }
+                            if let Some(memory) = resources.limits.get("memory") {
+                                return memory == "512Mi";
                             }
                         }
                     }
@@ -6475,9 +6466,7 @@ mod tests {
                         let env_vars: HashMap<String, String> = container
                             .env
                             .iter()
-                            .filter_map(|env| {
-                                env.value.as_ref().map(|v| (env.name.clone(), v.clone()))
-                            })
+                            .filter_map(|env| env.value().map(|v| (env.name.clone(), v.clone())))
                             .collect();
 
                         return env_vars.get("APP_ENV") == Some(&"production".to_string())
