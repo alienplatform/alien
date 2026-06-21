@@ -9,6 +9,7 @@ use crate::aws_sdk::{
     LambdaApi, S3Api, SqsApi, SsmApi,
 };
 use crate::error::Result;
+use crate::gcp_cloudrun::{CloudRunApi, OfficialGcpCloudRunClient};
 use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
@@ -23,13 +24,10 @@ use alien_azure_clients::{
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesClientConfig;
 use alien_core::{
-    AwsClientConfig, AzureClientConfig, AzureCredentials, GcpCredentials, GcpImpersonationConfig,
+    AwsClientConfig, AzureClientConfig, AzureCredentials, GcpClientConfig, GcpCredentials,
+    GcpImpersonationConfig,
 };
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError, IntoAlienErrorDirect};
-use alien_gcp_clients::{
-    cloudrun::{CloudRunApi, CloudRunClient},
-    GcpClientConfig,
-};
 use azure_core::{
     cloud::{CloudConfiguration, CustomConfiguration},
     credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions},
@@ -7487,10 +7485,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>> {
-        Ok(Arc::new(CloudRunClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(OfficialGcpCloudRunClient::new(config.clone())))
     }
 
     fn get_gcp_resource_manager_client(

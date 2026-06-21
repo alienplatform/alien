@@ -29,7 +29,6 @@ aws = [
     "alien-client-config/aws"
 ]  # TODO: Remove preflights from here, necessary because of CF
 gcp = [
-    "dep:alien-gcp-clients",
     "alien-client-config/gcp",
     "dep:base64",
     "dep:google-cloud-api-serviceusage-v1",
@@ -43,6 +42,7 @@ gcp = [
     "dep:google-cloud-longrunning",
     "dep:google-cloud-pubsub",
     "dep:google-cloud-resourcemanager-v3",
+    "dep:google-cloud-run-v2",
     "dep:google-cloud-scheduler-v1",
     "dep:google-cloud-storage",
     "dep:google-cloud-type",
@@ -61,7 +61,6 @@ test = []  # Test platform support - fast mock implementations without real clou
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
     "alien-core/test-utils",
-    "alien-gcp-clients/test-utils", 
     "alien-azure-clients/test-utils",
     "alien-client-config/test-utils",
     "dep:alien-preflights",
@@ -76,7 +75,6 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
-alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
 google-cloud-api-serviceusage-v1 = { workspace = true, optional = true }
 google-cloud-artifactregistry-v1 = { workspace = true, optional = true }
@@ -89,6 +87,7 @@ google-cloud-iam-v1 = { workspace = true, optional = true }
 google-cloud-longrunning = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
 google-cloud-resourcemanager-v3 = { workspace = true, optional = true }
+google-cloud-run-v2 = { workspace = true, optional = true }
 google-cloud-scheduler-v1 = { workspace = true, optional = true }
 google-cloud-storage = { workspace = true, optional = true }
 google-cloud-type = { workspace = true, optional = true }
@@ -155,7 +154,6 @@ console_error_panic_hook = { workspace = true }
 [dev-dependencies]
 alien-infra = { path = ".", features = ["test-utils"] }
 alien-preflights = { workspace = true }
-alien-gcp-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }

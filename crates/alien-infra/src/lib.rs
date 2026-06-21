@@ -4,6 +4,8 @@ pub use core::*;
 mod gcp_compute;
 pub use gcp_compute::*;
 
+pub mod gcp_cloudrun;
+
 mod error;
 pub use error::*;
 

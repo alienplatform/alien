@@ -10,6 +10,12 @@ use crate::core::{
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::gcp_cloudrun::{
+    ConditionState, Container, ContainerPort, EnvVar,
+    ExecutionEnvironment as CloudRunExecutionEnvironment, Ingress as CloudRunIngress,
+    NetworkInterface, OperationResult, ResourceRequirements, RevisionScaling, RevisionTemplate,
+    Service, TrafficTarget, TrafficTargetAllocationType, VpcAccess, VpcEgress,
+};
 use crate::gcp_compute::{
     Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
     ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
@@ -18,11 +24,6 @@ use crate::gcp_compute::{
 };
 use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_gcp_clients::cloudrun::{
-    Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
-    TrafficTargetAllocationType, VpcAccess, VpcEgress,
-};
-use alien_gcp_clients::longrunning::OperationResult;
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpClientConfig, GcpCloudRunWorkerHeartbeatData,
@@ -61,21 +62,6 @@ where
 
 fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
     left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
-}
-
-fn legacy_gcp_binding_from_local(binding: GcpBinding) -> alien_gcp_clients::iam::Binding {
-    alien_gcp_clients::iam::Binding {
-        role: binding.role,
-        members: binding.members,
-        condition: binding
-            .condition
-            .map(|condition| alien_gcp_clients::iam::Expr {
-                expression: condition.expression,
-                title: condition.title,
-                description: condition.description,
-                location: condition.location,
-            }),
-    }
 }
 
 fn gcs_notification_matches_existing(
@@ -584,15 +570,15 @@ impl GcpWorkerController {
         // Cloud Run v2 API may not return a top-level "Ready" condition. When both
         // "RoutesReady" and "ConfigurationsReady" are Succeeded, the service is
         // effectively ready for traffic.
-        let has_condition_succeeded =
-            |name: &str| -> bool {
-                service.conditions.iter().any(|c| {
-                    c.r#type.as_deref() == Some(name)
-                        && c.state.as_ref().map(|s| {
-                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
-                        }).unwrap_or(false)
-                })
-            };
+        let has_condition_succeeded = |name: &str| -> bool {
+            service.conditions.iter().any(|c| {
+                c.r#type.as_deref() == Some(name)
+                    && c.state
+                        .as_ref()
+                        .map(|s| s == &ConditionState::ConditionSucceeded)
+                        .unwrap_or(false)
+            })
+        };
 
         let is_ready = has_condition_succeeded("Ready")
             || (has_condition_succeeded("RoutesReady")
@@ -1983,15 +1969,15 @@ impl GcpWorkerController {
         // error to allow recovery instead of immediately failing the deployment.
         // Cloud Run v2 may not return a "Ready" condition, so also accept both
         // sub-conditions as Succeeded.
-        let has_condition_succeeded =
-            |name: &str| -> bool {
-                service.conditions.iter().any(|c| {
-                    c.r#type.as_deref() == Some(name)
-                        && c.state.as_ref().map(|s| {
-                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
-                        }).unwrap_or(false)
-                })
-            };
+        let has_condition_succeeded = |name: &str| -> bool {
+            service.conditions.iter().any(|c| {
+                c.r#type.as_deref() == Some(name)
+                    && c.state
+                        .as_ref()
+                        .map(|s| s == &ConditionState::ConditionSucceeded)
+                        .unwrap_or(false)
+            })
+        };
 
         let is_ready = has_condition_succeeded("Ready")
             || (has_condition_succeeded("RoutesReady")
@@ -2394,15 +2380,15 @@ impl GcpWorkerController {
 
         // Check if the service is ready. Cloud Run v2 may not return a "Ready"
         // condition, so also accept both sub-conditions as Succeeded.
-        let has_condition_succeeded =
-            |name: &str| -> bool {
-                service.conditions.iter().any(|c| {
-                    c.r#type.as_deref() == Some(name)
-                        && c.state.as_ref().map(|s| {
-                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
-                        }).unwrap_or(false)
-                })
-            };
+        let has_condition_succeeded = |name: &str| -> bool {
+            service.conditions.iter().any(|c| {
+                c.r#type.as_deref() == Some(name)
+                    && c.state
+                        .as_ref()
+                        .map(|s| s == &ConditionState::ConditionSucceeded)
+                        .unwrap_or(false)
+            })
+        };
 
         let is_ready = has_condition_succeeded("Ready")
             || (has_condition_succeeded("RoutesReady")
@@ -4334,10 +4320,6 @@ impl GcpWorkerController {
         cfg: &Worker,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Service> {
-        use alien_gcp_clients::cloudrun::{
-            Container, ContainerPort, EnvVar, ResourceRequirements, Service,
-        };
-
         // Get the ServiceAccount for this worker's permission profile
         let service_account_id = format!("{}-sa", cfg.get_permissions());
         let service_account_ref = ResourceRef::new(
@@ -4442,7 +4424,7 @@ impl GcpWorkerController {
         let template = RevisionTemplate::builder()
             .labels(HashMap::from([("worker".to_string(), cfg.id.clone())]))
             .scaling(
-                alien_gcp_clients::cloudrun::RevisionScaling::builder()
+                RevisionScaling::builder()
                     .min_instance_count(0) // Scale to zero
                     .maybe_max_instance_count(cfg.concurrency_limit.map(|c| c as i32))
                     .build(),
@@ -4450,9 +4432,7 @@ impl GcpWorkerController {
             .timeout(format!("{}s", cfg.timeout_seconds))
             .maybe_service_account(service_account)
             .containers(vec![container])
-            .execution_environment(
-                alien_gcp_clients::cloudrun::ExecutionEnvironment::ExecutionEnvironmentGen2,
-            )
+            .execution_environment(CloudRunExecutionEnvironment::ExecutionEnvironmentGen2)
             .max_instance_request_concurrency(1000) // Cloud Run default
             .maybe_vpc_access(vpc_access)
             .build();
@@ -4595,12 +4575,11 @@ impl GcpWorkerController {
                         binding.members.push(all_users_member);
                     }
                 } else {
-                    policy.bindings.push(
-                        alien_gcp_clients::iam::Binding::builder()
-                            .role(invoker_role)
-                            .members(vec![all_users_member])
-                            .build(),
-                    );
+                    policy.bindings.push(GcpBinding {
+                        role: invoker_role,
+                        members: vec![all_users_member],
+                        condition: None,
+                    });
                 }
             }
         }
@@ -4612,11 +4591,7 @@ impl GcpWorkerController {
                 bindings_count = resource_bindings.len(),
                 "Adding resource-scoped permissions to IAM policy"
             );
-            policy.bindings.extend(
-                resource_bindings
-                    .into_iter()
-                    .map(legacy_gcp_binding_from_local),
-            );
+            policy.bindings.extend(resource_bindings);
         }
 
         // Step 4: Apply the consolidated policy in one operation
@@ -5504,28 +5479,26 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::core::MockGcpIamApi;
+    use crate::core::{IamPolicy, MockGcpIamApi};
+    use crate::gcp_cloudrun::{
+        Condition, ConditionState, MockCloudRunApi, Operation as LongRunningOperation,
+        OperationResult, Service,
+    };
     use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
+    use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Ingress, Platform,
-        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
+        ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
-    use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
-    use alien_gcp_clients::longrunning::{OperationResult, Status};
-    use httpmock::{prelude::*, Mock};
+    use httpmock::prelude::*;
     use rstest::rstest;
 
     use super::{
         get_cloudrun_service_name, get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
         GCP_RESOURCE_NAME_MAX_LEN,
     };
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        PlatformServiceProvider,
-    };
+    use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{MockPlatformServiceProvider, MockPubSubApi};
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
@@ -5675,8 +5648,6 @@ mod tests {
     }
 
     fn create_successful_service_response(service_name: &str) -> Service {
-        use alien_gcp_clients::cloudrun::Service;
-
         Service::builder()
             .name(format!(
                 "projects/test-project/locations/us-central1/services/{}",
@@ -5716,11 +5687,14 @@ mod tests {
             .build()
     }
 
-    fn create_empty_iam_policy() -> alien_gcp_clients::iam::IamPolicy {
-        alien_gcp_clients::iam::IamPolicy::builder()
-            .version(1)
-            .bindings(vec![])
-            .build()
+    fn create_empty_iam_policy() -> IamPolicy {
+        IamPolicy {
+            version: Some(1),
+            bindings: vec![],
+            etag: None,
+            kind: None,
+            resource_id: None,
+        }
     }
 
     fn setup_mock_client_for_creation_and_update(
@@ -5975,7 +5949,7 @@ mod tests {
 
     fn setup_mock_client_for_creation_and_update_with_mock_url(
         function_name: &str,
-        has_public_access: bool,
+        _has_public_access: bool,
         mock_url: &str,
     ) -> Arc<MockCloudRunApi> {
         let mut mock_cloudrun = MockCloudRunApi::new();
@@ -6025,7 +5999,7 @@ mod tests {
 
     fn setup_mock_client_for_creation_and_deletion_with_mock_url(
         function_name: &str,
-        has_public_access: bool,
+        _has_public_access: bool,
         mock_url: &str,
     ) -> Arc<MockCloudRunApi> {
         let mut mock_cloudrun = MockCloudRunApi::new();

@@ -624,7 +624,6 @@ dependencies = [
  "alien-client-core",
  "alien-core",
  "alien-error",
- "alien-gcp-clients",
  "alien-helm",
  "alien-infra",
  "alien-local",
@@ -671,6 +670,7 @@ dependencies = [
  "google-cloud-longrunning",
  "google-cloud-pubsub",
  "google-cloud-resourcemanager-v3",
+ "google-cloud-run-v2",
  "google-cloud-scheduler-v1",
  "google-cloud-storage",
  "google-cloud-type",
@@ -4813,6 +4813,28 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "google-cloud-run-v2"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0ac50dc1c1876fa2451e3ee8487ba0cb63bb83367d7f10ada5a12df938945f2"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "google-cloud-api",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-iam-v1",
+ "google-cloud-longrunning",
+ "google-cloud-lro",
+ "google-cloud-rpc",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tracing",
 ]
 
 [[package]]
