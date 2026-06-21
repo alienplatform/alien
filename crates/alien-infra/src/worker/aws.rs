@@ -1331,27 +1331,32 @@ impl AwsWorkerController {
         // Get VPC configuration if a Network resource exists
         let vpc_config = self.get_vpc_config(ctx)?;
 
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(config.timeout_seconds as i32)
-            .memory_size(config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
-
         let arn = self.arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Worker ARN not available for env var update".to_string(),
+                message: "Worker ARN not available for self-binding update".to_string(),
                 resource_id: Some(config.id.clone()),
             })
         })?;
 
+        let request = UpdateFunctionConfigurationRequest::builder()
+            .function_name(arn.clone())
+            .role(role_arn)
+            .timeout(config.timeout_seconds as i32)
+            .memory_size(config.memory_mb as i32)
+            .set_environment(lambda_environment)
+            .set_vpc_config(vpc_config)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda configuration update request".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
         client
-            .update_function_configuration(arn, request)
+            .update_function_configuration(request)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to update Lambda worker configuration with self-binding"
-                    .to_string(),
+                message: "Failed to update Lambda function with resolved self-bindings".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -1894,11 +1899,6 @@ impl AwsWorkerController {
 
             let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
 
-            let request = UpdateFunctionCodeRequest::builder()
-                .image_uri(image_uri)
-                .publish(true)
-                .build();
-
             let arn = self.arn.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "Worker ARN not available for code update".to_string(),
@@ -1906,12 +1906,24 @@ impl AwsWorkerController {
                 })
             })?;
 
-            client.update_function_code(arn, request).await.context(
-                ErrorData::CloudPlatformError {
+            let request = UpdateFunctionCodeRequest::builder()
+                .function_name(arn.clone())
+                .image_uri(image_uri)
+                .publish(true)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid Lambda code update request".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })?;
+
+            client
+                .update_function_code(request)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: "Failed to update Lambda worker code".to_string(),
                     resource_id: Some(current_config.id.clone()),
-                },
-            )?;
+                })?;
         }
 
         // Always transition to wait for code update (even if no code change) - linear flow
@@ -2048,14 +2060,6 @@ impl AwsWorkerController {
         // Get VPC configuration if a Network resource exists
         let vpc_config = self.get_vpc_config(ctx)?;
 
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(current_config.timeout_seconds as i32)
-            .memory_size(current_config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
-
         let arn = self.arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Worker ARN not available for config update".to_string(),
@@ -2063,8 +2067,22 @@ impl AwsWorkerController {
             })
         })?;
 
+        let request = UpdateFunctionConfigurationRequest::builder()
+            .function_name(arn.clone())
+            .role(role_arn)
+            .timeout(current_config.timeout_seconds as i32)
+            .memory_size(current_config.memory_mb as i32)
+            .set_environment(lambda_environment)
+            .set_vpc_config(vpc_config)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda configuration update request".to_string(),
+                resource_id: Some(current_config.id.clone()),
+            })?;
+
         client
-            .update_function_configuration(arn, request)
+            .update_function_configuration(request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to update Lambda worker configuration".to_string(),
@@ -3315,18 +3333,21 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_identifier = self.arn.as_deref().unwrap_or(&aws_worker_name);
         let request = UpdateFunctionConfigurationRequest::builder()
+            .function_name(function_identifier)
             .vpc_config(
                 VpcConfig::builder()
                     .set_subnet_ids(Some(Vec::new()))
                     .set_security_group_ids(Some(Vec::new()))
                     .build(),
             )
-            .build();
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Invalid Lambda VPC detach request".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
-        match client
-            .update_function_configuration(function_identifier, request)
-            .await
-        {
+        match client.update_function_configuration(request).await {
             Ok(_) => {
                 info!(worker=%worker_config.id, "Lambda VPC config detach requested");
                 Ok(HandlerAction::Continue {
@@ -4200,7 +4221,7 @@ mod tests {
             let worker_name_for_self_binding = worker_name.clone();
             mock_lambda
                 .expect_update_function_configuration()
-                .returning(move |_, _| {
+                .returning(move |_| {
                     Ok(create_successful_function_response(
                         &worker_name_for_self_binding,
                     ))
@@ -4219,7 +4240,7 @@ mod tests {
         let worker_name_for_code_update = worker_name.clone();
         mock_lambda
             .expect_update_function_code()
-            .returning(move |_, _| {
+            .returning(move |_| {
                 Ok(create_successful_function_response(
                     &worker_name_for_code_update,
                 ))
@@ -4229,7 +4250,7 @@ mod tests {
             let worker_name_for_config_update = worker_name.clone();
             mock_lambda
                 .expect_update_function_configuration()
-                .returning(move |_, _| {
+                .returning(move |_| {
                     Ok(create_successful_function_response(
                         &worker_name_for_config_update,
                     ))
@@ -4269,7 +4290,7 @@ mod tests {
             let worker_name_for_config_update = worker_name.clone();
             mock_lambda
                 .expect_update_function_configuration()
-                .returning(move |_, _| {
+                .returning(move |_| {
                     Ok(create_successful_function_response(
                         &worker_name_for_config_update,
                     ))
@@ -4649,7 +4670,7 @@ mod tests {
         let worker_name_for_config_update = worker_name.clone();
         mock_lambda
             .expect_update_function_configuration()
-            .returning(move |_, _| {
+            .returning(move |_| {
                 Ok(create_successful_function_response(
                     &worker_name_for_config_update,
                 ))

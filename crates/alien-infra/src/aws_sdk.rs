@@ -123,6 +123,10 @@ pub use aws_sdk_acm::{
 
 pub type ReimportCertificateRequest = ImportCertificateRequest;
 
+pub use aws_sdk_lambda::operation::{
+    update_function_code::UpdateFunctionCodeInput as UpdateFunctionCodeRequest,
+    update_function_configuration::UpdateFunctionConfigurationInput as UpdateFunctionConfigurationRequest,
+};
 pub use aws_sdk_lambda::types::{Environment, FunctionCode, VpcConfig};
 
 /// Parameter metadata returned from SSM for vault heartbeat sampling.
@@ -343,30 +347,6 @@ pub struct AddPermissionRequest {
 pub struct AddPermissionResponse {
     /// Serialized policy statement returned by Lambda.
     pub statement: Option<String>,
-}
-
-/// Lambda code update request.
-#[derive(Debug, Clone, Builder)]
-pub struct UpdateFunctionCodeRequest {
-    /// Replacement image URI.
-    pub image_uri: String,
-    /// Whether to publish a version.
-    pub publish: Option<bool>,
-}
-
-/// Lambda configuration update request.
-#[derive(Debug, Clone, Builder)]
-pub struct UpdateFunctionConfigurationRequest {
-    /// IAM execution role ARN.
-    pub role: Option<String>,
-    /// Timeout in seconds.
-    pub timeout: Option<i32>,
-    /// Memory size in MB.
-    pub memory_size: Option<i32>,
-    /// Environment variables.
-    pub environment: Option<Environment>,
-    /// VPC configuration.
-    pub vpc_config: Option<VpcConfig>,
 }
 
 /// Lambda event-source mapping creation request.
@@ -1927,13 +1907,11 @@ pub trait LambdaApi: Send + Sync {
     /// Update Lambda function code.
     async fn update_function_code(
         &self,
-        function_name: &str,
         request: UpdateFunctionCodeRequest,
     ) -> Result<FunctionConfiguration>;
     /// Update Lambda function configuration.
     async fn update_function_configuration(
         &self,
-        function_name: &str,
         request: UpdateFunctionConfigurationRequest,
     ) -> Result<FunctionConfiguration>;
     /// Get Lambda function configuration.
@@ -2969,19 +2947,33 @@ impl LambdaApi for LambdaClient {
 
     async fn update_function_code(
         &self,
-        function_name: &str,
         request: UpdateFunctionCodeRequest,
     ) -> Result<FunctionConfiguration> {
+        let function_name = request.function_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "UpdateFunctionCode request did not include functionName".to_string(),
+                resource_id: None,
+            })
+        })?;
         let output = lambda_result(
             self.update_function_code()
-                .function_name(function_name)
-                .image_uri(request.image_uri)
+                .set_function_name(request.function_name)
+                .set_zip_file(request.zip_file)
+                .set_s3_bucket(request.s3_bucket)
+                .set_s3_key(request.s3_key)
+                .set_s3_object_version(request.s3_object_version)
+                .set_image_uri(request.image_uri)
                 .set_publish(request.publish)
+                .set_dry_run(request.dry_run)
+                .set_revision_id(request.revision_id)
+                .set_architectures(request.architectures)
+                .set_source_kms_key_arn(request.source_kms_key_arn)
+                .set_publish_to(request.publish_to)
                 .send()
                 .await,
             "UpdateFunctionCode",
             "LambdaFunction",
-            function_name,
+            &function_name,
         )?;
 
         Ok(function_configuration_from_update_code_output(output))
@@ -2989,22 +2981,43 @@ impl LambdaApi for LambdaClient {
 
     async fn update_function_configuration(
         &self,
-        function_name: &str,
         request: UpdateFunctionConfigurationRequest,
     ) -> Result<FunctionConfiguration> {
+        let function_name = request.function_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "UpdateFunctionConfiguration request did not include functionName"
+                    .to_string(),
+                resource_id: None,
+            })
+        })?;
         let output = lambda_result(
             self.update_function_configuration()
-                .function_name(function_name)
+                .set_function_name(request.function_name)
                 .set_role(request.role)
+                .set_handler(request.handler)
+                .set_description(request.description)
                 .set_timeout(request.timeout)
                 .set_memory_size(request.memory_size)
-                .set_environment(request.environment)
                 .set_vpc_config(request.vpc_config)
+                .set_environment(request.environment)
+                .set_runtime(request.runtime)
+                .set_dead_letter_config(request.dead_letter_config)
+                .set_kms_key_arn(request.kms_key_arn)
+                .set_tracing_config(request.tracing_config)
+                .set_revision_id(request.revision_id)
+                .set_layers(request.layers)
+                .set_file_system_configs(request.file_system_configs)
+                .set_image_config(request.image_config)
+                .set_ephemeral_storage(request.ephemeral_storage)
+                .set_snap_start(request.snap_start)
+                .set_logging_config(request.logging_config)
+                .set_capacity_provider_config(request.capacity_provider_config)
+                .set_durable_config(request.durable_config)
                 .send()
                 .await,
             "UpdateFunctionConfiguration",
             "LambdaFunction",
-            function_name,
+            &function_name,
         )?;
 
         Ok(function_configuration_from_update_config_output(output))
