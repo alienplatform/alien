@@ -7,7 +7,6 @@ use crate::aws_sdk::{
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
     ssm_client_from_alien_config,
 };
-use crate::azure_container_apps::OfficialAzureContainerAppsClient;
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 #[cfg(feature = "kubernetes")]
@@ -346,10 +345,6 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<azure_storage_2023_05::Client>;
-    fn get_azure_container_apps_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<Arc<OfficialAzureContainerAppsClient>>;
     fn get_azure_container_apps_management_client(
         &self,
         config: &AzureClientConfig,
@@ -719,17 +714,6 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<azure_storage_2023_05::Client> {
         azure_storage_client_from_alien_config(config)
-    }
-
-    fn get_azure_container_apps_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<Arc<OfficialAzureContainerAppsClient>> {
-        Ok(Arc::new(OfficialAzureContainerAppsClient::new(
-            config.clone(),
-            azure_core_021_credential(config)?,
-            azure_core_021::ClientOptions::default(),
-        )))
     }
 
     fn get_azure_container_apps_management_client(
@@ -1528,9 +1512,16 @@ pub(crate) fn azure_container_apps_management_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_app_2024_08::Client> {
     build_azure_management_client(config, "Container Apps", |endpoint, credential| {
-        azure_app_2024_08::Client::builder(credential)
-            .endpoint(endpoint)
-            .build()
+        let mut options = azure_core_021::ClientOptions::default();
+        options.per_call_policies_mut().push(Arc::new(
+            crate::azure_container_apps::ContainerAppUserAssignedIdentityPolicy,
+        ));
+        let scopes = vec![endpoint
+            .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)?
+            .to_string()];
+        Ok(azure_app_2024_08::Client::new(
+            endpoint, credential, scopes, options,
+        ))
     })
 }
 

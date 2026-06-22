@@ -7,8 +7,7 @@ use azure_mgmt_app::package_preview_2024_08::models::{
     Certificate, ContainerApp, DaprComponent, ManagedEnvironment, TrackedResource,
 };
 use futures_util::StreamExt;
-use serde::de::DeserializeOwned;
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 pub(crate) async fn create_or_update_managed_environment(
     client: &azure_app_2024_08::Client,
@@ -133,6 +132,62 @@ pub(crate) async fn get_container_app(
         "Azure Container App",
         container_app_name,
     )
+}
+
+pub(crate) async fn create_or_update_container_app(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    container_app_name: &str,
+    container_app: &ContainerApp,
+) -> CloudClientResult<OperationResult<ContainerApp>> {
+    let result = client
+        .container_apps_client()
+        .create_or_update(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            container_app_name.to_string(),
+            container_app.clone(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_lro_response(
+        "Azure Container Apps",
+        result,
+        "container app create or update",
+        "Azure Container App",
+        container_app_name,
+        |response| response.into_body(),
+    )
+    .await
+}
+
+pub(crate) async fn update_container_app(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    container_app_name: &str,
+    container_app: &ContainerApp,
+) -> CloudClientResult<OperationResult<ContainerApp>> {
+    let result = client
+        .container_apps_client()
+        .update(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            container_app_name.to_string(),
+            container_app.clone(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_lro_response(
+        "Azure Container Apps",
+        result,
+        "container app update",
+        "Azure Container App",
+        container_app_name,
+        |response| response.into_body(),
+    )
+    .await
 }
 
 pub(crate) async fn create_or_update_managed_environment_certificate(
@@ -303,253 +358,144 @@ pub(crate) async fn delete_container_app(
     .await
 }
 
-pub struct OfficialAzureContainerAppsClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn azure_core_021::auth::TokenCredential>,
-    scopes: Vec<String>,
-    pipeline: Arc<azure_core_021::Pipeline>,
-}
+#[derive(Debug)]
+pub(crate) struct ContainerAppUserAssignedIdentityPolicy;
 
-impl Debug for OfficialAzureContainerAppsClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureContainerAppsClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureContainerAppsClient {
-    pub fn new(
-        config: AzureClientConfig,
-        credential: Arc<dyn azure_core_021::auth::TokenCredential>,
-        options: azure_core_021::ClientOptions,
-    ) -> Self {
-        let pipeline = azure_core_021::Pipeline::new(
-            option_env!("CARGO_PKG_NAME"),
-            option_env!("CARGO_PKG_VERSION"),
-            options,
-            Vec::new(),
-            Vec::new(),
-        );
-        Self {
-            config,
-            credential,
-            scopes: vec!["https://management.azure.com/.default".to_string()],
-            pipeline: Arc::new(pipeline),
-        }
-    }
-
-    fn base_url(&self) -> String {
-        crate::core::azure_management_endpoint(&self.config)
-            .trim_end_matches('/')
-            .to_string()
-    }
-
-    fn container_app_url(&self, resource_group_name: &str, container_app_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}?api-version=2025-01-01",
-            self.base_url(), self.config.subscription_id, resource_group_name, container_app_name
-        )
-    }
-
-    async fn request(
+#[async_trait::async_trait]
+impl azure_core_021::Policy for ContainerAppUserAssignedIdentityPolicy {
+    async fn send(
         &self,
-        method: azure_core_021::Method,
-        url: String,
-        body: String,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<AzureCoreArmResponse> {
-        azure_core_arm_request(self, method, url, body, resource_type, resource_name).await
-    }
-
-    pub async fn create_or_update_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-        container_app: &ContainerApp,
-        identity: Option<&serde_json::Value>,
-    ) -> CloudClientResult<OperationResult<ContainerApp>> {
-        let body = serialize_container_app_request(container_app, identity, container_app_name)?;
-        let response = self
-            .request(
-                azure_core_021::Method::Put,
-                self.container_app_url(resource_group_name, container_app_name),
-                body,
-                "Azure Container App",
-                container_app_name,
-            )
-            .await?;
-        operation_result_from_response(
-            response.status,
-            &response.headers,
-            &response.body,
-            "Azure Container App",
-            container_app_name,
-        )
-    }
-
-    pub async fn update_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-        container_app: &ContainerApp,
-        identity: Option<&serde_json::Value>,
-    ) -> CloudClientResult<OperationResult<ContainerApp>> {
-        let body = serialize_container_app_request(container_app, identity, container_app_name)?;
-        let response = self
-            .request(
-                azure_core_021::Method::Patch,
-                self.container_app_url(resource_group_name, container_app_name),
-                body,
-                "Azure Container App",
-                container_app_name,
-            )
-            .await?;
-        operation_result_from_response(
-            response.status,
-            &response.headers,
-            &response.body,
-            "Azure Container App",
-            container_app_name,
-        )
+        ctx: &azure_core_021::Context,
+        request: &mut azure_core_021::Request,
+        next: &[Arc<dyn azure_core_021::Policy>],
+    ) -> azure_core_021::PolicyResult {
+        inject_user_assigned_identities(request)?;
+        next[0].send(ctx, request, &next[1..]).await
     }
 }
 
-struct AzureCoreArmResponse {
-    status: azure_core_021::StatusCode,
-    headers: azure_core_021::headers::Headers,
-    body: String,
-}
+fn inject_user_assigned_identities(
+    request: &mut azure_core_021::Request,
+) -> azure_core_021::Result<()> {
+    if !matches!(
+        request.method(),
+        &azure_core_021::Method::Put | &azure_core_021::Method::Patch
+    ) || !request
+        .url()
+        .path()
+        .contains("/providers/Microsoft.App/containerApps/")
+    {
+        return Ok(());
+    }
 
-async fn azure_core_arm_request(
-    client: &OfficialAzureContainerAppsClient,
-    method: azure_core_021::Method,
-    url: String,
-    body: String,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<AzureCoreArmResponse> {
-    let scopes = client.scopes.iter().map(String::as_str).collect::<Vec<_>>();
-    let token = client
-        .credential
-        .get_token(&scopes)
-        .await
-        .into_alien_error()
-        .context(CloudClientErrorData::AuthenticationError {
-            message: "Failed to get Azure management access token".to_string(),
-        })?;
-    let url = azure_core_021::Url::parse(&url)
-        .into_alien_error()
-        .context(CloudClientErrorData::HttpRequestFailed {
-            message: format!("Invalid Azure ARM request URL for {resource_type} '{resource_name}'"),
-        })?;
-    let mut request = azure_core_021::Request::new(url.clone(), method);
-    request.insert_header(
-        azure_core_021::headers::AUTHORIZATION,
-        format!("Bearer {}", token.token.secret()),
-    );
+    let azure_core_021::Body::Bytes(body) = request.body() else {
+        return Ok(());
+    };
+    let mut body: serde_json::Value = serde_json::from_slice(body)?;
+    let Some(identity_settings) = body
+        .pointer("/properties/configuration/identitySettings")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
 
-    request.insert_header(azure_core_021::headers::CONTENT_TYPE, "application/json");
+    let mut user_assigned_identities = serde_json::Map::new();
+    for identity in identity_settings.iter().filter_map(|identity_setting| {
+        identity_setting
+            .get("identity")
+            .and_then(serde_json::Value::as_str)
+            .filter(|identity| !identity.is_empty())
+    }) {
+        user_assigned_identities.insert(identity.to_string(), serde_json::json!({}));
+    }
+
+    if user_assigned_identities.is_empty() {
+        return Ok(());
+    }
+
+    body["identity"] = serde_json::json!({
+        "type": "UserAssigned",
+        "userAssignedIdentities": user_assigned_identities,
+    });
+    let body = serde_json::to_vec(&body)?;
     request.insert_header(
         azure_core_021::headers::CONTENT_LENGTH,
         body.len().to_string(),
     );
     request.set_body(body);
+    Ok(())
+}
 
-    let response = match client
-        .pipeline
-        .send(&azure_core_021::Context::default(), &mut request)
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            let mapped: CloudClientResult<azure_core_021::Response> = map_azure_core_021_sdk_error(
-                "Azure Container Apps",
-                Err(error),
-                "ARM request",
-                resource_type,
-                resource_name,
-            );
-            return match mapped {
-                Ok(_) => unreachable!("Azure Core send error unexpectedly mapped to success"),
-                Err(error) => Err(error),
-            };
-        }
-    };
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .into_alien_error()
-        .context(CloudClientErrorData::HttpRequestFailed {
-            message: format!(
-                "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-            ),
-        })?;
-    let text = String::from_utf8(body.to_vec())
-        .into_alien_error()
-        .context(CloudClientErrorData::SerializationError {
-            message: format!(
-                "Azure ARM response for {resource_type} '{resource_name}' was not UTF-8"
-            ),
-        })?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if status == azure_core_021::StatusCode::NotFound {
-        return Err(AlienError::new(
-            CloudClientErrorData::RemoteResourceNotFound {
-                resource_type: resource_type.to_string(),
-                resource_name: resource_name.to_string(),
-            },
-        ));
+    #[test]
+    fn injects_user_assigned_identity_map_from_generated_identity_settings() {
+        let mut request = azure_core_021::Request::new(
+            azure_core_021::Url::parse(
+                "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/containerApps/app?api-version=2024-08-02-preview",
+            )
+            .expect("test URL should parse"),
+            azure_core_021::Method::Put,
+        );
+        request.set_body(
+            serde_json::json!({
+                "properties": {
+                    "configuration": {
+                        "identitySettings": [
+                            {
+                                "identity": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/app-sa",
+                                "lifecycle": "All"
+                            }
+                        ]
+                    }
+                }
+            })
+            .to_string(),
+        );
+
+        inject_user_assigned_identities(&mut request).expect("identity injection should succeed");
+
+        let azure_core_021::Body::Bytes(body) = request.body() else {
+            panic!("test request should use a byte body");
+        };
+        let body: serde_json::Value =
+            serde_json::from_slice(body).expect("mutated request body should be JSON");
+        assert_eq!(body["identity"]["type"], "UserAssigned");
+        assert_eq!(
+            body["identity"]["userAssignedIdentities"]
+                ["/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/app-sa"],
+            serde_json::json!({})
+        );
     }
 
-    if status == azure_core_021::StatusCode::Conflict {
-        return Err(AlienError::new(
-            CloudClientErrorData::RemoteResourceConflict {
-                resource_type: resource_type.to_string(),
-                resource_name: resource_name.to_string(),
-                message: text,
-            },
-        ));
-    }
+    #[test]
+    fn leaves_container_app_request_without_identity_settings_unchanged() {
+        let body = serde_json::json!({
+            "properties": {
+                "configuration": {
+                    "identitySettings": []
+                }
+            }
+        })
+        .to_string();
+        let mut request = azure_core_021::Request::new(
+            azure_core_021::Url::parse(
+                "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/containerApps/app?api-version=2024-08-02-preview",
+            )
+            .expect("test URL should parse"),
+            azure_core_021::Method::Patch,
+        );
+        request.set_body(body.clone());
 
-    if status == azure_core_021::StatusCode::Forbidden
-        || status == azure_core_021::StatusCode::Unauthorized
-    {
-        return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
-            resource_type: resource_type.to_string(),
-            resource_name: resource_name.to_string(),
-        }));
-    }
+        inject_user_assigned_identities(&mut request).expect("identity injection should succeed");
 
-    if !matches!(
-        status,
-        azure_core_021::StatusCode::Ok
-            | azure_core_021::StatusCode::Created
-            | azure_core_021::StatusCode::Accepted
-            | azure_core_021::StatusCode::NoContent
-    ) {
-        return Err(AlienError::new(CloudClientErrorData::HttpResponseError {
-            message: format!(
-                "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}",
-                status as u16
-            ),
-            url: url.to_string(),
-            http_status: status as u16,
-            http_request_text: None,
-            http_response_text: Some(text),
-        }));
+        let azure_core_021::Body::Bytes(mutated_body) = request.body() else {
+            panic!("test request should use a byte body");
+        };
+        assert_eq!(mutated_body.as_ref(), body.as_bytes());
     }
-
-    Ok(AzureCoreArmResponse {
-        status,
-        headers,
-        body: text,
-    })
 }
 
 fn map_azure_core_021_sdk_error<T>(
@@ -731,65 +677,6 @@ async fn parse_azure_core_021_response_body_or_default_certificate(
     }
 
     serde_json::from_slice(&body).into_alien_error().context(
-        CloudClientErrorData::SerializationError {
-            message: format!("Failed to parse {resource_type} '{resource_name}' response"),
-        },
-    )
-}
-
-fn operation_result_from_response<T>(
-    status: azure_core_021::StatusCode,
-    headers: &azure_core_021::headers::Headers,
-    body: &str,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<OperationResult<T>>
-where
-    T: DeserializeOwned,
-{
-    if status == azure_core_021::StatusCode::Accepted {
-        return Ok(OperationResult::LongRunning(
-            long_running_operation_from_azure_core_021_headers(
-                headers,
-                resource_type,
-                resource_name,
-            )?,
-        ));
-    }
-
-    parse_response(resource_type, resource_name, body).map(OperationResult::Completed)
-}
-
-fn serialize_container_app_request(
-    container_app: &ContainerApp,
-    identity: Option<&serde_json::Value>,
-    container_app_name: &str,
-) -> CloudClientResult<String> {
-    let mut request = serde_json::to_value(container_app)
-        .into_alien_error()
-        .context(CloudClientErrorData::SerializationError {
-            message: format!(
-                "Failed to serialize Azure Container App '{container_app_name}' request"
-            ),
-        })?;
-    if let Some(identity) = identity {
-        request["identity"] = identity.clone();
-    }
-    serde_json::to_string(&request).into_alien_error().context(
-        CloudClientErrorData::SerializationError {
-            message: format!(
-                "Failed to serialize Azure Container App '{container_app_name}' request"
-            ),
-        },
-    )
-}
-
-fn parse_response<T: DeserializeOwned>(
-    resource_type: &str,
-    resource_name: &str,
-    body: &str,
-) -> CloudClientResult<T> {
-    serde_json::from_str(body).into_alien_error().context(
         CloudClientErrorData::SerializationError {
             message: format!("Failed to parse {resource_type} '{resource_name}' response"),
         },

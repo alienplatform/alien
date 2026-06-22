@@ -658,8 +658,8 @@ impl AzureWorkerController {
         // Build ARM request body.
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
-        let (container_app, identity) = self
+            .get_azure_container_apps_management_client(azure_cfg)?;
+        let container_app = self
             .build_container_app(
                 func_cfg,
                 &environment_name,
@@ -670,18 +670,18 @@ impl AzureWorkerController {
             .await?;
 
         // Fire the CREATE/UPDATE call.
-        let op_result = client
-            .create_or_update_container_app(
-                &resource_group_name,
-                &container_app_name,
-                &container_app,
-                identity.as_ref(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to initiate container app creation".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+        let op_result = azure_container_apps::create_or_update_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            &container_app_name,
+            &container_app,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to initiate container app creation".to_string(),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
 
         match op_result {
             OperationResult::Completed(immediate_app) => {
@@ -1023,7 +1023,7 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         if self.container_apps_certificate_id.is_none() {
@@ -1095,7 +1095,7 @@ impl AzureWorkerController {
                 })
             })?;
 
-        let (mut app, identity) = self
+        let mut app = self
             .build_container_app(
                 worker_config,
                 &environment_name,
@@ -1111,18 +1111,18 @@ impl AzureWorkerController {
         );
 
         // Update the container app with custom domain
-        let _operation = client
-            .create_or_update_container_app(
-                &resource_group_name,
-                container_app_name,
-                &app,
-                identity.as_ref(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to configure custom domain for container app".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let _operation = azure_container_apps::create_or_update_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            container_app_name,
+            &app,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to configure custom domain for container app".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         info!(
             worker=%worker_config.id,
@@ -2015,7 +2015,7 @@ impl AzureWorkerController {
             })?;
             let fqdn = self.fqdn.clone().unwrap();
             let environment_name = get_container_apps_environment_name(ctx.state)?;
-            let (mut app, identity) = self
+            let mut app = self
                 .build_container_app(
                     func_cfg,
                     &environment_name,
@@ -2028,19 +2028,19 @@ impl AzureWorkerController {
 
             let container_apps_client = ctx
                 .service_provider
-                .get_azure_container_apps_client(azure_cfg)?;
-            container_apps_client
-                .create_or_update_container_app(
-                    &resource_group_name,
-                    container_app_name,
-                    &app,
-                    identity.as_ref(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to bind renewed certificate to custom domain".to_string(),
-                    resource_id: Some(func_cfg.id.clone()),
-                })?;
+                .get_azure_container_apps_management_client(azure_cfg)?;
+            azure_container_apps::create_or_update_container_app(
+                &container_apps_client,
+                azure_cfg,
+                &resource_group_name,
+                container_app_name,
+                &app,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to bind renewed certificate to custom domain".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
         }
 
         self.container_apps_certificate_id = Some(container_apps_certificate_id);
@@ -2082,11 +2082,11 @@ impl AzureWorkerController {
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
         self.update_rbac_wait_required = true;
 
         // Build desired spec
-        let (desired_app, identity) = self
+        let mut desired_app = self
             .build_container_app(
                 func_cfg,
                 &environment_name,
@@ -2095,24 +2095,23 @@ impl AzureWorkerController {
                 ctx,
             )
             .await?;
-        let mut desired_app = desired_app;
         if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
             Self::set_custom_domain(&mut desired_app, fqdn.clone(), keyvault_cert_id.clone());
         }
 
         // Issue UPDATE
-        let op_result = client
-            .update_container_app(
-                &resource_group_name,
-                container_app_name,
-                &desired_app,
-                identity.as_ref(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to initiate container app update".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+        let op_result = azure_container_apps::update_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            container_app_name,
+            &desired_app,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to initiate container app update".to_string(),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
 
         match op_result {
             OperationResult::Completed(_) => {
@@ -3650,7 +3649,7 @@ impl AzureWorkerController {
         container_app_name: &str,
         azure_cfg: &AzureClientConfig,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<(ContainerApp, Option<serde_json::Value>)> {
+    ) -> Result<ContainerApp> {
         let location = azure_cfg.region.as_deref().unwrap_or("East US");
 
         let image = match &func.code {
@@ -3797,17 +3796,7 @@ impl AzureWorkerController {
             username: Some("deployment".to_string()),
         });
 
-        // Create managed identity spec if we have any identities
         let identity_resource_ids: Vec<String> = identity_map.keys().cloned().collect();
-
-        let managed_identity = if !identity_map.is_empty() {
-            Some(serde_json::json!({
-                "type": "UserAssigned",
-                "userAssignedIdentities": identity_map,
-            }))
-        } else {
-            None
-        };
 
         // Configure Dapr if the worker uses any triggers or commands.
         // Dapr handles delivery for queue (Service Bus), storage (blob), and cron triggers.
@@ -3865,26 +3854,23 @@ impl AzureWorkerController {
             volumes: vec![],
         };
 
-        Ok((
-            ContainerApp {
-                tracked_resource: {
-                    let mut tracked_resource = TrackedResource::new(location.to_string());
-                    tracked_resource.tags = Some(serde_json::json!(tags));
-                    tracked_resource
-                },
-                extended_location: None,
-                identity: None,
-                managed_by: None,
-                kind: None,
-                properties: Some(container_app::Properties {
-                    configuration: Some(configuration),
-                    managed_environment_id: Some(environment_id),
-                    template: Some(template),
-                    ..Default::default()
-                }),
+        Ok(ContainerApp {
+            tracked_resource: {
+                let mut tracked_resource = TrackedResource::new(location.to_string());
+                tracked_resource.tags = Some(serde_json::json!(tags));
+                tracked_resource
             },
-            managed_identity,
-        ))
+            extended_location: None,
+            identity: None,
+            managed_by: None,
+            kind: None,
+            properties: Some(container_app::Properties {
+                configuration: Some(configuration),
+                managed_environment_id: Some(environment_id),
+                template: Some(template),
+                ..Default::default()
+            }),
+        })
     }
 
     /// Creates a Dapr Service Bus component for a queue trigger
@@ -4358,7 +4344,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use crate::azure_container_apps::OfficialAzureContainerAppsClient;
     use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
@@ -4367,8 +4352,8 @@ mod tests {
     };
     use alien_error::{AlienError, ContextError};
     use azure_core_021::{
-        headers, headers::Headers, Body, BytesStream, ClientOptions, Context, Method, Policy,
-        PolicyResult, Request, Response, StatusCode, TransportOptions,
+        headers::Headers, Body, BytesStream, ClientOptions, Context, Method, Policy, PolicyResult,
+        Request, Response, StatusCode, TransportOptions,
     };
     use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
     use azure_mgmt_app::package_preview_2024_08::models::{
@@ -4543,35 +4528,6 @@ mod tests {
         }
     }
 
-    fn setup_mock_client_for_creation_and_update(
-        app_name: &str,
-        has_url: bool,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, has_url))
-    }
-
-    fn setup_mock_client_for_creation_and_deletion(
-        app_name: &str,
-        has_url: bool,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, has_url))
-    }
-
-    fn setup_mock_client_for_long_running_creation(
-        app_name: &str,
-        has_url: bool,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(
-            ContainerAppsTransport::new(app_name, has_url).long_running_create(),
-        )
-    }
-
-    fn setup_mock_client_for_best_effort_deletion(
-        app_name: &str,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, true))
-    }
-
     #[derive(Debug)]
     struct AuthorizationTransport;
 
@@ -4640,6 +4596,7 @@ mod tests {
         custom_url: Option<String>,
         container_app_delete_missing: bool,
         create_long_running: bool,
+        assertion: Option<ContainerAppRequestAssertion>,
         get_count: Mutex<u32>,
     }
 
@@ -4651,6 +4608,7 @@ mod tests {
                 custom_url: None,
                 container_app_delete_missing: false,
                 create_long_running: false,
+                assertion: None,
                 get_count: Mutex::new(0),
             }
         }
@@ -4667,6 +4625,11 @@ mod tests {
 
         fn long_running_create(mut self) -> Self {
             self.create_long_running = true;
+            self
+        }
+
+        fn assert_request(mut self, assertion: ContainerAppRequestAssertion) -> Self {
+            self.assertion = Some(assertion);
             self
         }
 
@@ -4763,6 +4726,47 @@ mod tests {
 
             if path.contains("/providers/Microsoft.App/containerApps/") {
                 match request.method() {
+                    &Method::Put => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        let body = assert_json_body(request);
+                        if let Some(assertion) = self.assertion {
+                            assert!(
+                                assertion(&body),
+                                "Container App PUT body did not match test assertion: {body}"
+                            );
+                        }
+                        if self.create_long_running {
+                            let mut headers = Headers::new();
+                            headers.insert(
+                                "azure-asyncoperation",
+                                "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.App/operations/test-op",
+                            );
+                            headers.insert("retry-after", "1");
+                            return Ok(Response::new(
+                                StatusCode::Accepted,
+                                headers,
+                                Box::pin(BytesStream::new("{}")),
+                            ));
+                        }
+                        return Ok(json_response(json!(self.response_app(false))));
+                    }
+                    &Method::Patch => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        let body = assert_json_body(request);
+                        if let Some(assertion) = self.assertion {
+                            assert!(
+                                assertion(&body),
+                                "Container App PATCH body did not match test assertion: {body}"
+                            );
+                        }
+                        return Ok(json_response(json!(self.response_app(false))));
+                    }
                     &Method::Get => {
                         assert_eq!(
                             request.url().query(),
@@ -4811,114 +4815,6 @@ mod tests {
     }
 
     type ContainerAppRequestAssertion = fn(&serde_json::Value) -> bool;
-
-    #[derive(Debug)]
-    struct ContainerAppsTransport {
-        app_name: String,
-        has_url: bool,
-        custom_url: Option<String>,
-        create_long_running: bool,
-        assertion: Option<ContainerAppRequestAssertion>,
-    }
-
-    impl ContainerAppsTransport {
-        fn new(app_name: &str, has_url: bool) -> Self {
-            Self {
-                app_name: app_name.to_string(),
-                has_url,
-                custom_url: None,
-                create_long_running: false,
-                assertion: None,
-            }
-        }
-
-        fn custom_url(mut self, custom_url: &str) -> Self {
-            self.custom_url = Some(custom_url.to_string());
-            self
-        }
-
-        fn long_running_create(mut self) -> Self {
-            self.create_long_running = true;
-            self
-        }
-
-        fn assert_request(mut self, assertion: ContainerAppRequestAssertion) -> Self {
-            self.assertion = Some(assertion);
-            self
-        }
-
-        fn response_app(&self, in_progress: bool) -> ContainerApp {
-            if let Some(custom_url) = &self.custom_url {
-                return create_container_app_with_custom_url(&self.app_name, custom_url);
-            }
-
-            if in_progress {
-                create_in_progress_container_app_response(&self.app_name)
-            } else {
-                create_successful_container_app_response(&self.app_name, self.has_url)
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Policy for ContainerAppsTransport {
-        async fn send(
-            &self,
-            _ctx: &Context,
-            request: &mut Request,
-            next: &[Arc<dyn Policy>],
-        ) -> PolicyResult {
-            assert!(next.is_empty());
-            let path = request.url().path();
-            assert!(
-                path.contains("/providers/Microsoft.App/containerApps/"),
-                "unexpected Azure Container Apps path: {path}"
-            );
-            assert_eq!(request.url().query(), Some("api-version=2025-01-01"));
-            assert!(request
-                .headers()
-                .get_str(&headers::AUTHORIZATION)
-                .expect("Container Apps request should include authorization")
-                .starts_with("Bearer "));
-
-            match request.method() {
-                &Method::Put => {
-                    let body = assert_json_body(request);
-                    if let Some(assertion) = self.assertion {
-                        assert!(
-                            assertion(&body),
-                            "Container App PUT body did not match test assertion: {body}"
-                        );
-                    }
-                    if self.create_long_running {
-                        let mut headers = Headers::new();
-                        headers.insert(
-                            "azure-asyncoperation",
-                            "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.App/operations/test-op",
-                        );
-                        headers.insert("retry-after", "1");
-                        return Ok(Response::new(
-                            StatusCode::Accepted,
-                            headers,
-                            Box::pin(BytesStream::new("{}")),
-                        ));
-                    }
-                    Ok(json_response(json!(self.response_app(false))))
-                }
-                &Method::Patch => {
-                    let body = assert_json_body(request);
-                    if let Some(assertion) = self.assertion {
-                        assert!(
-                            assertion(&body),
-                            "Container App PATCH body did not match test assertion: {body}"
-                        );
-                    }
-                    Ok(json_response(json!(self.response_app(false))))
-                }
-                method => panic!("unexpected Azure Container Apps method: {method:?}"),
-            }
-        }
-    }
 
     fn container_app_body_has_custom_resources(body: &serde_json::Value) -> bool {
         let resources = &body["properties"]["template"]["containers"][0]["resources"];
@@ -4998,69 +4894,44 @@ mod tests {
             azure_credential_from_config(&config).expect("test credential should build"),
         ));
 
-        azure_app_2024_08::Client::builder(credential)
-            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
-            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
-            .build()
-            .expect("Azure Container Apps management client should build")
-    }
-
-    fn container_apps_client_with_transport(
-        transport: impl Policy + 'static,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        let config = AzureClientConfig {
-            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
-            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::AccessToken {
-                token: "test-token".to_string(),
-            },
-            service_overrides: None,
-        };
-        let credential = Arc::new(AzureCore021Credential::new(
-            azure_credential_from_config(&config).expect("test credential should build"),
+        let endpoint = azure_core_021::Url::parse("https://management.azure.com").unwrap();
+        let scopes = vec![endpoint
+            .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)
+            .expect("management scope should parse")
+            .to_string()];
+        let mut options =
+            ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport)));
+        options.per_call_policies_mut().push(Arc::new(
+            crate::azure_container_apps::ContainerAppUserAssignedIdentityPolicy,
         ));
 
-        Arc::new(OfficialAzureContainerAppsClient::new(
-            config,
-            credential,
-            ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport))),
-        ))
+        azure_app_2024_08::Client::new(endpoint, credential, scopes, options)
     }
 
     fn setup_mock_service_provider(
-        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
         app_name: &str,
         has_url: bool,
     ) -> Arc<MockPlatformServiceProvider> {
-        setup_mock_service_provider_with_app_management(
-            container_apps_client,
-            AppManagementTransport::new(app_name, has_url),
-        )
+        setup_mock_service_provider_with_app_management(AppManagementTransport::new(
+            app_name, has_url,
+        ))
     }
 
     fn setup_mock_service_provider_with_delete_missing(
-        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
         app_name: &str,
         has_url: bool,
         container_app_delete_missing: bool,
     ) -> Arc<MockPlatformServiceProvider> {
         setup_mock_service_provider_with_app_management(
-            container_apps_client,
             AppManagementTransport::new(app_name, has_url)
                 .delete_missing(container_app_delete_missing),
         )
     }
 
     fn setup_mock_service_provider_with_app_management(
-        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
         app_management_transport: AppManagementTransport,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
-
-        mock_provider
-            .expect_get_azure_container_apps_client()
-            .returning(move |_| Ok(container_apps_client.clone()));
 
         let app_management_client = app_management_client_with_transport(app_management_transport);
         mock_provider
@@ -5092,38 +4963,20 @@ mod tests {
             None
         };
 
-        // Set up Container Apps client mock - create custom response if we need to override URL
-        let app_management_transport;
-        let container_apps_mock = if needs_readiness_probe && mock_server.is_some() {
+        let app_management_transport = if needs_readiness_probe && mock_server.is_some() {
             // Create custom mock that returns the mock server URL
             let mock_server_url = mock_server.as_ref().unwrap().base_url();
-            app_management_transport =
-                AppManagementTransport::new(app_name, true).custom_url(&mock_server_url);
-            setup_mock_client_with_custom_url(app_name, &mock_server_url, for_deletion)
+            AppManagementTransport::new(app_name, true).custom_url(&mock_server_url)
         } else if for_deletion {
-            app_management_transport = AppManagementTransport::new(app_name, has_url);
-            setup_mock_client_for_creation_and_deletion(app_name, has_url)
+            AppManagementTransport::new(app_name, has_url)
         } else {
-            app_management_transport = AppManagementTransport::new(app_name, has_url);
-            setup_mock_client_for_creation_and_update(app_name, has_url)
+            AppManagementTransport::new(app_name, has_url)
         };
 
-        let mock_provider = setup_mock_service_provider_with_app_management(
-            container_apps_mock,
-            app_management_transport,
-        );
+        let mock_provider =
+            setup_mock_service_provider_with_app_management(app_management_transport);
 
         (mock_provider, mock_server)
-    }
-
-    fn setup_mock_client_with_custom_url(
-        app_name: &str,
-        custom_url: &str,
-        _for_deletion: bool,
-    ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(
-            ContainerAppsTransport::new(app_name, true).custom_url(custom_url),
-        )
     }
 
     fn create_container_app_with_custom_url(app_name: &str, custom_url: &str) -> ContainerApp {
@@ -5452,9 +5305,7 @@ mod tests {
         #[case] app_missing: bool,
     ) {
         let app_name = format!("test-{}", worker.id);
-        let mock_container_apps = setup_mock_client_for_best_effort_deletion(&app_name);
         let mock_provider = setup_mock_service_provider_with_delete_missing(
-            mock_container_apps,
             &app_name,
             worker.ingress == Ingress::Public,
             app_missing,
@@ -5496,9 +5347,7 @@ mod tests {
     async fn test_long_running_creation_operation() {
         let worker = basic_function();
         let app_name = format!("test-{}", worker.id);
-        let mock_container_apps = setup_mock_client_for_long_running_creation(&app_name, false);
         let mock_provider = setup_mock_service_provider_with_app_management(
-            mock_container_apps,
             AppManagementTransport::new(&app_name, false).long_running_create(),
         );
 
@@ -5530,9 +5379,7 @@ mod tests {
         let worker = function_public_ingress();
         let app_name = format!("test-{}", worker.id);
 
-        let container_apps_client =
-            container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, true));
-        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, true);
+        let mock_provider = setup_mock_service_provider(&app_name, true);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5564,9 +5411,7 @@ mod tests {
         let worker = function_private_ingress();
         let app_name = format!("test-{}", worker.id);
 
-        let container_apps_client =
-            container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, false));
-        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
+        let mock_provider = setup_mock_service_provider(&app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5593,11 +5438,10 @@ mod tests {
         let worker = function_custom_config();
         let app_name = format!("test-{}", worker.id);
 
-        let container_apps_client = container_apps_client_with_transport(
-            ContainerAppsTransport::new(&app_name, false)
+        let mock_provider = setup_mock_service_provider_with_app_management(
+            AppManagementTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_custom_resources),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5619,11 +5463,10 @@ mod tests {
         let worker = function_with_env_vars();
         let app_name = format!("test-{}", worker.id);
 
-        let container_apps_client = container_apps_client_with_transport(
-            ContainerAppsTransport::new(&app_name, false)
+        let mock_provider = setup_mock_service_provider_with_app_management(
+            AppManagementTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_expected_env_vars),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
