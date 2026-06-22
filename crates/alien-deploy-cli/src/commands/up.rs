@@ -1931,6 +1931,7 @@ async fn initialize_deployment(
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
+        setup_method: None,
     };
 
     let response = client
