@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use tracing::info;
 
 use crate::azure_utils::get_resource_group_name;
-use crate::core::{ResourceControllerContext, StorageAccount};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureStorageAccountOutputs, AzureTableKvHeartbeatData, HeartbeatBackend,
@@ -13,6 +13,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use azure_mgmt_storage::package_2023_05::models::StorageAccount;
 use chrono::Utc;
 use serde::Serialize;
 

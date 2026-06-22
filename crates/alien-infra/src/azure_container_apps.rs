@@ -4,13 +4,9 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use azure_core::credentials::{AccessToken, TokenCredential};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
-pub use azure_mgmt_app::package_preview_2024_08::models::{
-    certificate, configuration, container_app, custom_domain, dapr, dapr_component,
-    identity_settings, ingress, managed_environment, BaseContainer, Certificate,
-    CertificateKeyVaultProperties, Configuration, Container, ContainerResources, CustomDomain,
-    CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar, IdentitySettings,
-    Ingress, ManagedEnvironment, RegistryCredentials, Scale, Secret, Template, TrackedResource,
-    TrafficWeight, VnetConfiguration, WorkloadProfile,
+use azure_mgmt_app::package_preview_2024_08::models::{
+    container_app, Certificate, Configuration, DaprComponent, ManagedEnvironment, Template,
+    TrackedResource,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};

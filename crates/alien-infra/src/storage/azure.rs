@@ -1,7 +1,7 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    core::{ResourceControllerContext, StorageAccount},
+    core::ResourceControllerContext,
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
@@ -14,6 +14,7 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use azure_mgmt_storage::package_2023_05::models::{
     container_properties::PublicAccess, BlobContainer, BlobServiceProperties, ContainerProperties,
+    StorageAccount,
 };
 use chrono::Utc;
 use serde::Serialize;

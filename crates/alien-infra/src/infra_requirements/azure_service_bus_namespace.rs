@@ -2,7 +2,7 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
-use crate::core::{ResourceControllerContext, SbNamespace};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
@@ -13,7 +13,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use azure_mgmt_servicebus::package_2024_01::models::{
-    sb_namespace_properties, Resource, SbNamespaceProperties, TrackedResource,
+    sb_namespace_properties, Resource, SbNamespace, SbNamespaceProperties, TrackedResource,
 };
 use chrono::Utc;
 use serde::Serialize;

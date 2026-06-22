@@ -37,30 +37,26 @@ use azure_identity::{
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
 use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
-pub use azure_mgmt_authorization::package_2022_04_01::models::{
-    role_assignment_properties::{self, PrincipalType as RoleAssignmentPropertiesPrincipalType},
-    Permission, RoleAssignment, RoleAssignmentCreateParameters, RoleAssignmentProperties,
-    RoleDefinition, RoleDefinitionProperties,
+use azure_mgmt_authorization::package_2022_04_01::models::{
+    RoleAssignment, RoleAssignmentCreateParameters, RoleDefinition,
 };
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
-pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
+use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
-pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
+use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 use azure_mgmt_network::package_2024_03 as azure_network_2024_03;
-pub use azure_mgmt_network::package_2024_03::models::{
-    AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
+use azure_mgmt_network::package_2024_03::models::{
+    NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
-pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
+use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 use azure_mgmt_servicebus::package_2024_01;
-pub use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue, SbQueueProperties};
+use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue};
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
-use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
-pub use azure_mgmt_storage::package_2023_05::models::{
-    Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
-    StorageAccountPropertiesCreateParameters,
+use azure_mgmt_storage::package_2023_05::models::{
+    BlobContainer, BlobServiceProperties, StorageAccount, StorageAccountCreateParameters,
 };
 use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::client::ServiceUsage;

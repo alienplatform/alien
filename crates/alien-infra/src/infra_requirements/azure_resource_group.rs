@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::core::{ResourceControllerContext, ResourceGroup};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
 use alien_core::{
@@ -13,6 +13,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use azure_mgmt_resources::package_resources_2021_04::models::ResourceGroup;
 use chrono::Utc;
 use serde_json::{json, Value};
 

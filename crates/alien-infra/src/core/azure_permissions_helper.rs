@@ -5,11 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::{
-    AuthorizationApi, Permission, ResourceControllerContext, RoleAssignmentCreateParameters,
-    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
-    RoleDefinitionProperties, Scope,
-};
+use crate::core::{AuthorizationApi, ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
 use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context};
@@ -19,6 +15,11 @@ use alien_permissions::{
         AzureRuntimePermissionsGenerator,
     },
     BindingTarget, PermissionContext,
+};
+use azure_mgmt_authorization::package_2022_04_01::models::{
+    role_assignment_properties::PrincipalType as RoleAssignmentPropertiesPrincipalType, Permission,
+    RoleAssignmentCreateParameters, RoleAssignmentProperties, RoleDefinition,
+    RoleDefinitionProperties,
 };
 
 use tracing::{info, warn};

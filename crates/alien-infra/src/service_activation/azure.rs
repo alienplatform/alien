@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{Provider, ResourceControllerContext};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureResourceProviderActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -11,6 +11,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError as _};
 use alien_macros::controller;
+use azure_mgmt_resources::package_resources_2021_04::models::Provider;
 use chrono::Utc;
 
 #[controller]

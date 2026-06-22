@@ -2,11 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::{
-    Identity, Permission, ResourceControllerContext, RoleAssignmentCreateParameters,
-    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
-    RoleDefinitionProperties, Scope,
-};
+use crate::core::{ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureManagedIdentityServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -23,7 +19,12 @@ use alien_permissions::{
     },
     BindingTarget, PermissionContext,
 };
-use azure_mgmt_msi::package_2023_01_31::models::TrackedResource;
+use azure_mgmt_authorization::package_2022_04_01::models::{
+    role_assignment_properties::PrincipalType as RoleAssignmentPropertiesPrincipalType, Permission,
+    RoleAssignmentCreateParameters, RoleAssignmentProperties, RoleDefinition,
+    RoleDefinitionProperties,
+};
+use azure_mgmt_msi::package_2023_01_31::models::{Identity, TrackedResource};
 use chrono::Utc;
 use std::collections::HashMap;
 

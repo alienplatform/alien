@@ -1,10 +1,4 @@
-use crate::azure_container_apps::{
-    certificate, configuration, container_app, custom_domain, dapr, identity_settings, ingress,
-    BaseContainer, Certificate, CertificateKeyVaultProperties, Configuration, Container,
-    ContainerApp, ContainerAppProperties, ContainerResources, CustomDomain, Dapr, EnvironmentVar,
-    IdentitySettings, Ingress as AzureContainerAppsIngress, RegistryCredentials, Scale, Secret,
-    Template, TrackedResource, TrafficWeight,
-};
+use crate::azure_container_apps::{ContainerApp, ContainerAppProperties};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
@@ -20,8 +14,8 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+use crate::core::EnvironmentVariableBuilder;
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
-use crate::core::{EnvironmentVariableBuilder, SbQueue, SbQueueProperties};
 use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -31,6 +25,14 @@ use crate::infra_requirements::azure_utils::{
 };
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
+use azure_mgmt_app::package_preview_2024_08::models::{
+    certificate, configuration, container_app, custom_domain, dapr, dapr_component,
+    identity_settings, ingress, BaseContainer, Certificate, CertificateKeyVaultProperties,
+    Configuration, Container, ContainerResources, CustomDomain, Dapr, DaprComponent, DaprMetadata,
+    EnvironmentVar, IdentitySettings, Ingress as AzureContainerAppsIngress, RegistryCredentials,
+    Scale, Secret, Template, TrackedResource, TrafficWeight,
+};
+use azure_mgmt_servicebus::package_2024_01::models::{SbQueue, SbQueueProperties};
 
 /// Generates a deterministic Azure Container Apps name for a worker.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
@@ -1572,8 +1574,6 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
-
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
 
@@ -3356,8 +3356,6 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
-
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
 
@@ -4045,8 +4043,6 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
-
         let azure_config = ctx.get_azure_config()?;
         // Dapr components live on the Container Apps Environment, which may be in a
         // different resource group than the deployment (shared/external environments).
@@ -4189,8 +4185,6 @@ impl AzureWorkerController {
         storage_ref: &alien_core::ResourceRef,
         _events: &[String],
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
-
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
         let resource_group_name = env_outputs.resource_group_name.clone();
@@ -4322,8 +4316,6 @@ impl AzureWorkerController {
         cron: &str,
         index: usize,
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
-
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
         let resource_group_name = env_outputs.resource_group_name.clone();
@@ -4507,13 +4499,16 @@ mod tests {
     use std::time::Duration;
 
     use crate::azure_container_apps::{
-        configuration, container_app, ingress, Configuration, ContainerApp, ContainerAppProperties,
-        Ingress as AzureContainerAppsIngress, MockContainerAppsApi, MockLongRunningOperationApi,
-        TrafficWeight,
+        ContainerApp, ContainerAppProperties, MockContainerAppsApi, MockLongRunningOperationApi,
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
     use alien_error::{AlienError, ContextError};
+    use azure_mgmt_app::package_preview_2024_08::models::{
+        configuration, container_app, ingress, Configuration, Ingress as AzureContainerAppsIngress,
+        TrafficWeight,
+    };
+    use azure_mgmt_authorization::package_2022_04_01::models::RoleAssignment;
     use httpmock::MockServer;
     use rstest::rstest;
 
@@ -4923,7 +4918,7 @@ mod tests {
                 mock_auth
                     .expect_create_or_update_role_assignment_by_id()
                     .returning(|_, role_assignment| {
-                        Ok(crate::core::RoleAssignment {
+                        Ok(RoleAssignment {
                             id: None,
                             name: None,
                             properties: Some(role_assignment.properties.clone()),

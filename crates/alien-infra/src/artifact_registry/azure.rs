@@ -3,7 +3,7 @@ use alien_macros::controller;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::{OperationResult, Registry, ResourceControllerContext};
+use crate::core::{OperationResult, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
@@ -12,7 +12,7 @@ use alien_core::{
     ResourceStatus,
 };
 use azure_mgmt_containerregistry::package_2023_11_preview::models::{
-    registry_properties, sku, RegistryProperties, Resource, Sku,
+    registry_properties, sku, Registry, RegistryProperties, Resource, Sku,
 };
 use chrono::Utc;
 

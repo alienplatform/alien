@@ -7,10 +7,7 @@
 //! - Public IP addresses for NAT
 //! - Network Security Groups (NSGs) for traffic control
 
-use crate::core::{
-    AddressSpace, NatGateway, NetworkSecurityGroup, OperationResult, PublicIpAddress,
-    ResourceControllerContext, Subnet, VirtualNetwork,
-};
+use crate::core::{OperationResult, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use alien_core::{
@@ -21,11 +18,12 @@ use alien_core::{
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
 use azure_mgmt_network::package_2024_03::models::{
-    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, IpAllocationMethod,
-    NatGatewayPropertiesFormat, NatGatewaySku, NetworkSecurityGroupPropertiesFormat,
+    nat_gateway_sku, public_ip_address_sku, security_rule_properties_format, AddressSpace,
+    IpAllocationMethod, NatGateway, NatGatewayPropertiesFormat, NatGatewaySku,
+    NetworkSecurityGroup, NetworkSecurityGroupPropertiesFormat, PublicIpAddress,
     PublicIpAddressPropertiesFormat, PublicIpAddressSku, Resource, SecurityRule,
-    SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat, SubResource,
-    SubnetPropertiesFormat, VirtualNetworkPropertiesFormat,
+    SecurityRuleAccess, SecurityRuleDirection, SecurityRulePropertiesFormat, SubResource, Subnet,
+    SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

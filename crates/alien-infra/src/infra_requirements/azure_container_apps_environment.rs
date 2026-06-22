@@ -3,9 +3,6 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_container_apps::{
-    managed_environment, ManagedEnvironment, TrackedResource, VnetConfiguration,
-};
 use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::core::{LongRunningOperation, OperationResult};
@@ -20,6 +17,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use azure_mgmt_app::package_preview_2024_08::models::{
+    managed_environment, managed_environment::properties::ProvisioningState, ManagedEnvironment,
+    TrackedResource, VnetConfiguration,
+};
 use chrono::Utc;
 
 #[controller]
@@ -209,9 +210,8 @@ impl AzureContainerAppsEnvironmentController {
         {
             Ok(managed_env) => {
                 if let Some(properties) = &managed_env.properties {
-                    use crate::azure_container_apps::managed_environment::properties::ProvisioningState::*;
                     match properties.provisioning_state.as_ref() {
-                        Some(Succeeded) => {
+                        Some(ProvisioningState::Succeeded) => {
                             info!(environment_name=%environment_name, "Environment creation completed");
                             self.handle_creation_completed(&managed_env, azure_config);
 
@@ -221,16 +221,16 @@ impl AzureContainerAppsEnvironmentController {
                                 suggested_delay: None,
                             })
                         }
-                        Some(InitializationInProgress)
-                        | Some(InfrastructureSetupInProgress)
-                        | Some(Waiting) => {
+                        Some(ProvisioningState::InitializationInProgress)
+                        | Some(ProvisioningState::InfrastructureSetupInProgress)
+                        | Some(ProvisioningState::Waiting) => {
                             debug!(environment_name=%environment_name, "Environment still being created");
                             Ok(HandlerAction::Stay {
                                 max_times: 20,
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
-                        Some(Failed) => {
+                        Some(ProvisioningState::Failed) => {
                             error!(environment_name=%environment_name, "Environment creation failed");
                             return Err(AlienError::new(ErrorData::CloudPlatformError {
                                 message: "Environment creation failed with status: Failed"
@@ -344,9 +344,8 @@ impl AzureContainerAppsEnvironmentController {
             );
 
             if let Some(properties) = &managed_env.properties {
-                use crate::azure_container_apps::managed_environment::properties::ProvisioningState::*;
                 match properties.provisioning_state.as_ref() {
-                    Some(Succeeded) => {
+                    Some(ProvisioningState::Succeeded) => {
                         // Environment is healthy
                     }
                     Some(state) => {

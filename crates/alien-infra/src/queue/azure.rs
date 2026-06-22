@@ -1,4 +1,4 @@
-use crate::core::{ResourceControllerContext, SbQueue, SbQueueProperties};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureServiceBusQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -7,6 +7,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use azure_mgmt_servicebus::package_2024_01::models::{SbQueue, SbQueueProperties};
 use chrono::Utc;
 use serde::Serialize;
 use std::time::Duration;
@@ -378,9 +379,8 @@ mod tests {
     use crate::core::MockAuthorizationApi;
     use crate::core::MockAzureServiceBusManagementApi;
     use crate::core::MockPlatformServiceProvider;
-    use crate::core::SbNamespace;
     use alien_core::{Platform, Queue, ResourceStatus};
-    use azure_mgmt_servicebus::package_2024_01::models::TrackedResource;
+    use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, TrackedResource};
     use std::sync::Arc;
 
     fn setup_mock_mgmt() -> Arc<MockAzureServiceBusManagementApi> {
