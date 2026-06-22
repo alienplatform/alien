@@ -36,7 +36,7 @@ use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_client::{
-    create, create_dynamic, delete, get, get_dynamic, namespaced, replace, replace_dynamic,
+    create, create_dynamic, delete, get, get_dynamic, replace, replace_dynamic,
 };
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
@@ -282,7 +282,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 target.resource_id,
             )?;
             get(
-                namespaced::<Secret>(&secrets_client, secret_namespace),
+                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), secret_namespace),
                 &secret_ref.secret_name,
             )
             .await
@@ -561,7 +561,7 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     if let Some(ingress_name) = state.ingress_name.take() {
         delete_not_found_ok(
             delete::<K8sIngress>(
-                namespaced::<K8sIngress>(&route_client, namespace),
+                kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace),
                 &ingress_name,
             )
             .await,
@@ -571,7 +571,7 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     if let Some(service_name) = state.service_name.take() {
         delete_not_found_ok(
             delete::<Service>(
-                namespaced::<Service>(&service_client, namespace),
+                kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
                 &service_name,
             )
             .await,
@@ -581,7 +581,7 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     if let Some(secret_name) = state.managed_tls_secret_name.take() {
         delete_not_found_ok(
             delete::<Secret>(
-                namespaced::<Secret>(&secrets_client, namespace),
+                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
                 &secret_name,
             )
             .await,
@@ -677,7 +677,7 @@ async fn cleanup_stale_endpoint_objects(
         if Some(ingress_name.as_str()) != active.ingress_name.as_deref() {
             delete_not_found_ok(
                 delete::<K8sIngress>(
-                    namespaced::<K8sIngress>(route_client, namespace),
+                    kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace),
                     &ingress_name,
                 )
                 .await,
@@ -695,7 +695,7 @@ async fn cleanup_stale_endpoint_objects(
                 .await?;
             delete_not_found_ok(
                 delete::<Secret>(
-                    namespaced::<Secret>(&secrets_client, namespace),
+                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
                     &secret_name,
                 )
                 .await,
@@ -1569,22 +1569,34 @@ async fn upsert_service(
     mut service: Service,
     resource_id: &str,
 ) -> Result<()> {
-    match create(namespaced::<Service>(client, namespace), &service).await {
+    match create(
+        kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
+        &service,
+    )
+    .await
+    {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(namespaced::<Service>(client, namespace), name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get Service '{}' before update", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            let existing = get(
+                kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
+                name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get Service '{}' before update", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             service.metadata.resource_version = existing.metadata.resource_version;
-            replace(namespaced::<Service>(client, namespace), name, &service)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update Service '{}'", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            replace(
+                kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
+                name,
+                &service,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update Service '{}'", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1631,22 +1643,34 @@ async fn upsert_tls_secret(
         ..Default::default()
     };
 
-    match create(namespaced::<Secret>(client, namespace), &secret).await {
+    match create(
+        kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
+        &secret,
+    )
+    .await
+    {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(namespaced::<Secret>(client, namespace), name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get TLS Secret '{}' before update", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            let existing = get(
+                kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
+                name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get TLS Secret '{}' before update", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             secret.metadata.resource_version = existing.metadata.resource_version;
-            replace(namespaced::<Secret>(client, namespace), name, &secret)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update TLS Secret '{}'", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            replace(
+                kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
+                name,
+                &secret,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update TLS Secret '{}'", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1663,22 +1687,34 @@ async fn upsert_ingress(
     mut ingress: K8sIngress,
     resource_id: &str,
 ) -> Result<()> {
-    match create(namespaced::<K8sIngress>(client, namespace), &ingress).await {
+    match create(
+        kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
+        &ingress,
+    )
+    .await
+    {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(namespaced::<K8sIngress>(client, namespace), name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get Ingress '{}' before update", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            let existing = get(
+                kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
+                name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get Ingress '{}' before update", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             ingress.metadata.resource_version = existing.metadata.resource_version;
-            replace(namespaced::<K8sIngress>(client, namespace), name, &ingress)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update Ingress '{}'", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            replace(
+                kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
+                name,
+                &ingress,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update Ingress '{}'", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1836,12 +1872,15 @@ async fn observe_ingress_endpoint(
     name: &str,
     profile: &KubernetesIngressRouteProfile,
 ) -> Result<Option<LoadBalancerEndpoint>> {
-    let ingress = get(namespaced::<K8sIngress>(client, namespace), name)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to get Ingress '{}'", name),
-            resource_id: None,
-        })?;
+    let ingress = get(
+        kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
+        name,
+    )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: format!("Failed to get Ingress '{}'", name),
+        resource_id: None,
+    })?;
     let Some(status) = ingress.status else {
         return Ok(None);
     };

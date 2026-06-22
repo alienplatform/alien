@@ -409,14 +409,6 @@ fn apply_headers(
     Ok(())
 }
 
-pub(crate) fn namespaced<K>(client: &Client, namespace: &str) -> Api<K>
-where
-    K: kube::Resource<Scope = kube::core::NamespaceResourceScope>,
-    <K as kube::Resource>::DynamicType: Default,
-{
-    Api::namespaced(client.clone(), namespace)
-}
-
 pub(crate) fn list_params(
     label_selector: Option<String>,
     field_selector: Option<String>,

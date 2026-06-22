@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, namespaced, replace};
+use crate::kubernetes_client::{create, delete, get, replace};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -112,7 +112,7 @@ impl KubernetesWorkerController {
             .await?;
 
         let _created_deployment = create(
-            namespaced::<Deployment>(&deployment_client, &namespace),
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &namespace),
             &deployment,
         )
         .await
@@ -164,7 +164,7 @@ impl KubernetesWorkerController {
             .await?;
 
         match get(
-            namespaced::<Deployment>(&deployment_client, namespace),
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
             deployment_name,
         )
         .await
@@ -279,7 +279,7 @@ impl KubernetesWorkerController {
                 .await?;
 
             let deployment = get(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 deployment_name,
             )
             .await
@@ -388,7 +388,7 @@ impl KubernetesWorkerController {
 
         // Get the existing deployment to carry over resourceVersion (required for PUT)
         let existing = get(
-            namespaced::<Deployment>(&deployment_client, namespace),
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
             deployment_name,
         )
         .await
@@ -441,7 +441,7 @@ impl KubernetesWorkerController {
         new_deployment.metadata.resource_version = resource_version;
 
         replace(
-            namespaced::<Deployment>(&deployment_client, namespace),
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
             deployment_name,
             &new_deployment,
         )
@@ -491,7 +491,7 @@ impl KubernetesWorkerController {
             .await?;
 
         match get(
-            namespaced::<Deployment>(&deployment_client, namespace),
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
             deployment_name,
         )
         .await
@@ -613,7 +613,7 @@ impl KubernetesWorkerController {
                 .await?;
 
             match delete::<Deployment>(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 deployment_name,
             )
             .await
@@ -679,7 +679,7 @@ impl KubernetesWorkerController {
                 .await?;
 
             match get(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 deployment_name,
             )
             .await

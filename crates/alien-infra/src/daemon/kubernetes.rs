@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, namespaced, replace};
+use crate::kubernetes_client::{create, delete, get, replace};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -84,7 +84,7 @@ impl KubernetesDaemonController {
             .await?;
 
         create(
-            namespaced::<DaemonSet>(&workload_client, &namespace),
+            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), &namespace),
             &daemonset,
         )
         .await
@@ -148,7 +148,7 @@ impl KubernetesDaemonController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
             let daemonset = get(
-                namespaced::<DaemonSet>(&workload_client, namespace),
+                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
                 daemon_set_name,
             )
             .await
@@ -208,7 +208,7 @@ impl KubernetesDaemonController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
         let existing = get(
-            namespaced::<DaemonSet>(&workload_client, namespace),
+            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
             daemon_set_name,
         )
         .await
@@ -255,7 +255,7 @@ impl KubernetesDaemonController {
         new_daemonset.metadata.resource_version = resource_version;
 
         replace(
-            namespaced::<DaemonSet>(&workload_client, namespace),
+            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
             daemon_set_name,
             &new_daemonset,
         )
@@ -315,7 +315,7 @@ impl KubernetesDaemonController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
             match delete::<DaemonSet>(
-                namespaced::<DaemonSet>(&workload_client, namespace),
+                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
                 daemon_set_name,
             )
             .await
@@ -373,7 +373,7 @@ impl KubernetesDaemonController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
             match get(
-                namespaced::<DaemonSet>(&workload_client, namespace),
+                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
                 daemon_set_name,
             )
             .await
@@ -453,7 +453,7 @@ impl KubernetesDaemonController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
         match get(
-            namespaced::<DaemonSet>(&workload_client, namespace),
+            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
             daemon_set_name,
         )
         .await

@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, namespaced, replace};
+use crate::kubernetes_client::{create, delete, get, replace};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -167,7 +167,10 @@ impl KubernetesContainerController {
                 .await?;
 
             match create(
-                namespaced::<StatefulSet>(&deployment_client, &namespace),
+                kube::Api::<StatefulSet>::namespaced(
+                    deployment_client.as_ref().clone(),
+                    &namespace,
+                ),
                 &statefulset,
             )
             .await
@@ -177,7 +180,10 @@ impl KubernetesContainerController {
                 }
                 Err(err) if is_already_exists(&err) => {
                     let existing = get(
-                        namespaced::<StatefulSet>(&deployment_client, &namespace),
+                        kube::Api::<StatefulSet>::namespaced(
+                            deployment_client.as_ref().clone(),
+                            &namespace,
+                        ),
                         &container_name,
                     )
                     .await
@@ -226,7 +232,7 @@ impl KubernetesContainerController {
                 .await?;
 
             match create(
-                namespaced::<Deployment>(&deployment_client, &namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &namespace),
                 &deployment,
             )
             .await
@@ -236,7 +242,10 @@ impl KubernetesContainerController {
                 }
                 Err(err) if is_already_exists(&err) => {
                     let existing = get(
-                        namespaced::<Deployment>(&deployment_client, &namespace),
+                        kube::Api::<Deployment>::namespaced(
+                            deployment_client.as_ref().clone(),
+                            &namespace,
+                        ),
                         &container_name,
                     )
                     .await
@@ -308,7 +317,7 @@ impl KubernetesContainerController {
         // Check workload status (different API for Deployment vs StatefulSet)
         let (ready_replicas, replicas) = if self.is_stateful {
             match get(
-                namespaced::<StatefulSet>(&deployment_client, namespace),
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -338,7 +347,7 @@ impl KubernetesContainerController {
             }
         } else {
             match get(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -465,7 +474,10 @@ impl KubernetesContainerController {
 
             let (ready_replicas, replicas, workload) = if self.is_stateful {
                 let statefulset = get(
-                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    kube::Api::<StatefulSet>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
@@ -488,7 +500,10 @@ impl KubernetesContainerController {
                 }
             } else {
                 let deployment = get(
-                    namespaced::<Deployment>(&deployment_client, namespace),
+                    kube::Api::<Deployment>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
@@ -643,7 +658,7 @@ impl KubernetesContainerController {
         if self.is_stateful {
             // Get existing StatefulSet to carry over resourceVersion
             let existing = get(
-                namespaced::<StatefulSet>(&deployment_client, namespace),
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -670,7 +685,7 @@ impl KubernetesContainerController {
             new_statefulset.metadata.resource_version = resource_version;
 
             replace(
-                namespaced::<StatefulSet>(&deployment_client, namespace),
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
                 &new_statefulset,
             )
@@ -682,7 +697,7 @@ impl KubernetesContainerController {
         } else {
             // Get existing Deployment to carry over resourceVersion
             let existing = get(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -706,7 +721,7 @@ impl KubernetesContainerController {
             new_deployment.metadata.resource_version = resource_version;
 
             replace(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
                 &new_deployment,
             )
@@ -758,7 +773,7 @@ impl KubernetesContainerController {
 
         let (ready_replicas, replicas) = if self.is_stateful {
             match get(
-                namespaced::<StatefulSet>(&deployment_client, namespace),
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -782,7 +797,7 @@ impl KubernetesContainerController {
             }
         } else {
             match get(
-                namespaced::<Deployment>(&deployment_client, namespace),
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
                 workload_name,
             )
             .await
@@ -918,13 +933,19 @@ impl KubernetesContainerController {
 
             let delete_result = if self.is_stateful {
                 delete::<StatefulSet>(
-                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    kube::Api::<StatefulSet>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
             } else {
                 delete::<Deployment>(
-                    namespaced::<Deployment>(&deployment_client, namespace),
+                    kube::Api::<Deployment>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
@@ -998,14 +1019,20 @@ impl KubernetesContainerController {
 
             let get_result = if self.is_stateful {
                 get(
-                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    kube::Api::<StatefulSet>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
                 .map(|_| ())
             } else {
                 get(
-                    namespaced::<Deployment>(&deployment_client, namespace),
+                    kube::Api::<Deployment>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        namespace,
+                    ),
                     workload_name,
                 )
                 .await
@@ -1230,11 +1257,16 @@ impl KubernetesContainerController {
             return Ok(());
         };
 
-        match create(namespaced::<Service>(&service_client, namespace), &service).await {
+        match create(
+            kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
+            &service,
+        )
+        .await
+        {
             Ok(_) => Ok(()),
             Err(e) if is_already_exists(&e) => {
                 let existing = get(
-                    namespaced::<Service>(&service_client, namespace),
+                    kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
                     service_name,
                 )
                 .await
@@ -1247,7 +1279,7 @@ impl KubernetesContainerController {
                 })?;
                 service.metadata.resource_version = existing.metadata.resource_version;
                 replace(
-                    namespaced::<Service>(&service_client, namespace),
+                    kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
                     service_name,
                     &service,
                 )
@@ -1278,7 +1310,7 @@ impl KubernetesContainerController {
             .await?;
 
         match delete::<Service>(
-            namespaced::<Service>(&service_client, namespace),
+            kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
             service_name,
         )
         .await

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    list, list_params, namespaced, optional_events_read, optional_metrics_read,
-    optional_nodes_read, OptionalKubernetesReadStatus,
+    list, list_params, optional_events_read, optional_metrics_read, optional_nodes_read,
+    OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -59,7 +59,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         .await?;
 
     let pods = list(
-        namespaced::<Pod>(&pod_client, &input.config.namespace),
+        kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.config.namespace),
         None,
         None,
     )
@@ -77,7 +77,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         &input.config.namespace,
         None,
         list(
-            namespaced::<Event>(&event_client, &input.config.namespace),
+            kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.config.namespace),
             None,
             None,
         ),

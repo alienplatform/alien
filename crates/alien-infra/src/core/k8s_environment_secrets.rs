@@ -8,7 +8,7 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, namespaced, replace};
+use crate::kubernetes_client::{create, get, replace};
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -111,12 +111,17 @@ pub async fn reconcile_environment_secret(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    match create(namespaced::<Secret>(&secrets_client, namespace), &secret).await {
+    match create(
+        kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
+        &secret,
+    )
+    .await
+    {
         Ok(_) => {}
         Err(e) => {
             let err = format!("{e}");
             if err.contains("AlreadyExists") || err.contains("409") {
-                let existing = get(namespaced::<Secret>(&secrets_client, namespace), &secret_name)
+                let existing = get(kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace), &secret_name)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -126,7 +131,7 @@ pub async fn reconcile_environment_secret(
                     })?;
                 secret.metadata.resource_version = existing.metadata.resource_version;
                 replace(
-                    namespaced::<Secret>(&secrets_client, namespace),
+                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
                     &secret_name,
                     &secret,
                 )
