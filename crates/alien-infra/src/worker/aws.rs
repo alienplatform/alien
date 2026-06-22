@@ -5,19 +5,11 @@ use tracing::{debug, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::aws_sdk::{
-    AddPermissionRequest, ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
-    ApiGatewayV2CreateApiRequest as CreateApiRequest,
-    ApiGatewayV2CreateDomainNameRequest as CreateDomainNameRequest,
-    ApiGatewayV2CreateIntegrationRequest as CreateIntegrationRequest,
-    ApiGatewayV2CreateRouteRequest as CreateRouteRequest,
-    ApiGatewayV2CreateStageRequest as CreateStageRequest,
-    ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
-    CreateEventSourceMappingRequest, CreateFunctionInput, DescribeNetworkInterfacesRequest,
-    EndpointType, Environment, Filter, FunctionCode, GetFunctionConfigurationResponse,
-    IntegrationType, LambdaArchitecture, LambdaFunctionConfiguration, LambdaLastUpdateStatus,
-    LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration, PackageType,
-    ProtocolType, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
-    UpdateFunctionConfigurationRequest, VpcConfig,
+    AddPermissionRequest, CreateEventSourceMappingRequest, CreateFunctionInput,
+    DescribeNetworkInterfacesRequest, Environment, Filter, FunctionCode,
+    GetFunctionConfigurationResponse, LambdaArchitecture, LambdaFunctionConfiguration,
+    LambdaLastUpdateStatus, LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration,
+    PackageType, S3Event, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -41,6 +33,21 @@ use aws_sdk_acm::{
     primitives::Blob,
     types::Tag,
     Client as AcmClient,
+};
+use aws_sdk_apigatewayv2::{
+    error::{
+        ProvideErrorMetadata as ApiGatewayV2ProvideErrorMetadata, SdkError as ApiGatewayV2SdkError,
+    },
+    operation::{
+        create_api::{CreateApiInput, CreateApiOutput},
+        create_api_mapping::{CreateApiMappingInput, CreateApiMappingOutput},
+        create_domain_name::{CreateDomainNameInput, CreateDomainNameOutput},
+        create_integration::{CreateIntegrationInput, CreateIntegrationOutput},
+        create_route::{CreateRouteInput, CreateRouteOutput},
+        create_stage::{CreateStageInput, CreateStageOutput},
+    },
+    types::{DomainNameConfiguration, EndpointType, IntegrationType, ProtocolType, SecurityPolicy},
+    Client as ApiGatewayV2Client,
 };
 use aws_sdk_eventbridge::{
     error::{
@@ -199,6 +206,285 @@ where
                     message: format!(
                         "ACM {operation} API failed for {resource_type} '{resource_name}'"
                     ),
+                    resource_id: None,
+                }))
+        }
+    }
+}
+
+async fn create_api_gateway_api(
+    client: &ApiGatewayV2Client,
+    request: CreateApiInput,
+) -> Result<CreateApiOutput> {
+    let resource_name = request
+        .name
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_api()
+            .set_api_key_selection_expression(request.api_key_selection_expression)
+            .set_cors_configuration(request.cors_configuration)
+            .set_credentials_arn(request.credentials_arn)
+            .set_description(request.description)
+            .set_disable_schema_validation(request.disable_schema_validation)
+            .set_disable_execute_api_endpoint(request.disable_execute_api_endpoint)
+            .set_ip_address_type(request.ip_address_type)
+            .set_name(request.name)
+            .set_protocol_type(request.protocol_type)
+            .set_route_key(request.route_key)
+            .set_route_selection_expression(request.route_selection_expression)
+            .set_tags(request.tags)
+            .set_target(request.target)
+            .set_version(request.version)
+            .send()
+            .await,
+        "CreateApi",
+        "ApiGatewayApi",
+        &resource_name,
+    )
+}
+
+async fn create_api_gateway_integration(
+    client: &ApiGatewayV2Client,
+    request: CreateIntegrationInput,
+) -> Result<CreateIntegrationOutput> {
+    let api_id = request
+        .api_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_integration()
+            .set_api_id(request.api_id)
+            .set_connection_id(request.connection_id)
+            .set_connection_type(request.connection_type)
+            .set_content_handling_strategy(request.content_handling_strategy)
+            .set_credentials_arn(request.credentials_arn)
+            .set_description(request.description)
+            .set_integration_method(request.integration_method)
+            .set_integration_subtype(request.integration_subtype)
+            .set_integration_type(request.integration_type)
+            .set_integration_uri(request.integration_uri)
+            .set_passthrough_behavior(request.passthrough_behavior)
+            .set_payload_format_version(request.payload_format_version)
+            .set_request_parameters(request.request_parameters)
+            .set_request_templates(request.request_templates)
+            .set_response_parameters(request.response_parameters)
+            .set_template_selection_expression(request.template_selection_expression)
+            .set_timeout_in_millis(request.timeout_in_millis)
+            .set_tls_config(request.tls_config)
+            .send()
+            .await,
+        "CreateIntegration",
+        "ApiGatewayIntegration",
+        &api_id,
+    )
+}
+
+async fn create_api_gateway_route(
+    client: &ApiGatewayV2Client,
+    request: CreateRouteInput,
+) -> Result<CreateRouteOutput> {
+    let api_id = request
+        .api_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_route()
+            .set_api_id(request.api_id)
+            .set_api_key_required(request.api_key_required)
+            .set_authorization_scopes(request.authorization_scopes)
+            .set_authorization_type(request.authorization_type)
+            .set_authorizer_id(request.authorizer_id)
+            .set_model_selection_expression(request.model_selection_expression)
+            .set_operation_name(request.operation_name)
+            .set_request_models(request.request_models)
+            .set_request_parameters(request.request_parameters)
+            .set_route_key(request.route_key)
+            .set_route_response_selection_expression(request.route_response_selection_expression)
+            .set_target(request.target)
+            .send()
+            .await,
+        "CreateRoute",
+        "ApiGatewayRoute",
+        &api_id,
+    )
+}
+
+async fn create_api_gateway_stage(
+    client: &ApiGatewayV2Client,
+    request: CreateStageInput,
+) -> Result<CreateStageOutput> {
+    let api_id = request
+        .api_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_stage()
+            .set_access_log_settings(request.access_log_settings)
+            .set_api_id(request.api_id)
+            .set_auto_deploy(request.auto_deploy)
+            .set_client_certificate_id(request.client_certificate_id)
+            .set_default_route_settings(request.default_route_settings)
+            .set_deployment_id(request.deployment_id)
+            .set_description(request.description)
+            .set_route_settings(request.route_settings)
+            .set_stage_name(request.stage_name)
+            .set_stage_variables(request.stage_variables)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "CreateStage",
+        "ApiGatewayStage",
+        &api_id,
+    )
+}
+
+async fn create_api_gateway_domain_name(
+    client: &ApiGatewayV2Client,
+    request: CreateDomainNameInput,
+) -> Result<CreateDomainNameOutput> {
+    let domain_name = request
+        .domain_name
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_domain_name()
+            .set_domain_name(request.domain_name)
+            .set_domain_name_configurations(request.domain_name_configurations)
+            .set_mutual_tls_authentication(request.mutual_tls_authentication)
+            .set_routing_mode(request.routing_mode)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "CreateDomainName",
+        "ApiGatewayDomainName",
+        &domain_name,
+    )
+}
+
+async fn create_api_gateway_mapping(
+    client: &ApiGatewayV2Client,
+    request: CreateApiMappingInput,
+) -> Result<CreateApiMappingOutput> {
+    let domain_name = request
+        .domain_name
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    api_gateway_v2_result(
+        client
+            .create_api_mapping()
+            .set_api_id(request.api_id)
+            .set_api_mapping_key(request.api_mapping_key)
+            .set_domain_name(request.domain_name)
+            .set_stage(request.stage)
+            .send()
+            .await,
+        "CreateApiMapping",
+        "ApiGatewayApiMapping",
+        &domain_name,
+    )
+}
+
+async fn delete_api_gateway_mapping(
+    client: &ApiGatewayV2Client,
+    domain_name: &str,
+    api_mapping_id: &str,
+) -> Result<()> {
+    api_gateway_v2_result(
+        client
+            .delete_api_mapping()
+            .domain_name(domain_name)
+            .api_mapping_id(api_mapping_id)
+            .send()
+            .await,
+        "DeleteApiMapping",
+        "ApiGatewayApiMapping",
+        domain_name,
+    )?;
+
+    Ok(())
+}
+
+async fn delete_api_gateway_domain_name(
+    client: &ApiGatewayV2Client,
+    domain_name: &str,
+) -> Result<()> {
+    api_gateway_v2_result(
+        client
+            .delete_domain_name()
+            .domain_name(domain_name)
+            .send()
+            .await,
+        "DeleteDomainName",
+        "ApiGatewayDomainName",
+        domain_name,
+    )?;
+
+    Ok(())
+}
+
+async fn delete_api_gateway_api(client: &ApiGatewayV2Client, api_id: &str) -> Result<()> {
+    api_gateway_v2_result(
+        client.delete_api().api_id(api_id).send().await,
+        "DeleteApi",
+        "ApiGatewayApi",
+        api_id,
+    )?;
+
+    Ok(())
+}
+
+fn api_gateway_v2_result<T, E>(
+    result: std::result::Result<T, ApiGatewayV2SdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: ApiGatewayV2ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                match service_error.code() {
+                    Some("NotFoundException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                        }));
+                    }
+                    Some("ConflictException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceConflict {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                            message: service_error
+                                .message()
+                                .unwrap_or("API Gateway V2 conflict")
+                                .to_string(),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                    "API Gateway V2 {operation} API failed for {resource_type} '{resource_name}'"
+                ),
                     resource_id: None,
                 }))
         }
@@ -1041,24 +1327,24 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let api_tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id);
 
-        let api = client
-            .create_api(
-                CreateApiRequest::builder()
-                    .name(format!("{}-{}-api", ctx.resource_prefix, worker_config.id))
-                    .protocol_type(ProtocolType::Http)
-                    .set_tags(Some(api_tags))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway HTTP API create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API Gateway HTTP API".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let api = create_api_gateway_api(
+            &client,
+            CreateApiInput::builder()
+                .name(format!("{}-{}-api", ctx.resource_prefix, worker_config.id))
+                .protocol_type(ProtocolType::Http)
+                .set_tags(Some(api_tags))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway HTTP API create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API Gateway HTTP API".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         let api_id = api.api_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -1112,25 +1398,25 @@ impl AwsWorkerController {
             })
         })?;
 
-        let integration = client
-            .create_integration(
-                CreateIntegrationRequest::builder()
-                    .api_id(api_id.clone())
-                    .integration_type(IntegrationType::AwsProxy)
-                    .integration_uri(function_arn)
-                    .payload_format_version("2.0")
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway integration create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API integration".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let integration = create_api_gateway_integration(
+            &client,
+            CreateIntegrationInput::builder()
+                .api_id(api_id.clone())
+                .integration_type(IntegrationType::AwsProxy)
+                .integration_uri(function_arn)
+                .payload_format_version("2.0")
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway integration create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API integration".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         let integration_id = integration.integration_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -1184,24 +1470,24 @@ impl AwsWorkerController {
             })
         })?;
 
-        let route = client
-            .create_route(
-                CreateRouteRequest::builder()
-                    .api_id(api_id.clone())
-                    .route_key("$default")
-                    .target(format!("integrations/{}", integration_id))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway route create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API route".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let route = create_api_gateway_route(
+            &client,
+            CreateRouteInput::builder()
+                .api_id(api_id.clone())
+                .route_key("$default")
+                .target(format!("integrations/{}", integration_id))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway route create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API route".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         self.route_id = route.route_id.clone();
 
@@ -1260,28 +1546,28 @@ impl AwsWorkerController {
             })
         })?;
 
-        let stage = client
-            .create_stage(
-                CreateStageRequest::builder()
-                    .api_id(api_id.clone())
-                    .stage_name("$default")
-                    .auto_deploy(true)
-                    .set_tags(Some(standard_resource_tags(
-                        ctx.resource_prefix,
-                        &worker_config.id,
-                    )))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway stage create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API stage".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let stage = create_api_gateway_stage(
+            &client,
+            CreateStageInput::builder()
+                .api_id(api_id.clone())
+                .stage_name("$default")
+                .auto_deploy(true)
+                .set_tags(Some(standard_resource_tags(
+                    ctx.resource_prefix,
+                    &worker_config.id,
+                )))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway stage create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API stage".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         self.stage_name = stage.stage_name.clone().or(Some("$default".to_string()));
 
@@ -1346,33 +1632,33 @@ impl AwsWorkerController {
             })
         })?;
 
-        let domain = client
-            .create_domain_name(
-                CreateDomainNameRequest::builder()
-                    .domain_name(fqdn.clone())
-                    .domain_name_configurations(
-                        DomainNameConfiguration::builder()
-                            .certificate_arn(cert_arn)
-                            .endpoint_type(EndpointType::Regional)
-                            .security_policy(SecurityPolicy::Tls12)
-                            .build(),
-                    )
-                    .set_tags(Some(standard_resource_tags(
-                        ctx.resource_prefix,
-                        &worker_config.id,
-                    )))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway domain create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API domain name".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let domain = create_api_gateway_domain_name(
+            &client,
+            CreateDomainNameInput::builder()
+                .domain_name(fqdn.clone())
+                .domain_name_configurations(
+                    DomainNameConfiguration::builder()
+                        .certificate_arn(cert_arn)
+                        .endpoint_type(EndpointType::Regional)
+                        .security_policy(SecurityPolicy::Tls12)
+                        .build(),
+                )
+                .set_tags(Some(standard_resource_tags(
+                    ctx.resource_prefix,
+                    &worker_config.id,
+                )))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway domain create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API domain name".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         let endpoint = domain
             .domain_name_configurations
@@ -1437,24 +1723,24 @@ impl AwsWorkerController {
             .clone()
             .unwrap_or_else(|| "$default".to_string());
 
-        let mapping = client
-            .create_api_mapping(
-                CreateApiMappingRequest::builder()
-                    .domain_name(domain_name)
-                    .api_id(api_id.clone())
-                    .stage(stage)
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Invalid API Gateway API mapping create request".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API mapping".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let mapping = create_api_gateway_mapping(
+            &client,
+            CreateApiMappingInput::builder()
+                .domain_name(domain_name)
+                .api_id(api_id.clone())
+                .stage(stage)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Invalid API Gateway API mapping create request".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create API mapping".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         self.api_mapping_id = mapping.api_mapping_id.clone();
 
@@ -3493,7 +3779,7 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match client.delete_api_mapping(domain_name, api_mapping_id).await {
+            match delete_api_gateway_mapping(&client, domain_name, api_mapping_id).await {
                 Ok(()) => info!(worker=%worker_config.id, "API mapping deleted"),
                 Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "API mapping already gone");
@@ -3513,7 +3799,7 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match client.delete_domain_name(domain_name).await {
+            match delete_api_gateway_domain_name(&client, domain_name).await {
                 Ok(()) => {
                     info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
                 }
@@ -3536,7 +3822,7 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match client.delete_api(api_id).await {
+            match delete_api_gateway_api(&client, api_id).await {
                 Ok(()) => {
                     info!(worker=%worker_config.id, api_id=%api_id, "API Gateway deleted")
                 }
@@ -4435,6 +4721,17 @@ mod tests {
         },
         Client as AcmClient,
     };
+    use aws_sdk_apigatewayv2::{
+        operation::{
+            create_api::CreateApiOutput, create_api_mapping::CreateApiMappingOutput,
+            create_domain_name::CreateDomainNameOutput,
+            create_integration::CreateIntegrationOutput, create_route::CreateRouteOutput,
+            create_stage::CreateStageOutput, delete_api::DeleteApiOutput,
+            delete_api_mapping::DeleteApiMappingOutput, delete_domain_name::DeleteDomainNameOutput,
+        },
+        types::{DomainNameConfiguration, EndpointType, SecurityPolicy},
+        Client as ApiGatewayV2Client,
+    };
     use aws_sdk_eventbridge::{
         operation::{put_rule::PutRuleOutput, put_targets::PutTargetsOutput},
         types::RuleState,
@@ -4446,14 +4743,9 @@ mod tests {
     use rstest::rstest;
 
     use crate::aws_sdk::{
-        AddPermissionResponse, ApiGatewayV2CreateApiMappingResponse as ApiMapping,
-        ApiGatewayV2CreateApiResponse as Api, ApiGatewayV2CreateDomainNameResponse as DomainName,
-        ApiGatewayV2CreateIntegrationResponse as Integration,
-        ApiGatewayV2CreateRouteResponse as Route, ApiGatewayV2CreateStageResponse as Stage,
-        ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, CreateFunctionResponse,
-        EndpointType, GetFunctionConfigurationResponse, LambdaArchitecture, LambdaLastUpdateStatus,
-        LambdaState, MockApiGatewayV2Api, MockIamApi, MockLambdaApi, PackageType, SecurityPolicy,
-        UpdateFunctionCodeResponse, UpdateFunctionConfigurationResponse,
+        AddPermissionResponse, CreateFunctionResponse, GetFunctionConfigurationResponse,
+        LambdaArchitecture, LambdaLastUpdateStatus, LambdaState, MockIamApi, MockLambdaApi,
+        PackageType, UpdateFunctionCodeResponse, UpdateFunctionConfigurationResponse,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -4514,30 +4806,32 @@ mod tests {
             .build()
     }
 
-    fn test_api_gateway_api(api_endpoint: Option<&str>) -> Api {
-        let mut builder = Api::builder().api_id("test-api-id");
+    fn test_api_gateway_api(api_endpoint: Option<&str>) -> CreateApiOutput {
+        let mut builder = CreateApiOutput::builder().api_id("test-api-id");
         if let Some(api_endpoint) = api_endpoint {
             builder = builder.api_endpoint(api_endpoint);
         }
         builder.build()
     }
 
-    fn test_api_gateway_integration() -> Integration {
-        Integration::builder()
+    fn test_api_gateway_integration() -> CreateIntegrationOutput {
+        CreateIntegrationOutput::builder()
             .integration_id("test-integration-id")
             .build()
     }
 
-    fn test_api_gateway_route() -> Route {
-        Route::builder().route_id("test-route-id").build()
+    fn test_api_gateway_route() -> CreateRouteOutput {
+        CreateRouteOutput::builder()
+            .route_id("test-route-id")
+            .build()
     }
 
-    fn test_api_gateway_stage() -> Stage {
-        Stage::builder().stage_name("$default").build()
+    fn test_api_gateway_stage() -> CreateStageOutput {
+        CreateStageOutput::builder().stage_name("$default").build()
     }
 
-    fn test_api_gateway_domain(domain_name: &str) -> DomainName {
-        DomainName::builder()
+    fn test_api_gateway_domain(domain_name: &str) -> CreateDomainNameOutput {
+        CreateDomainNameOutput::builder()
             .domain_name(domain_name)
             .domain_name_configurations(
                 DomainNameConfiguration::builder()
@@ -4551,8 +4845,8 @@ mod tests {
             .build()
     }
 
-    fn test_api_gateway_mapping() -> ApiMapping {
-        ApiMapping::builder()
+    fn test_api_gateway_mapping() -> CreateApiMappingOutput {
+        CreateApiMappingOutput::builder()
             .api_mapping_id("test-mapping-id")
             .build()
     }
@@ -4626,59 +4920,94 @@ mod tests {
             .build()
     }
 
-    fn create_apigatewayv2_mock_for_creation() -> Arc<MockApiGatewayV2Api> {
-        let mut mock_apigw = MockApiGatewayV2Api::new();
-        mock_apigw.expect_create_api().returning(|_| {
-            Ok(test_api_gateway_api(Some(
-                "https://test-api-id.execute-api.us-east-1.amazonaws.com",
-            )))
-        });
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_| Ok(test_api_gateway_integration()));
-        mock_apigw
-            .expect_create_route()
-            .returning(|_| Ok(test_api_gateway_route()));
-        mock_apigw
-            .expect_create_stage()
-            .returning(|_| Ok(test_api_gateway_stage()));
-        mock_apigw
-            .expect_create_domain_name()
-            .returning(|_| Ok(test_api_gateway_domain("test.example.com")));
-        mock_apigw
-            .expect_create_api_mapping()
-            .returning(|_| Ok(test_api_gateway_mapping()));
-        Arc::new(mock_apigw)
+    fn create_apigatewayv2_mock_for_creation() -> ApiGatewayV2Client {
+        let create_api_rule = mock!(ApiGatewayV2Client::create_api)
+            .match_requests(|request| request.name().is_some())
+            .then_output(|| {
+                test_api_gateway_api(Some(
+                    "https://test-api-id.execute-api.us-east-1.amazonaws.com",
+                ))
+            });
+        let create_integration_rule = mock!(ApiGatewayV2Client::create_integration)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_integration);
+        let create_route_rule = mock!(ApiGatewayV2Client::create_route)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_route);
+        let create_stage_rule = mock!(ApiGatewayV2Client::create_stage)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_stage);
+        let create_domain_rule = mock!(ApiGatewayV2Client::create_domain_name)
+            .match_requests(|request| request.domain_name().is_some())
+            .then_output(|| test_api_gateway_domain("test.example.com"));
+        let create_mapping_rule = mock!(ApiGatewayV2Client::create_api_mapping)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_mapping);
+
+        mock_client!(
+            aws_sdk_apigatewayv2,
+            RuleMode::Sequential,
+            [
+                &create_api_rule,
+                &create_integration_rule,
+                &create_route_rule,
+                &create_stage_rule,
+                &create_domain_rule,
+                &create_mapping_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
-    fn create_apigatewayv2_mock_for_creation_and_deletion() -> Arc<MockApiGatewayV2Api> {
-        let mut mock_apigw = MockApiGatewayV2Api::new();
-        mock_apigw.expect_create_api().returning(|_| {
-            Ok(test_api_gateway_api(Some(
-                "https://test-api-id.execute-api.us-east-1.amazonaws.com",
-            )))
-        });
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_| Ok(test_api_gateway_integration()));
-        mock_apigw
-            .expect_create_route()
-            .returning(|_| Ok(test_api_gateway_route()));
-        mock_apigw
-            .expect_create_stage()
-            .returning(|_| Ok(test_api_gateway_stage()));
-        mock_apigw
-            .expect_create_domain_name()
-            .returning(|_| Ok(test_api_gateway_domain("test.example.com")));
-        mock_apigw
-            .expect_create_api_mapping()
-            .returning(|_| Ok(test_api_gateway_mapping()));
-        mock_apigw
-            .expect_delete_api_mapping()
-            .returning(|_, _| Ok(()));
-        mock_apigw.expect_delete_domain_name().returning(|_| Ok(()));
-        mock_apigw.expect_delete_api().returning(|_| Ok(()));
-        Arc::new(mock_apigw)
+    fn create_apigatewayv2_mock_for_creation_and_deletion() -> ApiGatewayV2Client {
+        let create_api_rule = mock!(ApiGatewayV2Client::create_api)
+            .match_requests(|request| request.name().is_some())
+            .then_output(|| {
+                test_api_gateway_api(Some(
+                    "https://test-api-id.execute-api.us-east-1.amazonaws.com",
+                ))
+            });
+        let create_integration_rule = mock!(ApiGatewayV2Client::create_integration)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_integration);
+        let create_route_rule = mock!(ApiGatewayV2Client::create_route)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_route);
+        let create_stage_rule = mock!(ApiGatewayV2Client::create_stage)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_stage);
+        let create_domain_rule = mock!(ApiGatewayV2Client::create_domain_name)
+            .match_requests(|request| request.domain_name().is_some())
+            .then_output(|| test_api_gateway_domain("test.example.com"));
+        let create_mapping_rule = mock!(ApiGatewayV2Client::create_api_mapping)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_mapping);
+        let delete_mapping_rule = mock!(ApiGatewayV2Client::delete_api_mapping)
+            .match_requests(|request| request.api_mapping_id() == Some("test-mapping-id"))
+            .then_output(|| DeleteApiMappingOutput::builder().build());
+        let delete_domain_rule = mock!(ApiGatewayV2Client::delete_domain_name)
+            .match_requests(|request| request.domain_name().is_some())
+            .then_output(|| DeleteDomainNameOutput::builder().build());
+        let delete_api_rule = mock!(ApiGatewayV2Client::delete_api)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(|| DeleteApiOutput::builder().build());
+
+        mock_client!(
+            aws_sdk_apigatewayv2,
+            RuleMode::Sequential,
+            [
+                &create_api_rule,
+                &create_integration_rule,
+                &create_route_rule,
+                &create_stage_rule,
+                &create_domain_rule,
+                &create_mapping_rule,
+                &delete_mapping_rule,
+                &delete_domain_rule,
+                &delete_api_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
     fn setup_mock_client_for_creation_and_update(
@@ -4867,7 +5196,7 @@ mod tests {
     fn setup_mock_service_provider(
         mock_lambda: Arc<MockLambdaApi>,
         mock_acm: Option<AcmClient>,
-        mock_apigw: Option<Arc<MockApiGatewayV2Api>>,
+        mock_apigw: Option<ApiGatewayV2Client>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
@@ -5348,42 +5677,47 @@ mod tests {
             |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
         );
 
-        // Validate API Gateway is created with the worker's name in the API name
-        let mut mock_apigw = MockApiGatewayV2Api::new();
-        mock_apigw
-            .expect_create_api()
-            .withf(|request| {
+        // Validate API Gateway creation through the generated API Gateway V2 client.
+        let create_api_rule = mock!(ApiGatewayV2Client::create_api)
+            .match_requests(|request| {
                 request
-                    .name
-                    .as_deref()
+                    .name()
                     .is_some_and(|name| name.contains("public-func"))
             })
-            .returning(|_| Ok(test_api_gateway_api(None)));
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_| Ok(test_api_gateway_integration()));
-        mock_apigw
-            .expect_create_route()
-            .returning(|_| Ok(test_api_gateway_route()));
-        mock_apigw
-            .expect_create_stage()
-            .returning(|_| Ok(test_api_gateway_stage()));
-        mock_apigw
-            .expect_create_domain_name()
-            .returning(|_| Ok(test_api_gateway_domain("public-func.test.example.com")));
-        mock_apigw
-            .expect_create_api_mapping()
-            .returning(|_| Ok(test_api_gateway_mapping()));
-        mock_apigw
-            .expect_delete_api_mapping()
-            .returning(|_, _| Ok(()));
-        mock_apigw.expect_delete_domain_name().returning(|_| Ok(()));
-        mock_apigw.expect_delete_api().returning(|_| Ok(()));
+            .then_output(|| test_api_gateway_api(None));
+        let create_integration_rule = mock!(ApiGatewayV2Client::create_integration)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_integration);
+        let create_route_rule = mock!(ApiGatewayV2Client::create_route)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_route);
+        let create_stage_rule = mock!(ApiGatewayV2Client::create_stage)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_stage);
+        let create_domain_rule = mock!(ApiGatewayV2Client::create_domain_name)
+            .match_requests(|request| request.domain_name() == Some("public-func.test.example.com"))
+            .then_output(|| test_api_gateway_domain("public-func.test.example.com"));
+        let create_mapping_rule = mock!(ApiGatewayV2Client::create_api_mapping)
+            .match_requests(|request| request.api_id() == Some("test-api-id"))
+            .then_output(test_api_gateway_mapping);
+        let apigw_client = mock_client!(
+            aws_sdk_apigatewayv2,
+            RuleMode::Sequential,
+            [
+                &create_api_rule,
+                &create_integration_rule,
+                &create_route_rule,
+                &create_stage_rule,
+                &create_domain_rule,
+                &create_mapping_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
 
         let mock_provider = setup_mock_service_provider(
             Arc::new(mock_lambda),
             Some(acm_client),
-            Some(Arc::new(mock_apigw)),
+            Some(apigw_client),
         );
 
         let mut executor = SingleControllerExecutor::builder()
@@ -5405,6 +5739,7 @@ mod tests {
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.url.is_some());
         assert_eq!(import_certificate_rule.num_calls(), 1);
+        assert_eq!(create_api_rule.num_calls(), 1);
     }
 
     /// Test that verifies private workers don't get URL creation
