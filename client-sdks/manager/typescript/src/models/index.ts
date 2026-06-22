@@ -122,6 +122,8 @@ export * from "./networkheartbeatstatus.js";
 export * from "./networksettings.js";
 export * from "./observedcounts.js";
 export * from "./observedhealth.js";
+export * from "./observedinventorybatch.js";
+export * from "./observedresourcesample.js";
 export * from "./platformenum.js";
 export * from "./presignedoperation.js";
 export * from "./presignedrequest.js";

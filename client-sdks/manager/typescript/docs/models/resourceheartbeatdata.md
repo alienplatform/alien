@@ -32,9 +32,9 @@ const value: models.ResourceHeartbeatDataWorker = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
     backend: "azureContainerApps",
   },
@@ -60,9 +60,9 @@ const value: models.ResourceHeartbeatDataContainer = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
     workloadKind: "daemonSet",
     backend: "kubernetes",
@@ -82,30 +82,24 @@ const value: models.ResourceHeartbeatDataDaemon = {
     daemonInstances: [
       {
         name: "<value>",
-        ready: true,
+        ready: false,
         replicaId: "<id>",
       },
     ],
-    daemonName: "<value>",
-    desiredMachines: 633734,
-    events: [
-      {
-        message: "<value>",
-        reason: "<value>",
-      },
-    ],
-    healthyInstances: 102281,
+    desiredMachines: 920664,
+    events: [],
+    healthyInstances: 222122,
     horizonClusterId: "<id>",
     horizonStatus: "<value>",
     latestUpdateTimestamp: "<value>",
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
-    unavailableInstances: 222122,
+    unavailableInstances: 631428,
     backend: "azure",
   },
   resourceType: "daemon",
@@ -146,9 +140,9 @@ const value: models.ResourceHeartbeatDataKubernetesCluster = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
   },
   resourceType: "kubernetes-cluster",
@@ -198,7 +192,7 @@ const value: models.ResourceHeartbeatDataKv = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },
@@ -226,7 +220,7 @@ const value: models.ResourceHeartbeatDataVault = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },
@@ -267,7 +261,7 @@ const value: models.ResourceHeartbeatDataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },
@@ -358,15 +352,15 @@ const value: models.ResourceHeartbeatDataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "creating",
+      health: "degraded",
+      lifecycle: "updating",
       partial: false,
-      stale: true,
+      stale: false,
     },
     backend: "azureContainerApps",
   },
@@ -445,20 +439,13 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
   data: {
     name: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unhealthy",
-      lifecycle: "creating",
+      collectionIssues: [],
+      health: "healthy",
+      lifecycle: "scaling",
       partial: true,
       stale: false,
     },
-    workloadProfileCount: 511598,
+    workloadProfileCount: 324464,
     workloadProfiles: [
       {
         name: "<value>",

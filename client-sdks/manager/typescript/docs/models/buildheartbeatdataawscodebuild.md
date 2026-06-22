@@ -14,15 +14,15 @@ let value: BuildHeartbeatDataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "updating",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "awsCodeBuild",
 };

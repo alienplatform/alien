@@ -13,9 +13,9 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 109377,
   backend: "awsLambda",
@@ -30,9 +30,9 @@ const value: models.WorkerHeartbeatDataGcpCloudRun = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   trafficCount: 570634,
   urls: [
@@ -52,9 +52,9 @@ const value: models.WorkerHeartbeatDataAzureContainerApps = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -77,9 +77,9 @@ const value: models.WorkerHeartbeatDataKubernetes = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 374516,
   workloadKind: "daemonSet",
@@ -104,9 +104,9 @@ const value: models.WorkerHeartbeatDataLocal = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 305200,
   backend: "local",

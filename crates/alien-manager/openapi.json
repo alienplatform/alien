@@ -7490,6 +7490,13 @@
               "null"
             ]
           },
+          "setupMethod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs."
+          },
           "stackSettings": {
             "oneOf": [
               {

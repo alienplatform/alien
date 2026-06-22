@@ -616,6 +616,7 @@ fn operator_deployment_doc(
         "OPERATOR_PERMISSION",
         options.permission.as_str(),
     );
+    append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
     if options.log_collector.is_some() {
         append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
@@ -2731,6 +2732,8 @@ spec:
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: OPERATOR_SETUP_METHOD
+              value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             - name: SYNC_TOKEN_FILE

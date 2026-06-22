@@ -11,9 +11,9 @@ let value: ResourceHeartbeatDataWorker = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
     backend: "azureContainerApps",
   },

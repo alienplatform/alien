@@ -12,9 +12,9 @@ let value: WorkerHeartbeatDataAwsLambda = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 109377,
   backend: "awsLambda",

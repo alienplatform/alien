@@ -22,9 +22,9 @@ const value: models.ContainerHeartbeatDataHorizonPlatform = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "horizonPlatform",
 };
@@ -47,9 +47,9 @@ const value: models.ContainerHeartbeatDataKubernetes = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   workloadKind: "deployment",
   backend: "kubernetes",
@@ -67,9 +67,9 @@ const value: models.ContainerHeartbeatDataLocal = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };

@@ -10,7 +10,7 @@ let value: KvHeartbeatDataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },

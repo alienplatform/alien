@@ -6426,6 +6426,11 @@
             "type": "string",
             "nullable": true
           },
+          "setupMethod": {
+            "type": "string",
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs.",
+            "nullable": true
+          },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
             "nullable": true

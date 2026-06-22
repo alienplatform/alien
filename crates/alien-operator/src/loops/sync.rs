@@ -10,6 +10,8 @@
 use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
 use alien_core::sync::{SyncRequest, SyncResponse};
+use alien_core::{DeploymentStatus, ObservedInventoryBatch};
+use alien_deployment::run_observe_pass;
 use alien_error::{Context, IntoAlienError};
 use chrono::Utc;
 use reqwest::Client;
@@ -132,7 +134,10 @@ async fn sync_with_manager(
         .await?
         .expect("deployment_id must be set in online mode");
     let heartbeats = state.db.get_pending_heartbeats().await?;
-    let observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
+    let mut observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
+    if deployment_state.status == DeploymentStatus::Running {
+        observed_inventory_batches.extend(observe_running_deployment(state, &deployment_id).await?);
+    }
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
@@ -288,6 +293,36 @@ async fn sync_with_manager(
     }
 
     Ok(has_update || state_hydrated)
+}
+
+async fn observe_running_deployment(
+    state: &OperatorState,
+    deployment_id: &str,
+) -> crate::error::Result<Vec<ObservedInventoryBatch>> {
+    let client_config = super::deployment::resolve_client_config(
+        state.config.platform,
+        state.config.base_platform,
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let service_provider = state
+        .service_provider
+        .clone()
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    let observe_report = run_observe_pass(
+        state.config.platform,
+        &client_config,
+        &service_provider,
+        deployment_id,
+    )
+    .await
+    .map_err(|e| e.into_generic())
+    .context(crate::error::ErrorData::SyncFailed {
+        message: "Failed to run observe pass before sync".to_string(),
+    })?;
+    Ok(observe_report.inventory_batches)
 }
 
 fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {

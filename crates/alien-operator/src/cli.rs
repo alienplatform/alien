@@ -6,7 +6,7 @@
 use crate::error::{ErrorData, Result};
 use crate::{run_operator_with_cancel, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
-use alien_core::Platform;
+use alien_core::{DeploymentState, DeploymentStatus, Platform, DEPLOYMENT_PROTOCOL_VERSION};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
@@ -58,6 +58,9 @@ pub struct Args {
 
     #[arg(long, env = "OPERATOR_PERMISSION")]
     pub operator_permission: Option<String>,
+
+    #[arg(long, env = "OPERATOR_SETUP_METHOD")]
+    pub operator_setup_method: Option<String>,
 
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
@@ -188,6 +191,7 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
     });
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
+    let operator_setup_method = args.operator_setup_method;
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -219,10 +223,15 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
                     args.operator_name.as_deref(),
                     operator_scope.as_deref(),
                     operator_permission.as_deref(),
+                    operator_setup_method.as_deref(),
                 )
                 .await?;
 
                 db.set_deployment_id(&initialized_deployment_id).await?;
+                if is_observe_permission(operator_permission.as_deref()) {
+                    db.set_deployment_state(&observe_only_initial_state(args.platform))
+                        .await?;
+                }
 
                 if let Some(ref dt) = deployment_token {
                     info!("   Received deployment-scoped token from manager");
@@ -338,6 +347,25 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
     run_operator_with_cancel(operator_config, service_provider, cancel).await?;
 
     Ok(())
+}
+
+fn is_observe_permission(permission: Option<&str>) -> bool {
+    matches!(permission, Some("observe"))
+}
+
+fn observe_only_initial_state(platform: Platform) -> DeploymentState {
+    DeploymentState {
+        platform,
+        status: DeploymentStatus::Running,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        error: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
+    }
 }
 
 #[cfg(unix)]
@@ -495,6 +523,7 @@ async fn initialize_with_manager(
     operator_name: Option<&str>,
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
+    operator_setup_method: Option<&str>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -546,6 +575,9 @@ async fn initialize_with_manager(
     }
     if let Some(permission) = operator_permission {
         builder = builder.body_map(|b| b.permission(permission.to_string()));
+    }
+    if let Some(setup_method) = operator_setup_method {
+        builder = builder.body_map(|b| b.setup_method(setup_method.to_string()));
     }
 
     let response = builder
@@ -733,7 +765,8 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::is_secret_file_mode_allowed;
+    use super::{is_observe_permission, is_secret_file_mode_allowed, observe_only_initial_state};
+    use alien_core::{DeploymentStatus, Platform};
 
     #[test]
     fn secret_file_mode_allows_kubernetes_fs_group_read() {
@@ -749,5 +782,19 @@ mod tests {
         assert!(!is_secret_file_mode_allowed(0o644));
         assert!(!is_secret_file_mode_allowed(0o700));
         assert!(!is_secret_file_mode_allowed(0o040));
+    }
+
+    #[test]
+    fn observe_permission_initializes_running_observe_state() {
+        assert!(is_observe_permission(Some("observe")));
+        assert!(!is_observe_permission(Some("manage")));
+        assert!(!is_observe_permission(None));
+
+        let state = observe_only_initial_state(Platform::Kubernetes);
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(state.platform, Platform::Kubernetes);
+        assert!(state.current_release.is_none());
+        assert!(state.target_release.is_none());
+        assert!(state.stack_state.is_none());
     }
 }

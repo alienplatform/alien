@@ -155,7 +155,6 @@ async fn run_step_loop_inner(
             client_config,
             &service_provider,
             deployment_id,
-            config,
         )
         .await?;
 
@@ -318,7 +317,6 @@ async fn run_step_loop_inner(
                 client_config,
                 &observe_service_provider,
                 deployment_id,
-                config,
             )
             .await?;
             observed_inventory_batches.extend(observe_report.inventory_batches);
