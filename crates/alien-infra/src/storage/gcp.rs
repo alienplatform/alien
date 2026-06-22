@@ -1,4 +1,4 @@
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -10,6 +10,7 @@ use alien_core::{
 };
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::model::{Binding, Policy};
 use google_cloud_storage::client::StorageControl;
 use google_cloud_storage::model::{
@@ -21,11 +22,10 @@ use google_cloud_storage::model::{
         },
         IamConfig as IamConfiguration, Lifecycle, Versioning,
     },
-    Bucket,
+    Bucket, DeleteObjectRequest,
 };
 
 use crate::core::ResourceControllerContext;
-use crate::gcp_storage;
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -101,6 +101,62 @@ fn gcs_iam_patch(uniform_bucket_level_access: bool, public_access_prevention: &s
     )
 }
 
+fn gcs_bucket_resource_name(bucket_name: &str) -> String {
+    if bucket_name.starts_with("projects/") {
+        bucket_name.to_string()
+    } else {
+        format!("projects/_/buckets/{bucket_name}")
+    }
+}
+
+fn gcs_bucket_update_mask(bucket: &Bucket) -> wkt::FieldMask {
+    let mut paths = Vec::new();
+    if bucket.versioning.is_some() {
+        paths.push("versioning".to_string());
+    }
+    if bucket.lifecycle.is_some() {
+        paths.push("lifecycle".to_string());
+    }
+    if bucket.iam_config.is_some() {
+        paths.push("iam_config".to_string());
+    }
+    if !bucket.labels.is_empty() {
+        paths.push("labels".to_string());
+    }
+    wkt::FieldMask::default().set_paths(paths)
+}
+
+fn gcs_gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::NotFound)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::NOT_FOUND.as_u16())
+}
+
+fn gcs_gax_error_is_conflict(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::AlreadyExists)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::CONFLICT.as_u16())
+}
+
+fn gcs_gax_platform_error(
+    error: google_cloud_gax::error::Error,
+    operation: &str,
+    bucket_name: &str,
+) -> AlienError<ErrorData> {
+    error
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("GCS {operation} request failed"),
+            resource_id: Some(bucket_name.to_string()),
+        })
+}
+
 #[controller]
 pub struct GcpStorageController {
     /// The actual bucket name (includes stack name prefix).
@@ -150,13 +206,28 @@ impl GcpStorageController {
         }
 
         // Create the bucket with basic configuration only
-        let created_bucket =
-            gcp_storage::create_bucket(&client, &gcp_config.project_id, &bucket_name, bucket)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create GCS bucket '{}'", bucket_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let created_bucket = match client
+            .create_bucket()
+            .set_parent(format!("projects/{}", gcp_config.project_id))
+            .set_bucket_id(bucket_name.clone())
+            .set_bucket(bucket)
+            .send()
+            .await
+        {
+            Ok(bucket) => Ok(bucket),
+            Err(error) if gcs_gax_error_is_conflict(&error) => {
+                Err(AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: "GCS bucket".to_string(),
+                    resource_name: bucket_name.clone(),
+                    message: "create_bucket reported the bucket already exists".to_string(),
+                }))
+            }
+            Err(error) => Err(gcs_gax_platform_error(error, "storage", &bucket_name)),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create GCS bucket '{}'", bucket_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
@@ -194,7 +265,12 @@ impl GcpStorageController {
             .await?;
 
         // Check if bucket exists and is ready
-        match gcp_storage::get_bucket(&client, bucket_name).await {
+        match client
+            .get_bucket()
+            .set_name(gcs_bucket_resource_name(bucket_name))
+            .send()
+            .await
+        {
             Ok(_bucket) => {
                 info!(bucket = %bucket_name, "Bucket is ready");
                 Ok(HandlerAction::Continue {
@@ -246,19 +322,51 @@ impl GcpStorageController {
             // First set uniform bucket-level access
             let bucket_patch = gcs_iam_patch(true, "inherited");
 
-            gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to enable uniform bucket-level access for bucket '{}'",
-                        bucket_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let update_mask = gcs_bucket_update_mask(&bucket_patch);
+            let mut bucket_patch = bucket_patch;
+            if bucket_patch.name.is_empty() {
+                bucket_patch.name = gcs_bucket_resource_name(bucket_name);
+            }
+            let mut request =
+                google_cloud_storage::model::UpdateBucketRequest::new().set_bucket(bucket_patch);
+            if !update_mask.paths.is_empty() {
+                request = request.set_update_mask(update_mask);
+            }
+
+            match client.update_bucket().with_request(request).send().await {
+                Ok(bucket) => Ok(bucket),
+                Err(error) if gcs_gax_error_is_not_found(&error) => {
+                    Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket".to_string(),
+                        resource_name: bucket_name.to_string(),
+                    }))
+                }
+                Err(error) => Err(gcs_gax_platform_error(error, "storage", bucket_name)),
+            }
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to enable uniform bucket-level access for bucket '{}'",
+                    bucket_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             // Then add public read binding via read-modify-write to preserve existing bindings
-            let mut existing_policy = gcp_storage::get_bucket_iam_policy(&client, bucket_name)
+            let mut existing_policy = client
+                .get_iam_policy()
+                .set_resource(gcs_bucket_resource_name(bucket_name))
+                .send()
                 .await
+                .map_err(|error| {
+                    if gcs_gax_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCS bucket IAM policy".to_string(),
+                            resource_name: bucket_name.to_string(),
+                        })
+                    } else {
+                        gcs_gax_platform_error(error, "storage", bucket_name)
+                    }
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get bucket IAM policy for '{}' before setting public read. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
                     resource_id: Some(config.id.clone()),
@@ -292,8 +400,22 @@ impl GcpStorageController {
 
                 existing_policy.version = 3;
 
-                gcp_storage::set_bucket_iam_policy(&client, bucket_name, existing_policy)
+                client
+                    .set_iam_policy()
+                    .set_resource(gcs_bucket_resource_name(bucket_name))
+                    .set_policy(existing_policy)
+                    .send()
                     .await
+                    .map_err(|error| {
+                        if gcs_gax_error_is_not_found(&error) {
+                            AlienError::new(ErrorData::CloudResourceNotFound {
+                                resource_type: "GCS bucket IAM policy".to_string(),
+                                resource_name: bucket_name.to_string(),
+                            })
+                        } else {
+                            gcs_gax_platform_error(error, "storage", bucket_name)
+                        }
+                    })
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
                         resource_id: Some(config.id.clone()),
@@ -328,12 +450,25 @@ impl GcpStorageController {
                 .await?;
 
             // Fetch bucket metadata without listing objects or reading object ACLs.
-            let bucket = gcp_storage::get_bucket(&client, bucket_name)
+            let bucket = match client
+                .get_bucket()
+                .set_name(gcs_bucket_resource_name(bucket_name))
+                .send()
                 .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to check GCS bucket during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            {
+                Ok(bucket) => Ok(bucket),
+                Err(error) if gcs_gax_error_is_not_found(&error) => {
+                    Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket".to_string(),
+                        resource_name: bucket_name.to_string(),
+                    }))
+                }
+                Err(error) => Err(gcs_gax_platform_error(error, "storage", bucket_name)),
+            }
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to check GCS bucket during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_gcp_storage_heartbeat(ctx, &config.id, bucket_name, bucket);
 
@@ -399,12 +534,31 @@ impl GcpStorageController {
 
         // Apply bucket configuration changes if needed
         if needs_update {
-            gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update GCS bucket '{}'", bucket_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let update_mask = gcs_bucket_update_mask(&bucket_patch);
+            let mut bucket_patch = bucket_patch;
+            if bucket_patch.name.is_empty() {
+                bucket_patch.name = gcs_bucket_resource_name(bucket_name);
+            }
+            let mut request =
+                google_cloud_storage::model::UpdateBucketRequest::new().set_bucket(bucket_patch);
+            if !update_mask.paths.is_empty() {
+                request = request.set_update_mask(update_mask);
+            }
+
+            match client.update_bucket().with_request(request).send().await {
+                Ok(bucket) => Ok(bucket),
+                Err(error) if gcs_gax_error_is_not_found(&error) => {
+                    Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket".to_string(),
+                        resource_name: bucket_name.to_string(),
+                    }))
+                }
+                Err(error) => Err(gcs_gax_platform_error(error, "storage", bucket_name)),
+            }
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update GCS bucket '{}'", bucket_name),
+                resource_id: Some(config.id.clone()),
+            })?;
             info!(bucket = %bucket_name, "Bucket configuration updated successfully");
         } else {
             info!(bucket = %bucket_name, "No bucket configuration changes needed");
@@ -442,7 +596,12 @@ impl GcpStorageController {
             .await?;
 
         // Check if bucket is ready after update
-        match gcp_storage::get_bucket(&client, bucket_name).await {
+        match client
+            .get_bucket()
+            .set_name(gcs_bucket_resource_name(bucket_name))
+            .send()
+            .await
+        {
             Ok(_bucket) => {
                 info!(bucket = %bucket_name, "Bucket is ready after update");
                 Ok(HandlerAction::Continue {
@@ -495,23 +654,56 @@ impl GcpStorageController {
                 // First set uniform bucket-level access
                 let bucket_patch = gcs_iam_patch(true, "inherited");
 
-                gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to enable uniform bucket-level access for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let update_mask = gcs_bucket_update_mask(&bucket_patch);
+                let mut bucket_patch = bucket_patch;
+                if bucket_patch.name.is_empty() {
+                    bucket_patch.name = gcs_bucket_resource_name(bucket_name);
+                }
+                let mut request = google_cloud_storage::model::UpdateBucketRequest::new()
+                    .set_bucket(bucket_patch);
+                if !update_mask.paths.is_empty() {
+                    request = request.set_update_mask(update_mask);
+                }
+
+                match client.update_bucket().with_request(request).send().await {
+                    Ok(bucket) => Ok(bucket),
+                    Err(error) if gcs_gax_error_is_not_found(&error) => {
+                        Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCS bucket".to_string(),
+                            resource_name: bucket_name.to_string(),
+                        }))
+                    }
+                    Err(error) => Err(gcs_gax_platform_error(error, "storage", bucket_name)),
+                }
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to enable uniform bucket-level access for bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 // Then set IAM policy
                 let iam_policy = Policy::new().set_version(1).set_bindings([Binding::new()
                     .set_role("roles/storage.objectViewer")
                     .set_members(["allUsers"])]);
 
-                gcp_storage::set_bucket_iam_policy(&client, bucket_name, iam_policy)
+                client
+                    .set_iam_policy()
+                    .set_resource(gcs_bucket_resource_name(bucket_name))
+                    .set_policy(iam_policy)
+                    .send()
                     .await
+                    .map_err(|error| {
+                        if gcs_gax_error_is_not_found(&error) {
+                            AlienError::new(ErrorData::CloudResourceNotFound {
+                                resource_type: "GCS bucket IAM policy".to_string(),
+                                resource_name: bucket_name.to_string(),
+                            })
+                        } else {
+                            gcs_gax_platform_error(error, "storage", bucket_name)
+                        }
+                    })
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
                         resource_id: Some(config.id.clone()),
@@ -525,26 +717,73 @@ impl GcpStorageController {
                 // First disable uniform bucket-level access
                 let bucket_patch = gcs_iam_patch(false, "enforced");
 
-                gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to disable uniform bucket-level access for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let update_mask = gcs_bucket_update_mask(&bucket_patch);
+                let mut bucket_patch = bucket_patch;
+                if bucket_patch.name.is_empty() {
+                    bucket_patch.name = gcs_bucket_resource_name(bucket_name);
+                }
+                let mut request = google_cloud_storage::model::UpdateBucketRequest::new()
+                    .set_bucket(bucket_patch);
+                if !update_mask.paths.is_empty() {
+                    request = request.set_update_mask(update_mask);
+                }
+
+                match client.update_bucket().with_request(request).send().await {
+                    Ok(bucket) => Ok(bucket),
+                    Err(error) if gcs_gax_error_is_not_found(&error) => {
+                        Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCS bucket".to_string(),
+                            resource_name: bucket_name.to_string(),
+                        }))
+                    }
+                    Err(error) => Err(gcs_gax_platform_error(error, "storage", bucket_name)),
+                }
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to disable uniform bucket-level access for bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 // Then remove allUsers from IAM policy
-                match gcp_storage::get_bucket_iam_policy(&client, bucket_name).await {
+                match client
+                    .get_iam_policy()
+                    .set_resource(gcs_bucket_resource_name(bucket_name))
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        if gcs_gax_error_is_not_found(&error) {
+                            AlienError::new(ErrorData::CloudResourceNotFound {
+                                resource_type: "GCS bucket IAM policy".to_string(),
+                                resource_name: bucket_name.to_string(),
+                            })
+                        } else {
+                            gcs_gax_platform_error(error, "storage", bucket_name)
+                        }
+                    }) {
                     Ok(mut current_policy) => {
                         current_policy.bindings.retain(|binding| {
                             !(binding.role == "roles/storage.objectViewer"
                                 && binding.members.contains(&"allUsers".to_string()))
                         });
 
-                        gcp_storage::set_bucket_iam_policy(&client, bucket_name, current_policy)
+                        client
+                            .set_iam_policy()
+                            .set_resource(gcs_bucket_resource_name(bucket_name))
+                            .set_policy(current_policy)
+                            .send()
                             .await
+                            .map_err(|error| {
+                                if gcs_gax_error_is_not_found(&error) {
+                                    AlienError::new(ErrorData::CloudResourceNotFound {
+                                        resource_type: "GCS bucket IAM policy".to_string(),
+                                        resource_name: bucket_name.to_string(),
+                                    })
+                                } else {
+                                    gcs_gax_platform_error(error, "storage", bucket_name)
+                                }
+                            })
                             .context(ErrorData::CloudPlatformError {
                                 message: format!(
                                     "Failed to update IAM policy for bucket '{}'",
@@ -649,15 +888,63 @@ impl GcpStorageController {
             .get_gcp_storage_control_client(gcp_config)
             .await?;
 
-        // Best effort: try to empty the bucket first
-        match gcp_storage::empty_bucket(&client, bucket_name).await {
-            Ok(_) => {
-                info!(bucket = %bucket_name, "Bucket emptied successfully");
+        let mut page_token = String::new();
+        let mut emptied_successfully = true;
+        loop {
+            let response = match client
+                .list_objects()
+                .set_parent(gcs_bucket_resource_name(bucket_name))
+                .set_page_size(1000)
+                .set_page_token(page_token.clone())
+                .set_versions(true)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if gcs_gax_error_is_not_found(&error) => break,
+                Err(e) => {
+                    emptied_successfully = false;
+                    info!(bucket = %bucket_name, error=?e, "Could not list bucket objects, continuing with deletion attempt");
+                    break;
+                }
+            };
+
+            for object in response.objects {
+                let generation = if object.generation == 0 {
+                    None
+                } else {
+                    Some(object.generation)
+                };
+                let mut request = DeleteObjectRequest::new()
+                    .set_bucket(gcs_bucket_resource_name(bucket_name))
+                    .set_object(object.name.clone());
+                if let Some(generation) = generation {
+                    request = request.set_generation(generation);
+                }
+                match client.delete_object().with_request(request).send().await {
+                    Ok(()) => {}
+                    Err(error) if gcs_gax_error_is_not_found(&error) => {}
+                    Err(e) => {
+                        emptied_successfully = false;
+                        info!(
+                            bucket = %bucket_name,
+                            object = %object.name,
+                            error = ?e,
+                            "Could not delete bucket object, continuing with bucket deletion attempt"
+                        );
+                    }
+                }
             }
-            Err(e) => {
-                // Log but continue - bucket might not exist or might already be empty
-                info!(bucket = %bucket_name, error=?e, "Could not empty bucket, continuing with deletion attempt");
+
+            if response.next_page_token.is_empty() {
+                break;
             }
+            page_token = response.next_page_token;
+        }
+        if emptied_successfully {
+            info!(bucket = %bucket_name, "Bucket emptied successfully");
+        } else {
+            warn!(bucket = %bucket_name, "Bucket emptying was incomplete, continuing with deletion attempt");
         }
 
         Ok(HandlerAction::Continue {
@@ -700,7 +987,21 @@ impl GcpStorageController {
             .await?;
 
         // Best effort: try to delete the bucket
-        match gcp_storage::delete_bucket(&client, bucket_name).await {
+        match client
+            .delete_bucket()
+            .set_name(gcs_bucket_resource_name(bucket_name))
+            .send()
+            .await
+            .map_err(|error| {
+                if gcs_gax_error_is_not_found(&error) {
+                    AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCS bucket".to_string(),
+                        resource_name: bucket_name.to_string(),
+                    })
+                } else {
+                    gcs_gax_platform_error(error, "storage", bucket_name)
+                }
+            }) {
             Ok(()) => {
                 info!(bucket = %bucket_name, "GCS bucket deleted successfully");
             }
@@ -889,8 +1190,21 @@ impl GcpStorageController {
             );
 
             // Get existing IAM policy to merge with new bindings
-            let mut existing_policy = gcp_storage::get_bucket_iam_policy(client, bucket_name)
+            let mut existing_policy = client
+                .get_iam_policy()
+                .set_resource(gcs_bucket_resource_name(bucket_name))
+                .send()
                 .await
+                .map_err(|error| {
+                    if gcs_gax_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCS bucket IAM policy".to_string(),
+                            resource_name: bucket_name.to_string(),
+                        })
+                    } else {
+                        gcs_gax_platform_error(error, "storage", bucket_name)
+                    }
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get bucket IAM policy for '{}' before applying resource-scoped permissions. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
                     resource_id: Some(config.id.clone()),
@@ -903,8 +1217,22 @@ impl GcpStorageController {
             existing_policy.version = 3;
 
             // Apply the updated IAM policy
-            gcp_storage::set_bucket_iam_policy(client, bucket_name, existing_policy)
+            client
+                .set_iam_policy()
+                .set_resource(gcs_bucket_resource_name(bucket_name))
+                .set_policy(existing_policy)
+                .send()
                 .await
+                .map_err(|error| {
+                    if gcs_gax_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCS bucket IAM policy".to_string(),
+                            resource_name: bucket_name.to_string(),
+                        })
+                    } else {
+                        gcs_gax_platform_error(error, "storage", bucket_name)
+                    }
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to apply resource-scoped IAM policy to bucket '{}'",
