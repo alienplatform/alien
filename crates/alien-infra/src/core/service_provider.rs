@@ -84,6 +84,7 @@ pub use google_cloud_iam_admin_v1::model::{
     role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
     ServiceAccount,
 };
+use google_cloud_iam_v1::client::IAMPolicy;
 pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
@@ -577,8 +578,7 @@ struct OfficialGcpPubSubClient {
     config: GcpClientConfig,
     topic_admin: OnceCell<TopicAdmin>,
     subscription_admin: OnceCell<SubscriptionAdmin>,
-    credentials: Credentials,
-    http_client: reqwest::Client,
+    iam_policy: OnceCell<IAMPolicy>,
 }
 
 impl std::fmt::Debug for OfficialGcpPubSubClient {
@@ -591,15 +591,13 @@ impl std::fmt::Debug for OfficialGcpPubSubClient {
 }
 
 impl OfficialGcpPubSubClient {
-    fn new(config: GcpClientConfig) -> Result<Self> {
-        let credentials = gcp_credentials_from_alien_config(&config)?;
-        Ok(Self {
+    fn new(config: GcpClientConfig) -> Self {
+        Self {
             config,
             topic_admin: OnceCell::new(),
             subscription_admin: OnceCell::new(),
-            credentials,
-            http_client: reqwest::Client::new(),
-        })
+            iam_policy: OnceCell::new(),
+        }
     }
 
     async fn topic_admin(&self) -> Result<TopicAdmin> {
@@ -616,6 +614,14 @@ impl OfficialGcpPubSubClient {
             .get_or_try_init(|| async {
                 pubsub_subscription_admin_from_alien_config(&self.config).await
             })
+            .await?;
+        Ok(client.clone())
+    }
+
+    async fn iam_policy(&self) -> Result<IAMPolicy> {
+        let client = self
+            .iam_policy
+            .get_or_try_init(|| async { pubsub_iam_policy_from_alien_config(&self.config).await })
             .await?;
         Ok(client.clone())
     }
@@ -640,65 +646,18 @@ impl OfficialGcpPubSubClient {
     }
 
     async fn set_iam_policy(&self, resource: String, policy: Policy) -> Result<Policy> {
-        let url = format!(
-            "{}/{}:setIamPolicy",
-            pubsub_rest_endpoint(&self.config),
-            resource
-        );
-        let headers = match self
-            .credentials
-            .headers(Extensions::new())
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get GCP Pub/Sub authorization headers".to_string(),
-                resource_id: Some(resource.clone()),
-            })? {
-            CacheableResource::New { data, .. } => data,
-            CacheableResource::NotModified => {
-                return Err(AlienError::new(
-                    crate::error::ErrorData::CloudPlatformError {
-                        message: "GCP Pub/Sub authorization headers were not refreshed and no cached headers are available".to_string(),
-                        resource_id: Some(resource),
-                    },
-                ));
-            }
-        };
-
-        let body = json!({ "policy": policy });
-        let response = self
-            .http_client
-            .post(url)
-            .headers(headers)
-            .json(&body)
+        self.iam_policy()
+            .await?
+            .set_iam_policy()
+            .set_resource(resource.clone())
+            .set_policy(policy)
             .send()
             .await
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Pub/Sub setIamPolicy request failed".to_string(),
-                resource_id: Some(resource.clone()),
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Pub/Sub setIamPolicy for '{resource}' returned HTTP {}: {text}",
-                        status.as_u16()
-                    ),
-                    resource_id: Some(resource),
-                },
-            ));
-        }
-
-        response.json::<Policy>().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to parse Pub/Sub setIamPolicy response".to_string(),
-                resource_id: None,
-            },
-        )
+                message: "Pub/Sub set_iam_policy request failed".to_string(),
+                resource_id: Some(resource),
+            })
     }
 }
 
@@ -5022,7 +4981,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>> {
-        Ok(Arc::new(OfficialGcpPubSubClient::new(config.clone())?))
+        Ok(Arc::new(OfficialGcpPubSubClient::new(config.clone())))
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {
@@ -5463,6 +5422,28 @@ async fn pubsub_subscription_admin_from_alien_config(
         })
 }
 
+async fn pubsub_iam_policy_from_alien_config(config: &GcpClientConfig) -> Result<IAMPolicy> {
+    let credentials = gcp_credentials_from_alien_config(config)?;
+    let mut builder = IAMPolicy::builder().with_credentials(credentials);
+
+    if let Some(endpoint) = config
+        .service_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.endpoints.get("pubsub"))
+    {
+        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
+    }
+
+    builder
+        .build()
+        .await
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official GCP Pub/Sub IAMPolicy client".to_string(),
+            resource_id: None,
+        })
+}
+
 async fn gcs_storage_control_from_alien_config(config: &GcpClientConfig) -> Result<StorageControl> {
     let credentials = gcp_credentials_from_alien_config(config)?;
     let mut builder = StorageControl::builder().with_credentials(credentials);
@@ -5606,22 +5587,6 @@ fn pubsub_admin_endpoint(endpoint: &str) -> String {
         .trim_end_matches('/')
         .trim_end_matches("/v1")
         .to_string()
-}
-
-fn pubsub_rest_endpoint(config: &GcpClientConfig) -> String {
-    config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("pubsub"))
-        .map(|endpoint| {
-            let endpoint = endpoint.trim_end_matches('/');
-            if endpoint.ends_with("/v1") {
-                endpoint.to_string()
-            } else {
-                format!("{endpoint}/v1")
-            }
-        })
-        .unwrap_or_else(|| "https://pubsub.googleapis.com/v1".to_string())
 }
 
 fn gcs_control_endpoint(endpoint: &str) -> String {
