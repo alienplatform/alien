@@ -36,8 +36,7 @@ use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_client::{
-    create, create_dynamic, delete, dynamic_namespaced, get, get_dynamic, namespaced, replace,
-    replace_dynamic,
+    create, create_dynamic, delete, get, get_dynamic, namespaced, replace, replace_dynamic,
 };
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
@@ -46,56 +45,56 @@ fn gateway_api(
     client: &std::sync::Arc<kube::Client>,
     namespace: &str,
 ) -> kube::Api<kube::api::DynamicObject> {
-    dynamic_namespaced(
-        client,
-        namespace,
-        "gateway.networking.k8s.io",
-        "v1",
-        "Gateway",
-        "gateways",
-    )
+    let resource = kube::api::ApiResource {
+        group: "gateway.networking.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "gateway.networking.k8s.io/v1".to_string(),
+        kind: "Gateway".to_string(),
+        plural: "gateways".to_string(),
+    };
+    kube::Api::namespaced_with(client.as_ref().clone(), namespace, &resource)
 }
 
 fn http_route_api(
     client: &std::sync::Arc<kube::Client>,
     namespace: &str,
 ) -> kube::Api<kube::api::DynamicObject> {
-    dynamic_namespaced(
-        client,
-        namespace,
-        "gateway.networking.k8s.io",
-        "v1",
-        "HTTPRoute",
-        "httproutes",
-    )
+    let resource = kube::api::ApiResource {
+        group: "gateway.networking.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "gateway.networking.k8s.io/v1".to_string(),
+        kind: "HTTPRoute".to_string(),
+        plural: "httproutes".to_string(),
+    };
+    kube::Api::namespaced_with(client.as_ref().clone(), namespace, &resource)
 }
 
 fn gke_health_check_policy_api(
     client: &std::sync::Arc<kube::Client>,
     namespace: &str,
 ) -> kube::Api<kube::api::DynamicObject> {
-    dynamic_namespaced(
-        client,
-        namespace,
-        "networking.gke.io",
-        "v1",
-        "HealthCheckPolicy",
-        "healthcheckpolicies",
-    )
+    let resource = kube::api::ApiResource {
+        group: "networking.gke.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "networking.gke.io/v1".to_string(),
+        kind: "HealthCheckPolicy".to_string(),
+        plural: "healthcheckpolicies".to_string(),
+    };
+    kube::Api::namespaced_with(client.as_ref().clone(), namespace, &resource)
 }
 
 fn azure_health_check_policy_api(
     client: &std::sync::Arc<kube::Client>,
     namespace: &str,
 ) -> kube::Api<kube::api::DynamicObject> {
-    dynamic_namespaced(
-        client,
-        namespace,
-        "alb.networking.azure.io",
-        "v1",
-        "HealthCheckPolicy",
-        "healthcheckpolicy",
-    )
+    let resource = kube::api::ApiResource {
+        group: "alb.networking.azure.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "alb.networking.azure.io/v1".to_string(),
+        kind: "HealthCheckPolicy".to_string(),
+        plural: "healthcheckpolicy".to_string(),
+    };
+    kube::Api::namespaced_with(client.as_ref().clone(), namespace, &resource)
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]

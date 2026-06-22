@@ -4,7 +4,7 @@ use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use k8s_openapi::List;
 use kube::{
-    api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, ObjectList, PostParams},
+    api::{Api, DeleteParams, DynamicObject, ListParams, ObjectList, PostParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
@@ -415,25 +415,6 @@ where
     <K as kube::Resource>::DynamicType: Default,
 {
     Api::namespaced(client.clone(), namespace)
-}
-
-pub(crate) fn dynamic_namespaced(
-    client: &Client,
-    namespace: &str,
-    group: &str,
-    version: &str,
-    kind: &str,
-    plural: &str,
-) -> Api<DynamicObject> {
-    let resource = ApiResource {
-        group: group.to_string(),
-        version: version.to_string(),
-        api_version: format!("{group}/{version}"),
-        kind: kind.to_string(),
-        plural: plural.to_string(),
-    };
-
-    Api::namespaced_with(client.clone(), namespace, &resource)
 }
 
 pub(crate) fn list_params(

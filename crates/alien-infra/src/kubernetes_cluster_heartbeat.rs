@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    dynamic_namespaced, list, list_params, namespaced, optional_events_read, optional_metrics_read,
+    list, list_params, namespaced, optional_events_read, optional_metrics_read,
     optional_nodes_read, OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -93,13 +93,17 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         Some(&input.config.namespace),
         None,
         async {
-            dynamic_namespaced(
-                &metrics_client,
+            let pod_metrics = ApiResource {
+                group: "metrics.k8s.io".to_string(),
+                version: "v1beta1".to_string(),
+                api_version: "metrics.k8s.io/v1beta1".to_string(),
+                kind: "PodMetrics".to_string(),
+                plural: "pods".to_string(),
+            };
+            kube::Api::<DynamicObject>::namespaced_with(
+                metrics_client.as_ref().clone(),
                 &input.config.namespace,
-                "metrics.k8s.io",
-                "v1beta1",
-                "PodMetrics",
-                "pods",
+                &pod_metrics,
             )
             .list(&list_params(None, None))
             .await

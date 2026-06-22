@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    dynamic_namespaced, list, list_params, namespaced, optional_events_read, optional_metrics_read,
+    list, list_params, namespaced, optional_events_read, optional_metrics_read,
     OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -21,7 +21,7 @@ use k8s_openapi::api::apps::v1::{
 use k8s_openapi::api::core::v1::{Event, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
-use kube::api::DynamicObject;
+use kube::api::{ApiResource, DynamicObject};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -200,13 +200,17 @@ pub async fn emit_kubernetes_workload_heartbeat(
         Some(&input.namespace),
         Some(&input.workload_name),
         async {
-            dynamic_namespaced(
-                &metrics_client,
+            let pod_metrics = ApiResource {
+                group: "metrics.k8s.io".to_string(),
+                version: "v1beta1".to_string(),
+                api_version: "metrics.k8s.io/v1beta1".to_string(),
+                kind: "PodMetrics".to_string(),
+                plural: "pods".to_string(),
+            };
+            kube::Api::<DynamicObject>::namespaced_with(
+                metrics_client.as_ref().clone(),
                 &input.namespace,
-                "metrics.k8s.io",
-                "v1beta1",
-                "PodMetrics",
-                "pods",
+                &pod_metrics,
             )
             .list(&list_params(Some(input.label_selector.clone()), None))
             .await
