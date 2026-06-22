@@ -1,7 +1,6 @@
 use crate::azure_authorization;
 use crate::azure_container_apps;
 use crate::azure_servicebus;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
     HeartbeatBackend, Ingress, ObservedHealth, Platform, ProviderLifecycleState,
@@ -830,12 +829,7 @@ impl AzureWorkerController {
                     })
                 }
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 debug!(name=%container_app_name, "Resource not yet visible – retry");
                 Ok(HandlerAction::Stay {
                     max_times: 60,
@@ -2628,12 +2622,7 @@ impl AzureWorkerController {
                 Ok(_) => {
                     info!(component=%component_name, "Commands Dapr component delete requested");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(component=%component_name, "Commands Dapr component was already deleted");
                 }
                 Err(e) => {
@@ -2782,12 +2771,7 @@ impl AzureWorkerController {
                     suggested_delay: Some(lro.retry_after.unwrap_or(Duration::from_secs(15))),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(name=%container_app_name, "Container app already deleted");
                 Ok(HandlerAction::Continue {
                     state: DeletingCertificate,
@@ -2865,12 +2849,7 @@ impl AzureWorkerController {
         )
         .await
         {
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(name=%container_app_name, "Container app confirmed deleted");
                 Ok(HandlerAction::Continue {
                     state: DeletingCertificate,
@@ -2942,12 +2921,7 @@ impl AzureWorkerController {
                     suggested_delay: Some(lro.retry_after.unwrap_or(Duration::from_secs(15))),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 self.clear_all();
                 Ok(HandlerAction::Continue {
                     state: Deleted,
@@ -2999,12 +2973,7 @@ impl AzureWorkerController {
         )
         .await
         {
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 self.pending_operation_url = None;
                 self.pending_operation_retry_after = None;
                 self.clear_all();
@@ -4271,12 +4240,7 @@ impl AzureWorkerController {
                         "Dapr component delete requested"
                     );
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
+                Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(
                         worker=%worker_config.id,
                         component=%component_name,

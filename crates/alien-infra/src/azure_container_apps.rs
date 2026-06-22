@@ -1,13 +1,16 @@
-use crate::core::{LongRunningOperation, OperationResult};
-use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
+use crate::core::{
+    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response,
+    map_azure_core_021_sdk_error, OperationResult,
+};
+use crate::error::{ErrorData, Result};
 use alien_core::AzureClientConfig;
-use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
+use alien_error::{Context, IntoAlienError};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
     Certificate, ContainerApp, DaprComponent, ManagedEnvironment, TrackedResource,
 };
 use futures_util::StreamExt;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub(crate) async fn create_or_update_managed_environment(
     client: &azure_app_2024_08::Client,
@@ -15,7 +18,7 @@ pub(crate) async fn create_or_update_managed_environment(
     resource_group_name: &str,
     environment_name: &str,
     managed_environment: &ManagedEnvironment,
-) -> CloudClientResult<OperationResult<ManagedEnvironment>> {
+) -> Result<OperationResult<ManagedEnvironment>> {
     let result = client
         .managed_environments_client()
         .create_or_update(
@@ -42,7 +45,7 @@ pub(crate) async fn get_managed_environment(
     config: &AzureClientConfig,
     resource_group_name: &str,
     environment_name: &str,
-) -> CloudClientResult<ManagedEnvironment> {
+) -> Result<ManagedEnvironment> {
     let result = client
         .managed_environments_client()
         .get(
@@ -65,7 +68,7 @@ pub(crate) async fn delete_managed_environment(
     config: &AzureClientConfig,
     resource_group_name: &str,
     environment_name: &str,
-) -> CloudClientResult<OperationResult<()>> {
+) -> Result<OperationResult<()>> {
     let result = client
         .managed_environments_client()
         .delete(
@@ -89,7 +92,7 @@ pub(crate) async fn list_container_apps_by_resource_group(
     client: &azure_app_2024_08::Client,
     config: &AzureClientConfig,
     resource_group_name: &str,
-) -> CloudClientResult<azure_app_2024_08::models::ContainerAppCollection> {
+) -> Result<azure_app_2024_08::models::ContainerAppCollection> {
     let mut stream = client
         .container_apps_client()
         .list_by_resource_group(
@@ -116,7 +119,7 @@ pub(crate) async fn get_container_app(
     config: &AzureClientConfig,
     resource_group_name: &str,
     container_app_name: &str,
-) -> CloudClientResult<ContainerApp> {
+) -> Result<ContainerApp> {
     let result = client
         .container_apps_client()
         .get(
@@ -140,7 +143,7 @@ pub(crate) async fn create_or_update_container_app(
     resource_group_name: &str,
     container_app_name: &str,
     container_app: &ContainerApp,
-) -> CloudClientResult<OperationResult<ContainerApp>> {
+) -> Result<OperationResult<ContainerApp>> {
     let result = client
         .container_apps_client()
         .create_or_update(
@@ -168,7 +171,7 @@ pub(crate) async fn update_container_app(
     resource_group_name: &str,
     container_app_name: &str,
     container_app: &ContainerApp,
-) -> CloudClientResult<OperationResult<ContainerApp>> {
+) -> Result<OperationResult<ContainerApp>> {
     let result = client
         .container_apps_client()
         .update(
@@ -197,7 +200,7 @@ pub(crate) async fn create_or_update_managed_environment_certificate(
     environment_name: &str,
     certificate_name: &str,
     certificate: &Certificate,
-) -> CloudClientResult<Certificate> {
+) -> Result<Certificate> {
     let result = client
         .certificates_client()
         .create_or_update(
@@ -230,7 +233,7 @@ pub(crate) async fn delete_managed_environment_certificate(
     resource_group_name: &str,
     environment_name: &str,
     certificate_name: &str,
-) -> CloudClientResult<OperationResult<()>> {
+) -> Result<OperationResult<()>> {
     let result = client
         .certificates_client()
         .delete(
@@ -257,7 +260,7 @@ pub(crate) async fn get_managed_environment_certificate(
     resource_group_name: &str,
     environment_name: &str,
     certificate_name: &str,
-) -> CloudClientResult<Certificate> {
+) -> Result<Certificate> {
     let result = client
         .certificates_client()
         .get(
@@ -283,7 +286,7 @@ pub(crate) async fn create_or_update_dapr_component(
     environment_name: &str,
     component_name: &str,
     dapr_component: &DaprComponent,
-) -> CloudClientResult<OperationResult<DaprComponent>> {
+) -> Result<OperationResult<DaprComponent>> {
     let result = client
         .dapr_components_client()
         .create_or_update(
@@ -312,7 +315,7 @@ pub(crate) async fn delete_dapr_component(
     resource_group_name: &str,
     environment_name: &str,
     component_name: &str,
-) -> CloudClientResult<OperationResult<()>> {
+) -> Result<OperationResult<()>> {
     let result = client
         .dapr_components_client()
         .delete(
@@ -338,7 +341,7 @@ pub(crate) async fn delete_container_app(
     config: &AzureClientConfig,
     resource_group_name: &str,
     container_app_name: &str,
-) -> CloudClientResult<OperationResult<()>> {
+) -> Result<OperationResult<()>> {
     let result = client
         .container_apps_client()
         .delete(
@@ -498,187 +501,29 @@ mod tests {
     }
 }
 
-fn map_azure_core_021_sdk_error<T>(
-    service_name: &str,
-    result: azure_core_021::Result<T>,
-    action: &str,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            let http_status = match error.kind() {
-                azure_core_021::error::ErrorKind::HttpResponse { status, .. } => Some(*status),
-                _ => None,
-            };
-
-            match http_status {
-                Some(azure_core_021::StatusCode::NotFound) => Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: resource_type.to_string(),
-                        resource_name: resource_name.to_string(),
-                    },
-                )),
-                Some(azure_core_021::StatusCode::Conflict) => Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceConflict {
-                        resource_type: resource_type.to_string(),
-                        resource_name: resource_name.to_string(),
-                        message: error.to_string(),
-                    },
-                )),
-                Some(azure_core_021::StatusCode::Forbidden)
-                | Some(azure_core_021::StatusCode::Unauthorized) => {
-                    Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
-                        resource_type: resource_type.to_string(),
-                        resource_name: resource_name.to_string(),
-                    }))
-                }
-                Some(status) => Err(AlienError::new(CloudClientErrorData::HttpResponseError {
-                    message: format!(
-                        "{service_name} {action} for {resource_type} '{resource_name}' returned HTTP {}",
-                        status as u16
-                    ),
-                    url: String::new(),
-                    http_status: status as u16,
-                    http_request_text: None,
-                    http_response_text: Some(error.to_string()),
-                })),
-                None => Err(error.into_alien_error().context(
-                    CloudClientErrorData::HttpRequestFailed {
-                        message: format!(
-                            "{service_name} {action} failed for {resource_type} '{resource_name}'"
-                        ),
-                    },
-                )),
-            }
-        }
-    }
-}
-
-async fn map_azure_core_021_lro_response<T, R, F, Fut>(
-    service_name: &str,
-    result: azure_core_021::Result<R>,
-    action: &str,
-    resource_type: &str,
-    resource_name: &str,
-    into_body: F,
-) -> CloudClientResult<OperationResult<T>>
-where
-    R: AsRef<azure_core_021::Response>,
-    F: FnOnce(R) -> Fut,
-    Fut: std::future::Future<Output = azure_core_021::Result<T>>,
-{
-    let response =
-        map_azure_core_021_sdk_error(service_name, result, action, resource_type, resource_name)?;
-    if response.as_ref().status() == azure_core_021::StatusCode::Accepted {
-        let operation = long_running_operation_from_azure_core_021_headers(
-            response.as_ref().headers(),
-            resource_type,
-            resource_name,
-        )?;
-        Ok(OperationResult::LongRunning(operation))
-    } else {
-        let body = into_body(response).await.into_alien_error().context(
-            CloudClientErrorData::SerializationError {
-                message: format!(
-                    "Failed to parse {service_name} {action} response for {resource_type} '{resource_name}'"
-                ),
-            },
-        )?;
-        Ok(OperationResult::Completed(body))
-    }
-}
-
-async fn map_azure_core_021_delete_lro_response<R>(
-    service_name: &str,
-    result: azure_core_021::Result<R>,
-    action: &str,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<OperationResult<()>>
-where
-    R: AsRef<azure_core_021::Response>,
-{
-    let response =
-        map_azure_core_021_sdk_error(service_name, result, action, resource_type, resource_name)?;
-    if response.as_ref().status() == azure_core_021::StatusCode::Accepted {
-        let operation = long_running_operation_from_azure_core_021_headers(
-            response.as_ref().headers(),
-            resource_type,
-            resource_name,
-        )?;
-        Ok(OperationResult::LongRunning(operation))
-    } else {
-        Ok(OperationResult::Completed(()))
-    }
-}
-
-fn long_running_operation_from_azure_core_021_headers(
-    headers: &azure_core_021::headers::Headers,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<LongRunningOperation> {
-    let async_operation_url = headers
-        .get_optional_str(&azure_core_021::headers::AZURE_ASYNCOPERATION)
-        .map(ToString::to_string);
-    let location_url = headers
-        .get_optional_str(&azure_core_021::headers::LOCATION)
-        .map(ToString::to_string);
-    let url = async_operation_url
-        .clone()
-        .or_else(|| location_url.clone())
-        .ok_or_else(|| {
-            AlienError::new(CloudClientErrorData::GenericError {
-                message: format!(
-                    "{resource_type} '{resource_name}' returned 202 without Azure-AsyncOperation or Location header"
-                ),
-            })
-        })?;
-    let retry_after = headers
-        .get_optional_str(&azure_core_021::headers::RETRY_AFTER)
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map(Duration::from_secs)
-                .map_err(|error| {
-                    AlienError::new(CloudClientErrorData::SerializationError {
-                        message: format!(
-                            "Failed to parse Azure Retry-After header '{value}': {error}"
-                        ),
-                    })
-                })
-        })
-        .transpose()?;
-
-    Ok(LongRunningOperation {
-        url,
-        retry_after,
-        location_url: async_operation_url.and(location_url),
-    })
-}
-
 async fn parse_azure_core_021_response_body_or_default_certificate(
     response: azure_core_021::Response,
     resource_type: &str,
     resource_name: &str,
-) -> CloudClientResult<Certificate> {
+) -> Result<Certificate> {
     let body = response
         .into_body()
         .collect()
         .await
         .into_alien_error()
-        .context(CloudClientErrorData::HttpRequestFailed {
+        .context(ErrorData::CloudPlatformError {
             message: format!("Failed to read {resource_type} '{resource_name}' response"),
+            resource_id: None,
         })?;
 
     if body.is_empty() {
         return Ok(Certificate::new(TrackedResource::new(String::new())));
     }
 
-    serde_json::from_slice(&body).into_alien_error().context(
-        CloudClientErrorData::SerializationError {
+    serde_json::from_slice(&body)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
             message: format!("Failed to parse {resource_type} '{resource_name}' response"),
-        },
-    )
+            resource_id: None,
+        })
 }

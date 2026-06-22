@@ -8,7 +8,6 @@ use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resou
 use crate::core::ResourceControllerContext;
 use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
     AzureContainerAppsEnvironmentHeartbeatStatus, AzureContainerAppsEnvironmentOutputs,
@@ -231,7 +230,7 @@ impl AzureContainerAppsEnvironmentController {
                 }
             }
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 debug!(environment_name=%environment_name, "Environment not yet available, continuing to wait");
@@ -472,7 +471,7 @@ impl AzureContainerAppsEnvironmentController {
                 }
             },
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 info!(environment_name=%environment_name, "Environment already deleted");
@@ -585,7 +584,7 @@ impl AzureContainerAppsEnvironmentController {
                 })
             }
             Err(AlienError {
-                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                error: Some(ErrorData::CloudResourceNotFound { .. }),
                 ..
             }) => {
                 info!(environment_name=%environment_name, "Environment successfully deleted");
