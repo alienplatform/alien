@@ -43,6 +43,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     Permission, RoleAssignment, RoleAssignmentListResult, RoleAssignmentProperties, RoleDefinition,
     RoleDefinitionProperties,
 };
+use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
@@ -2856,6 +2857,41 @@ pub struct LongRunningOperation {
 }
 
 impl LongRunningOperation {
+    fn from_azure_core_021_headers(
+        headers: &azure_core_021::headers::Headers,
+    ) -> Result<Option<Self>> {
+        let async_operation_url =
+            azure_core_021_header(headers, azure_core_021::headers::AZURE_ASYNCOPERATION);
+        let location_url = azure_core_021_header(headers, azure_core_021::headers::LOCATION);
+        let url = async_operation_url
+            .as_ref()
+            .or(location_url.as_ref())
+            .cloned();
+        let Some(url) = url else {
+            return Ok(None);
+        };
+
+        let retry_after = azure_core_021_header(headers, azure_core_021::headers::RETRY_AFTER)
+            .map(|value| {
+                let seconds = value.parse::<u64>().into_alien_error().context(
+                    crate::error::ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to parse Azure Retry-After header '{value}' as seconds"
+                        ),
+                        resource_id: None,
+                    },
+                )?;
+                Ok(Duration::from_secs(seconds))
+            })
+            .transpose()?;
+
+        Ok(Some(Self {
+            url,
+            retry_after,
+            location_url: async_operation_url.and(location_url),
+        }))
+    }
+
     fn from_response_headers(headers: &reqwest::header::HeaderMap) -> Result<Option<Self>> {
         let async_operation_url = headers
             .get("azure-asyncoperation")
@@ -2920,6 +2956,15 @@ impl LongRunningOperation {
     }
 }
 
+fn azure_core_021_header(
+    headers: &azure_core_021::headers::Headers,
+    name: azure_core_021::headers::HeaderName,
+) -> Option<String> {
+    headers
+        .get_optional_str(&name)
+        .map(std::string::ToString::to_string)
+}
+
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
@@ -2942,7 +2987,7 @@ pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureContainerRegistryClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_containerregistry_2023_11::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureContainerRegistryClient {
@@ -2959,107 +3004,36 @@ impl OfficialAzureContainerRegistryClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn registry_url(&self, resource_group_name: &str, registry_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}?api-version=2025-04-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            registry_name
-        )
-    }
+    async fn client(&self) -> Result<azure_containerregistry_2023_11::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
+
+                azure_containerregistry_2023_11::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Container Registry client"
+                            .to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<(StatusCode, reqwest::header::HeaderMap, String)> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok((status, headers, text))
-    }
-
-    fn parse_response<T: DeserializeOwned>(
-        &self,
-        resource_type: &str,
-        resource_name: &str,
-        body: &str,
-    ) -> Result<T> {
-        serde_json::from_str(body).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure ARM {resource_type} '{resource_name}' response"
-                ),
-                resource_id: None,
-            },
-        )
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -3071,53 +3045,71 @@ impl ContainerRegistryApi for OfficialAzureContainerRegistryClient {
         registry_name: &str,
         parameters: &Registry,
     ) -> Result<OperationResult<Registry>> {
-        let body = serde_json::to_string(parameters)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Container Registry '{registry_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let (status, headers, response) = self
-            .request(
-                Method::PUT,
-                self.registry_url(resource_group_name, registry_name),
-                Some(body),
-                "Azure Container Registry",
-                registry_name,
+        let response = self
+            .client()
+            .await?
+            .registries_client()
+            .create(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                registry_name.to_string(),
+                parameters.clone(),
             )
-            .await?;
+            .send()
+            .await;
+        let response = map_azure_core_021_sdk_error(
+            "Azure Container Registry",
+            response,
+            "registry create",
+            "Azure Container Registry",
+            registry_name,
+        )?;
 
-        if status == StatusCode::ACCEPTED {
-            let operation = LongRunningOperation::from_response_headers(&headers)?.ok_or_else(|| {
-                AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure Container Registry '{registry_name}' returned 202 without an operation URL"
-                    ),
-                    resource_id: None,
-                })
-            })?;
+        if response.as_raw_response().status() == azure_core_021::StatusCode::Accepted {
+            let operation =
+                LongRunningOperation::from_azure_core_021_headers(response.as_raw_response().headers())?
+                    .ok_or_else(|| {
+                        AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Azure Container Registry '{registry_name}' returned 202 without an operation URL"
+                            ),
+                            resource_id: None,
+                        })
+                    })?;
             Ok(OperationResult::LongRunning(operation))
         } else {
-            Ok(OperationResult::Completed(self.parse_response(
-                "Azure Container Registry",
-                registry_name,
-                &response,
-            )?))
+            let registry = response.into_body().await.into_alien_error().context(
+                crate::error::ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to parse Azure Container Registry '{registry_name}' response"
+                    ),
+                    resource_id: None,
+                },
+            )?;
+            Ok(OperationResult::Completed(registry))
         }
     }
 
     async fn delete_registry(&self, resource_group_name: &str, registry_name: &str) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.registry_url(resource_group_name, registry_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .registries_client()
+            .delete(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                registry_name.to_string(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Container Registry",
+            result,
+            "registry delete",
             "Azure Container Registry",
             registry_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_registry(
@@ -3125,16 +3117,23 @@ impl ContainerRegistryApi for OfficialAzureContainerRegistryClient {
         resource_group_name: &str,
         registry_name: &str,
     ) -> Result<Registry> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.registry_url(resource_group_name, registry_name),
-                None,
-                "Azure Container Registry",
-                registry_name,
+        let result = self
+            .client()
+            .await?
+            .registries_client()
+            .get(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                registry_name.to_string(),
             )
-            .await?;
-        self.parse_response("Azure Container Registry", registry_name, &response)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Container Registry",
+            result,
+            "registry get",
+            "Azure Container Registry",
+            registry_name,
+        )
     }
 }
 
