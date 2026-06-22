@@ -15,7 +15,6 @@ use alien_core::{
     ResourceStatus,
 };
 use aws_sdk_ecr::{
-    operation::describe_repositories::{DescribeRepositoriesInput, DescribeRepositoriesOutput},
     types::{ReplicationConfiguration, ReplicationDestination, ReplicationRule, Repository},
     Client as EcrClient,
 };
@@ -929,23 +928,18 @@ impl AwsArtifactRegistryController {
                 .repository_prefix
                 .clone()
                 .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
-            let repositories_request = DescribeRepositoriesInput::builder()
+            let repositories_response = ecr_client
+                .describe_repositories()
                 .registry_id(stored_account_id)
                 .max_results(100)
-                .build()
+                .send()
+                .await
                 .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build ECR DescribeRepositories request".to_string(),
+                    message: "Failed to describe ECR repositories during heartbeat check"
+                        .to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
-            let repositories_response =
-                describe_ecr_repositories(&ecr_client, repositories_request)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to describe ECR repositories during heartbeat check"
-                            .to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
             let mut repositories = Vec::new();
             for repository in repositories_response.repositories() {
                 let repository_name = ecr_repository_required_string(
@@ -1224,13 +1218,26 @@ impl AwsArtifactRegistryController {
         }
 
         // Read the current replication configuration so we don't clobber existing rules
-        let current =
-            describe_ecr_registry(ecr_client)
-                .await
+        let current_response = ecr_client
+            .describe_registry()
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to describe ECR registry for replication config".to_string(),
+                resource_id: Some(registry_id.to_string()),
+            })?;
+        let current = match current_response.replication_configuration {
+            Some(replication_configuration) => replication_configuration,
+            None => ReplicationConfiguration::builder()
+                .set_rules(Some(vec![]))
+                .build()
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
-                    message: "Failed to describe ECR registry for replication config".to_string(),
+                    message: "Failed to build empty ECR replication configuration".to_string(),
                     resource_id: Some(registry_id.to_string()),
-                })?;
+                })?,
+        };
 
         // Merge: find or create a rule whose destinations include ours
         let mut rules = current.rules;
@@ -1264,12 +1271,24 @@ impl AwsArtifactRegistryController {
                 resource_id: Some(registry_id.to_string()),
             })?;
 
-        put_ecr_replication_configuration(ecr_client, replication_configuration)
+        let response = ecr_client
+            .put_replication_configuration()
+            .replication_configuration(replication_configuration)
+            .send()
             .await
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure ECR replication".to_string(),
                 resource_id: Some(registry_id.to_string()),
             })?;
+        response.replication_configuration().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message:
+                    "PutReplicationConfiguration response did not include replication configuration"
+                        .to_string(),
+                resource_id: Some(registry_id.to_string()),
+            })
+        })?;
 
         info!(
             registry = %registry_id,
@@ -1434,74 +1453,6 @@ impl AwsArtifactRegistryController {
             _internal_stay_count: None,
         }
     }
-}
-
-async fn describe_ecr_repositories(
-    client: &EcrClient,
-    request: DescribeRepositoriesInput,
-) -> Result<DescribeRepositoriesOutput> {
-    client
-        .describe_repositories()
-        .set_registry_id(request.registry_id)
-        .set_repository_names(request.repository_names)
-        .set_next_token(request.next_token)
-        .set_max_results(request.max_results)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "ECR DescribeRepositories API failed".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn describe_ecr_registry(client: &EcrClient) -> Result<ReplicationConfiguration> {
-    let response = client
-        .describe_registry()
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "ECR DescribeRegistry API failed".to_string(),
-            resource_id: None,
-        })?;
-
-    match response.replication_configuration {
-        Some(replication_configuration) => Ok(replication_configuration),
-        None => ReplicationConfiguration::builder()
-            .set_rules(Some(vec![]))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to build empty ECR replication configuration".to_string(),
-                resource_id: None,
-            }),
-    }
-}
-
-async fn put_ecr_replication_configuration(
-    client: &EcrClient,
-    replication_configuration: ReplicationConfiguration,
-) -> Result<ReplicationConfiguration> {
-    let response = client
-        .put_replication_configuration()
-        .replication_configuration(replication_configuration)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "ECR PutReplicationConfiguration API failed".to_string(),
-            resource_id: None,
-        })?;
-
-    response.replication_configuration.ok_or_else(|| {
-        AlienError::new(ErrorData::CloudPlatformError {
-            message:
-                "ECR PutReplicationConfiguration response did not include replication configuration"
-                    .to_string(),
-            resource_id: None,
-        })
-    })
 }
 
 fn emit_aws_artifact_registry_heartbeat(
