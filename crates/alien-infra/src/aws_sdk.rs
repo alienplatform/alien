@@ -14,8 +14,7 @@ use aws_sdk_dynamodb::{
         describe_time_to_live::DescribeTimeToLiveError,
     },
     types::{
-        AttributeDefinition as AwsDynamoDbAttributeDefinition, BillingMode,
-        KeySchemaElement as AwsDynamoDbKeySchemaElement, KeyType, ScalarAttributeType,
+        AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
         Tag as DynamoDbTag, TimeToLiveSpecification,
     },
     Client as DynamoDbClient,
@@ -1936,7 +1935,7 @@ impl SsmApi for aws_sdk_ssm::Client {
 impl DynamoDbApi for DynamoDbClient {
     async fn create_kv_table(&self, table_name: &str, tags: HashMap<String, String>) -> Result<()> {
         let key_schema = vec![
-            AwsDynamoDbKeySchemaElement::builder()
+            KeySchemaElement::builder()
                 .attribute_name("pk")
                 .key_type(KeyType::Hash)
                 .build()
@@ -1945,7 +1944,7 @@ impl DynamoDbApi for DynamoDbClient {
                     message: "Failed to build DynamoDB partition key schema".to_string(),
                     resource_id: None,
                 })?,
-            AwsDynamoDbKeySchemaElement::builder()
+            KeySchemaElement::builder()
                 .attribute_name("sk")
                 .key_type(KeyType::Range)
                 .build()
@@ -1957,7 +1956,7 @@ impl DynamoDbApi for DynamoDbClient {
         ];
 
         let attribute_definitions = vec![
-            AwsDynamoDbAttributeDefinition::builder()
+            AttributeDefinition::builder()
                 .attribute_name("pk")
                 .attribute_type(ScalarAttributeType::S)
                 .build()
@@ -1967,7 +1966,7 @@ impl DynamoDbApi for DynamoDbClient {
                         .to_string(),
                     resource_id: None,
                 })?,
-            AwsDynamoDbAttributeDefinition::builder()
+            AttributeDefinition::builder()
                 .attribute_name("sk")
                 .attribute_type(ScalarAttributeType::S)
                 .build()
