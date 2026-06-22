@@ -510,14 +510,36 @@ impl Toolchain for RustToolchain {
         // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
         let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
 
+        let mut files_to_package = vec![super::FileSpec {
+            host_path: binary_path,
+            container_path: format!("./{}", binary_filename),
+            mode: Some(0o755),
+        }];
+
+        // Convention (mirrors the local-platform/from-scratch path): include
+        // a top-level `vendor/` directory next to Cargo.toml under `/app/vendor/`
+        // in the image. This is how a daemon ships helper binaries or data
+        // files it needs at runtime — e.g. bear-agent-loader bundling the
+        // bear-agent binary it later installs onto the host. Without this,
+        // source-built cloud daemons can't ship vendored assets at all
+        // (the local path bundles them; this path silently dropped them).
+        let vendor_dir = context.src_dir.join("vendor");
+        if vendor_dir.is_dir() {
+            info!(
+                "Including vendor directory in image: {}",
+                vendor_dir.display()
+            );
+            files_to_package.push(super::FileSpec {
+                host_path: vendor_dir,
+                container_path: "./vendor".to_string(),
+                mode: None,
+            });
+        }
+
         let output = ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![super::FileSpec {
-                    host_path: binary_path,
-                    container_path: format!("./{}", binary_filename),
-                    mode: Some(0o755),
-                }],
+                files_to_package,
             },
             runtime_command,
         };
