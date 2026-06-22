@@ -5,10 +5,10 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
 pub use azure_mgmt_app::package_preview_2024_08::models::{
     certificate, custom_domain, dapr, dapr_component, identity_settings, managed_environment,
-    Certificate, CertificateKeyVaultProperties, ContainerResources, CustomDomain,
-    CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar, IdentitySettings,
-    ManagedEnvironment, RegistryCredentials, Secret, TrackedResource, TrafficWeight,
-    VnetConfiguration, WorkloadProfile,
+    BaseContainer, Certificate, CertificateKeyVaultProperties, Container, ContainerResources,
+    CustomDomain, CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar,
+    IdentitySettings, ManagedEnvironment, RegistryCredentials, Scale, Secret, Template,
+    TrackedResource, TrafficWeight, VnetConfiguration, WorkloadProfile,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
@@ -412,128 +412,6 @@ impl Default for IngressTransport {
     fn default() -> Self {
         Self::Auto
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Template {
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub containers: Vec<Container>,
-    #[serde(
-        rename = "initContainers",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub init_containers: Vec<serde_json::Value>,
-    #[serde(
-        rename = "revisionSuffix",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub revision_suffix: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scale: Option<Scale>,
-    #[serde(
-        rename = "serviceBinds",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub service_binds: Vec<serde_json::Value>,
-    #[serde(
-        rename = "terminationGracePeriodSeconds",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub termination_grace_period_seconds: Option<i64>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub volumes: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Container {
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub args: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub command: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub env: Vec<EnvironmentVar>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub probes: Vec<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<ContainerResources>,
-    #[serde(
-        rename = "volumeMounts",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub volume_mounts: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Scale {
-    #[serde(
-        rename = "cooldownPeriod",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cooldown_period: Option<i32>,
-    #[serde(rename = "maxReplicas", default = "default_max_replicas")]
-    pub max_replicas: i32,
-    #[serde(
-        rename = "minReplicas",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub min_replicas: Option<i32>,
-    #[serde(
-        rename = "pollingInterval",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub polling_interval: Option<i32>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub rules: Vec<serde_json::Value>,
-}
-
-fn default_max_replicas() -> i32 {
-    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

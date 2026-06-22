@@ -1,5 +1,5 @@
 use crate::azure_container_apps::{
-    certificate, custom_domain, dapr, identity_settings, Certificate,
+    certificate, custom_domain, dapr, identity_settings, BaseContainer, Certificate,
     CertificateKeyVaultProperties, Configuration, ConfigurationActiveRevisionsMode, Container,
     ContainerApp, ContainerAppProperties, ContainerAppPropertiesProvisioningState,
     ContainerResources, CustomDomain, Dapr, EnvironmentVar, IdentitySettings,
@@ -203,7 +203,7 @@ fn emit_azure_container_apps_worker_heartbeat(
     let properties = container_app.properties.as_ref();
     let template = properties.and_then(|properties| properties.template.as_ref());
     let container = template.and_then(|template| template.containers.first());
-    let resources = container.and_then(|container| container.resources.as_ref());
+    let resources = container.and_then(|container| container.base_container.resources.as_ref());
     let scale = template.and_then(|template| template.scale.as_ref());
     let ingress = properties
         .and_then(|properties| properties.configuration.as_ref())
@@ -244,7 +244,7 @@ fn emit_azure_container_apps_worker_heartbeat(
                     .map(|status| format!("{status:?}")),
                 ingress_fqdn: ingress.and_then(|ingress| ingress.fqdn.clone()),
                 min_replicas: scale.and_then(|scale| scale.min_replicas),
-                max_replicas: scale.map(|scale| scale.max_replicas),
+                max_replicas: scale.and_then(|scale| scale.max_replicas),
                 cpu: resources.and_then(|resources| resources.cpu),
                 memory: resources.and_then(|resources| resources.memory.clone()),
             },
@@ -3828,18 +3828,21 @@ impl AzureWorkerController {
         let cpu = memory_gi / 2.0;
 
         let container = Container {
-            name: Some("main".to_string()),
-            image: Some(image.clone()),
-            resources: Some(ContainerResources {
-                cpu: Some(cpu),
-                memory: Some(format!("{}Gi", memory_gi)),
-                ephemeral_storage: None,
-            }),
-            env: env_vars,
-            args: vec![],
-            command: vec![],
+            base_container: BaseContainer {
+                name: Some("main".to_string()),
+                image: Some(image.clone()),
+                image_type: None,
+                resources: Some(ContainerResources {
+                    cpu: Some(cpu),
+                    memory: Some(format!("{}Gi", memory_gi)),
+                    ephemeral_storage: None,
+                }),
+                env: env_vars,
+                args: vec![],
+                command: vec![],
+                volume_mounts: vec![],
+            },
             probes: vec![],
-            volume_mounts: vec![],
         };
 
         // Tags for traceability
@@ -4008,7 +4011,7 @@ impl AzureWorkerController {
             revision_suffix: None,
             scale: Some(Scale {
                 cooldown_period: None,
-                max_replicas: func.concurrency_limit.map(|c| c as i32).unwrap_or(10),
+                max_replicas: Some(func.concurrency_limit.map(|c| c as i32).unwrap_or(10)),
                 min_replicas: Some(if func.ingress == Ingress::Private {
                     0
                 } else {
@@ -5566,7 +5569,7 @@ mod tests {
                 if let Some(properties) = &container_app.properties {
                     if let Some(template) = &properties.template {
                         if let Some(container) = template.containers.first() {
-                            if let Some(resources) = &container.resources {
+                            if let Some(resources) = &container.base_container.resources {
                                 // function_custom_config has 512MB memory
                                 let expected_memory = format!("{}Gi", 512.0 / 1024.0);
                                 return resources.memory.as_ref() == Some(&expected_memory)
@@ -5639,15 +5642,16 @@ mod tests {
                     if let Some(template) = &properties.template {
                         if let Some(container) = template.containers.first() {
                             // Check that environment variables are present
-                            let has_app_env = container.env.iter().any(|env_var| {
+                            let has_app_env = container.base_container.env.iter().any(|env_var| {
                                 env_var.name.as_deref() == Some("APP_ENV")
                                     && env_var.value.as_deref() == Some("production")
                             });
-                            let has_log_level = container.env.iter().any(|env_var| {
-                                env_var.name.as_deref() == Some("LOG_LEVEL")
-                                    && env_var.value.as_deref() == Some("debug")
-                            });
-                            let has_db_name = container.env.iter().any(|env_var| {
+                            let has_log_level =
+                                container.base_container.env.iter().any(|env_var| {
+                                    env_var.name.as_deref() == Some("LOG_LEVEL")
+                                        && env_var.value.as_deref() == Some("debug")
+                                });
+                            let has_db_name = container.base_container.env.iter().any(|env_var| {
                                 env_var.name.as_deref() == Some("DB_NAME")
                                     && env_var.value.as_deref() == Some("myapp")
                             });
