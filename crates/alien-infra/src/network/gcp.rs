@@ -7,8 +7,8 @@
 //! - Cloud NAT for private subnet internet access
 //! - Firewall rules for ingress/egress control
 
-use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::{core::ResourceControllerContext, gcp_compute};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
@@ -212,38 +212,49 @@ impl GcpNetworkController {
             NetworkSettings::UseDefault => {
                 // Use the cloud provider's default network — no provisioning needed
                 let gcp_config = ctx.get_gcp_config()?;
-                let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+                let networks_client = ctx
+                    .service_provider
+                    .get_gcp_compute_networks_client(gcp_config)
+                    .await?;
+                let subnetworks_client = ctx
+                    .service_provider
+                    .get_gcp_compute_subnetworks_client(gcp_config)
+                    .await?;
                 let region = gcp_config.region.clone();
 
                 info!("Using GCP default network in region {}", region);
 
-                let network = compute_client
-                    .get_network("default".to_string())
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: "Default network not found. It may have been deleted. \
+                let network =
+                    gcp_compute::get_network(&networks_client, &gcp_config.project_id, "default")
+                        .await
+                        .context(ErrorData::InfrastructureError {
+                            message: "Default network not found. It may have been deleted. \
                                   Use NetworkSettings::Create to create an isolated VPC, \
                                   or ByoVpcGcp to reference an existing one."
-                            .to_string(),
-                        operation: Some("discover_default_network".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                                .to_string(),
+                            operation: Some("discover_default_network".to_string()),
+                            resource_id: Some(config.id.clone()),
+                        })?;
 
                 self.network_self_link = network.self_link;
                 self.network_name = Some("default".to_string());
 
-                let subnetwork = compute_client
-                    .get_subnetwork(region.clone(), "default".to_string())
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Default subnet not found in region '{}'. \
+                let subnetwork = gcp_compute::get_subnetwork(
+                    &subnetworks_client,
+                    &gcp_config.project_id,
+                    &region,
+                    "default",
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Default subnet not found in region '{}'. \
                              Use NetworkSettings::Create or ByoVpcGcp instead.",
-                            region
-                        ),
-                        operation: Some("discover_default_subnet".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                        region
+                    ),
+                    operation: Some("discover_default_subnet".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 self.subnetwork_self_link = subnetwork.self_link;
                 self.subnetwork_name = Some("default".to_string());
@@ -277,28 +288,42 @@ impl GcpNetworkController {
 
                 // Verify the network exists
                 let gcp_config = ctx.get_gcp_config()?;
-                let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+                let networks_client = ctx
+                    .service_provider
+                    .get_gcp_compute_networks_client(gcp_config)
+                    .await?;
+                let subnetworks_client = ctx
+                    .service_provider
+                    .get_gcp_compute_subnetworks_client(gcp_config)
+                    .await?;
 
-                let network = compute_client
-                    .get_network(network_name.clone())
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: format!("BYO-VPC network '{}' not found", network_name),
-                        operation: Some("verify_byo_vpc".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let network = gcp_compute::get_network(
+                    &networks_client,
+                    &gcp_config.project_id,
+                    network_name,
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("BYO-VPC network '{}' not found", network_name),
+                    operation: Some("verify_byo_vpc".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 self.network_self_link = network.self_link;
 
                 // Verify subnetwork exists
-                let subnetwork = compute_client
-                    .get_subnetwork(region.clone(), subnet_name.clone())
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: format!("BYO-VPC subnetwork '{}' not found", subnet_name),
-                        operation: Some("verify_byo_vpc".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let subnetwork = gcp_compute::get_subnetwork(
+                    &subnetworks_client,
+                    &gcp_config.project_id,
+                    region,
+                    subnet_name,
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("BYO-VPC subnetwork '{}' not found", subnet_name),
+                    operation: Some("verify_byo_vpc".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 self.subnetwork_self_link = subnetwork.self_link;
                 self.cidr_block = subnetwork.ip_cidr_range;
@@ -354,7 +379,10 @@ impl GcpNetworkController {
         info!(network_name = %network_name, "Creating GCP VPC network");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let networks_client = ctx
+            .service_provider
+            .get_gcp_compute_networks_client(gcp_config)
+            .await?;
 
         // Create custom-mode VPC (we control subnets)
         let network_description = format!("Runtime-managed VPC for {}", ctx.resource_prefix);
@@ -366,20 +394,29 @@ impl GcpNetworkController {
                 NetworkRoutingConfig::new().set_routing_mode(RoutingMode::Regional),
             );
 
-        let operation = match compute_client.insert_network(network).await {
+        let operation = match gcp_compute::insert_network(
+            &networks_client,
+            &gcp_config.project_id,
+            network,
+        )
+        .await
+        {
             Ok(operation) => operation,
             Err(error) if is_remote_resource_conflict(&error) => {
-                let existing = compute_client
-                    .get_network(network_name.clone())
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "VPC network '{}' already exists but could not be inspected",
-                            network_name
-                        ),
-                        operation: Some("get_network_after_conflict".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let existing = gcp_compute::get_network(
+                    &networks_client,
+                    &gcp_config.project_id,
+                    &network_name,
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "VPC network '{}' already exists but could not be inspected",
+                        network_name
+                    ),
+                    operation: Some("get_network_after_conflict".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
                 if !network_matches_expected_create(&existing, &network_description) {
                     return Err(AlienError::new(ErrorData::InfrastructureError {
                         message: format!(
@@ -432,16 +469,22 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_global_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check network creation status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_global_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check network creation status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Network creation still in progress");
@@ -465,14 +508,18 @@ impl GcpNetworkController {
 
         // Get the created network to store self_link
         let network_name = self.network_name.clone().unwrap();
-        let network = compute_client
-            .get_network(network_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to get created network '{}'", network_name),
-                operation: Some("get_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let networks_client = ctx
+            .service_provider
+            .get_gcp_compute_networks_client(gcp_config)
+            .await?;
+        let network =
+            gcp_compute::get_network(&networks_client, &gcp_config.project_id, &network_name)
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to get created network '{}'", network_name),
+                    operation: Some("get_network".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.network_self_link = network.self_link;
         self.pending_operation_name = None;
@@ -508,7 +555,10 @@ impl GcpNetworkController {
         );
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let subnetworks_client = ctx
+            .service_provider
+            .get_gcp_compute_subnetworks_client(gcp_config)
+            .await?;
 
         let subnetwork = Subnetwork::new()
             .set_name(subnetwork_name.clone())
@@ -520,14 +570,18 @@ impl GcpNetworkController {
             .set_ip_cidr_range(cidr_block)
             .set_private_ip_google_access(true);
 
-        let operation = compute_client
-            .insert_subnetwork(region.clone(), subnetwork)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create subnetwork '{}'", subnetwork_name),
-                operation: Some("insert_subnetwork".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::insert_subnetwork(
+            &subnetworks_client,
+            &gcp_config.project_id,
+            &region,
+            subnetwork,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create subnetwork '{}'", subnetwork_name),
+            operation: Some("insert_subnetwork".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.subnetwork_name = Some(subnetwork_name);
         self.pending_operation_name = operation.name;
@@ -553,16 +607,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region.clone(), operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check subnetwork creation status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check subnetwork creation status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Subnetwork creation still in progress");
@@ -586,14 +647,22 @@ impl GcpNetworkController {
 
         // Get the created subnetwork
         let subnetwork_name = self.subnetwork_name.clone().unwrap();
-        let subnetwork = compute_client
-            .get_subnetwork(region, subnetwork_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to get created subnetwork '{}'", subnetwork_name),
-                operation: Some("get_subnetwork".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let subnetworks_client = ctx
+            .service_provider
+            .get_gcp_compute_subnetworks_client(gcp_config)
+            .await?;
+        let subnetwork = gcp_compute::get_subnetwork(
+            &subnetworks_client,
+            &gcp_config.project_id,
+            &region,
+            &subnetwork_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to get created subnetwork '{}'", subnetwork_name),
+            operation: Some("get_subnetwork".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.subnetwork_self_link = subnetwork.self_link;
         self.pending_operation_name = None;
@@ -625,7 +694,10 @@ impl GcpNetworkController {
         info!(router_name = %router_name, region = %region, "Creating Cloud Router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let routers_client = ctx
+            .service_provider
+            .get_gcp_compute_routers_client(gcp_config)
+            .await?;
 
         let router = Router::new()
             .set_name(router_name.clone())
@@ -635,14 +707,14 @@ impl GcpNetworkController {
             ))
             .set_network(network_self_link);
 
-        let operation = compute_client
-            .insert_router(region.clone(), router)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create router '{}'", router_name),
-                operation: Some("insert_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation =
+            gcp_compute::insert_router(&routers_client, &gcp_config.project_id, &region, router)
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to create router '{}'", router_name),
+                    operation: Some("insert_router".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.router_name = Some(router_name);
         self.pending_operation_name = operation.name;
@@ -668,16 +740,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region.clone(), operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check router creation status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check router creation status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Router creation still in progress");
@@ -728,20 +807,27 @@ impl GcpNetworkController {
         info!(cloud_nat_name = %cloud_nat_name, router_name = %router_name, "Creating Cloud NAT");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let routers_client = ctx
+            .service_provider
+            .get_gcp_compute_routers_client(gcp_config)
+            .await?;
 
         // Get current router to add NAT config
-        let mut router = compute_client
-            .get_router(region.clone(), router_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!(
-                    "Failed to get router '{}' for NAT configuration",
-                    router_name
-                ),
-                operation: Some("get_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let mut router = gcp_compute::get_router(
+            &routers_client,
+            &gcp_config.project_id,
+            &region,
+            &router_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!(
+                "Failed to get router '{}' for NAT configuration",
+                router_name
+            ),
+            operation: Some("get_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         // Add Cloud NAT configuration to router
         let nat_config = RouterNat::new()
@@ -756,14 +842,19 @@ impl GcpNetworkController {
 
         router.nats = vec![nat_config];
 
-        let operation = compute_client
-            .patch_router(region.clone(), router_name.clone(), router)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to configure Cloud NAT on router '{}'", router_name),
-                operation: Some("patch_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::patch_router(
+            &routers_client,
+            &gcp_config.project_id,
+            &region,
+            &router_name,
+            router,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to configure Cloud NAT on router '{}'", router_name),
+            operation: Some("patch_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.cloud_nat_name = Some(cloud_nat_name);
         self.pending_operation_name = operation.name;
@@ -789,16 +880,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region.clone(), operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check Cloud NAT creation status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check Cloud NAT creation status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Cloud NAT creation still in progress");
@@ -848,7 +946,10 @@ impl GcpNetworkController {
         info!(firewall_name = %firewall_name, "Creating firewall rule for internal traffic");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let firewalls_client = ctx
+            .service_provider
+            .get_gcp_compute_firewalls_client(gcp_config)
+            .await?;
 
         // Create firewall rule allowing internal traffic
         let firewall = Firewall::new()
@@ -867,13 +968,14 @@ impl GcpNetworkController {
             ])
             .set_priority(1000);
 
-        let operation = compute_client.insert_firewall(firewall).await.context(
-            ErrorData::InfrastructureError {
-                message: format!("Failed to create firewall rule '{}'", firewall_name),
-                operation: Some("insert_firewall".to_string()),
-                resource_id: Some(config.id.clone()),
-            },
-        )?;
+        let operation =
+            gcp_compute::insert_firewall(&firewalls_client, &gcp_config.project_id, firewall)
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to create firewall rule '{}'", firewall_name),
+                    operation: Some("insert_firewall".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.firewall_name = Some(firewall_name);
         self.pending_operation_name = operation.name;
@@ -898,16 +1000,22 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_global_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check firewall creation status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_global_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check firewall creation status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             debug!(operation_name = %operation_name, "Firewall creation still in progress");
@@ -966,15 +1074,18 @@ impl GcpNetworkController {
         // For created networks, verify network still exists
         if let Some(network_name) = &self.network_name {
             let gcp_config = ctx.get_gcp_config()?;
-            let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+            let networks_client = ctx
+                .service_provider
+                .get_gcp_compute_networks_client(gcp_config)
+                .await?;
 
-            let _ = compute_client
-                .get_network(network_name.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to verify network during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let _ =
+                gcp_compute::get_network(&networks_client, &gcp_config.project_id, network_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to verify network during heartbeat".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
             debug!(network_name = %network_name, "Network exists and is accessible");
         }
@@ -1087,16 +1198,19 @@ impl GcpNetworkController {
         info!(firewall_name = %firewall_name, "Deleting firewall rule");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let firewalls_client = ctx
+            .service_provider
+            .get_gcp_compute_firewalls_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .delete_firewall(firewall_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete firewall '{}'", firewall_name),
-                operation: Some("delete_firewall".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation =
+            gcp_compute::delete_firewall(&firewalls_client, &gcp_config.project_id, &firewall_name)
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to delete firewall '{}'", firewall_name),
+                    operation: Some("delete_firewall".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.pending_operation_name = operation.name;
 
@@ -1119,16 +1233,22 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_global_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check firewall deletion status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_global_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check firewall deletion status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
@@ -1184,28 +1304,40 @@ impl GcpNetworkController {
         info!(router_name = %router_name, "Removing Cloud NAT from router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let routers_client = ctx
+            .service_provider
+            .get_gcp_compute_routers_client(gcp_config)
+            .await?;
 
         // Get router and remove NAT config
-        let mut router = compute_client
-            .get_router(region.clone(), router_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to get router '{}' for NAT removal", router_name),
-                operation: Some("get_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let mut router = gcp_compute::get_router(
+            &routers_client,
+            &gcp_config.project_id,
+            &region,
+            &router_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to get router '{}' for NAT removal", router_name),
+            operation: Some("get_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         router.nats = vec![]; // Remove all NAT configs
 
-        let operation = compute_client
-            .patch_router(region.clone(), router_name.clone(), router)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to remove Cloud NAT from router '{}'", router_name),
-                operation: Some("patch_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::patch_router(
+            &routers_client,
+            &gcp_config.project_id,
+            &region,
+            &router_name,
+            router,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to remove Cloud NAT from router '{}'", router_name),
+            operation: Some("patch_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = Some(region);
@@ -1230,16 +1362,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check Cloud NAT deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check Cloud NAT deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
@@ -1274,16 +1413,23 @@ impl GcpNetworkController {
         info!(router_name = %router_name, "Deleting Cloud Router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let routers_client = ctx
+            .service_provider
+            .get_gcp_compute_routers_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .delete_router(region.clone(), router_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete router '{}'", router_name),
-                operation: Some("delete_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::delete_router(
+            &routers_client,
+            &gcp_config.project_id,
+            &region,
+            &router_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete router '{}'", router_name),
+            operation: Some("delete_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = Some(region);
@@ -1308,16 +1454,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check router deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check router deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
@@ -1352,16 +1505,23 @@ impl GcpNetworkController {
         info!(subnetwork_name = %subnetwork_name, "Deleting subnetwork");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let subnetworks_client = ctx
+            .service_provider
+            .get_gcp_compute_subnetworks_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .delete_subnetwork(region.clone(), subnetwork_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete subnetwork '{}'", subnetwork_name),
-                operation: Some("delete_subnetwork".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::delete_subnetwork(
+            &subnetworks_client,
+            &gcp_config.project_id,
+            &region,
+            &subnetwork_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete subnetwork '{}'", subnetwork_name),
+            operation: Some("delete_subnetwork".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = Some(region);
@@ -1386,16 +1546,23 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_region_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check subnetwork deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_region_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &region,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check subnetwork deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {
@@ -1430,16 +1597,19 @@ impl GcpNetworkController {
         info!(network_name = %network_name, "Deleting VPC network");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let networks_client = ctx
+            .service_provider
+            .get_gcp_compute_networks_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .delete_network(network_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete network '{}'", network_name),
-                operation: Some("delete_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation =
+            gcp_compute::delete_network(&networks_client, &gcp_config.project_id, &network_name)
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to delete network '{}'", network_name),
+                    operation: Some("delete_network".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.pending_operation_name = operation.name;
 
@@ -1462,16 +1632,22 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operations_client = ctx
+            .service_provider
+            .get_gcp_compute_global_operations_client(gcp_config)
+            .await?;
 
-        let operation = compute_client
-            .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check network deletion status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation = gcp_compute::get_global_operation(
+            &operations_client,
+            &gcp_config.project_id,
+            &operation_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check network deletion status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if !crate::gcp_compute::operation_is_done(&operation) {
             return Ok(HandlerAction::Stay {

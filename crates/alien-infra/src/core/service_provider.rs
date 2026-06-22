@@ -65,6 +65,9 @@ use google_cloud_auth::credentials::{
     self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
 };
 use google_cloud_auth::errors::CredentialsError;
+use google_cloud_compute_v1::client::{
+    Firewalls, GlobalOperations, Networks, RegionOperations, Routers, Subnetworks,
+};
 use google_cloud_firestore_admin_v1::client::FirestoreAdmin;
 use google_cloud_iam_admin_v1::client::Iam;
 use google_cloud_iam_v1::client::IAMPolicy;
@@ -2771,6 +2774,22 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<SubscriptionAdmin>;
     async fn get_gcp_pubsub_iam_policy_client(&self, config: &GcpClientConfig)
         -> Result<IAMPolicy>;
+    async fn get_gcp_compute_networks_client(&self, config: &GcpClientConfig) -> Result<Networks>;
+    async fn get_gcp_compute_subnetworks_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Subnetworks>;
+    async fn get_gcp_compute_routers_client(&self, config: &GcpClientConfig) -> Result<Routers>;
+    async fn get_gcp_compute_firewalls_client(&self, config: &GcpClientConfig)
+        -> Result<Firewalls>;
+    async fn get_gcp_compute_global_operations_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalOperations>;
+    async fn get_gcp_compute_region_operations_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<RegionOperations>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
     async fn get_gcp_cloud_scheduler_client(
         &self,
@@ -3099,6 +3118,44 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &GcpClientConfig,
     ) -> Result<IAMPolicy> {
         pubsub_iam_policy_from_alien_config(config).await
+    }
+
+    async fn get_gcp_compute_networks_client(&self, config: &GcpClientConfig) -> Result<Networks> {
+        crate::gcp_compute::compute_client_from_alien_config(config, Networks::builder).await
+    }
+
+    async fn get_gcp_compute_subnetworks_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Subnetworks> {
+        crate::gcp_compute::compute_client_from_alien_config(config, Subnetworks::builder).await
+    }
+
+    async fn get_gcp_compute_routers_client(&self, config: &GcpClientConfig) -> Result<Routers> {
+        crate::gcp_compute::compute_client_from_alien_config(config, Routers::builder).await
+    }
+
+    async fn get_gcp_compute_firewalls_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Firewalls> {
+        crate::gcp_compute::compute_client_from_alien_config(config, Firewalls::builder).await
+    }
+
+    async fn get_gcp_compute_global_operations_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalOperations> {
+        crate::gcp_compute::compute_client_from_alien_config(config, GlobalOperations::builder)
+            .await
+    }
+
+    async fn get_gcp_compute_region_operations_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<RegionOperations> {
+        crate::gcp_compute::compute_client_from_alien_config(config, RegionOperations::builder)
+            .await
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {

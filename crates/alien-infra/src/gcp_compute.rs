@@ -25,43 +25,6 @@ use google_cloud_compute_v1::model::{
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait GcpComputeApi: Send + Sync + std::fmt::Debug {
-    async fn get_network(&self, network_name: String) -> CloudClientResult<Network>;
-    async fn insert_network(&self, network: Network) -> CloudClientResult<Operation>;
-    async fn delete_network(&self, network_name: String) -> CloudClientResult<Operation>;
-
-    async fn get_subnetwork(
-        &self,
-        region: String,
-        subnetwork_name: String,
-    ) -> CloudClientResult<Subnetwork>;
-    async fn insert_subnetwork(
-        &self,
-        region: String,
-        subnetwork: Subnetwork,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_subnetwork(
-        &self,
-        region: String,
-        subnetwork_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn get_router(&self, region: String, router_name: String) -> CloudClientResult<Router>;
-    async fn insert_router(&self, region: String, router: Router) -> CloudClientResult<Operation>;
-    async fn patch_router(
-        &self,
-        region: String,
-        router_name: String,
-        router: Router,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_router(
-        &self,
-        region: String,
-        router_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn insert_firewall(&self, firewall: Firewall) -> CloudClientResult<Operation>;
-    async fn delete_firewall(&self, firewall_name: String) -> CloudClientResult<Operation>;
-
     async fn get_global_operation(&self, operation_name: String) -> CloudClientResult<Operation>;
     async fn get_region_operation(
         &self,
@@ -140,12 +103,243 @@ pub fn operation_has_error(operation: &Operation) -> bool {
         .is_some_and(|error| !error.errors.is_empty())
 }
 
+pub(crate) async fn compute_client_from_alien_config<T, B>(
+    config: &GcpClientConfig,
+    builder: impl FnOnce() -> B,
+) -> crate::error::Result<T>
+where
+    B: ComputeClientBuilder<T>,
+{
+    build_compute_client(config, builder)
+        .await
+        .map_err(|error| {
+            AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })
+}
+
+pub(crate) async fn get_network(
+    client: &Networks,
+    project_id: &str,
+    network_name: &str,
+) -> CloudClientResult<Network> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_network(network_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "network", network_name))
+}
+
+pub(crate) async fn insert_network(
+    client: &Networks,
+    project_id: &str,
+    network: Network,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&network.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(network)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "network", &name))
+}
+
+pub(crate) async fn delete_network(
+    client: &Networks,
+    project_id: &str,
+    network_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_network(network_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "network", network_name))
+}
+
+pub(crate) async fn get_subnetwork(
+    client: &Subnetworks,
+    project_id: &str,
+    region: &str,
+    subnetwork_name: &str,
+) -> CloudClientResult<Subnetwork> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_region(region)
+        .set_subnetwork(subnetwork_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "subnetwork", subnetwork_name))
+}
+
+pub(crate) async fn insert_subnetwork(
+    client: &Subnetworks,
+    project_id: &str,
+    region: &str,
+    subnetwork: Subnetwork,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&subnetwork.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_region(region)
+        .set_body(subnetwork)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "subnetwork", &name))
+}
+
+pub(crate) async fn delete_subnetwork(
+    client: &Subnetworks,
+    project_id: &str,
+    region: &str,
+    subnetwork_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_region(region)
+        .set_subnetwork(subnetwork_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "subnetwork", subnetwork_name))
+}
+
+pub(crate) async fn get_router(
+    client: &Routers,
+    project_id: &str,
+    region: &str,
+    router_name: &str,
+) -> CloudClientResult<Router> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_region(region)
+        .set_router(router_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "router", router_name))
+}
+
+pub(crate) async fn insert_router(
+    client: &Routers,
+    project_id: &str,
+    region: &str,
+    router: Router,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&router.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_region(region)
+        .set_body(router)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "router", &name))
+}
+
+pub(crate) async fn patch_router(
+    client: &Routers,
+    project_id: &str,
+    region: &str,
+    router_name: &str,
+    router: Router,
+) -> CloudClientResult<Operation> {
+    client
+        .patch()
+        .set_project(project_id)
+        .set_region(region)
+        .set_router(router_name)
+        .set_body(router)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "router", router_name))
+}
+
+pub(crate) async fn delete_router(
+    client: &Routers,
+    project_id: &str,
+    region: &str,
+    router_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_region(region)
+        .set_router(router_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "router", router_name))
+}
+
+pub(crate) async fn insert_firewall(
+    client: &Firewalls,
+    project_id: &str,
+    firewall: Firewall,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&firewall.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(firewall)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "firewall", &name))
+}
+
+pub(crate) async fn delete_firewall(
+    client: &Firewalls,
+    project_id: &str,
+    firewall_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_firewall(firewall_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "firewall", firewall_name))
+}
+
+pub(crate) async fn get_global_operation(
+    client: &GlobalOperations,
+    project_id: &str,
+    operation_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_operation(operation_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalOperation", operation_name))
+}
+
+pub(crate) async fn get_region_operation(
+    client: &RegionOperations,
+    project_id: &str,
+    region: &str,
+    operation_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_region(region)
+        .set_operation(operation_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "regionOperation", operation_name))
+}
+
 pub struct OfficialGcpComputeClient {
     config: GcpClientConfig,
-    networks: OnceCell<Networks>,
-    subnetworks: OnceCell<Subnetworks>,
-    routers: OnceCell<Routers>,
-    firewalls: OnceCell<Firewalls>,
     global_operations: OnceCell<GlobalOperations>,
     region_operations: OnceCell<RegionOperations>,
     backend_services: OnceCell<BackendServices>,
@@ -171,10 +365,6 @@ impl OfficialGcpComputeClient {
     pub fn new(config: GcpClientConfig) -> Self {
         Self {
             config,
-            networks: OnceCell::new(),
-            subnetworks: OnceCell::new(),
-            routers: OnceCell::new(),
-            firewalls: OnceCell::new(),
             global_operations: OnceCell::new(),
             region_operations: OnceCell::new(),
             backend_services: OnceCell::new(),
@@ -185,38 +375,6 @@ impl OfficialGcpComputeClient {
             global_forwarding_rules: OnceCell::new(),
             region_network_endpoint_groups: OnceCell::new(),
         }
-    }
-
-    async fn networks(&self) -> CloudClientResult<&Networks> {
-        self.networks
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, Networks::builder).await
-            })
-            .await
-    }
-
-    async fn subnetworks(&self) -> CloudClientResult<&Subnetworks> {
-        self.subnetworks
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, Subnetworks::builder).await
-            })
-            .await
-    }
-
-    async fn routers(&self) -> CloudClientResult<&Routers> {
-        self.routers
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, Routers::builder).await
-            })
-            .await
-    }
-
-    async fn firewalls(&self) -> CloudClientResult<&Firewalls> {
-        self.firewalls
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, Firewalls::builder).await
-            })
-            .await
     }
 
     async fn global_operations(&self) -> CloudClientResult<&GlobalOperations> {
@@ -296,171 +454,6 @@ impl OfficialGcpComputeClient {
 
 #[async_trait::async_trait]
 impl GcpComputeApi for OfficialGcpComputeClient {
-    async fn get_network(&self, network_name: String) -> CloudClientResult<Network> {
-        self.networks()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_network(network_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "network", &network_name))
-    }
-
-    async fn insert_network(&self, network: Network) -> CloudClientResult<Operation> {
-        let name = resource_name(&network.name);
-        self.networks()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(network)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "network", &name))
-    }
-
-    async fn delete_network(&self, network_name: String) -> CloudClientResult<Operation> {
-        self.networks()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_network(network_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "network", &network_name))
-    }
-
-    async fn get_subnetwork(
-        &self,
-        region: String,
-        subnetwork_name: String,
-    ) -> CloudClientResult<Subnetwork> {
-        self.subnetworks()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_subnetwork(subnetwork_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "subnetwork", &subnetwork_name))
-    }
-
-    async fn insert_subnetwork(
-        &self,
-        region: String,
-        subnetwork: Subnetwork,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&subnetwork.name);
-        self.subnetworks()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_body(subnetwork)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "subnetwork", &name))
-    }
-
-    async fn delete_subnetwork(
-        &self,
-        region: String,
-        subnetwork_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.subnetworks()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_subnetwork(subnetwork_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "subnetwork", &subnetwork_name))
-    }
-
-    async fn get_router(&self, region: String, router_name: String) -> CloudClientResult<Router> {
-        self.routers()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_router(router_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "router", &router_name))
-    }
-
-    async fn insert_router(&self, region: String, router: Router) -> CloudClientResult<Operation> {
-        let name = resource_name(&router.name);
-        self.routers()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_body(router)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "router", &name))
-    }
-
-    async fn patch_router(
-        &self,
-        region: String,
-        router_name: String,
-        router: Router,
-    ) -> CloudClientResult<Operation> {
-        self.routers()
-            .await?
-            .patch()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_router(router_name.clone())
-            .set_body(router)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "router", &router_name))
-    }
-
-    async fn delete_router(
-        &self,
-        region: String,
-        router_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.routers()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_router(router_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "router", &router_name))
-    }
-
-    async fn insert_firewall(&self, firewall: Firewall) -> CloudClientResult<Operation> {
-        let name = resource_name(&firewall.name);
-        self.firewalls()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(firewall)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "firewall", &name))
-    }
-
-    async fn delete_firewall(&self, firewall_name: String) -> CloudClientResult<Operation> {
-        self.firewalls()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_firewall(firewall_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "firewall", &firewall_name))
-    }
-
     async fn get_global_operation(&self, operation_name: String) -> CloudClientResult<Operation> {
         self.global_operations()
             .await?
@@ -749,7 +742,7 @@ where
 }
 
 #[async_trait::async_trait]
-trait ComputeClientBuilder<T>: Sized {
+pub(crate) trait ComputeClientBuilder<T>: Sized {
     fn with_credentials(self, credentials: google_cloud_auth::credentials::Credentials) -> Self;
     fn with_endpoint(self, endpoint: String) -> Self;
     async fn build(self) -> Result<T, google_cloud_gax::client_builder::Error>;
