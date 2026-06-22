@@ -8,6 +8,7 @@ use azure_mgmt_app::package_preview_2024_08::models::{
     container_app, Certificate, Configuration, DaprComponent, ManagedEnvironment, Template,
     TrackedResource,
 };
+use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 
@@ -36,11 +37,6 @@ pub trait ContainerAppsApi: Send + Sync + Debug {
         resource_group_name: &str,
         container_app_name: &str,
     ) -> CloudClientResult<ContainerApp>;
-
-    async fn list_container_apps_by_resource_group(
-        &self,
-        resource_group_name: &str,
-    ) -> CloudClientResult<ContainerAppCollection>;
 
     async fn delete_container_app(
         &self,
@@ -97,17 +93,6 @@ pub struct ContainerApp {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_data: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerAppCollection {
-    /// Link to the next result page.
-    #[serde(rename = "nextLink", default, skip_serializing_if = "Option::is_none")]
-    pub next_link: Option<String>,
-    /// Container App resources.
-    #[serde(default, deserialize_with = "null_to_default")]
-    pub value: Vec<ContainerApp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -259,6 +244,32 @@ pub(crate) async fn delete_managed_environment(
         environment_name,
     )
     .await
+}
+
+pub(crate) async fn list_container_apps_by_resource_group(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+) -> CloudClientResult<azure_app_2024_08::models::ContainerAppCollection> {
+    let mut stream = client
+        .container_apps_client()
+        .list_by_resource_group(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+        )
+        .into_stream();
+    let mut apps = Vec::new();
+    while let Some(page) = stream.next().await {
+        let page = map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            page,
+            "container apps list by resource group",
+            "Azure Container Apps",
+            resource_group_name,
+        )?;
+        apps.extend(page.value);
+    }
+    Ok(azure_app_2024_08::models::ContainerAppCollection::new(apps))
 }
 
 pub(crate) async fn create_or_update_managed_environment_certificate(
@@ -416,13 +427,6 @@ impl OfficialAzureContainerAppsClient {
         )
     }
 
-    fn container_apps_by_resource_group_url(&self, resource_group_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps?api-version=2025-01-01",
-            self.base_url(), self.config.subscription_id, resource_group_name
-        )
-    }
-
     async fn request(
         &self,
         method: reqwest::Method,
@@ -500,22 +504,6 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
             container_app_name,
         )
         .await
-    }
-
-    async fn list_container_apps_by_resource_group(
-        &self,
-        resource_group_name: &str,
-    ) -> CloudClientResult<ContainerAppCollection> {
-        let (_, _, body) = self
-            .request(
-                reqwest::Method::GET,
-                self.container_apps_by_resource_group_url(resource_group_name),
-                None,
-                "Azure Container Apps",
-                resource_group_name,
-            )
-            .await?;
-        self.parse_response("Azure Container Apps", resource_group_name, &body)
     }
 
     async fn delete_container_app(

@@ -422,9 +422,9 @@ impl AzureContainerAppsEnvironmentController {
 
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
-        let client = ctx
+        let container_apps_client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
 
         // Check if Container Apps still exist in this environment before
         // attempting deletion. Azure rejects environment deletion with
@@ -438,9 +438,12 @@ impl AzureContainerAppsEnvironmentController {
             )
         });
         // List container apps from the stack's resource group (where the apps live)
-        let apps = client
-            .list_container_apps_by_resource_group(&resource_group_name)
-            .await;
+        let apps = azure_container_apps::list_container_apps_by_resource_group(
+            &container_apps_client,
+            azure_config,
+            &resource_group_name,
+        )
+        .await;
         if let Ok(collection) = apps {
             let remaining: Vec<_> = collection
                 .value
