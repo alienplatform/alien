@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
+use crate::azure_resources;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
@@ -57,16 +58,20 @@ impl AzureResourceGroupController {
         resource_group.tags = Some(json!({}));
         let resource_group = resource_group;
 
-        let rg = client
-            .create_or_update_resource_group(&group_name, &resource_group)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create or update resource group '{}'.",
-                    group_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let rg = azure_resources::create_or_update_resource_group(
+            &client,
+            &azure_config.subscription_id,
+            &group_name,
+            resource_group,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create or update resource group '{}'.",
+                group_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.resource_group_name = Some(group_name.clone());
         self.location = Some(rg.location.clone());
@@ -108,7 +113,13 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        match client.get_resource_group(group_name).await {
+        match azure_resources::get_resource_group(
+            &client,
+            &azure_config.subscription_id,
+            group_name,
+        )
+        .await
+        {
             Ok(rg) => {
                 if let Some(props) = &rg.properties {
                     if let Some(state) = &props.provisioning_state {
@@ -182,12 +193,16 @@ impl AzureResourceGroupController {
                 .service_provider
                 .get_azure_resources_client(azure_config)?;
 
-            let rg = client.get_resource_group(group_name).await.context(
-                ErrorData::CloudPlatformError {
-                    message: format!("Failed to get resource group '{}'", group_name),
-                    resource_id: Some(config.id.clone()),
-                },
-            )?;
+            let rg = azure_resources::get_resource_group(
+                &client,
+                &azure_config.subscription_id,
+                group_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get resource group '{}'", group_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_resource_group_heartbeat(ctx, &config.id, &rg);
 
@@ -234,7 +249,13 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        match client.delete_resource_group(group_name).await {
+        match azure_resources::delete_resource_group(
+            &client,
+            &azure_config.subscription_id,
+            group_name,
+        )
+        .await
+        {
             Ok(_) => {
                 info!(group_name=%group_name, "Resource group deletion initiated");
             }
@@ -288,7 +309,13 @@ impl AzureResourceGroupController {
             .service_provider
             .get_azure_resources_client(azure_config)?;
 
-        match client.get_resource_group(group_name).await {
+        match azure_resources::get_resource_group(
+            &client,
+            &azure_config.subscription_id,
+            group_name,
+        )
+        .await
+        {
             Ok(_) => {
                 debug!(group_name=%group_name, "Resource group still exists, continuing to wait");
             }

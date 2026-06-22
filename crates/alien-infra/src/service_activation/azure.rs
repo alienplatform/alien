@@ -1,6 +1,7 @@
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::azure_resources;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -45,7 +46,13 @@ impl AzureServiceActivationController {
         );
 
         // Check if the provider is already registered (reading before command is allowed)
-        let already_registered = match client.get_provider(&config.service_name).await {
+        let already_registered = match azure_resources::get_provider(
+            &client,
+            &azure_config.subscription_id,
+            &config.service_name,
+        )
+        .await
+        {
             Ok(provider) => {
                 if let Some(registration_state) = provider.registration_state {
                     registration_state.to_lowercase() == "registered"
@@ -118,7 +125,13 @@ impl AzureServiceActivationController {
         }
 
         // Provider is not registered, proceed to register it
-        match client.register_provider(&config.service_name).await {
+        match azure_resources::register_provider(
+            &client,
+            &azure_config.subscription_id,
+            &config.service_name,
+        )
+        .await
+        {
             Ok(provider) => {
                 info!(
                     service_id = %config.id,
@@ -180,7 +193,13 @@ impl AzureServiceActivationController {
         }
 
         // Check the actual provider registration status
-        match client.get_provider(&config.service_name).await {
+        match azure_resources::get_provider(
+            &client,
+            &azure_config.subscription_id,
+            &config.service_name,
+        )
+        .await
+        {
             Ok(provider) => {
                 if let Some(registration_state) = provider.registration_state {
                     if registration_state.to_lowercase() == "registered" {
@@ -246,8 +265,7 @@ impl AzureServiceActivationController {
                 .get_azure_resources_client(azure_config)?;
 
             let provider =
-                client
-                    .get_provider(service_name)
+                azure_resources::get_provider(&client, &azure_config.subscription_id, service_name)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to get Azure provider '{}'", service_name),

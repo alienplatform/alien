@@ -4,6 +4,8 @@ pub use core::*;
 mod azure_container_apps;
 pub use azure_container_apps::*;
 
+mod azure_resources;
+
 mod gcp_compute;
 pub use gcp_compute::*;
 

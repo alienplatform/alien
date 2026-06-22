@@ -49,7 +49,6 @@ use azure_mgmt_network::package_2024_03::models::{
     NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
-use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 use azure_mgmt_servicebus::package_2024_01;
 use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue};
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
@@ -1595,172 +1594,6 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
-pub trait AzureResourcesApi: Send + Sync {
-    async fn create_or_update_resource_group(
-        &self,
-        resource_group_name: &str,
-        resource_group: &ResourceGroup,
-    ) -> Result<ResourceGroup>;
-
-    async fn delete_resource_group(&self, resource_group_name: &str) -> Result<()>;
-
-    async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup>;
-
-    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider>;
-
-    async fn register_provider(&self, resource_provider_namespace: &str) -> Result<Provider>;
-}
-
-struct OfficialAzureResourcesClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_resources_2021_04::Client>,
-}
-
-impl OfficialAzureResourcesClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_resources_2021_04::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_resources_2021_04::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Resources client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AzureResourcesApi for OfficialAzureResourcesClient {
-    async fn create_or_update_resource_group(
-        &self,
-        resource_group_name: &str,
-        resource_group: &ResourceGroup,
-    ) -> Result<ResourceGroup> {
-        let result = self
-            .client()
-            .await?
-            .resource_groups_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                resource_group.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Resources",
-            result,
-            "resource group create or update",
-            "Azure Resource Group",
-            resource_group_name,
-        )
-    }
-
-    async fn delete_resource_group(&self, resource_group_name: &str) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .resource_groups_client()
-            .delete(
-                resource_group_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Resources",
-            result,
-            "resource group delete",
-            "Azure Resource Group",
-            resource_group_name,
-        )
-    }
-
-    async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup> {
-        let result = self
-            .client()
-            .await?
-            .resource_groups_client()
-            .get(
-                resource_group_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Resources",
-            result,
-            "resource group get",
-            "Azure Resource Group",
-            resource_group_name,
-        )
-    }
-
-    async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
-        let result = self
-            .client()
-            .await?
-            .providers_client()
-            .get(
-                resource_provider_namespace.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Resources",
-            result,
-            "provider get",
-            "Azure Resource Provider",
-            resource_provider_namespace,
-        )
-    }
-
-    async fn register_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
-        let result = self
-            .client()
-            .await?
-            .providers_client()
-            .register(
-                resource_provider_namespace.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Resources",
-            result,
-            "provider register",
-            "Azure Resource Provider",
-            resource_provider_namespace,
-        )
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
 pub trait AzureKeyVaultManagementApi: Send + Sync + std::fmt::Debug {
     async fn create_or_update_vault(
         &self,
@@ -2675,7 +2508,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureResourcesApi>>;
+    ) -> Result<azure_resources_2021_04::Client>;
     fn get_azure_storage_accounts_client(
         &self,
         config: &AzureClientConfig,
@@ -3130,11 +2963,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureResourcesApi>> {
-        Ok(Arc::new(OfficialAzureResourcesClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_resources_2021_04::Client> {
+        azure_resources_client_from_alien_config(config)
     }
 
     fn get_azure_storage_accounts_client(
@@ -4116,6 +3946,29 @@ pub(crate) fn azure_containerregistry_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Container Registry client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_resources_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_resources_2021_04::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_resources_2021_04::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Resources client".to_string(),
             resource_id: None,
         })
 }
