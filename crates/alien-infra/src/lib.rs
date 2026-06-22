@@ -6,6 +6,8 @@ pub use azure_container_apps::*;
 
 mod azure_keyvault;
 
+mod azure_msi;
+
 mod azure_resources;
 
 mod azure_servicebus;

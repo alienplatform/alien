@@ -2,6 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::azure_msi;
 use crate::core::{AuthorizationApi, ResourceControllerContext, ResourcePermissionsHelper, Scope};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -200,17 +201,18 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        let created = client
-            .create_or_update_user_assigned_identity(
-                &resource_group_name,
-                &identity_name,
-                &identity,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create management identity '{}'", identity_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let created = azure_msi::create_or_update_user_assigned_identity(
+            &client,
+            &azure_cfg.subscription_id,
+            &resource_group_name,
+            &identity_name,
+            &identity,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create management identity '{}'", identity_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let identity_id = created.tracked_resource.resource.id.ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -301,21 +303,22 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        client
-            .create_or_update_federated_credential(
-                &resource_group_name,
-                &identity_name,
-                &fic_name,
-                &credential,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create federated identity credential '{}' on identity '{}'",
-                    fic_name, identity_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        azure_msi::create_or_update_federated_credential(
+            &client,
+            &azure_cfg.subscription_id,
+            &resource_group_name,
+            &identity_name,
+            &fic_name,
+            &credential,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create federated identity credential '{}' on identity '{}'",
+                fic_name, identity_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             fic_name = %fic_name,
@@ -572,13 +575,17 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            let identity = client
-                .get_user_assigned_identity(&resource_group_name, &identity_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get management identity during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let identity = azure_msi::get_user_assigned_identity(
+                &client,
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+                &identity_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get management identity during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             if let Some(fetched_id) = &identity.tracked_resource.resource.id {
                 if !azure_utils::azure_resource_ids_equal(uami_resource_id, fetched_id) {
@@ -696,18 +703,19 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        mi_client
-            .create_or_update_federated_credential(
-                &resource_group_name,
-                &identity_name,
-                &fic_name,
-                &credential,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to update federated identity credential".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        azure_msi::create_or_update_federated_credential(
+            &mi_client,
+            &azure_cfg.subscription_id,
+            &resource_group_name,
+            &identity_name,
+            &fic_name,
+            &credential,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to update federated identity credential".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.fic_name = Some(fic_name);
         info!("Federated identity credential updated");
@@ -831,9 +839,14 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            match client
-                .delete_federated_credential(&resource_group_name, &identity_name, fic_name)
-                .await
+            match azure_msi::delete_federated_credential(
+                &client,
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+                &identity_name,
+                fic_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(fic_name = %fic_name, "Federated credential deleted");
@@ -877,9 +890,13 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            match client
-                .delete_user_assigned_identity(&resource_group_name, &identity_name)
-                .await
+            match azure_msi::delete_user_assigned_identity(
+                &client,
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+                &identity_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(identity_name = %identity_name, "Management identity deleted");

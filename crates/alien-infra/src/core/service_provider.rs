@@ -42,7 +42,6 @@ use azure_mgmt_authorization::package_2022_04_01::models::{
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
-use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 use azure_mgmt_network::package_2024_03 as azure_network_2024_03;
 use azure_mgmt_network::package_2024_03::models::{
     NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
@@ -530,282 +529,6 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
                 resource_name,
             },
             role_assignment_name,
-        )
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait ManagedIdentityApi: Send + Sync + std::fmt::Debug {
-    async fn create_or_update_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-        identity: &Identity,
-    ) -> Result<Identity>;
-
-    async fn delete_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> Result<()>;
-
-    async fn get_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> Result<Identity>;
-
-    async fn create_or_update_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-        credential: &FederatedIdentityCredential,
-    ) -> Result<FederatedIdentityCredential>;
-
-    async fn get_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-    ) -> Result<FederatedIdentityCredential>;
-
-    async fn delete_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-    ) -> Result<()>;
-
-    fn build_user_assigned_identity_id(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> String;
-}
-
-struct OfficialAzureManagedIdentityClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_msi_2023_01_31::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureManagedIdentityClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureManagedIdentityClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureManagedIdentityClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_msi_2023_01_31::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_msi_2023_01_31::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Managed Identity client"
-                            .to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
-    async fn create_or_update_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-        identity: &Identity,
-    ) -> Result<Identity> {
-        let result = self
-            .client()
-            .await?
-            .user_assigned_identities_client()
-            .create_or_update(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                resource_name.to_string(),
-                identity.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "user assigned identity create or update",
-            "Azure managed identity",
-            resource_name,
-        )
-    }
-
-    async fn delete_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .user_assigned_identities_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                resource_name.to_string(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "user assigned identity delete",
-            "Azure managed identity",
-            resource_name,
-        )
-    }
-
-    async fn get_user_assigned_identity(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> Result<Identity> {
-        let result = self
-            .client()
-            .await?
-            .user_assigned_identities_client()
-            .get(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                resource_name.to_string(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "user assigned identity get",
-            "Azure managed identity",
-            resource_name,
-        )
-    }
-
-    async fn create_or_update_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-        credential: &FederatedIdentityCredential,
-    ) -> Result<FederatedIdentityCredential> {
-        let result = self
-            .client()
-            .await?
-            .federated_identity_credentials_client()
-            .create_or_update(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                identity_name.to_string(),
-                credential_name.to_string(),
-                credential.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "federated credential create or update",
-            "Azure federated identity credential",
-            credential_name,
-        )
-    }
-
-    async fn get_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-    ) -> Result<FederatedIdentityCredential> {
-        let result = self
-            .client()
-            .await?
-            .federated_identity_credentials_client()
-            .get(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                identity_name.to_string(),
-                credential_name.to_string(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "federated credential get",
-            "Azure federated identity credential",
-            credential_name,
-        )
-    }
-
-    async fn delete_federated_credential(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .federated_identity_credentials_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                identity_name.to_string(),
-                credential_name.to_string(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Managed Identity",
-            result,
-            "federated credential delete",
-            "Azure federated identity credential",
-            credential_name,
-        )
-    }
-
-    fn build_user_assigned_identity_id(
-        &self,
-        resource_group_name: &str,
-        resource_name: &str,
-    ) -> String {
-        format!(
-            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-            self.config.subscription_id, resource_group_name, resource_name
         )
     }
 }
@@ -1561,7 +1284,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ManagedIdentityApi>>;
+    ) -> Result<azure_msi_2023_01_31::Client>;
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
@@ -2007,11 +1730,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ManagedIdentityApi>> {
-        Ok(Arc::new(OfficialAzureManagedIdentityClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_msi_2023_01_31::Client> {
+        azure_msi_client_from_alien_config(config)
     }
 
     fn get_azure_resources_client(
@@ -3057,6 +2777,29 @@ pub(crate) fn azure_servicebus_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Service Bus client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_msi_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_msi_2023_01_31::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_msi_2023_01_31::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Managed Identity client".to_string(),
             resource_id: None,
         })
 }
