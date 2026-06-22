@@ -12,7 +12,6 @@ use crate::azure_container_apps::{
 };
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
-use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
     DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
@@ -66,7 +65,9 @@ use google_cloud_auth::credentials::{
 };
 use google_cloud_auth::errors::CredentialsError;
 use google_cloud_compute_v1::client::{
-    Firewalls, GlobalOperations, Networks, RegionOperations, Routers, Subnetworks,
+    BackendServices, Firewalls, GlobalAddresses, GlobalForwardingRules, GlobalOperations, Networks,
+    RegionNetworkEndpointGroups, RegionOperations, Routers, SslCertificates, Subnetworks,
+    TargetHttpsProxies, UrlMaps,
 };
 use google_cloud_firestore_admin_v1::client::FirestoreAdmin;
 use google_cloud_iam_admin_v1::client::Iam;
@@ -2790,7 +2791,31 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<RegionOperations>;
-    fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
+    async fn get_gcp_compute_backend_services_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<BackendServices>;
+    async fn get_gcp_compute_url_maps_client(&self, config: &GcpClientConfig) -> Result<UrlMaps>;
+    async fn get_gcp_compute_target_https_proxies_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<TargetHttpsProxies>;
+    async fn get_gcp_compute_ssl_certificates_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<SslCertificates>;
+    async fn get_gcp_compute_global_addresses_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalAddresses>;
+    async fn get_gcp_compute_global_forwarding_rules_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalForwardingRules>;
+    async fn get_gcp_compute_region_network_endpoint_groups_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<RegionNetworkEndpointGroups>;
     async fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
@@ -3158,8 +3183,56 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .await
     }
 
-    fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {
-        Ok(Arc::new(OfficialGcpComputeClient::new(config.clone())))
+    async fn get_gcp_compute_backend_services_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<BackendServices> {
+        crate::gcp_compute::compute_client_from_alien_config(config, BackendServices::builder).await
+    }
+
+    async fn get_gcp_compute_url_maps_client(&self, config: &GcpClientConfig) -> Result<UrlMaps> {
+        crate::gcp_compute::compute_client_from_alien_config(config, UrlMaps::builder).await
+    }
+
+    async fn get_gcp_compute_target_https_proxies_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<TargetHttpsProxies> {
+        crate::gcp_compute::compute_client_from_alien_config(config, TargetHttpsProxies::builder)
+            .await
+    }
+
+    async fn get_gcp_compute_ssl_certificates_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<SslCertificates> {
+        crate::gcp_compute::compute_client_from_alien_config(config, SslCertificates::builder).await
+    }
+
+    async fn get_gcp_compute_global_addresses_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalAddresses> {
+        crate::gcp_compute::compute_client_from_alien_config(config, GlobalAddresses::builder).await
+    }
+
+    async fn get_gcp_compute_global_forwarding_rules_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<GlobalForwardingRules> {
+        crate::gcp_compute::compute_client_from_alien_config(config, GlobalForwardingRules::builder)
+            .await
+    }
+
+    async fn get_gcp_compute_region_network_endpoint_groups_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<RegionNetworkEndpointGroups> {
+        crate::gcp_compute::compute_client_from_alien_config(
+            config,
+            RegionNetworkEndpointGroups::builder,
+        )
+        .await
     }
 
     async fn get_gcp_cloud_scheduler_client(

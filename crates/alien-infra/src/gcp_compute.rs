@@ -11,86 +11,12 @@ use google_cloud_compute_v1::{
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use http::StatusCode;
-use tokio::sync::OnceCell;
-
-#[cfg(any(test, feature = "test-utils"))]
-use mockall::automock;
 
 use google_cloud_compute_v1::model::{
     operation::Status as OperationStatus, Address, BackendService, Firewall, ForwardingRule,
     Network, NetworkEndpointGroup, Operation, Router, SslCertificate, Subnetwork, TargetHttpsProxy,
     UrlMap,
 };
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait GcpComputeApi: Send + Sync + std::fmt::Debug {
-    async fn get_global_operation(&self, operation_name: String) -> CloudClientResult<Operation>;
-    async fn get_region_operation(
-        &self,
-        region: String,
-        operation_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn insert_backend_service(
-        &self,
-        backend_service: BackendService,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_backend_service(
-        &self,
-        backend_service_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn insert_url_map(&self, url_map: UrlMap) -> CloudClientResult<Operation>;
-    async fn delete_url_map(&self, url_map_name: String) -> CloudClientResult<Operation>;
-
-    async fn insert_target_https_proxy(
-        &self,
-        target_https_proxy: TargetHttpsProxy,
-    ) -> CloudClientResult<Operation>;
-    async fn set_target_https_proxy_ssl_certificates(
-        &self,
-        target_https_proxy_name: String,
-        ssl_certificates: Vec<String>,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_target_https_proxy(
-        &self,
-        target_https_proxy_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn insert_ssl_certificate(
-        &self,
-        ssl_certificate: SslCertificate,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_ssl_certificate(
-        &self,
-        ssl_certificate_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn get_global_address(&self, address_name: String) -> CloudClientResult<Address>;
-    async fn insert_global_address(&self, address: Address) -> CloudClientResult<Operation>;
-    async fn delete_global_address(&self, address_name: String) -> CloudClientResult<Operation>;
-
-    async fn insert_global_forwarding_rule(
-        &self,
-        forwarding_rule: ForwardingRule,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_global_forwarding_rule(
-        &self,
-        forwarding_rule_name: String,
-    ) -> CloudClientResult<Operation>;
-
-    async fn insert_region_network_endpoint_group(
-        &self,
-        region: String,
-        network_endpoint_group: NetworkEndpointGroup,
-    ) -> CloudClientResult<Operation>;
-    async fn delete_region_network_endpoint_group(
-        &self,
-        region: String,
-        network_endpoint_group_name: String,
-    ) -> CloudClientResult<Operation>;
-}
 
 pub fn operation_is_done(operation: &Operation) -> bool {
     matches!(operation.status, Some(OperationStatus::Done))
@@ -338,378 +264,249 @@ pub(crate) async fn get_region_operation(
         .map_err(|error| compute_error(error, "regionOperation", operation_name))
 }
 
-pub struct OfficialGcpComputeClient {
-    config: GcpClientConfig,
-    global_operations: OnceCell<GlobalOperations>,
-    region_operations: OnceCell<RegionOperations>,
-    backend_services: OnceCell<BackendServices>,
-    url_maps: OnceCell<UrlMaps>,
-    target_https_proxies: OnceCell<TargetHttpsProxies>,
-    ssl_certificates: OnceCell<SslCertificates>,
-    global_addresses: OnceCell<GlobalAddresses>,
-    global_forwarding_rules: OnceCell<GlobalForwardingRules>,
-    region_network_endpoint_groups: OnceCell<RegionNetworkEndpointGroups>,
+pub(crate) async fn insert_backend_service(
+    client: &BackendServices,
+    project_id: &str,
+    backend_service: BackendService,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&backend_service.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(backend_service)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "backendService", &name))
 }
 
-impl std::fmt::Debug for OfficialGcpComputeClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialGcpComputeClient")
-            .field("project_id", &self.config.project_id)
-            .field("region", &self.config.region)
-            .finish_non_exhaustive()
-    }
+pub(crate) async fn delete_backend_service(
+    client: &BackendServices,
+    project_id: &str,
+    backend_service_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_backend_service(backend_service_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "backendService", backend_service_name))
 }
 
-impl OfficialGcpComputeClient {
-    pub fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            global_operations: OnceCell::new(),
-            region_operations: OnceCell::new(),
-            backend_services: OnceCell::new(),
-            url_maps: OnceCell::new(),
-            target_https_proxies: OnceCell::new(),
-            ssl_certificates: OnceCell::new(),
-            global_addresses: OnceCell::new(),
-            global_forwarding_rules: OnceCell::new(),
-            region_network_endpoint_groups: OnceCell::new(),
-        }
-    }
-
-    async fn global_operations(&self) -> CloudClientResult<&GlobalOperations> {
-        self.global_operations
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, GlobalOperations::builder).await
-            })
-            .await
-    }
-
-    async fn region_operations(&self) -> CloudClientResult<&RegionOperations> {
-        self.region_operations
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, RegionOperations::builder).await
-            })
-            .await
-    }
-
-    async fn backend_services(&self) -> CloudClientResult<&BackendServices> {
-        self.backend_services
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, BackendServices::builder).await
-            })
-            .await
-    }
-
-    async fn url_maps(&self) -> CloudClientResult<&UrlMaps> {
-        self.url_maps
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, UrlMaps::builder).await
-            })
-            .await
-    }
-
-    async fn target_https_proxies(&self) -> CloudClientResult<&TargetHttpsProxies> {
-        self.target_https_proxies
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, TargetHttpsProxies::builder).await
-            })
-            .await
-    }
-
-    async fn ssl_certificates(&self) -> CloudClientResult<&SslCertificates> {
-        self.ssl_certificates
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, SslCertificates::builder).await
-            })
-            .await
-    }
-
-    async fn global_addresses(&self) -> CloudClientResult<&GlobalAddresses> {
-        self.global_addresses
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, GlobalAddresses::builder).await
-            })
-            .await
-    }
-
-    async fn global_forwarding_rules(&self) -> CloudClientResult<&GlobalForwardingRules> {
-        self.global_forwarding_rules
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, GlobalForwardingRules::builder).await
-            })
-            .await
-    }
-
-    async fn region_network_endpoint_groups(
-        &self,
-    ) -> CloudClientResult<&RegionNetworkEndpointGroups> {
-        self.region_network_endpoint_groups
-            .get_or_try_init(|| async {
-                build_compute_client(&self.config, RegionNetworkEndpointGroups::builder).await
-            })
-            .await
-    }
+pub(crate) async fn insert_url_map(
+    client: &UrlMaps,
+    project_id: &str,
+    url_map: UrlMap,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&url_map.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(url_map)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "urlMap", &name))
 }
 
-#[async_trait::async_trait]
-impl GcpComputeApi for OfficialGcpComputeClient {
-    async fn get_global_operation(&self, operation_name: String) -> CloudClientResult<Operation> {
-        self.global_operations()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_operation(operation_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalOperation", &operation_name))
-    }
+pub(crate) async fn delete_url_map(
+    client: &UrlMaps,
+    project_id: &str,
+    url_map_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_url_map(url_map_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "urlMap", url_map_name))
+}
 
-    async fn get_region_operation(
-        &self,
-        region: String,
-        operation_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.region_operations()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_operation(operation_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "regionOperation", &operation_name))
-    }
+pub(crate) async fn insert_target_https_proxy(
+    client: &TargetHttpsProxies,
+    project_id: &str,
+    target_https_proxy: TargetHttpsProxy,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&target_https_proxy.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(target_https_proxy)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "targetHttpsProxy", &name))
+}
 
-    async fn insert_backend_service(
-        &self,
-        backend_service: BackendService,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&backend_service.name);
-        self.backend_services()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(backend_service)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "backendService", &name))
-    }
+pub(crate) async fn set_target_https_proxy_ssl_certificates(
+    client: &TargetHttpsProxies,
+    project_id: &str,
+    target_https_proxy_name: &str,
+    ssl_certificates: Vec<String>,
+) -> CloudClientResult<Operation> {
+    let request =
+        TargetHttpsProxiesSetSslCertificatesRequest::new().set_ssl_certificates(ssl_certificates);
+    client
+        .set_ssl_certificates()
+        .set_project(project_id)
+        .set_target_https_proxy(target_https_proxy_name)
+        .set_body(request)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "targetHttpsProxy", target_https_proxy_name))
+}
 
-    async fn delete_backend_service(
-        &self,
-        backend_service_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.backend_services()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_backend_service(backend_service_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "backendService", &backend_service_name))
-    }
+pub(crate) async fn delete_target_https_proxy(
+    client: &TargetHttpsProxies,
+    project_id: &str,
+    target_https_proxy_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_target_https_proxy(target_https_proxy_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "targetHttpsProxy", target_https_proxy_name))
+}
 
-    async fn insert_url_map(&self, url_map: UrlMap) -> CloudClientResult<Operation> {
-        let name = resource_name(&url_map.name);
-        self.url_maps()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(url_map)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "urlMap", &name))
-    }
+pub(crate) async fn insert_ssl_certificate(
+    client: &SslCertificates,
+    project_id: &str,
+    ssl_certificate: SslCertificate,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&ssl_certificate.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(ssl_certificate)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "sslCertificate", &name))
+}
 
-    async fn delete_url_map(&self, url_map_name: String) -> CloudClientResult<Operation> {
-        self.url_maps()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_url_map(url_map_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "urlMap", &url_map_name))
-    }
+pub(crate) async fn delete_ssl_certificate(
+    client: &SslCertificates,
+    project_id: &str,
+    ssl_certificate_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_ssl_certificate(ssl_certificate_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "sslCertificate", ssl_certificate_name))
+}
 
-    async fn insert_target_https_proxy(
-        &self,
-        target_https_proxy: TargetHttpsProxy,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&target_https_proxy.name);
-        self.target_https_proxies()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(target_https_proxy)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "targetHttpsProxy", &name))
-    }
+pub(crate) async fn get_global_address(
+    client: &GlobalAddresses,
+    project_id: &str,
+    address_name: &str,
+) -> CloudClientResult<Address> {
+    client
+        .get()
+        .set_project(project_id)
+        .set_address(address_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalAddress", address_name))
+}
 
-    async fn set_target_https_proxy_ssl_certificates(
-        &self,
-        target_https_proxy_name: String,
-        ssl_certificates: Vec<String>,
-    ) -> CloudClientResult<Operation> {
-        let request = TargetHttpsProxiesSetSslCertificatesRequest::new()
-            .set_ssl_certificates(ssl_certificates);
-        self.target_https_proxies()
-            .await?
-            .set_ssl_certificates()
-            .set_project(self.config.project_id.clone())
-            .set_target_https_proxy(target_https_proxy_name.clone())
-            .set_body(request)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "targetHttpsProxy", &target_https_proxy_name))
-    }
+pub(crate) async fn insert_global_address(
+    client: &GlobalAddresses,
+    project_id: &str,
+    address: Address,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&address.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(address)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalAddress", &name))
+}
 
-    async fn delete_target_https_proxy(
-        &self,
-        target_https_proxy_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.target_https_proxies()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_target_https_proxy(target_https_proxy_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "targetHttpsProxy", &target_https_proxy_name))
-    }
+pub(crate) async fn delete_global_address(
+    client: &GlobalAddresses,
+    project_id: &str,
+    address_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_address(address_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalAddress", address_name))
+}
 
-    async fn insert_ssl_certificate(
-        &self,
-        ssl_certificate: SslCertificate,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&ssl_certificate.name);
-        self.ssl_certificates()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(ssl_certificate)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "sslCertificate", &name))
-    }
+pub(crate) async fn insert_global_forwarding_rule(
+    client: &GlobalForwardingRules,
+    project_id: &str,
+    forwarding_rule: ForwardingRule,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&forwarding_rule.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_body(forwarding_rule)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalForwardingRule", &name))
+}
 
-    async fn delete_ssl_certificate(
-        &self,
-        ssl_certificate_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.ssl_certificates()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_ssl_certificate(ssl_certificate_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "sslCertificate", &ssl_certificate_name))
-    }
+pub(crate) async fn delete_global_forwarding_rule(
+    client: &GlobalForwardingRules,
+    project_id: &str,
+    forwarding_rule_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_forwarding_rule(forwarding_rule_name)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "globalForwardingRule", forwarding_rule_name))
+}
 
-    async fn get_global_address(&self, address_name: String) -> CloudClientResult<Address> {
-        self.global_addresses()
-            .await?
-            .get()
-            .set_project(self.config.project_id.clone())
-            .set_address(address_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalAddress", &address_name))
-    }
+pub(crate) async fn insert_region_network_endpoint_group(
+    client: &RegionNetworkEndpointGroups,
+    project_id: &str,
+    region: &str,
+    network_endpoint_group: NetworkEndpointGroup,
+) -> CloudClientResult<Operation> {
+    let name = resource_name(&network_endpoint_group.name);
+    client
+        .insert()
+        .set_project(project_id)
+        .set_region(region)
+        .set_body(network_endpoint_group)
+        .send()
+        .await
+        .map_err(|error| compute_error(error, "regionNetworkEndpointGroup", &name))
+}
 
-    async fn insert_global_address(&self, address: Address) -> CloudClientResult<Operation> {
-        let name = resource_name(&address.name);
-        self.global_addresses()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(address)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalAddress", &name))
-    }
-
-    async fn delete_global_address(&self, address_name: String) -> CloudClientResult<Operation> {
-        self.global_addresses()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_address(address_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalAddress", &address_name))
-    }
-
-    async fn insert_global_forwarding_rule(
-        &self,
-        forwarding_rule: ForwardingRule,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&forwarding_rule.name);
-        self.global_forwarding_rules()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_body(forwarding_rule)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalForwardingRule", &name))
-    }
-
-    async fn delete_global_forwarding_rule(
-        &self,
-        forwarding_rule_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.global_forwarding_rules()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_forwarding_rule(forwarding_rule_name.clone())
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "globalForwardingRule", &forwarding_rule_name))
-    }
-
-    async fn insert_region_network_endpoint_group(
-        &self,
-        region: String,
-        network_endpoint_group: NetworkEndpointGroup,
-    ) -> CloudClientResult<Operation> {
-        let name = resource_name(&network_endpoint_group.name);
-        self.region_network_endpoint_groups()
-            .await?
-            .insert()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_body(network_endpoint_group)
-            .send()
-            .await
-            .map_err(|error| compute_error(error, "regionNetworkEndpointGroup", &name))
-    }
-
-    async fn delete_region_network_endpoint_group(
-        &self,
-        region: String,
-        network_endpoint_group_name: String,
-    ) -> CloudClientResult<Operation> {
-        self.region_network_endpoint_groups()
-            .await?
-            .delete()
-            .set_project(self.config.project_id.clone())
-            .set_region(region)
-            .set_network_endpoint_group(network_endpoint_group_name.clone())
-            .send()
-            .await
-            .map_err(|error| {
-                compute_error(
-                    error,
-                    "regionNetworkEndpointGroup",
-                    &network_endpoint_group_name,
-                )
-            })
-    }
+pub(crate) async fn delete_region_network_endpoint_group(
+    client: &RegionNetworkEndpointGroups,
+    project_id: &str,
+    region: &str,
+    network_endpoint_group_name: &str,
+) -> CloudClientResult<Operation> {
+    client
+        .delete()
+        .set_project(project_id)
+        .set_region(region)
+        .set_network_endpoint_group(network_endpoint_group_name)
+        .send()
+        .await
+        .map_err(|error| {
+            compute_error(
+                error,
+                "regionNetworkEndpointGroup",
+                network_endpoint_group_name,
+            )
+        })
 }
 
 async fn build_compute_client<T, B>(
