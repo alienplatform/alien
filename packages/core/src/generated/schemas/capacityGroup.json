@@ -1,0 +1,84 @@
+{
+  "type": "object",
+  "description": "Capacity group definition.\n\nA capacity group represents machines with identical hardware profiles.\nEach group becomes a separate Auto Scaling Group (AWS), Managed Instance Group (GCP),\nor VM Scale Set (Azure).",
+  "required": ["groupId", "minSize", "maxSize"],
+  "properties": {
+    "groupId": {
+      "type": "string",
+      "description": "Unique identifier for this capacity group (must be lowercase alphanumeric with hyphens)"
+    },
+    "instanceType": {
+      "type": ["string", "null"],
+      "description": "Instance type for machines in this group (e.g., \"m7g.xlarge\", \"n2-standard-8\")\nAuto-selected if not specified, based on profile requirements."
+    },
+    "maxSize": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Maximum number of machines (must be ≤ 10)",
+      "minimum": 0
+    },
+    "minSize": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Minimum number of machines (can be 0 for scale-to-zero)",
+      "minimum": 0
+    },
+    "nestedVirtualization": {
+      "type": ["boolean", "null"],
+      "description": "Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs — needed by workloads that boot VMs inside containers\n(e.g. bear-agent's QEMU sandboxes).\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist."
+    },
+    "profile": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "description": "Machine resource profile (auto-derived from instance_type if not specified)",
+          "type": "object",
+          "required": ["cpu", "memoryBytes", "ephemeralStorageBytes"],
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "description": "CPU cores per machine (hardware total) - stored as string to preserve precision\n(e.g., \"8.0\", \"4.5\")"
+            },
+            "ephemeralStorageBytes": {
+              "type": "integer",
+              "format": "int64",
+              "description": "Ephemeral storage in bytes (hardware total)",
+              "minimum": 0
+            },
+            "gpu": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "description": "GPU specification (optional)",
+                  "type": "object",
+                  "required": ["type", "count"],
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "format": "int32",
+                      "description": "Number of GPUs per machine",
+                      "minimum": 0
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")"
+                    }
+                  },
+                  "x-readme-ref-name": "GpuSpec"
+                }
+              ]
+            },
+            "memoryBytes": {
+              "type": "integer",
+              "format": "int64",
+              "description": "Memory in bytes (hardware total)",
+              "minimum": 0
+            }
+          },
+          "x-readme-ref-name": "MachineProfile"
+        }
+      ]
+    }
+  },
+  "x-readme-ref-name": "CapacityGroup"
+}

@@ -685,17 +685,23 @@ fn discover_built_platforms(
     Ok(platforms)
 }
 
-/// True if any daemon in this stack declared `nestedVirtualization(true)`.
-/// On AWS this implies x86_64 — nested virtualization is not available on
-/// Graviton, so a build targeting `linux-arm64` (the AWS default) for such
-/// a stack would produce an image the deploy can't actually run.
+/// True if any ComputeCluster in this stack has a capacity group with
+/// `nestedVirtualization: true`. On AWS this implies x86_64 — nested
+/// virtualization is not available on Graviton, so a build targeting
+/// `linux-arm64` (the AWS default) for such a stack would produce an image
+/// the deploy can't actually run.
 fn stack_requires_x86_64_on_aws(stack: &Stack) -> bool {
-    use alien_core::Daemon;
+    use alien_core::ComputeCluster;
     stack.resources().any(|(_, entry)| {
         entry
             .config
-            .downcast_ref::<Daemon>()
-            .is_some_and(|daemon| daemon.nested_virtualization)
+            .downcast_ref::<ComputeCluster>()
+            .is_some_and(|cluster| {
+                cluster
+                    .capacity_groups
+                    .iter()
+                    .any(|g| g.nested_virtualization == Some(true))
+            })
     })
 }
 
@@ -1614,8 +1620,20 @@ mod tests {
     }
 
     #[test]
-    fn stack_with_daemon_no_nested_virt_does_not_require_x86_64() {
+    fn stack_with_cluster_no_nested_virt_does_not_require_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                nested_virtualization: None,
+            })
+            .build();
         let stack = Stack::new("no-nested".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
             .add(
                 daemon_with_image("ghcr.io/test/agent:1"),
                 ResourceLifecycle::Live,
@@ -1625,16 +1643,24 @@ mod tests {
     }
 
     #[test]
-    fn stack_with_daemon_with_nested_virt_requires_x86_64() {
-        let daemon = Daemon::new("agent".to_string())
-            .permissions("execution".to_string())
-            .code(DaemonCode::Image {
-                image: "ghcr.io/test/agent:1".to_string(),
+    fn stack_with_cluster_capacity_group_nested_virt_requires_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                nested_virtualization: Some(true),
             })
-            .nested_virtualization(true)
             .build();
         let stack = Stack::new("nested".to_string())
-            .add(daemon, ResourceLifecycle::Live)
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
             .build();
         assert!(stack_requires_x86_64_on_aws(&stack));
     }

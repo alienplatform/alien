@@ -86,6 +86,7 @@ export type { BuildHeartbeatStatus } from "./zod/build-heartbeat-status-schema.j
 export type { BuildOutputs } from "./zod/build-outputs-schema.js";
 export type { Build } from "./zod/build-schema.js";
 export type { BuildStatus } from "./zod/build-status-schema.js";
+export type { CapacityGroup } from "./zod/capacity-group-schema.js";
 export type { CommandResponse } from "./zod/command-response-schema.js";
 export type { CommandState } from "./zod/command-state-schema.js";
 export type { CommandStatusResponse } from "./zod/command-status-response-schema.js";
@@ -95,6 +96,7 @@ export type { ComputeCapacityGroupStatus } from "./zod/compute-capacity-group-st
 export type { ComputeCapacityRecommendation } from "./zod/compute-capacity-recommendation-schema.js";
 export type { ComputeClusterHeartbeatData } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./zod/compute-cluster-heartbeat-status-schema.js";
+export type { ComputeCluster } from "./zod/compute-cluster-schema.js";
 export type { ComputeType } from "./zod/compute-type-schema.js";
 export type { ContainerAutoscaling } from "./zod/container-autoscaling-schema.js";
 export type { ContainerCode } from "./zod/container-code-schema.js";
@@ -151,6 +153,7 @@ export type { GcpStorageImportData } from "./zod/gcp-storage-import-data-schema.
 export type { GcpVaultImportData } from "./zod/gcp-vault-import-data-schema.js";
 export type { GcpVpcNetworkHeartbeatData } from "./zod/gcp-vpc-network-heartbeat-data-schema.js";
 export type { GcpWorkerImportData } from "./zod/gcp-worker-import-data-schema.js";
+export type { GpuSpec } from "./zod/gpu-spec-schema.js";
 export type { HealthCheck } from "./zod/health-check-schema.js";
 export type { HeartbeatBackend } from "./zod/heartbeat-backend-schema.js";
 export type { HeartbeatCollectionIssueReason } from "./zod/heartbeat-collection-issue-reason-schema.js";
@@ -217,6 +220,7 @@ export type { LocalServiceAccountHeartbeatData } from "./zod/local-service-accou
 export type { LocalStorageHeartbeatData } from "./zod/local-storage-heartbeat-data-schema.js";
 export type { LocalVaultHeartbeatData } from "./zod/local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./zod/local-worker-heartbeat-data-schema.js";
+export type { MachineProfile } from "./zod/machine-profile-schema.js";
 export type { ManagedRuntimeEventInvolvedObject } from "./zod/managed-runtime-event-involved-object-schema.js";
 export type { ManagedRuntimeEventSnapshot } from "./zod/managed-runtime-event-snapshot-schema.js";
 export type { ManagedRuntimeEventSource } from "./zod/managed-runtime-event-source-schema.js";
@@ -398,6 +402,7 @@ export { BuildHeartbeatStatusSchema } from "./zod/build-heartbeat-status-schema.
 export { BuildOutputsSchema } from "./zod/build-outputs-schema.js";
 export { BuildSchema } from "./zod/build-schema.js";
 export { BuildStatusSchema } from "./zod/build-status-schema.js";
+export { CapacityGroupSchema } from "./zod/capacity-group-schema.js";
 export { CommandResponseSchema } from "./zod/command-response-schema.js";
 export { CommandStateSchema } from "./zod/command-state-schema.js";
 export { CommandStatusResponseSchema } from "./zod/command-status-response-schema.js";
@@ -407,6 +412,7 @@ export { ComputeCapacityGroupStatusSchema } from "./zod/compute-capacity-group-s
 export { ComputeCapacityRecommendationSchema } from "./zod/compute-capacity-recommendation-schema.js";
 export { ComputeClusterHeartbeatDataSchema } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./zod/compute-cluster-heartbeat-status-schema.js";
+export { ComputeClusterSchema } from "./zod/compute-cluster-schema.js";
 export { ComputeTypeSchema } from "./zod/compute-type-schema.js";
 export { ContainerAutoscalingSchema } from "./zod/container-autoscaling-schema.js";
 export { ContainerCodeSchema } from "./zod/container-code-schema.js";
@@ -463,6 +469,7 @@ export { GcpStorageImportDataSchema } from "./zod/gcp-storage-import-data-schema
 export { GcpVaultImportDataSchema } from "./zod/gcp-vault-import-data-schema.js";
 export { GcpVpcNetworkHeartbeatDataSchema } from "./zod/gcp-vpc-network-heartbeat-data-schema.js";
 export { GcpWorkerImportDataSchema } from "./zod/gcp-worker-import-data-schema.js";
+export { GpuSpecSchema } from "./zod/gpu-spec-schema.js";
 export { HealthCheckSchema } from "./zod/health-check-schema.js";
 export { HeartbeatBackendSchema } from "./zod/heartbeat-backend-schema.js";
 export { HeartbeatCollectionIssueReasonSchema } from "./zod/heartbeat-collection-issue-reason-schema.js";
@@ -529,6 +536,7 @@ export { LocalServiceAccountHeartbeatDataSchema } from "./zod/local-service-acco
 export { LocalStorageHeartbeatDataSchema } from "./zod/local-storage-heartbeat-data-schema.js";
 export { LocalVaultHeartbeatDataSchema } from "./zod/local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./zod/local-worker-heartbeat-data-schema.js";
+export { MachineProfileSchema } from "./zod/machine-profile-schema.js";
 export { ManagedRuntimeEventInvolvedObjectSchema } from "./zod/managed-runtime-event-involved-object-schema.js";
 export { ManagedRuntimeEventSnapshotSchema } from "./zod/managed-runtime-event-snapshot-schema.js";
 export { ManagedRuntimeEventSourceSchema } from "./zod/managed-runtime-event-source-schema.js";
