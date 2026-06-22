@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
     optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
@@ -15,6 +15,7 @@ use alien_error::Context;
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
+use kube::api::DynamicObject;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -130,21 +131,22 @@ pub async fn emit_kubernetes_cluster_heartbeat(
                 .iter()
                 .filter_map(|metric| {
                     metric.metadata.name.as_ref().map(|name| {
+                        let usage = node_metric_usage(metric);
                         (
                             name.clone(),
                             KubernetesNodeUsage {
-                                cpu: metric.usage.get("cpu").and_then(quantity_cpu_cores).map(
-                                    |value| MetricSample {
+                                cpu: usage.get("cpu").and_then(quantity_cpu_cores).map(|value| {
+                                    MetricSample {
                                         value,
                                         unit: MetricUnit::Cores,
-                                    },
-                                ),
-                                memory: metric.usage.get("memory").and_then(quantity_bytes).map(
-                                    |value| MetricSample {
+                                    }
+                                }),
+                                memory: usage.get("memory").and_then(quantity_bytes).map(|value| {
+                                    MetricSample {
                                         value,
                                         unit: MetricUnit::Bytes,
-                                    },
-                                ),
+                                    }
+                                }),
                             },
                         )
                     })
@@ -411,6 +413,14 @@ fn quantity_map_resources(
             .get("pods")
             .and_then(|quantity| quantity.0.parse().ok()),
     }
+}
+
+fn node_metric_usage(metric: &DynamicObject) -> BTreeMap<String, Quantity> {
+    metric
+        .data
+        .get("usage")
+        .and_then(|usage| serde_json::from_value(usage.clone()).ok())
+        .unwrap_or_default()
 }
 
 fn pod_ready(pod: &Pod) -> bool {

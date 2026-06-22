@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    optional_events_read, optional_metrics_read, ContainerMetrics, OptionalKubernetesReadStatus,
+    optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
 };
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
@@ -19,6 +19,7 @@ use k8s_openapi::api::apps::v1::{
 use k8s_openapi::api::core::v1::{Event, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
+use kube::api::DynamicObject;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -200,22 +201,21 @@ pub async fn emit_kubernetes_workload_heartbeat(
         resource_id: Some(input.resource_id.clone()),
     })?;
 
-    let metric_by_pod = metrics
-        .value
-        .as_ref()
-        .map(|list| {
-            list.items
-                .iter()
-                .filter_map(|metrics| {
-                    metrics
-                        .metadata
-                        .name
-                        .as_ref()
-                        .map(|name| (name.clone(), pod_metric_samples(&metrics.containers)))
-                })
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let metric_by_pod =
+        metrics
+            .value
+            .as_ref()
+            .map(|list| {
+                list.items
+                    .iter()
+                    .filter_map(|metrics| {
+                        metrics.metadata.name.as_ref().map(|name| {
+                            (name.clone(), pod_metric_samples(pod_metric_usages(metrics)))
+                        })
+                    })
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
 
     let pod_statuses = pods
         .items
@@ -569,20 +569,33 @@ fn pod_instance_status(
     }
 }
 
+fn pod_metric_usages(
+    metrics: &DynamicObject,
+) -> impl Iterator<Item = BTreeMap<String, Quantity>> + '_ {
+    metrics
+        .data
+        .get("containers")
+        .and_then(|containers| containers.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|container| container.get("usage"))
+        .filter_map(|usage| serde_json::from_value(usage.clone()).ok())
+}
+
 fn pod_metric_samples(
-    containers: &[ContainerMetrics],
+    containers: impl IntoIterator<Item = BTreeMap<String, Quantity>>,
 ) -> (Option<MetricSample>, Option<MetricSample>) {
     let mut cpu = 0.0;
     let mut memory = 0.0;
     let mut has_cpu = false;
     let mut has_memory = false;
 
-    for container in containers {
-        if let Some(value) = container.usage.get("cpu").and_then(quantity_cpu_cores) {
+    for usage in containers {
+        if let Some(value) = usage.get("cpu").and_then(quantity_cpu_cores) {
             cpu += value;
             has_cpu = true;
         }
-        if let Some(value) = container.usage.get("memory").and_then(quantity_bytes) {
+        if let Some(value) = usage.get("memory").and_then(quantity_bytes) {
             memory += value;
             has_memory = true;
         }
@@ -709,10 +722,7 @@ mod tests {
         let mut usage = BTreeMap::new();
         usage.insert("cpu".to_string(), Quantity("250m".to_string()));
         usage.insert("memory".to_string(), Quantity("128Mi".to_string()));
-        let metrics = pod_metric_samples(&[ContainerMetrics {
-            name: "api".to_string(),
-            usage,
-        }]);
+        let metrics = pod_metric_samples([usage]);
         let pod = Pod {
             metadata: ObjectMeta {
                 name: Some("api-abc".to_string()),

@@ -10,10 +10,6 @@ use k8s_openapi::{
         core::v1::{Event, Node, Pod, Secret, Service},
         networking::v1::Ingress,
     },
-    apimachinery::pkg::{
-        api::resource::Quantity,
-        apis::meta::v1::{ListMeta, ObjectMeta},
-    },
     List,
 };
 use kube::{
@@ -26,7 +22,6 @@ use mockall::automock;
 use secrecy::SecretString;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -127,45 +122,6 @@ pub trait NodeApi: Send + Sync + std::fmt::Debug {
     ) -> Result<List<Node>>;
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PodMetricsList {
-    pub metadata: ListMeta,
-    pub items: Vec<PodMetrics>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PodMetrics {
-    pub metadata: ObjectMeta,
-    pub timestamp: Option<String>,
-    pub window: Option<String>,
-    pub containers: Vec<ContainerMetrics>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerMetrics {
-    pub name: String,
-    pub usage: BTreeMap<String, Quantity>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeMetricsList {
-    pub metadata: ListMeta,
-    pub items: Vec<NodeMetrics>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeMetrics {
-    pub metadata: ObjectMeta,
-    pub timestamp: Option<String>,
-    pub window: Option<String>,
-    pub usage: BTreeMap<String, Quantity>,
-}
-
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait]
 pub trait MetricsApi: Send + Sync + std::fmt::Debug {
@@ -173,9 +129,12 @@ pub trait MetricsApi: Send + Sync + std::fmt::Debug {
         &self,
         namespace: &str,
         label_selector: Option<String>,
-    ) -> Result<PodMetricsList>;
+    ) -> Result<ObjectList<DynamicObject>>;
 
-    async fn list_node_metrics(&self, label_selector: Option<String>) -> Result<NodeMetricsList>;
+    async fn list_node_metrics(
+        &self,
+        label_selector: Option<String>,
+    ) -> Result<ObjectList<DynamicObject>>;
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -1034,45 +993,28 @@ impl MetricsApi for KubernetesClient {
         &self,
         namespace: &str,
         label_selector: Option<String>,
-    ) -> Result<PodMetricsList> {
+    ) -> Result<ObjectList<DynamicObject>> {
         let api =
             self.dynamic_namespaced(namespace, "metrics.k8s.io", "v1beta1", "PodMetrics", "pods");
-        let list = api
-            .list(&list_params(label_selector, None))
+        api.list(&list_params(label_selector, None))
             .await
             .into_alien_error()
             .context(ErrorData::HttpRequestFailed {
                 message: "Kubernetes pod metrics list operation failed".to_string(),
-            })?;
-        serde_json::from_value(serde_json::to_value(list).into_alien_error().context(
-            ErrorData::HttpRequestFailed {
-                message: "Failed to serialize Kubernetes pod metrics response".to_string(),
-            },
-        )?)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to deserialize Kubernetes pod metrics response".to_string(),
-        })
+            })
     }
 
-    async fn list_node_metrics(&self, label_selector: Option<String>) -> Result<NodeMetricsList> {
+    async fn list_node_metrics(
+        &self,
+        label_selector: Option<String>,
+    ) -> Result<ObjectList<DynamicObject>> {
         let api = self.dynamic_cluster("metrics.k8s.io", "v1beta1", "NodeMetrics", "nodes");
-        let list = api
-            .list(&list_params(label_selector, None))
+        api.list(&list_params(label_selector, None))
             .await
             .into_alien_error()
             .context(ErrorData::HttpRequestFailed {
                 message: "Kubernetes node metrics list operation failed".to_string(),
-            })?;
-        serde_json::from_value(serde_json::to_value(list).into_alien_error().context(
-            ErrorData::HttpRequestFailed {
-                message: "Failed to serialize Kubernetes node metrics response".to_string(),
-            },
-        )?)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to deserialize Kubernetes node metrics response".to_string(),
-        })
+            })
     }
 }
 
