@@ -22,7 +22,7 @@ use tokio::net::lookup_host;
 use tracing::info;
 
 #[cfg(feature = "aws")]
-use crate::aws_sdk::{AcmBlob, AcmTag, ImportCertificateRequest, ReimportCertificateRequest};
+use crate::aws_sdk::{AcmBlob, AcmTag, ImportCertificateRequest};
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
@@ -629,7 +629,7 @@ async fn publish_managed_acm_certificate(
     let (leaf, chain) = split_certificate_chain(&input.certificate_chain);
 
     let certificate_arn = if let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() {
-        let request = ReimportCertificateRequest::builder()
+        let request = ImportCertificateRequest::builder()
             .certificate_arn(certificate_arn.clone())
             .certificate(AcmBlob::new(leaf.into_bytes()))
             .private_key(AcmBlob::new(input.private_key.into_bytes()))

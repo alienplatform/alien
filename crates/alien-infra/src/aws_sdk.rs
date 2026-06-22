@@ -61,8 +61,6 @@ pub use aws_sdk_acm::{
     types::Tag as AcmTag,
 };
 
-pub type ReimportCertificateRequest = ImportCertificateRequest;
-
 pub use aws_sdk_apigatewayv2::{
     operation::{
         create_api::{
@@ -391,7 +389,7 @@ pub trait AcmApi: Send + Sync {
     ) -> Result<ImportCertificateResponse>;
 
     /// Reimport certificate material for an existing ACM certificate.
-    async fn reimport_certificate(&self, request: ReimportCertificateRequest) -> Result<()>;
+    async fn reimport_certificate(&self, request: ImportCertificateRequest) -> Result<()>;
 
     /// Delete an ACM certificate by ARN.
     async fn delete_certificate(&self, certificate_arn: &str) -> Result<()>;
@@ -1134,7 +1132,7 @@ impl AcmApi for AcmClient {
         Ok(response)
     }
 
-    async fn reimport_certificate(&self, request: ReimportCertificateRequest) -> Result<()> {
+    async fn reimport_certificate(&self, request: ImportCertificateRequest) -> Result<()> {
         let certificate_arn = request.certificate_arn.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: "ACM reimport request did not include certificateArn".to_string(),

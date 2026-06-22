@@ -18,8 +18,8 @@ use crate::aws_sdk::{
     GetFunctionConfigurationResponse, ImportCertificateRequest, IntegrationType,
     LambdaArchitecture, LambdaFunctionConfiguration, LambdaLastUpdateStatus, LambdaState,
     ListEventSourceMappingsRequest, NotificationConfiguration, PackageType, ProtocolType,
-    PutRuleRequest, PutTargetsRequest, ReimportCertificateRequest, RuleState, S3Event,
-    SecurityPolicy, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    PutRuleRequest, PutTargetsRequest, RuleState, S3Event, SecurityPolicy,
+    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -1948,7 +1948,7 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let reimport_request = ReimportCertificateRequest::builder()
+        let reimport_request = ImportCertificateRequest::builder()
             .certificate_arn(certificate_arn)
             .certificate(AcmBlob::new(leaf.into_bytes()))
             .private_key(AcmBlob::new(private_key.clone().into_bytes()))
