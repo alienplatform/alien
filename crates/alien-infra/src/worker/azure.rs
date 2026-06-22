@@ -1,12 +1,11 @@
 use crate::azure_container_apps::{
-    Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
-    ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
-    CustomDomain, CustomDomainBindingType, Dapr, DaprAppProtocol, EnvironmentVar, IdentitySettings,
+    certificate, Certificate, CertificateKeyVaultProperties, Configuration,
+    ConfigurationActiveRevisionsMode, Container, ContainerApp, ContainerAppProperties,
+    ContainerAppPropertiesProvisioningState, ContainerResources, CustomDomain,
+    CustomDomainBindingType, Dapr, DaprAppProtocol, EnvironmentVar, IdentitySettings,
     IdentitySettingsLifecycle, Ingress as AzureContainerAppsIngress, IngressTransport,
-    ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
-    ManagedEnvironmentCertificateProperties, ManagedServiceIdentity, ManagedServiceIdentityType,
-    RegistryCredentials, Scale, Secret, Template, TrafficWeight, UserAssignedIdentities,
-    UserAssignedIdentity,
+    ManagedServiceIdentity, ManagedServiceIdentityType, RegistryCredentials, Scale, Secret,
+    Template, TrackedResource, TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -1002,14 +1001,14 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let location = azure_cfg.region.as_deref().unwrap_or("East US").to_string();
-        let certificate = ManagedEnvironmentCertificate {
-            location,
-            properties: Some(ManagedEnvironmentCertificateProperties {
+        let certificate = Certificate {
+            tracked_resource: TrackedResource::new(location),
+            properties: Some(certificate::Properties {
                 value: Some(pkcs12_base64),
                 password: Some(String::new()),
                 certificate_key_vault_properties: None,
+                ..Default::default()
             }),
-            tags: HashMap::new(),
         };
 
         let container_apps_client = ctx
@@ -1029,13 +1028,14 @@ impl AzureWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Azure Container Apps Environment certificate response missing ID"
-                    .to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?);
+        self.container_apps_certificate_id =
+            Some(response.tracked_resource.resource.id.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "Azure Container Apps Environment certificate response missing ID"
+                        .to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })
+            })?);
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
@@ -1103,19 +1103,19 @@ impl AzureWorkerController {
                 })?;
             let certificate_name =
                 get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
-            let certificate = ManagedEnvironmentCertificate {
-                location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
-                properties: Some(ManagedEnvironmentCertificateProperties {
+            let certificate = Certificate {
+                tracked_resource: TrackedResource::new(
+                    azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
+                ),
+                properties: Some(certificate::Properties {
                     value: None,
                     password: None,
-                    certificate_key_vault_properties: Some(
-                        ManagedEnvironmentCertificateKeyVaultProperties {
-                            identity: rsm_outputs.management_resource_id.clone(),
-                            key_vault_url: keyvault_cert_id.clone(),
-                        },
-                    ),
+                    certificate_key_vault_properties: Some(CertificateKeyVaultProperties {
+                        identity: Some(rsm_outputs.management_resource_id.clone()),
+                        key_vault_url: Some(keyvault_cert_id.clone()),
+                    }),
+                    ..Default::default()
                 }),
-                tags: HashMap::new(),
             };
             let response = client
                 .create_or_update_managed_environment_certificate(
@@ -1131,13 +1131,14 @@ impl AzureWorkerController {
                             .to_string(),
                     resource_id: Some(worker_config.id.clone()),
                 })?;
-            self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "Azure Container Apps Environment certificate response missing ID"
-                        .to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                })
-            })?);
+            self.container_apps_certificate_id =
+                Some(response.tracked_resource.resource.id.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Azure Container Apps Environment certificate response missing ID"
+                            .to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })
+                })?);
         }
         let container_apps_certificate_id =
             self.container_apps_certificate_id.as_ref().ok_or_else(|| {
@@ -2068,14 +2069,16 @@ impl AzureWorkerController {
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let certificate_name =
             get_container_apps_certificate_name(ctx.resource_prefix, &func_cfg.id);
-        let certificate = ManagedEnvironmentCertificate {
-            location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
-            properties: Some(ManagedEnvironmentCertificateProperties {
+        let certificate = Certificate {
+            tracked_resource: TrackedResource::new(
+                azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
+            ),
+            properties: Some(certificate::Properties {
                 value: Some(pkcs12_base64),
                 password: Some(String::new()),
                 certificate_key_vault_properties: None,
+                ..Default::default()
             }),
-            tags: HashMap::new(),
         };
 
         let container_apps_client = ctx
@@ -2095,13 +2098,14 @@ impl AzureWorkerController {
                 resource_id: Some(func_cfg.id.clone()),
             })?;
 
-        let container_apps_certificate_id = response.id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Azure Container Apps Environment certificate response missing ID"
-                    .to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })
-        })?;
+        let container_apps_certificate_id =
+            response.tracked_resource.resource.id.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "Azure Container Apps Environment certificate response missing ID"
+                        .to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })
+            })?;
 
         if self.fqdn.is_some() {
             let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {

@@ -4,7 +4,8 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
 pub use azure_mgmt_app::package_preview_2024_08::models::{
-    dapr_component, DaprComponent, DaprMetadata,
+    certificate, dapr_component, Certificate, CertificateKeyVaultProperties, DaprComponent,
+    DaprMetadata, TrackedResource,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
@@ -70,8 +71,8 @@ pub trait ContainerAppsApi: Send + Sync + Debug {
         resource_group_name: &str,
         environment_name: &str,
         certificate_name: &str,
-        certificate: &ManagedEnvironmentCertificate,
-    ) -> CloudClientResult<ManagedEnvironmentCertificateResponse>;
+        certificate: &Certificate,
+    ) -> CloudClientResult<Certificate>;
 
     async fn delete_managed_environment_certificate(
         &self,
@@ -986,44 +987,6 @@ pub struct WorkloadProfile {
     pub maximum_count: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedEnvironmentCertificate {
-    /// Azure region.
-    pub location: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<ManagedEnvironmentCertificateProperties>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedEnvironmentCertificateProperties {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certificate_key_vault_properties: Option<ManagedEnvironmentCertificateKeyVaultProperties>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedEnvironmentCertificateKeyVaultProperties {
-    /// Identity used to access Key Vault.
-    pub identity: String,
-    /// Key Vault certificate secret URL.
-    pub key_vault_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedEnvironmentCertificateResponse {
-    /// Certificate resource ID.
-    pub id: Option<String>,
-}
-
 pub struct OfficialAzureContainerAppsClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
@@ -1269,8 +1232,8 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
         resource_group_name: &str,
         environment_name: &str,
         certificate_name: &str,
-        certificate: &ManagedEnvironmentCertificate,
-    ) -> CloudClientResult<ManagedEnvironmentCertificateResponse> {
+        certificate: &Certificate,
+    ) -> CloudClientResult<Certificate> {
         let body = serialize_request(
             "Azure Container Apps Managed Environment Certificate",
             certificate_name,
@@ -1286,7 +1249,7 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
             )
             .await?;
         if body.trim().is_empty() {
-            return Ok(ManagedEnvironmentCertificateResponse::default());
+            return Ok(Certificate::new(TrackedResource::new(String::new())));
         }
         self.parse_response(
             "Azure Container Apps Managed Environment Certificate",
