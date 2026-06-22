@@ -7,8 +7,7 @@ use crate::aws_sdk::{
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
 };
 use crate::azure_container_apps::{
-    ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
-    OfficialAzureLongRunningOperationClient,
+    AzureLongRunningOperationClient, ContainerAppsApi, OfficialAzureContainerAppsClient,
 };
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
@@ -366,7 +365,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_long_running_operation_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn LongRunningOperationApi>>;
+    ) -> Result<AzureLongRunningOperationClient>;
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
@@ -810,11 +809,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_long_running_operation_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn LongRunningOperationApi>> {
-        Ok(Arc::new(OfficialAzureLongRunningOperationClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<AzureLongRunningOperationClient> {
+        azure_long_running_operation_client_from_alien_config(config)
     }
 
     fn get_azure_managed_identity_client(
@@ -1820,6 +1816,34 @@ pub(crate) fn azure_container_apps_management_client_from_alien_config(
             message: "Failed to build official Azure Container Apps client".to_string(),
             resource_id: None,
         })
+}
+
+pub(crate) fn azure_long_running_operation_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<AzureLongRunningOperationClient> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let scopes = vec![endpoint
+        .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build Azure management OAuth scope".to_string(),
+            resource_id: None,
+        })?
+        .to_string()];
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    Ok(AzureLongRunningOperationClient::new(
+        credential,
+        scopes,
+        azure_core_021::ClientOptions::default(),
+    ))
 }
 
 pub(crate) fn azure_authorization_client_from_alien_config(

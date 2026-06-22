@@ -4529,11 +4529,11 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use crate::azure_container_apps::{
-        ContainerApp, ContainerAppProperties, MockContainerAppsApi, MockLongRunningOperationApi,
+        AzureLongRunningOperationClient, ContainerApp, ContainerAppProperties, MockContainerAppsApi,
     };
     use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -4543,8 +4543,8 @@ mod tests {
     };
     use alien_error::{AlienError, ContextError};
     use azure_core_021::{
-        headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
-        Response, StatusCode, TransportOptions,
+        headers, headers::Headers, Body, BytesStream, ClientOptions, Context, Method, Policy,
+        PolicyResult, Request, Response, StatusCode, TransportOptions,
     };
     use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
     use azure_mgmt_app::package_preview_2024_08::models::{
@@ -4834,9 +4834,8 @@ mod tests {
     fn setup_mock_client_for_long_running_creation(
         app_name: &str,
         has_url: bool,
-    ) -> (Arc<MockContainerAppsApi>, Arc<MockLongRunningOperationApi>) {
+    ) -> (Arc<MockContainerAppsApi>, AzureLongRunningOperationClient) {
         let mut mock_container_apps = MockContainerAppsApi::new();
-        let mut mock_lro = MockLongRunningOperationApi::new();
 
         // Mock creation that starts as long-running
         // Use minimal retry_after for fast tests (actual Azure would use seconds)
@@ -4851,17 +4850,6 @@ mod tests {
                     location_url: None,
                 }))
             });
-
-        // Mock LRO polling - first incomplete, then complete
-        mock_lro
-            .expect_check_status()
-            .returning(|_, _, _| Ok(None)) // Still running
-            .times(1);
-
-        mock_lro
-            .expect_check_status()
-            .returning(|_, _, _| Ok(Some("completed".to_string()))) // Completed
-            .times(1);
 
         // Mock get operations showing progression
         let app_name_for_get1 = app_name.clone();
@@ -4884,7 +4872,10 @@ mod tests {
                 ))
             });
 
-        (Arc::new(mock_container_apps), Arc::new(mock_lro))
+        (
+            Arc::new(mock_container_apps),
+            long_running_operation_client_with_transport(LongRunningOperationTransport::new()),
+        )
     }
 
     fn setup_mock_client_for_best_effort_deletion(
@@ -5072,6 +5063,58 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct LongRunningOperationTransport {
+        poll_count: Mutex<u32>,
+    }
+
+    impl LongRunningOperationTransport {
+        fn new() -> Self {
+            Self {
+                poll_count: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Policy for LongRunningOperationTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(request.method(), &Method::Get);
+            assert!(request
+                .headers()
+                .get_str(&headers::AUTHORIZATION)
+                .expect("LRO polling request should include authorization")
+                .starts_with("Bearer "));
+            assert!(
+                request.url().path().ends_with("/operations/test-op"),
+                "unexpected Azure LRO polling path: {}",
+                request.url().path()
+            );
+
+            let mut poll_count = self
+                .poll_count
+                .lock()
+                .expect("LRO polling count mutex should not be poisoned");
+            *poll_count += 1;
+
+            if *poll_count == 1 {
+                return Ok(Response::new(
+                    StatusCode::Accepted,
+                    Headers::new(),
+                    Box::pin(BytesStream::new("{}")),
+                ));
+            }
+
+            Ok(json_response(json!({ "status": "Succeeded" })))
+        }
+    }
+
     fn assert_json_body(request: &Request) -> serde_json::Value {
         match request.body() {
             Body::Bytes(bytes) => {
@@ -5136,9 +5179,32 @@ mod tests {
             .expect("Azure Container Apps management client should build")
     }
 
+    fn long_running_operation_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> AzureLongRunningOperationClient {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        AzureLongRunningOperationClient::new(
+            credential,
+            vec!["https://management.azure.com/.default".to_string()],
+            ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport))),
+        )
+    }
+
     fn setup_mock_service_provider(
         mock_container_apps: Arc<MockContainerAppsApi>,
-        mock_lro: Option<Arc<MockLongRunningOperationApi>>,
+        mock_lro: Option<AzureLongRunningOperationClient>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 

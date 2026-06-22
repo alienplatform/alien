@@ -45,17 +45,6 @@ pub trait ContainerAppsApi: Send + Sync + Debug {
     ) -> CloudClientResult<OperationResult<()>>;
 }
 
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait LongRunningOperationApi: Send + Sync + Debug {
-    async fn check_status(
-        &self,
-        operation: &LongRunningOperation,
-        operation_name: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<Option<String>>;
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerApp {
@@ -591,60 +580,111 @@ impl OfficialAzureContainerAppsClient {
     }
 }
 
-pub struct OfficialAzureLongRunningOperationClient {
-    credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+#[derive(Clone)]
+pub struct AzureLongRunningOperationClient {
+    credential: Arc<dyn azure_core_021::auth::TokenCredential>,
+    scopes: Vec<String>,
+    pipeline: Arc<azure_core_021::Pipeline>,
 }
 
-impl Debug for OfficialAzureLongRunningOperationClient {
+impl Debug for AzureLongRunningOperationClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("OfficialAzureLongRunningOperationClient")
+            .debug_struct("AzureLongRunningOperationClient")
             .finish_non_exhaustive()
     }
 }
 
-impl OfficialAzureLongRunningOperationClient {
-    pub fn new(_config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
+impl AzureLongRunningOperationClient {
+    pub fn new(
+        credential: Arc<dyn azure_core_021::auth::TokenCredential>,
+        scopes: Vec<String>,
+        options: azure_core_021::ClientOptions,
+    ) -> Self {
+        let pipeline = azure_core_021::Pipeline::new(
+            option_env!("CARGO_PKG_NAME"),
+            option_env!("CARGO_PKG_VERSION"),
+            options,
+            Vec::new(),
+            Vec::new(),
+        );
         Self {
             credential,
-            http_client: reqwest::Client::new(),
+            scopes,
+            pipeline: Arc::new(pipeline),
         }
     }
-}
 
-#[async_trait::async_trait]
-impl LongRunningOperationApi for OfficialAzureLongRunningOperationClient {
-    async fn check_status(
+    pub async fn check_status(
         &self,
         operation: &LongRunningOperation,
         operation_name: &str,
         resource_name: &str,
     ) -> CloudClientResult<Option<String>> {
-        let (status, _, body) = azure_arm_request(
-            &self.http_client,
-            self.credential.as_ref(),
-            reqwest::Method::GET,
-            operation.url.clone(),
-            None,
-            operation_name,
-            resource_name,
-        )
-        .await?;
+        let scopes = self.scopes.iter().map(String::as_str).collect::<Vec<_>>();
+        let token = self
+            .credential
+            .get_token(&scopes)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::AuthenticationError {
+                message: "Failed to get Azure management access token".to_string(),
+            })?;
+        let url = azure_core_021::Url::parse(&operation.url)
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!(
+                    "Invalid Azure {operation_name} polling URL for '{resource_name}'"
+                ),
+            })?;
+        let mut request = azure_core_021::Request::new(url, azure_core_021::Method::Get);
+        request.insert_header(
+            azure_core_021::headers::AUTHORIZATION,
+            format!("Bearer {}", token.token.secret()),
+        );
+
+        let response = self
+            .pipeline
+            .send(&azure_core_021::Context::default(), &mut request)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!(
+                    "Azure {operation_name} polling request failed for '{resource_name}'"
+                ),
+            })?;
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!(
+                    "Failed to read Azure {operation_name} polling response for '{resource_name}'"
+                ),
+            })?;
+        let body = String::from_utf8(body.to_vec())
+            .into_alien_error()
+            .context(CloudClientErrorData::SerializationError {
+                message: format!(
+                    "Azure {operation_name} polling response for '{resource_name}' was not UTF-8"
+                ),
+            })?;
 
         match status {
-            reqwest::StatusCode::OK => {
+            azure_core_021::StatusCode::Ok => {
                 azure_operation_body_status(operation, operation_name, resource_name, body)
             }
-            reqwest::StatusCode::NO_CONTENT => Ok(Some(String::new())),
-            reqwest::StatusCode::ACCEPTED => Ok(None),
+            azure_core_021::StatusCode::NoContent => Ok(Some(String::new())),
+            azure_core_021::StatusCode::Accepted => Ok(None),
             _ => Err(AlienError::new(CloudClientErrorData::HttpResponseError {
                 message: format!(
                     "Azure {operation_name} for '{resource_name}' returned HTTP {}",
-                    status.as_u16()
+                    status as u16
                 ),
                 url: operation.url.clone(),
-                http_status: status.as_u16(),
+                http_status: status as u16,
                 http_request_text: None,
                 http_response_text: Some(body),
             })),
