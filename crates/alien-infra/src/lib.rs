@@ -11,6 +11,7 @@ pub mod gcp_cloudrun;
 
 mod gcp_iam_admin;
 mod gcp_resource_manager;
+mod gcp_storage;
 
 mod error;
 pub use error::*;

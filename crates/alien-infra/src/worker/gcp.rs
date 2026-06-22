@@ -5593,8 +5593,6 @@ impl GcpWorkerController {
             .service_provider
             .get_gcp_pubsub_iam_policy_client(gcp_config)
             .await?;
-        let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
-
         // Get bucket name from the storage controller dependency
         let storage_controller =
             ctx.require_dependency::<crate::storage::GcpStorageController>(storage_ref)?;
@@ -5708,8 +5706,7 @@ impl GcpWorkerController {
             "payloadFormat": "JSON_API_V1",
         });
 
-        let existing_notification = gcs_client
-            .list_notifications(bucket_name.clone())
+        let existing_notification = crate::gcp_storage::list_notifications(gcp_config, bucket_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -5731,8 +5728,7 @@ impl GcpWorkerController {
             );
             existing_notification
         } else {
-            gcs_client
-                .insert_notification(bucket_name.clone(), notification)
+            crate::gcp_storage::insert_notification(gcp_config, bucket_name, notification)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -5853,13 +5849,15 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for tracker in &self.gcs_notification_ids.clone() {
-            match gcs_client
-                .delete_notification(tracker.bucket_name.clone(), tracker.notification_id.clone())
-                .await
+            match crate::gcp_storage::delete_notification(
+                gcp_config,
+                &tracker.bucket_name,
+                &tracker.notification_id,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(

@@ -1,5 +1,4 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -12,6 +11,7 @@ use alien_core::{
 use alien_macros::controller;
 use chrono::Utc;
 use google_cloud_iam_v1::model::{Binding, Policy};
+use google_cloud_storage::client::StorageControl;
 use google_cloud_storage::model::{
     bucket::{
         iam_config::UniformBucketLevelAccess,
@@ -24,7 +24,8 @@ use google_cloud_storage::model::{
     Bucket,
 };
 
-use crate::core::{GcsApi, ResourceControllerContext};
+use crate::core::ResourceControllerContext;
+use crate::gcp_storage;
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -130,7 +131,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Creating GCS bucket with basic configuration");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Build bucket configuration with basic settings only
         let mut bucket = Bucket::new().set_location(gcp_config.region.clone());
@@ -146,13 +150,13 @@ impl GcpStorageController {
         }
 
         // Create the bucket with basic configuration only
-        let created_bucket = client
-            .create_bucket(bucket_name.clone(), bucket)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create GCS bucket '{}'", bucket_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let created_bucket =
+            gcp_storage::create_bucket(&client, &gcp_config.project_id, &bucket_name, bucket)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create GCS bucket '{}'", bucket_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
@@ -184,10 +188,13 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Checking bucket status");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Check if bucket exists and is ready
-        match client.get_bucket(bucket_name.clone()).await {
+        match gcp_storage::get_bucket(&client, bucket_name).await {
             Ok(_bucket) => {
                 info!(bucket = %bucket_name, "Bucket is ready");
                 Ok(HandlerAction::Continue {
@@ -223,7 +230,10 @@ impl GcpStorageController {
         })?;
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Step 1: Apply resource-scoped permissions from the stack
         self.apply_resource_scoped_permissions(ctx, bucket_name, &client)
@@ -236,8 +246,7 @@ impl GcpStorageController {
             // First set uniform bucket-level access
             let bucket_patch = gcs_iam_patch(true, "inherited");
 
-            client
-                .update_bucket(bucket_name.clone(), bucket_patch)
+            gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -248,8 +257,7 @@ impl GcpStorageController {
                 })?;
 
             // Then add public read binding via read-modify-write to preserve existing bindings
-            let mut existing_policy = client
-                .get_bucket_iam_policy(bucket_name.clone())
+            let mut existing_policy = gcp_storage::get_bucket_iam_policy(&client, bucket_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get bucket IAM policy for '{}' before setting public read. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
@@ -284,8 +292,7 @@ impl GcpStorageController {
 
                 existing_policy.version = 3;
 
-                client
-                    .set_bucket_iam_policy(bucket_name.clone(), existing_policy)
+                gcp_storage::set_bucket_iam_policy(&client, bucket_name, existing_policy)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
@@ -315,15 +322,18 @@ impl GcpStorageController {
 
         if let Some(bucket_name) = &self.bucket_name {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+            let client = ctx
+                .service_provider
+                .get_gcp_storage_control_client(gcp_config)
+                .await?;
 
             // Fetch bucket metadata without listing objects or reading object ACLs.
-            let bucket = client.get_bucket(bucket_name.clone()).await.context(
-                ErrorData::CloudPlatformError {
+            let bucket = gcp_storage::get_bucket(&client, bucket_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: "Failed to check GCS bucket during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             emit_gcp_storage_heartbeat(ctx, &config.id, bucket_name, bucket);
 
@@ -357,7 +367,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Starting bucket configuration update");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Build patch object with changed fields (always check all fields, no early optimization)
         let mut bucket_patch = Bucket::default();
@@ -386,8 +399,7 @@ impl GcpStorageController {
 
         // Apply bucket configuration changes if needed
         if needs_update {
-            client
-                .update_bucket(bucket_name.clone(), bucket_patch)
+            gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update GCS bucket '{}'", bucket_name),
@@ -424,10 +436,13 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Checking bucket status after update");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Check if bucket is ready after update
-        match client.get_bucket(bucket_name.clone()).await {
+        match gcp_storage::get_bucket(&client, bucket_name).await {
             Ok(_bucket) => {
                 info!(bucket = %bucket_name, "Bucket is ready after update");
                 Ok(HandlerAction::Continue {
@@ -468,7 +483,10 @@ impl GcpStorageController {
             info!(bucket = %bucket_name, current = %config.public_read, previous = %prev_config.public_read, "Updating public access");
 
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+            let client = ctx
+                .service_provider
+                .get_gcp_storage_control_client(gcp_config)
+                .await?;
 
             if config.public_read {
                 // Enable public read access
@@ -477,8 +495,7 @@ impl GcpStorageController {
                 // First set uniform bucket-level access
                 let bucket_patch = gcs_iam_patch(true, "inherited");
 
-                client
-                    .update_bucket(bucket_name.clone(), bucket_patch)
+                gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -493,8 +510,7 @@ impl GcpStorageController {
                     .set_role("roles/storage.objectViewer")
                     .set_members(["allUsers"])]);
 
-                client
-                    .set_bucket_iam_policy(bucket_name.clone(), iam_policy)
+                gcp_storage::set_bucket_iam_policy(&client, bucket_name, iam_policy)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
@@ -509,8 +525,7 @@ impl GcpStorageController {
                 // First disable uniform bucket-level access
                 let bucket_patch = gcs_iam_patch(false, "enforced");
 
-                client
-                    .update_bucket(bucket_name.clone(), bucket_patch)
+                gcp_storage::update_bucket(&client, bucket_name, bucket_patch)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -521,15 +536,14 @@ impl GcpStorageController {
                     })?;
 
                 // Then remove allUsers from IAM policy
-                match client.get_bucket_iam_policy(bucket_name.clone()).await {
+                match gcp_storage::get_bucket_iam_policy(&client, bucket_name).await {
                     Ok(mut current_policy) => {
                         current_policy.bindings.retain(|binding| {
                             !(binding.role == "roles/storage.objectViewer"
                                 && binding.members.contains(&"allUsers".to_string()))
                         });
 
-                        client
-                            .set_bucket_iam_policy(bucket_name.clone(), current_policy)
+                        gcp_storage::set_bucket_iam_policy(&client, bucket_name, current_policy)
                             .await
                             .context(ErrorData::CloudPlatformError {
                                 message: format!(
@@ -585,7 +599,10 @@ impl GcpStorageController {
         })?;
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         info!(bucket = %bucket_name, "Re-applying resource-scoped permissions after update");
         self.apply_resource_scoped_permissions(ctx, bucket_name, &client)
@@ -627,10 +644,13 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Starting bucket deletion by emptying contents");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Best effort: try to empty the bucket first
-        match client.empty_bucket(bucket_name.clone()).await {
+        match gcp_storage::empty_bucket(&client, bucket_name).await {
             Ok(_) => {
                 info!(bucket = %bucket_name, "Bucket emptied successfully");
             }
@@ -674,10 +694,13 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Deleting GCS bucket");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_storage_control_client(gcp_config)
+            .await?;
 
         // Best effort: try to delete the bucket
-        match client.delete_bucket(bucket_name.clone()).await {
+        match gcp_storage::delete_bucket(&client, bucket_name).await {
             Ok(()) => {
                 info!(bucket = %bucket_name, "GCS bucket deleted successfully");
             }
@@ -840,7 +863,7 @@ impl GcpStorageController {
         &self,
         ctx: &ResourceControllerContext<'_>,
         bucket_name: &str,
-        client: &Arc<dyn GcsApi>,
+        client: &StorageControl,
     ) -> Result<()> {
         use crate::core::ResourcePermissionsHelper;
 
@@ -866,8 +889,7 @@ impl GcpStorageController {
             );
 
             // Get existing IAM policy to merge with new bindings
-            let mut existing_policy = client
-                .get_bucket_iam_policy(bucket_name.to_string())
+            let mut existing_policy = gcp_storage::get_bucket_iam_policy(client, bucket_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get bucket IAM policy for '{}' before applying resource-scoped permissions. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
@@ -881,8 +903,7 @@ impl GcpStorageController {
             existing_policy.version = 3;
 
             // Apply the updated IAM policy
-            client
-                .set_bucket_iam_policy(bucket_name.to_string(), existing_policy)
+            gcp_storage::set_bucket_iam_policy(client, bucket_name, existing_policy)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -922,16 +943,73 @@ mod tests {
     use alien_core::{
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
-    use alien_error::AlienError;
-    use google_cloud_iam_v1::model::{Binding, Policy};
-    use google_cloud_storage::model::Bucket;
+    use google_cloud_gax::{
+        error::{
+            rpc::{Code, Status},
+            Error as GaxError,
+        },
+        options::RequestOptions,
+        response::Response,
+    };
+    use google_cloud_iam_v1::model::{Binding, GetIamPolicyRequest, Policy, SetIamPolicyRequest};
+    use google_cloud_storage::{
+        client::StorageControl as StorageControlClient,
+        model::{
+            Bucket, CreateBucketRequest, DeleteBucketRequest, DeleteObjectRequest,
+            GetBucketRequest, ListObjectsRequest, ListObjectsResponse, UpdateBucketRequest,
+        },
+    };
     use rstest::{fixture, rstest};
 
-    use crate::core::{
-        controller_test::SingleControllerExecutor, MockGcsApi, MockPlatformServiceProvider,
-    };
-    use crate::error::ErrorData;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::storage::GcpStorageController;
+
+    mockall::mock! {
+        #[derive(Debug)]
+        StorageControlSdk {}
+        impl google_cloud_storage::stub::StorageControl for StorageControlSdk {
+            async fn create_bucket(
+                &self,
+                request: CreateBucketRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<Bucket>>;
+            async fn get_bucket(
+                &self,
+                request: GetBucketRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<Bucket>>;
+            async fn update_bucket(
+                &self,
+                request: UpdateBucketRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<Bucket>>;
+            async fn delete_bucket(
+                &self,
+                request: DeleteBucketRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<()>>;
+            async fn get_iam_policy(
+                &self,
+                request: GetIamPolicyRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<Policy>>;
+            async fn set_iam_policy(
+                &self,
+                request: SetIamPolicyRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<Policy>>;
+            async fn list_objects(
+                &self,
+                request: ListObjectsRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<ListObjectsResponse>>;
+            async fn delete_object(
+                &self,
+                request: DeleteObjectRequest,
+                options: RequestOptions,
+            ) -> google_cloud_gax::Result<Response<()>>;
+        }
+    }
 
     // ─────────────── STORAGE FIXTURES ──────────────────────────
 
@@ -991,94 +1069,117 @@ mod tests {
             .set_location("us-central1")
     }
 
-    fn setup_mock_client_for_creation_and_deletion(bucket_name: &str) -> Arc<MockGcsApi> {
-        let mut mock_gcs = MockGcsApi::new();
+    fn not_found_error() -> GaxError {
+        GaxError::service(
+            Status::default()
+                .set_code(Code::NotFound)
+                .set_message("not found"),
+        )
+    }
+
+    fn setup_mock_client_for_creation_and_deletion(bucket_name: &str) -> StorageControlClient {
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Mock successful bucket creation
         let bucket_name = bucket_name.to_string();
         let bucket_name_clone1 = bucket_name.clone();
         let bucket_name_clone2 = bucket_name.clone();
 
-        mock_gcs
-            .expect_create_bucket()
-            .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name)));
+        mock_gcs.expect_create_bucket().returning(move |_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &bucket_name,
+            )))
+        });
 
         // Mock bucket status checks
-        mock_gcs
-            .expect_get_bucket()
-            .returning(move |_| Ok(create_successful_bucket_response(&bucket_name_clone1)));
+        mock_gcs.expect_get_bucket().returning(move |_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &bucket_name_clone1,
+            )))
+        });
 
         // Mock bucket updates for IAM and other configurations
-        mock_gcs
-            .expect_update_bucket()
-            .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone2)));
+        mock_gcs.expect_update_bucket().returning(move |_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &bucket_name_clone2,
+            )))
+        });
 
         // Mock IAM policy operations
         mock_gcs
-            .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(Policy::new().set_version(1)));
+            .expect_get_iam_policy()
+            .returning(|_, _| Ok(Response::from(Policy::new().set_version(1))));
 
         mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(Policy::new().set_version(1)));
+            .expect_set_iam_policy()
+            .returning(|_, _| Ok(Response::from(Policy::new().set_version(1))));
 
         // Mock deletion operations
-        mock_gcs.expect_empty_bucket().returning(|_| Ok(()));
-        mock_gcs.expect_delete_bucket().returning(|_| Ok(()));
+        mock_gcs
+            .expect_list_objects()
+            .returning(|_, _| Ok(Response::from(ListObjectsResponse::new())));
+        mock_gcs
+            .expect_delete_bucket()
+            .returning(|_, _| Ok(Response::from(())));
 
-        Arc::new(mock_gcs)
+        StorageControlClient::from_stub(mock_gcs)
     }
 
-    fn setup_mock_client_for_creation_and_update(bucket_name: &str) -> Arc<MockGcsApi> {
-        let mut mock_gcs = MockGcsApi::new();
+    fn setup_mock_client_for_creation_and_update(bucket_name: &str) -> StorageControlClient {
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Mock bucket status checks
         let bucket_name = bucket_name.to_string();
         let bucket_name_clone1 = bucket_name.clone();
 
-        mock_gcs
-            .expect_get_bucket()
-            .returning(move |_| Ok(create_successful_bucket_response(&bucket_name)));
+        mock_gcs.expect_get_bucket().returning(move |_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &bucket_name,
+            )))
+        });
 
         // Mock bucket updates for configuration changes
-        mock_gcs
-            .expect_update_bucket()
-            .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone1)));
+        mock_gcs.expect_update_bucket().returning(move |_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &bucket_name_clone1,
+            )))
+        });
 
         // Mock IAM policy operations for public read changes
         mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(Policy::new().set_version(1)));
+            .expect_set_iam_policy()
+            .returning(|_, _| Ok(Response::from(Policy::new().set_version(1))));
 
         mock_gcs
-            .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(Policy::new().set_version(1)));
+            .expect_get_iam_policy()
+            .returning(|_, _| Ok(Response::from(Policy::new().set_version(1))));
 
-        Arc::new(mock_gcs)
+        StorageControlClient::from_stub(mock_gcs)
     }
 
-    fn setup_mock_client_for_best_effort_deletion(_bucket_name: &str) -> Arc<MockGcsApi> {
-        let mut mock_gcs = MockGcsApi::new();
+    fn setup_mock_client_for_best_effort_deletion(_bucket_name: &str) -> StorageControlClient {
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Mock empty bucket failure (bucket doesn't exist)
-        mock_gcs.expect_empty_bucket().returning(|_| {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "GCS Bucket".to_string(),
-                resource_name: "test-bucket".to_string(),
-            }))
-        });
+        mock_gcs
+            .expect_list_objects()
+            .returning(|_, _| Err(not_found_error()));
 
         // Mock successful bucket deletion
-        mock_gcs.expect_delete_bucket().returning(|_| Ok(()));
+        mock_gcs
+            .expect_delete_bucket()
+            .returning(|_, _| Ok(Response::from(())));
 
-        Arc::new(mock_gcs)
+        StorageControlClient::from_stub(mock_gcs)
     }
 
-    fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_service_provider(
+        mock_gcs: StorageControlClient,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
-            .expect_get_gcp_gcs_client()
+            .expect_get_gcp_storage_control_client()
             .returning(move |_| Ok(mock_gcs.clone()));
 
         Arc::new(mock_provider)
@@ -1218,20 +1319,19 @@ mod tests {
     async fn test_best_effort_deletion_when_bucket_delete_fails() {
         let storage = basic_storage();
 
-        let mut mock_gcs = MockGcsApi::new();
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Mock successful empty bucket
-        mock_gcs.expect_empty_bucket().returning(|_| Ok(()));
+        mock_gcs
+            .expect_list_objects()
+            .returning(|_, _| Ok(Response::from(ListObjectsResponse::new())));
 
         // Mock bucket deletion failure (bucket doesn't exist)
-        mock_gcs.expect_delete_bucket().returning(|_| {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "GCS Bucket".to_string(),
-                resource_name: "test-bucket".to_string(),
-            }))
-        });
+        mock_gcs
+            .expect_delete_bucket()
+            .returning(|_, _| Err(not_found_error()));
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
+        let mock_provider = setup_mock_service_provider(StorageControlClient::from_stub(mock_gcs));
 
         // Start with a ready controller
         let ready_controller = GcpStorageController::mock_ready(&storage.id);
@@ -1267,26 +1367,31 @@ mod tests {
     async fn test_bucket_naming_validation() {
         let storage = Storage::new("my-awesome-storage".to_string()).build();
 
-        let mut mock_gcs = MockGcsApi::new();
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Validate that bucket names are prefixed correctly
         mock_gcs
             .expect_create_bucket()
-            .withf(|bucket_name, _| bucket_name == "test-my-awesome-storage")
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+            .withf(|request, _| request.bucket_id == "test-my-awesome-storage")
+            .returning(|request, _| {
+                Ok(Response::from(create_successful_bucket_response(
+                    &request.bucket_id,
+                )))
+            });
 
         // Mock other required methods
-        mock_gcs
-            .expect_get_bucket()
-            .returning(|_| Ok(create_successful_bucket_response("test-my-awesome-storage")));
-        mock_gcs
-            .expect_update_bucket()
-            .returning(|_, _| Ok(create_successful_bucket_response("test-my-awesome-storage")));
-        mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(Policy::default()));
+        mock_gcs.expect_get_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-my-awesome-storage",
+            )))
+        });
+        mock_gcs.expect_update_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-my-awesome-storage",
+            )))
+        });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
+        let mock_provider = setup_mock_service_provider(StorageControlClient::from_stub(mock_gcs));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1318,12 +1423,16 @@ mod tests {
             ])
             .build();
 
-        let mut mock_gcs = MockGcsApi::new();
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Validate that the generated lifecycle configuration contains expected rules
         mock_gcs
             .expect_create_bucket()
-            .withf(|_bucket_name, bucket| {
+            .withf(|request, _| {
+                let Some(bucket) = &request.bucket else {
+                    eprintln!("Expected bucket in create request");
+                    return false;
+                };
                 if let Some(lifecycle) = &bucket.lifecycle {
                     let rules = &lifecycle.rule;
                     if rules.len() != 2 {
@@ -1383,19 +1492,24 @@ mod tests {
                     false
                 }
             })
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+            .returning(|request, _| {
+                Ok(Response::from(create_successful_bucket_response(
+                    &request.bucket_id,
+                )))
+            });
 
-        mock_gcs
-            .expect_get_bucket()
-            .returning(|_| Ok(create_successful_bucket_response("test-lifecycle-test")));
-        mock_gcs
-            .expect_update_bucket()
-            .returning(|_, _| Ok(create_successful_bucket_response("test-lifecycle-test")));
-        mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(Policy::default()));
+        mock_gcs.expect_get_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-lifecycle-test",
+            )))
+        });
+        mock_gcs.expect_update_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-lifecycle-test",
+            )))
+        });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
+        let mock_provider = setup_mock_service_provider(StorageControlClient::from_stub(mock_gcs));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1418,12 +1532,16 @@ mod tests {
             .versioning(true)
             .build();
 
-        let mut mock_gcs = MockGcsApi::new();
+        let mut mock_gcs = MockStorageControlSdk::new();
 
         // Validate that versioning is enabled in bucket configuration
         mock_gcs
             .expect_create_bucket()
-            .withf(|_bucket_name, bucket| {
+            .withf(|request, _| {
+                let Some(bucket) = &request.bucket else {
+                    eprintln!("Expected bucket in create request");
+                    return false;
+                };
                 if let Some(versioning) = &bucket.versioning {
                     if !versioning.enabled {
                         eprintln!("Expected versioning to be enabled");
@@ -1435,19 +1553,24 @@ mod tests {
                     false
                 }
             })
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+            .returning(|request, _| {
+                Ok(Response::from(create_successful_bucket_response(
+                    &request.bucket_id,
+                )))
+            });
 
-        mock_gcs
-            .expect_get_bucket()
-            .returning(|_| Ok(create_successful_bucket_response("test-versioning-test")));
-        mock_gcs
-            .expect_update_bucket()
-            .returning(|_, _| Ok(create_successful_bucket_response("test-versioning-test")));
-        mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(Policy::default()));
+        mock_gcs.expect_get_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-versioning-test",
+            )))
+        });
+        mock_gcs.expect_update_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-versioning-test",
+            )))
+        });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
+        let mock_provider = setup_mock_service_provider(StorageControlClient::from_stub(mock_gcs));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1470,20 +1593,28 @@ mod tests {
             .public_read(true)
             .build();
 
-        let mut mock_gcs = MockGcsApi::new();
+        let mut mock_gcs = MockStorageControlSdk::new();
 
-        mock_gcs
-            .expect_create_bucket()
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+        mock_gcs.expect_create_bucket().returning(|request, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                &request.bucket_id,
+            )))
+        });
 
-        mock_gcs
-            .expect_get_bucket()
-            .returning(|_| Ok(create_successful_bucket_response("test-public-test")));
+        mock_gcs.expect_get_bucket().returning(|_, _| {
+            Ok(Response::from(create_successful_bucket_response(
+                "test-public-test",
+            )))
+        });
 
         // Validate uniform bucket-level access configuration
         mock_gcs
             .expect_update_bucket()
-            .withf(|_bucket_name, bucket| {
+            .withf(|request, _| {
+                let Some(bucket) = &request.bucket else {
+                    eprintln!("Expected bucket in update request");
+                    return false;
+                };
                 if let Some(iam_config) = &bucket.iam_config {
                     if let Some(ubla) = &iam_config.uniform_bucket_level_access {
                         if !ubla.enabled {
@@ -1509,17 +1640,30 @@ mod tests {
                     false
                 }
             })
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+            .returning(|request, _| {
+                let bucket_name = request
+                    .bucket
+                    .as_ref()
+                    .and_then(|bucket| bucket.name.rsplit_once("/buckets/").map(|(_, name)| name))
+                    .unwrap_or("test-public-test");
+                Ok(Response::from(create_successful_bucket_response(
+                    bucket_name,
+                )))
+            });
 
         // Return empty policy for the read-modify-write pattern
         mock_gcs
-            .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(Policy::default()));
+            .expect_get_iam_policy()
+            .returning(|_, _| Ok(Response::from(Policy::default())));
 
         // Validate IAM policy for public read access
         mock_gcs
-            .expect_set_bucket_iam_policy()
-            .withf(|_bucket_name, iam_policy| {
+            .expect_set_iam_policy()
+            .withf(|request, _| {
+                let Some(iam_policy) = &request.policy else {
+                    eprintln!("Expected policy in set IAM request");
+                    return false;
+                };
                 // Should have the correct binding for public read
                 if iam_policy.bindings.len() != 1 {
                     eprintln!("Expected 1 binding, got {}", iam_policy.bindings.len());
@@ -1543,12 +1687,14 @@ mod tests {
                 true
             })
             .returning(|_, _| {
-                Ok(Policy::new().set_version(1).set_bindings([Binding::new()
-                    .set_role("roles/storage.objectViewer")
-                    .set_members(["allUsers"])]))
+                Ok(Response::from(
+                    Policy::new().set_version(1).set_bindings([Binding::new()
+                        .set_role("roles/storage.objectViewer")
+                        .set_members(["allUsers"])]),
+                ))
             });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
+        let mock_provider = setup_mock_service_provider(StorageControlClient::from_stub(mock_gcs));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
