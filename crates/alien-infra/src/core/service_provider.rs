@@ -7,9 +7,7 @@ use crate::aws_sdk::{
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
     ssm_client_from_alien_config,
 };
-use crate::azure_container_apps::{
-    AzureLongRunningOperationClient, OfficialAzureContainerAppsClient,
-};
+use crate::azure_container_apps::OfficialAzureContainerAppsClient;
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 #[cfg(feature = "kubernetes")]
@@ -360,10 +358,6 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<azure_containerregistry_2023_11::Client>;
-    fn get_azure_long_running_operation_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<AzureLongRunningOperationClient>;
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
@@ -750,13 +744,6 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<azure_containerregistry_2023_11::Client> {
         azure_containerregistry_client_from_alien_config(config)
-    }
-
-    fn get_azure_long_running_operation_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<AzureLongRunningOperationClient> {
-        azure_long_running_operation_client_from_alien_config(config)
     }
 
     fn get_azure_managed_identity_client(
@@ -1508,18 +1495,6 @@ fn azure_core_021_credential(
     )))
 }
 
-fn azure_management_scope(config: &AzureClientConfig) -> Result<Vec<String>> {
-    let endpoint = azure_management_endpoint_url(config)?;
-    Ok(vec![endpoint
-        .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build Azure management OAuth scope".to_string(),
-            resource_id: None,
-        })?
-        .to_string()])
-}
-
 fn build_azure_management_client<T>(
     config: &AzureClientConfig,
     service_name: &str,
@@ -1557,16 +1532,6 @@ pub(crate) fn azure_container_apps_management_client_from_alien_config(
             .endpoint(endpoint)
             .build()
     })
-}
-
-pub(crate) fn azure_long_running_operation_client_from_alien_config(
-    config: &AzureClientConfig,
-) -> Result<AzureLongRunningOperationClient> {
-    Ok(AzureLongRunningOperationClient::new(
-        azure_core_021_credential(config)?,
-        azure_management_scope(config)?,
-        azure_core_021::ClientOptions::default(),
-    ))
 }
 
 pub(crate) fn azure_authorization_client_from_alien_config(

@@ -236,6 +236,31 @@ pub(crate) async fn delete_managed_environment_certificate(
     .await
 }
 
+pub(crate) async fn get_managed_environment_certificate(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    certificate_name: &str,
+) -> CloudClientResult<Certificate> {
+    let result = client
+        .certificates_client()
+        .get(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            certificate_name.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Container Apps",
+        result,
+        "managed environment certificate get",
+        "Azure Container Apps Managed Environment Certificate",
+        certificate_name,
+    )
+}
+
 pub(crate) async fn create_or_update_dapr_component(
     client: &azure_app_2024_08::Client,
     config: &AzureClientConfig,
@@ -493,118 +518,6 @@ impl OfficialAzureContainerAppsClient {
             resource_type,
             resource_name,
         )
-    }
-}
-
-#[derive(Clone)]
-pub struct AzureLongRunningOperationClient {
-    credential: Arc<dyn azure_core_021::auth::TokenCredential>,
-    scopes: Vec<String>,
-    pipeline: Arc<azure_core_021::Pipeline>,
-}
-
-impl Debug for AzureLongRunningOperationClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AzureLongRunningOperationClient")
-            .finish_non_exhaustive()
-    }
-}
-
-impl AzureLongRunningOperationClient {
-    pub fn new(
-        credential: Arc<dyn azure_core_021::auth::TokenCredential>,
-        scopes: Vec<String>,
-        options: azure_core_021::ClientOptions,
-    ) -> Self {
-        let pipeline = azure_core_021::Pipeline::new(
-            option_env!("CARGO_PKG_NAME"),
-            option_env!("CARGO_PKG_VERSION"),
-            options,
-            Vec::new(),
-            Vec::new(),
-        );
-        Self {
-            credential,
-            scopes,
-            pipeline: Arc::new(pipeline),
-        }
-    }
-
-    pub async fn check_status(
-        &self,
-        operation: &LongRunningOperation,
-        operation_name: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<Option<String>> {
-        let scopes = self.scopes.iter().map(String::as_str).collect::<Vec<_>>();
-        let token = self
-            .credential
-            .get_token(&scopes)
-            .await
-            .into_alien_error()
-            .context(CloudClientErrorData::AuthenticationError {
-                message: "Failed to get Azure management access token".to_string(),
-            })?;
-        let url = azure_core_021::Url::parse(&operation.url)
-            .into_alien_error()
-            .context(CloudClientErrorData::HttpRequestFailed {
-                message: format!(
-                    "Invalid Azure {operation_name} polling URL for '{resource_name}'"
-                ),
-            })?;
-        let mut request = azure_core_021::Request::new(url, azure_core_021::Method::Get);
-        request.insert_header(
-            azure_core_021::headers::AUTHORIZATION,
-            format!("Bearer {}", token.token.secret()),
-        );
-
-        let response = self
-            .pipeline
-            .send(&azure_core_021::Context::default(), &mut request)
-            .await
-            .into_alien_error()
-            .context(CloudClientErrorData::HttpRequestFailed {
-                message: format!(
-                    "Azure {operation_name} polling request failed for '{resource_name}'"
-                ),
-            })?;
-        let status = response.status();
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .into_alien_error()
-            .context(CloudClientErrorData::HttpRequestFailed {
-                message: format!(
-                    "Failed to read Azure {operation_name} polling response for '{resource_name}'"
-                ),
-            })?;
-        let body = String::from_utf8(body.to_vec())
-            .into_alien_error()
-            .context(CloudClientErrorData::SerializationError {
-                message: format!(
-                    "Azure {operation_name} polling response for '{resource_name}' was not UTF-8"
-                ),
-            })?;
-
-        match status {
-            azure_core_021::StatusCode::Ok => {
-                azure_operation_body_status(operation, operation_name, resource_name, body)
-            }
-            azure_core_021::StatusCode::NoContent => Ok(Some(String::new())),
-            azure_core_021::StatusCode::Accepted => Ok(None),
-            _ => Err(AlienError::new(CloudClientErrorData::HttpResponseError {
-                message: format!(
-                    "Azure {operation_name} for '{resource_name}' returned HTTP {}",
-                    status as u16
-                ),
-                url: operation.url.clone(),
-                http_status: status as u16,
-                http_request_text: None,
-                http_response_text: Some(body),
-            })),
-        }
     }
 }
 
@@ -977,64 +890,4 @@ fn parse_response<T: DeserializeOwned>(
             message: format!("Failed to parse {resource_type} '{resource_name}' response"),
         },
     )
-}
-
-fn azure_operation_body_status(
-    operation: &LongRunningOperation,
-    operation_name: &str,
-    resource_name: &str,
-    body: String,
-) -> CloudClientResult<Option<String>> {
-    if body.trim().is_empty() {
-        return Ok(Some(body));
-    }
-
-    let value: serde_json::Value = serde_json::from_str(&body).into_alien_error().context(
-        CloudClientErrorData::HttpResponseError {
-            message: format!("Azure {operation_name}: failed to parse operation JSON"),
-            url: operation.url.clone(),
-            http_status: 200,
-            http_request_text: None,
-            http_response_text: Some(body.clone()),
-        },
-    )?;
-
-    if let Some(status) = value.get("status").and_then(serde_json::Value::as_str) {
-        match status.to_ascii_lowercase().as_str() {
-            "succeeded" => return Ok(Some(body)),
-            "failed" | "canceled" => {
-                return Err(AlienError::new(CloudClientErrorData::GenericError {
-                    message: format!(
-                        "Azure {operation_name} for '{resource_name}' {}: {}",
-                        status.to_ascii_lowercase(),
-                        value
-                            .get("error")
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| "no error details".to_string())
-                    ),
-                }));
-            }
-            _ => return Ok(None),
-        }
-    }
-
-    if let Some(state) = value
-        .get("properties")
-        .and_then(|properties| properties.get("provisioningState"))
-        .and_then(serde_json::Value::as_str)
-    {
-        match state.to_ascii_lowercase().as_str() {
-            "succeeded" => return Ok(Some(body)),
-            "failed" | "canceled" => {
-                return Err(AlienError::new(CloudClientErrorData::GenericError {
-                    message: format!(
-                        "Azure {operation_name} for '{resource_name}' failed with provisioningState: {state}"
-                    ),
-                }));
-            }
-            _ => return Ok(None),
-        }
-    }
-
-    Ok(Some(body))
 }

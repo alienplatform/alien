@@ -140,45 +140,15 @@ impl AzureContainerAppsEnvironmentController {
             })
         })?;
 
-        debug!(environment_name=%environment_name, "Checking Azure long-running operation status");
-
-        let azure_config = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_config)?;
-
-        let status_result = operation_client
-            .check_status(
-                long_running_op,
-                "CreateManagedEnvironment",
-                environment_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure long-running operation failed".to_string(),
-                resource_id: Some(desired_config.id.clone()),
-            })?;
-
-        if status_result.is_some() {
-            info!(environment_name=%environment_name, "Azure long-running operation completed successfully, now checking resource status");
-            // Operation completed, now check the actual resource status
-            self.long_running_operation = None; // Clear the operation since it's done
-                                                // Always go to CreatingEnvironment next - linear flow
-            Ok(HandlerAction::Continue {
-                state: CreatingEnvironment,
-                suggested_delay: Some(Duration::from_secs(5)),
-            })
-        } else {
-            // Operation still running - retry this same state
-            debug!(environment_name=%environment_name, "Azure long-running operation still in progress");
-            let delay = long_running_op
-                .retry_after
-                .unwrap_or(Duration::from_secs(10));
-            Ok(HandlerAction::Stay {
-                max_times: 30,
-                suggested_delay: Some(delay),
-            })
-        }
+        debug!(environment_name=%environment_name, "Azure environment create accepted, checking managed environment resource status");
+        let delay = long_running_op
+            .retry_after
+            .unwrap_or(Duration::from_secs(10));
+        self.long_running_operation = None;
+        Ok(HandlerAction::Continue {
+            state: CreatingEnvironment,
+            suggested_delay: Some(delay),
+        })
     }
 
     #[handler(
@@ -563,46 +533,15 @@ impl AzureContainerAppsEnvironmentController {
             }
         }
 
-        debug!(environment_name=%environment_name, "Checking Azure deletion long-running operation status");
-
-        let azure_config = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_config)?;
-
-        let status_result = operation_client
-            .check_status(
-                long_running_op,
-                "DeleteManagedEnvironment",
-                environment_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure deletion long-running operation failed".to_string(),
-                resource_id: Some(desired_config.id.clone()),
-            })?;
-
-        if status_result.is_some() {
-            info!(environment_name=%environment_name, "Azure deletion long-running operation completed successfully, now checking resource status");
-            // Operation completed, now check if the resource is actually gone
-            self.long_running_operation = None; // Clear the operation since it's done
-                                                // Always go to DeletingEnvironment next - linear flow
-            Ok(HandlerAction::Continue {
-                state: DeletingEnvironment,
-                suggested_delay: Some(Duration::from_secs(5)),
-            })
-        } else {
-            // Operation still running - retry this same state.
-            // Azure env deletion can take 10+ min, so allow 60 polls × 10s = 10 min.
-            debug!(environment_name=%environment_name, "Azure deletion long-running operation still in progress");
-            let delay = long_running_op
-                .retry_after
-                .unwrap_or(Duration::from_secs(10));
-            Ok(HandlerAction::Stay {
-                max_times: 60,
-                suggested_delay: Some(delay),
-            })
-        }
+        debug!(environment_name=%environment_name, "Azure environment delete accepted, checking managed environment deletion status");
+        let delay = long_running_op
+            .retry_after
+            .unwrap_or(Duration::from_secs(10));
+        self.long_running_operation = None;
+        Ok(HandlerAction::Continue {
+            state: DeletingEnvironment,
+            suggested_delay: Some(delay),
+        })
     }
 
     #[handler(

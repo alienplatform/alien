@@ -17,8 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
+use crate::core::OperationResult;
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
-use crate::core::{LongRunningOperation, OperationResult};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -580,7 +580,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+        self.pending_operation_url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "No pending operation URL recorded for commands Dapr component"
                     .to_string(),
@@ -591,41 +591,12 @@ impl AzureWorkerController {
             })
         })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let status = operation_client
-            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for commands Dapr component".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: CreateStart,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        Ok(HandlerAction::Continue {
+            state: CreateStart,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -744,58 +715,25 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let operation_url = match &self.pending_operation_url {
-            Some(u) => u.clone(),
-            None => {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: "No pending operation URL recorded in WaitingForCreateOperation"
-                        .to_string(),
-                    operation: Some("waiting_for_create_operation".to_string()),
-                    resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-                }));
-            }
-        };
-
-        let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let container_app_name = self.container_app_name.as_ref().unwrap();
-
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-
-        let lro = LongRunningOperation {
-            url: operation_url.clone(),
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        // Poll ARM operation.
-        let op_status = operation_client
-            .check_status(&lro, "CreateContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app creation".to_string(),
+        self.pending_operation_url.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded in WaitingForCreateOperation"
+                    .to_string(),
+                operation: Some("waiting_for_create_operation".to_string()),
                 resource_id: Some(func_cfg.id.clone()),
-            })?;
+            })
+        })?;
 
-        if op_status.is_some() {
-            info!(name=%container_app_name, "LRO completed – checking resource status");
-            Ok(HandlerAction::Continue {
-                state: CreatingContainerApp,
-                suggested_delay: None,
-            })
-        } else {
-            // Still running – schedule another poll.
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        let container_app_name = self.container_app_name.as_ref().unwrap();
+        let delay = self.pending_operation_retry_after.map(Duration::from_secs);
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        info!(name=%container_app_name, "Container App create accepted, checking resource status");
+        Ok(HandlerAction::Continue {
+            state: CreatingContainerApp,
+            suggested_delay: delay,
+        })
     }
 
     #[handler(
@@ -1436,7 +1374,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+        self.pending_operation_url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "No pending operation URL recorded for Dapr component".to_string(),
                 operation: Some("waiting_for_dapr_component_create_operation".to_string()),
@@ -1444,41 +1382,12 @@ impl AzureWorkerController {
             })
         })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let status = operation_client
-            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for Dapr component creation".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: ConfiguringDaprComponents,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        Ok(HandlerAction::Continue {
+            state: ConfiguringDaprComponents,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -1738,7 +1647,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+        self.pending_operation_url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "No pending operation URL recorded for commands Dapr component"
                     .to_string(),
@@ -1747,41 +1656,12 @@ impl AzureWorkerController {
             })
         })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let status = operation_client
-            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for commands Dapr component".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: CreatingCommandsInfrastructure,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        Ok(HandlerAction::Continue {
+            state: CreatingCommandsInfrastructure,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -2242,53 +2122,25 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let operation_url = match &self.pending_operation_url {
-            Some(u) => u.clone(),
-            None => {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: "No pending operation URL recorded in WaitingForUpdateOperation"
-                        .to_string(),
-                    operation: Some("waiting_for_update_operation".to_string()),
-                    resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-                }));
-            }
-        };
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        self.pending_operation_url.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded in WaitingForUpdateOperation"
+                    .to_string(),
+                operation: Some("waiting_for_update_operation".to_string()),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().unwrap();
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let op_status = operation_client
-            .check_status(&lro, "UpdateContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app update".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-            })?;
-
-        if op_status.is_some() {
-            Ok(HandlerAction::Continue {
-                state: UpdatingContainerApp,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        let delay = self.pending_operation_retry_after.map(Duration::from_secs);
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        info!(name=%container_app_name, "Container App update accepted, checking resource status");
+        Ok(HandlerAction::Continue {
+            state: UpdatingContainerApp,
+            suggested_delay: delay,
+        })
     }
 
     #[handler(
@@ -2568,7 +2420,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+        self.pending_operation_url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "No pending operation URL recorded for Dapr component update".to_string(),
                 operation: Some("waiting_for_dapr_component_update_operation".to_string()),
@@ -2576,41 +2428,12 @@ impl AzureWorkerController {
             })
         })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let status = operation_client
-            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for Dapr component update".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: UpdateDaprComponents,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 100,
-                suggested_delay: Some(delay),
-            })
-        }
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        Ok(HandlerAction::Continue {
+            state: UpdateDaprComponents,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -2965,54 +2788,24 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let operation_url = match &self.pending_operation_url {
-            Some(u) => u.clone(),
-            None => {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: "No pending_operation_url in WaitingForDeleteOperation".to_string(),
-                    operation: Some("waiting_for_delete_operation".to_string()),
-                    resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-                }));
-            }
-        };
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        self.pending_operation_url.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending_operation_url in WaitingForDeleteOperation".to_string(),
+                operation: Some("waiting_for_delete_operation".to_string()),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().unwrap();
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let op_status = operation_client
-            .check_status(&lro, "DeleteContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app deletion".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-            })?;
-
-        if op_status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: DeletingContainerApp,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 60,
-                suggested_delay: Some(delay),
-            })
-        }
+        let delay = self.pending_operation_retry_after.map(Duration::from_secs);
+        self.pending_operation_url = None;
+        self.pending_operation_retry_after = None;
+        info!(name=%container_app_name, "Container App delete accepted, checking resource deletion status");
+        Ok(HandlerAction::Continue {
+            state: DeletingContainerApp,
+            suggested_delay: delay,
+        })
     }
 
     #[handler(
@@ -3150,7 +2943,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+        self.pending_operation_url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "No pending_operation_url in WaitingForCertificateDeleteOperation"
                     .to_string(),
@@ -3159,48 +2952,53 @@ impl AzureWorkerController {
             })
         })?;
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
+        let azure_config = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let client = ctx
             .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
+            .get_azure_container_apps_management_client(azure_config)?;
         let certificate_name =
             get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
 
-        let status = operation_client
-            .check_status(
-                &lro,
-                "DeleteManagedEnvironmentCertificate",
-                &certificate_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for managed environment certificate deletion"
+        match azure_container_apps::get_managed_environment_certificate(
+            &client,
+            azure_config,
+            &resource_group_name,
+            &environment_name,
+            &certificate_name,
+        )
+        .await
+        {
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.clear_all();
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            }
+            Ok(_) => {
+                let delay = self
+                    .pending_operation_retry_after
+                    .map(Duration::from_secs)
+                    .unwrap_or(Duration::from_secs(15));
+                Ok(HandlerAction::Stay {
+                    max_times: 60,
+                    suggested_delay: Some(delay),
+                })
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: "Failed to check Container Apps managed environment certificate deletion"
                     .to_string(),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            self.clear_all();
-            Ok(HandlerAction::Continue {
-                state: Deleted,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
-                max_times: 60,
-                suggested_delay: Some(delay),
-            })
+            })),
         }
     }
 
@@ -4530,8 +4328,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::azure_container_apps::{
-        AzureLongRunningOperationClient, ContainerApp, ContainerAppProperties,
-        OfficialAzureContainerAppsClient,
+        ContainerApp, ContainerAppProperties, OfficialAzureContainerAppsClient,
     };
     use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -4742,15 +4539,9 @@ mod tests {
     fn setup_mock_client_for_long_running_creation(
         app_name: &str,
         has_url: bool,
-    ) -> (
-        Arc<OfficialAzureContainerAppsClient>,
-        AzureLongRunningOperationClient,
-    ) {
-        (
-            container_apps_client_with_transport(
-                ContainerAppsTransport::new(app_name, has_url).long_running_create(),
-            ),
-            long_running_operation_client_with_transport(LongRunningOperationTransport::new()),
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        container_apps_client_with_transport(
+            ContainerAppsTransport::new(app_name, has_url).long_running_create(),
         )
     }
 
@@ -4939,58 +4730,6 @@ mod tests {
             }
 
             panic!("unexpected Azure Container Apps management path: {path}");
-        }
-    }
-
-    #[derive(Debug)]
-    struct LongRunningOperationTransport {
-        poll_count: Mutex<u32>,
-    }
-
-    impl LongRunningOperationTransport {
-        fn new() -> Self {
-            Self {
-                poll_count: Mutex::new(0),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Policy for LongRunningOperationTransport {
-        async fn send(
-            &self,
-            _ctx: &Context,
-            request: &mut Request,
-            next: &[Arc<dyn Policy>],
-        ) -> PolicyResult {
-            assert!(next.is_empty());
-            assert_eq!(request.method(), &Method::Get);
-            assert!(request
-                .headers()
-                .get_str(&headers::AUTHORIZATION)
-                .expect("LRO polling request should include authorization")
-                .starts_with("Bearer "));
-            assert!(
-                request.url().path().ends_with("/operations/test-op"),
-                "unexpected Azure LRO polling path: {}",
-                request.url().path()
-            );
-
-            let mut poll_count = self
-                .poll_count
-                .lock()
-                .expect("LRO polling count mutex should not be poisoned");
-            *poll_count += 1;
-
-            if *poll_count == 1 {
-                return Ok(Response::new(
-                    StatusCode::Accepted,
-                    Headers::new(),
-                    Box::pin(BytesStream::new("{}")),
-                ));
-            }
-
-            Ok(json_response(json!({ "status": "Succeeded" })))
         }
     }
 
@@ -5251,39 +4990,14 @@ mod tests {
         ))
     }
 
-    fn long_running_operation_client_with_transport(
-        transport: impl Policy + 'static,
-    ) -> AzureLongRunningOperationClient {
-        let config = AzureClientConfig {
-            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
-            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::AccessToken {
-                token: "test-token".to_string(),
-            },
-            service_overrides: None,
-        };
-        let credential = Arc::new(AzureCore021Credential::new(
-            azure_credential_from_config(&config).expect("test credential should build"),
-        ));
-
-        AzureLongRunningOperationClient::new(
-            credential,
-            vec!["https://management.azure.com/.default".to_string()],
-            ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport))),
-        )
-    }
-
     fn setup_mock_service_provider(
         container_apps_client: Arc<OfficialAzureContainerAppsClient>,
-        mock_lro: Option<AzureLongRunningOperationClient>,
     ) -> Arc<MockPlatformServiceProvider> {
-        setup_mock_service_provider_with_delete_missing(container_apps_client, mock_lro, false)
+        setup_mock_service_provider_with_delete_missing(container_apps_client, false)
     }
 
     fn setup_mock_service_provider_with_delete_missing(
         container_apps_client: Arc<OfficialAzureContainerAppsClient>,
-        mock_lro: Option<AzureLongRunningOperationClient>,
         container_app_delete_missing: bool,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
@@ -5298,12 +5012,6 @@ mod tests {
         mock_provider
             .expect_get_azure_container_apps_management_client()
             .returning(move |_| Ok(app_management_client.clone()));
-
-        if let Some(lro_client) = mock_lro {
-            mock_provider
-                .expect_get_azure_long_running_operation_client()
-                .returning(move |_| Ok(lro_client.clone()));
-        }
 
         let authorization_client = authorization_client_with_transport(AuthorizationTransport);
         mock_provider
@@ -5341,7 +5049,7 @@ mod tests {
             setup_mock_client_for_creation_and_update(app_name, has_url)
         };
 
-        let mock_provider = setup_mock_service_provider(container_apps_mock, None);
+        let mock_provider = setup_mock_service_provider(container_apps_mock);
 
         (mock_provider, mock_server)
     }
@@ -5690,7 +5398,7 @@ mod tests {
         let app_name = format!("test-{}", worker.id);
         let mock_container_apps = setup_mock_client_for_best_effort_deletion(&app_name);
         let mock_provider =
-            setup_mock_service_provider_with_delete_missing(mock_container_apps, None, app_missing);
+            setup_mock_service_provider_with_delete_missing(mock_container_apps, app_missing);
 
         // Start with a ready controller
         let mut ready_controller = AzureWorkerController::mock_ready(&app_name);
@@ -5728,9 +5436,8 @@ mod tests {
     async fn test_long_running_creation_operation() {
         let worker = basic_function();
         let app_name = format!("test-{}", worker.id);
-        let (mock_container_apps, mock_lro) =
-            setup_mock_client_for_long_running_creation(&app_name, false);
-        let mock_provider = setup_mock_service_provider(mock_container_apps, Some(mock_lro));
+        let mock_container_apps = setup_mock_client_for_long_running_creation(&app_name, false);
+        let mock_provider = setup_mock_service_provider(mock_container_apps);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5762,7 +5469,7 @@ mod tests {
 
         let container_apps_client =
             container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, true));
-        let mock_provider = setup_mock_service_provider(container_apps_client, None);
+        let mock_provider = setup_mock_service_provider(container_apps_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5796,7 +5503,7 @@ mod tests {
 
         let container_apps_client =
             container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, false));
-        let mock_provider = setup_mock_service_provider(container_apps_client, None);
+        let mock_provider = setup_mock_service_provider(container_apps_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5827,7 +5534,7 @@ mod tests {
             ContainerAppsTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_custom_resources),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client, None);
+        let mock_provider = setup_mock_service_provider(container_apps_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5853,7 +5560,7 @@ mod tests {
             ContainerAppsTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_expected_env_vars),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client, None);
+        let mock_provider = setup_mock_service_provider(container_apps_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
