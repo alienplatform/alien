@@ -4,8 +4,7 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_container_apps::{
-    ManagedEnvironment, ManagedEnvironmentProperties,
-    ManagedEnvironmentPropertiesProvisioningState, VnetConfiguration,
+    managed_environment, ManagedEnvironment, TrackedResource, VnetConfiguration,
 };
 use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
@@ -210,8 +209,8 @@ impl AzureContainerAppsEnvironmentController {
         {
             Ok(managed_env) => {
                 if let Some(properties) = &managed_env.properties {
-                    use crate::azure_container_apps::ManagedEnvironmentPropertiesProvisioningState::*;
-                    match properties.provisioning_state {
+                    use crate::azure_container_apps::managed_environment::properties::ProvisioningState::*;
+                    match properties.provisioning_state.as_ref() {
                         Some(Succeeded) => {
                             info!(environment_name=%environment_name, "Environment creation completed");
                             self.handle_creation_completed(&managed_env, azure_config);
@@ -345,8 +344,8 @@ impl AzureContainerAppsEnvironmentController {
             );
 
             if let Some(properties) = &managed_env.properties {
-                use crate::azure_container_apps::ManagedEnvironmentPropertiesProvisioningState::*;
-                match properties.provisioning_state {
+                use crate::azure_container_apps::managed_environment::properties::ProvisioningState::*;
+                match properties.provisioning_state.as_ref() {
                     Some(Succeeded) => {
                         // Environment is healthy
                     }
@@ -688,13 +687,15 @@ fn emit_azure_container_apps_environment_heartbeat(
     let properties = managed_env.properties.as_ref();
     let provisioning_state = properties.and_then(|p| p.provisioning_state.as_ref());
     let (health, lifecycle) = match provisioning_state {
-        Some(ManagedEnvironmentPropertiesProvisioningState::Succeeded) => {
+        Some(managed_environment::properties::ProvisioningState::Succeeded) => {
             (ObservedHealth::Healthy, ProviderLifecycleState::Running)
         }
         Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
         None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
     };
     let name = managed_env
+        .tracked_resource
+        .resource
         .name
         .clone()
         .unwrap_or_else(|| resource_id.to_string());
@@ -728,7 +729,7 @@ fn emit_azure_container_apps_environment_heartbeat(
                         "Azure Container Apps environment '{}' provisioning state is {}",
                         name,
                         provisioning_state
-                            .map(ToString::to_string)
+                            .map(|state| format!("{state:?}"))
                             .as_deref()
                             .unwrap_or("unknown")
                     )),
@@ -737,11 +738,11 @@ fn emit_azure_container_apps_environment_heartbeat(
                     collection_issues: vec![],
                 },
                 name,
-                resource_id: managed_env.id.clone(),
+                resource_id: managed_env.tracked_resource.resource.id.clone(),
                 resource_group: Some(resource_group_name.to_string()),
-                location: Some(managed_env.location.clone()),
+                location: Some(managed_env.tracked_resource.location.clone()),
                 kind: managed_env.kind.clone(),
-                provisioning_state: provisioning_state.map(ToString::to_string),
+                provisioning_state: provisioning_state.map(|state| format!("{state:?}")),
                 default_domain: properties.and_then(|p| p.default_domain.clone()),
                 static_ip: properties.and_then(|p| p.static_ip.clone()),
                 custom_domain_verification_id: properties
@@ -767,15 +768,20 @@ impl AzureContainerAppsEnvironmentController {
         managed_env: &ManagedEnvironment,
         azure_config: &AzureClientConfig,
     ) {
-        self.resource_id = managed_env.id.clone().or_else(|| {
-            let resource_group_name = self.resource_group_name.as_ref()?;
-            let environment_name = self.environment_name.as_ref()?;
-            Some(azure_container_apps_environment_resource_id(
-                &azure_config.subscription_id,
-                resource_group_name,
-                environment_name,
-            ))
-        });
+        self.resource_id = managed_env
+            .tracked_resource
+            .resource
+            .id
+            .clone()
+            .or_else(|| {
+                let resource_group_name = self.resource_group_name.as_ref()?;
+                let environment_name = self.environment_name.as_ref()?;
+                Some(azure_container_apps_environment_resource_id(
+                    &azure_config.subscription_id,
+                    resource_group_name,
+                    environment_name,
+                ))
+            });
         self.default_domain = managed_env
             .properties
             .as_ref()
@@ -822,34 +828,19 @@ impl AzureContainerAppsEnvironmentController {
             info!("Configuring Container Apps Environment with VNet integration");
         }
 
+        let mut tracked_resource = TrackedResource::new(location.to_string());
+        tracked_resource.tags = Some(serde_json::json!(tags));
+
         ManagedEnvironment {
-            id: None,
+            tracked_resource,
             identity: None,
             kind: None,
-            location: location.to_string(),
-            name: None,
-            properties: Some(ManagedEnvironmentProperties {
-                app_logs_configuration: None,
-                custom_domain_configuration: None,
-                dapr_ai_connection_string: None,
-                dapr_ai_instrumentation_key: None,
-                dapr_configuration: None,
-                default_domain: None,
-                deployment_errors: None,
-                event_stream_endpoint: None,
-                infrastructure_resource_group: None,
-                keda_configuration: None,
-                peer_authentication: None,
-                peer_traffic_configuration: None,
-                provisioning_state: None,
-                static_ip: None,
+            properties: Some(managed_environment::Properties {
                 vnet_configuration,
-                workload_profiles: vec![], // Empty workload profiles for default setup
-                zone_redundant: Some(false), // Default to non-zone redundant for simplicity
+                workload_profiles: Vec::new(),
+                zone_redundant: Some(false),
+                ..Default::default()
             }),
-            system_data: None,
-            tags,
-            type_: None,
         }
     }
 
