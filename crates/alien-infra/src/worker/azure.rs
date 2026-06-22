@@ -1,5 +1,5 @@
 use crate::azure_authorization;
-use crate::azure_container_apps::{ContainerApp, ContainerAppProperties};
+use crate::azure_container_apps::{self, ContainerApp, ContainerAppProperties};
 use crate::azure_servicebus;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -1013,22 +1013,22 @@ impl AzureWorkerController {
             }),
         };
 
-        let container_apps_client = ctx
+        let container_apps_management_client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
-        let response = container_apps_client
-            .create_or_update_managed_environment_certificate(
-                &resource_group_name,
-                &environment_name,
-                &certificate_name,
-                &certificate,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to import certificate to Azure Container Apps Environment"
-                    .to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
+        let response = azure_container_apps::create_or_update_managed_environment_certificate(
+            &container_apps_management_client,
+            azure_cfg,
+            &resource_group_name,
+            &environment_name,
+            &certificate_name,
+            &certificate,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to import certificate to Azure Container Apps Environment".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         self.container_apps_certificate_id =
             Some(response.tracked_resource.resource.id.ok_or_else(|| {
@@ -1119,20 +1119,24 @@ impl AzureWorkerController {
                     ..Default::default()
                 }),
             };
-            let response = client
-                .create_or_update_managed_environment_certificate(
-                    &resource_group_name,
-                    &environment_name,
-                    &certificate_name,
-                    &certificate,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message:
-                        "Failed to import Key Vault certificate to Azure Container Apps Environment"
-                            .to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
+            let management_client = ctx
+                .service_provider
+                .get_azure_container_apps_management_client(azure_cfg)?;
+            let response = azure_container_apps::create_or_update_managed_environment_certificate(
+                &management_client,
+                azure_cfg,
+                &resource_group_name,
+                &environment_name,
+                &certificate_name,
+                &certificate,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message:
+                    "Failed to import Key Vault certificate to Azure Container Apps Environment"
+                        .to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
             self.container_apps_certificate_id =
                 Some(response.tracked_resource.resource.id.ok_or_else(|| {
                     AlienError::new(ErrorData::CloudPlatformError {
@@ -1646,16 +1650,17 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &env_resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
+        match azure_container_apps::create_or_update_dapr_component(
+            &client,
+            azure_config,
+            &env_resource_group_name,
+            &environment_name,
+            &component_name,
+            &dapr_component,
+        )
+        .await
         {
             Ok(OperationResult::Completed(_)) => {
                 self.container_apps_environment_wake_wait_until_epoch_secs = None;
@@ -2084,20 +2089,21 @@ impl AzureWorkerController {
 
         let container_apps_client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
-        let response = container_apps_client
-            .create_or_update_managed_environment_certificate(
-                &resource_group_name,
-                &environment_name,
-                &certificate_name,
-                &certificate,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to re-import certificate to Azure Container Apps Environment"
-                    .to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
+        let response = azure_container_apps::create_or_update_managed_environment_certificate(
+            &container_apps_client,
+            azure_cfg,
+            &resource_group_name,
+            &environment_name,
+            &certificate_name,
+            &certificate,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to re-import certificate to Azure Container Apps Environment"
+                .to_string(),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
 
         let container_apps_certificate_id =
             response.tracked_resource.resource.id.ok_or_else(|| {
@@ -2128,6 +2134,9 @@ impl AzureWorkerController {
                 .await?;
             Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id.clone());
 
+            let container_apps_client = ctx
+                .service_provider
+                .get_azure_container_apps_client(azure_cfg)?;
             container_apps_client
                 .create_or_update_container_app(&resource_group_name, container_app_name, &app)
                 .await
@@ -2757,15 +2766,16 @@ impl AzureWorkerController {
             let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
             let client = ctx
                 .service_provider
-                .get_azure_container_apps_client(azure_config)?;
+                .get_azure_container_apps_management_client(azure_config)?;
 
-            match client
-                .delete_dapr_component(
-                    &env_outputs.resource_group_name,
-                    &env_outputs.environment_name,
-                    &component_name,
-                )
-                .await
+            match azure_container_apps::delete_dapr_component(
+                &client,
+                azure_config,
+                &env_outputs.resource_group_name,
+                &env_outputs.environment_name,
+                &component_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(component=%component_name, "Commands Dapr component delete requested");
@@ -3080,15 +3090,16 @@ impl AzureWorkerController {
             get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match client
-            .delete_managed_environment_certificate(
-                &resource_group_name,
-                &environment_name,
-                &certificate_name,
-            )
-            .await
+        match azure_container_apps::delete_managed_environment_certificate(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            &environment_name,
+            &certificate_name,
+        )
+        .await
         {
             Ok(OperationResult::Completed(())) => {
                 self.clear_all();
@@ -3431,23 +3442,24 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &env_resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create commands Dapr component '{}'",
-                    component_name
-                ),
-                resource_id: Some(func_cfg.id.clone()),
-            })? {
+        match azure_container_apps::create_or_update_dapr_component(
+            &client,
+            azure_config,
+            &env_resource_group_name,
+            &environment_name,
+            &component_name,
+            &dapr_component,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create commands Dapr component '{}'",
+                component_name
+            ),
+            resource_id: Some(func_cfg.id.clone()),
+        })? {
             OperationResult::Completed(_) => {}
             OperationResult::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
@@ -4150,23 +4162,24 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(&azure_config)?;
+            .get_azure_container_apps_management_client(&azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr component '{}' for queue '{}'",
-                    component_name, queue_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
+        match azure_container_apps::create_or_update_dapr_component(
+            &client,
+            &azure_config,
+            &resource_group_name,
+            &environment_name,
+            &component_name,
+            &dapr_component,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Dapr component '{}' for queue '{}'",
+                component_name, queue_ref.id
+            ),
+            resource_id: Some(worker_config.id.clone()),
+        })? {
             OperationResult::Completed(_) => {}
             OperationResult::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
@@ -4281,23 +4294,24 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(&azure_config)?;
+            .get_azure_container_apps_management_client(&azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr blob storage component '{}' for storage '{}'",
-                    component_name, storage_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
+        match azure_container_apps::create_or_update_dapr_component(
+            &client,
+            &azure_config,
+            &resource_group_name,
+            &environment_name,
+            &component_name,
+            &dapr_component,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Dapr blob storage component '{}' for storage '{}'",
+                component_name, storage_ref.id
+            ),
+            resource_id: Some(worker_config.id.clone()),
+        })? {
             OperationResult::Completed(_) => {}
             OperationResult::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
@@ -4365,23 +4379,24 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(&azure_config)?;
+            .get_azure_container_apps_management_client(&azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr cron component '{}' with schedule '{}'",
-                    component_name, cron
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
+        match azure_container_apps::create_or_update_dapr_component(
+            &client,
+            &azure_config,
+            &resource_group_name,
+            &environment_name,
+            &component_name,
+            &dapr_component,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Dapr cron component '{}' with schedule '{}'",
+                component_name, cron
+            ),
+            resource_id: Some(worker_config.id.clone()),
+        })? {
             OperationResult::Completed(_) => {}
             OperationResult::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
@@ -4425,12 +4440,17 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(&azure_config)?;
+            .get_azure_container_apps_management_client(&azure_config)?;
 
         for component_name in &self.dapr_components.clone() {
-            match client
-                .delete_dapr_component(&resource_group_name, &environment_name, component_name)
-                .await
+            match azure_container_apps::delete_dapr_component(
+                &client,
+                &azure_config,
+                &resource_group_name,
+                &environment_name,
+                component_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(
@@ -4526,6 +4546,7 @@ mod tests {
         headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
         Response, StatusCode, TransportOptions,
     };
+    use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
     use azure_mgmt_app::package_preview_2024_08::models::{
         configuration, container_app, ingress, Configuration, Ingress as AzureContainerAppsIngress,
         TrafficWeight,
@@ -4966,6 +4987,91 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct AppManagementTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for AppManagementTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            let path = request.url().path();
+
+            if path.contains("/providers/Microsoft.App/managedEnvironments/")
+                && path.contains("/certificates/")
+            {
+                match request.method() {
+                    &Method::Put => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        let body = assert_json_body(request);
+                        return Ok(json_response(json!({
+                            "id": path,
+                            "name": path.rsplit('/').next().unwrap_or("test-certificate"),
+                            "type": "Microsoft.App/managedEnvironments/certificates",
+                            "location": "eastus",
+                            "properties": body["properties"].clone()
+                        })));
+                    }
+                    &Method::Delete => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        return Ok(Response::new(
+                            StatusCode::NoContent,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    method => {
+                        panic!("unexpected Azure Container Apps certificate method: {method:?}")
+                    }
+                }
+            }
+
+            if path.contains("/providers/Microsoft.App/managedEnvironments/")
+                && path.contains("/daprComponents/")
+            {
+                match request.method() {
+                    &Method::Put => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        let body = assert_json_body(request);
+                        return Ok(json_response(json!({
+                            "id": path,
+                            "name": path.rsplit('/').next().unwrap_or("test-component"),
+                            "type": "Microsoft.App/managedEnvironments/daprComponents",
+                            "properties": body["properties"].clone()
+                        })));
+                    }
+                    &Method::Delete => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        return Ok(Response::new(
+                            StatusCode::NoContent,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    method => panic!("unexpected Azure Container Apps Dapr method: {method:?}"),
+                }
+            }
+
+            panic!("unexpected Azure Container Apps management path: {path}");
+        }
+    }
+
     fn assert_json_body(request: &Request) -> serde_json::Value {
         match request.body() {
             Body::Bytes(bytes) => {
@@ -5007,6 +5113,29 @@ mod tests {
             .expect("Azure Authorization client should build")
     }
 
+    fn app_management_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_app_2024_08::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_app_2024_08::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Container Apps management client should build")
+    }
+
     fn setup_mock_service_provider(
         mock_container_apps: Arc<MockContainerAppsApi>,
         mock_lro: Option<Arc<MockLongRunningOperationApi>>,
@@ -5016,6 +5145,11 @@ mod tests {
         mock_provider
             .expect_get_azure_container_apps_client()
             .returning(move |_| Ok(mock_container_apps.clone()));
+
+        let app_management_client = app_management_client_with_transport(AppManagementTransport);
+        mock_provider
+            .expect_get_azure_container_apps_management_client()
+            .returning(move |_| Ok(app_management_client.clone()));
 
         if let Some(lro_client) = mock_lro {
             mock_provider

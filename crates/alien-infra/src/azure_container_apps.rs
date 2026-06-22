@@ -10,7 +10,6 @@ use azure_mgmt_app::package_preview_2024_08::models::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
-use tokio::sync::OnceCell;
 
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
@@ -47,36 +46,6 @@ pub trait ContainerAppsApi: Send + Sync + Debug {
         &self,
         resource_group_name: &str,
         container_app_name: &str,
-    ) -> CloudClientResult<OperationResult<()>>;
-
-    async fn create_or_update_managed_environment_certificate(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        certificate_name: &str,
-        certificate: &Certificate,
-    ) -> CloudClientResult<Certificate>;
-
-    async fn delete_managed_environment_certificate(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        certificate_name: &str,
-    ) -> CloudClientResult<OperationResult<()>>;
-
-    async fn create_or_update_dapr_component(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        component_name: &str,
-        dapr_component: &DaprComponent,
-    ) -> CloudClientResult<OperationResult<DaprComponent>>;
-
-    async fn delete_dapr_component(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        component_name: &str,
     ) -> CloudClientResult<OperationResult<()>>;
 }
 
@@ -292,11 +261,128 @@ pub(crate) async fn delete_managed_environment(
     .await
 }
 
+pub(crate) async fn create_or_update_managed_environment_certificate(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    certificate_name: &str,
+    certificate: &Certificate,
+) -> CloudClientResult<Certificate> {
+    let result = client
+        .certificates_client()
+        .create_or_update(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            certificate_name.to_string(),
+        )
+        .certificate_envelope(certificate.clone())
+        .send()
+        .await;
+    let response = map_azure_core_021_sdk_error(
+        "Azure Container Apps",
+        result,
+        "managed environment certificate create or update",
+        "Azure Container Apps Managed Environment Certificate",
+        certificate_name,
+    )?;
+    parse_azure_core_021_response_body_or_default_certificate(
+        response.into_raw_response(),
+        "Azure Container Apps Managed Environment Certificate",
+        certificate_name,
+    )
+    .await
+}
+
+pub(crate) async fn delete_managed_environment_certificate(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    certificate_name: &str,
+) -> CloudClientResult<OperationResult<()>> {
+    let result = client
+        .certificates_client()
+        .delete(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            certificate_name.to_string(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_delete_lro_response(
+        "Azure Container Apps",
+        result,
+        "managed environment certificate delete",
+        "Azure Container Apps Managed Environment Certificate",
+        certificate_name,
+    )
+    .await
+}
+
+pub(crate) async fn create_or_update_dapr_component(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    component_name: &str,
+    dapr_component: &DaprComponent,
+) -> CloudClientResult<OperationResult<DaprComponent>> {
+    let result = client
+        .dapr_components_client()
+        .create_or_update(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            component_name.to_string(),
+            dapr_component.clone(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_lro_response(
+        "Azure Container Apps",
+        result,
+        "Dapr component create or update",
+        "Azure Container Apps Dapr Component",
+        component_name,
+        |response| response.into_body(),
+    )
+    .await
+}
+
+pub(crate) async fn delete_dapr_component(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    component_name: &str,
+) -> CloudClientResult<OperationResult<()>> {
+    let result = client
+        .dapr_components_client()
+        .delete(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            component_name.to_string(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_delete_lro_response(
+        "Azure Container Apps",
+        result,
+        "Dapr component delete",
+        "Azure Container Apps Dapr Component",
+        component_name,
+    )
+    .await
+}
+
 pub struct OfficialAzureContainerAppsClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
     http_client: reqwest::Client,
-    client: OnceCell<azure_app_2024_08::Client>,
 }
 
 impl Debug for OfficialAzureContainerAppsClient {
@@ -314,7 +400,6 @@ impl OfficialAzureContainerAppsClient {
             config,
             credential,
             http_client: reqwest::Client::new(),
-            client: OnceCell::new(),
         }
     }
 
@@ -365,33 +450,6 @@ impl OfficialAzureContainerAppsClient {
         body: &str,
     ) -> CloudClientResult<T> {
         parse_response(resource_type, resource_name, body)
-    }
-
-    async fn client(&self) -> CloudClientResult<azure_app_2024_08::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(crate::core::azure_management_endpoint(
-                    &self.config,
-                ))
-                .into_alien_error()
-                .context(CloudClientErrorData::HttpRequestFailed {
-                    message: "Failed to parse Azure management endpoint".to_string(),
-                })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_app_2024_08::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(CloudClientErrorData::HttpRequestFailed {
-                        message: "Failed to build official Azure Container Apps client".to_string(),
-                    })
-            })
-            .await?;
-        Ok(client.clone())
     }
 }
 
@@ -469,128 +527,6 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
             self.container_app_url(resource_group_name, container_app_name),
             "Azure Container App",
             container_app_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_managed_environment_certificate(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        certificate_name: &str,
-        certificate: &Certificate,
-    ) -> CloudClientResult<Certificate> {
-        let result = self
-            .client()
-            .await?
-            .certificates_client()
-            .create_or_update(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-                certificate_name.to_string(),
-            )
-            .certificate_envelope(certificate.clone())
-            .send()
-            .await;
-        let response = map_azure_core_021_sdk_error(
-            "Azure Container Apps",
-            result,
-            "managed environment certificate create or update",
-            "Azure Container Apps Managed Environment Certificate",
-            certificate_name,
-        )?;
-        parse_azure_core_021_response_body_or_default_certificate(
-            response.into_raw_response(),
-            "Azure Container Apps Managed Environment Certificate",
-            certificate_name,
-        )
-        .await
-    }
-
-    async fn delete_managed_environment_certificate(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        certificate_name: &str,
-    ) -> CloudClientResult<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .certificates_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-                certificate_name.to_string(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Container Apps",
-            result,
-            "managed environment certificate delete",
-            "Azure Container Apps Managed Environment Certificate",
-            certificate_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_dapr_component(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        component_name: &str,
-        dapr_component: &DaprComponent,
-    ) -> CloudClientResult<OperationResult<DaprComponent>> {
-        let result = self
-            .client()
-            .await?
-            .dapr_components_client()
-            .create_or_update(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-                component_name.to_string(),
-                dapr_component.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Container Apps",
-            result,
-            "Dapr component create or update",
-            "Azure Container Apps Dapr Component",
-            component_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn delete_dapr_component(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        component_name: &str,
-    ) -> CloudClientResult<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .dapr_components_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-                component_name.to_string(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Container Apps",
-            result,
-            "Dapr component delete",
-            "Azure Container Apps Dapr Component",
-            component_name,
         )
         .await
     }
@@ -813,42 +749,6 @@ async fn azure_bearer_token(credential: &dyn TokenCredential) -> CloudClientResu
         .context(CloudClientErrorData::AuthenticationError {
             message: "Failed to get Azure management access token".to_string(),
         })
-}
-
-#[derive(Debug)]
-struct AzureCore021Credential {
-    inner: Arc<dyn TokenCredential>,
-}
-
-impl AzureCore021Credential {
-    fn new(inner: Arc<dyn TokenCredential>) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_trait::async_trait]
-impl azure_core_021::auth::TokenCredential for AzureCore021Credential {
-    async fn get_token(
-        &self,
-        scopes: &[&str],
-    ) -> azure_core_021::Result<azure_core_021::auth::AccessToken> {
-        let token = self.inner.get_token(scopes, None).await.map_err(|error| {
-            azure_core_021::Error::full(
-                azure_core_021::error::ErrorKind::Credential,
-                error,
-                "failed to get Azure token for generated Container Apps client",
-            )
-        })?;
-
-        Ok(azure_core_021::auth::AccessToken::new(
-            token.token.secret().to_string(),
-            token.expires_on,
-        ))
-    }
-
-    async fn clear_cache(&self) -> azure_core_021::Result<()> {
-        Ok(())
-    }
 }
 
 fn map_azure_core_021_sdk_error<T>(
