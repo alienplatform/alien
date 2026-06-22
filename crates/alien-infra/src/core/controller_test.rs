@@ -49,14 +49,20 @@
 //!
 //! ### Setting Up Mocks
 //!
-//! All cloud client APIs in Alien come with built-in mock support using [MockAll](https://github.com/asomers/mockall).
-//! This makes it easy to simulate cloud API responses:
+//! AWS controllers use the official SDK clients directly. Use `aws_smithy_mocks`
+//! to simulate SDK responses and inspect generated operation inputs:
 //!
 //! ```rust
-//! use alien_infra::aws_sdk::{CreateRoleResponse, MockIamApi, Role};
+//! use aws_sdk_iam::{
+//!     operation::create_role::CreateRoleOutput,
+//!     types::Role,
+//!     Client as IamClient,
+//! };
+//! use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+//! use aws_smithy_mocks::{mock, mock_client, RuleMode};
 //!
-//! # fn create_successful_response() -> CreateRoleResponse {
-//! #     CreateRoleResponse::builder()
+//! # fn create_successful_response() -> CreateRoleOutput {
+//! #     CreateRoleOutput::builder()
 //! #         .role(
 //! #             Role::builder()
 //! #                 .path("/")
@@ -69,22 +75,23 @@
 //! #         )
 //! #         .build()
 //! # }
-//! let mut mock_iam = MockIamApi::new();
-//! mock_iam
-//!     .expect_create_role()
-//!     .returning(|_| Ok(create_successful_response()));
 //!
 //! // For validation tests, inspect the actual requests:
-//! mock_iam
-//!     .expect_create_role()
-//!     .withf(|request| {
+//! let create_role_rule = mock!(IamClient::create_role)
+//!     .match_requests(|request| {
 //!         request.role_name() == Some("test-role") &&
 //!         request
 //!             .assume_role_policy_document()
 //!             .map(|document| document.contains("sts:AssumeRole"))
 //!             .unwrap_or(false)
 //!     })
-//!     .returning(|_| Ok(create_successful_response()));
+//!     .then_output(create_successful_response);
+//! let iam_client = mock_client!(
+//!     aws_sdk_iam,
+//!     RuleMode::Sequential,
+//!     [&create_role_rule],
+//!     |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+//! );
 //! ```
 //!
 //! ### Organizing Test Data with Fixtures
@@ -205,13 +212,12 @@
 //! // Resilience test: what happens when things are already gone?
 //! #[tokio::test]
 //! async fn test_deletion_when_policy_missing() {
-//!     let mut mock_iam = MockIamApi::new();
-//!     mock_iam
-//!         .expect_delete_role_policy()
-//!         .returning(|_, _| Err(not_found_error()));
-//!     mock_iam
-//!         .expect_delete_role()
-//!         .returning(|_| Ok(()));
+//!     let delete_policy_rule = mock!(IamClient::delete_role_policy)
+//!         .match_requests(|request| request.role_name().is_some())
+//!         .then_error(not_found_error);
+//!     let delete_role_rule = mock!(IamClient::delete_role)
+//!         .match_requests(|request| request.role_name().is_some())
+//!         .then_output(success_response);
 //!     
 //!     // Should succeed even though policy deletion failed
 //!     // ... rest of test
@@ -220,10 +226,8 @@
 //! // Validation test: check the actual API calls
 //! #[tokio::test]
 //! async fn test_management_role_gets_correct_policy() {
-//!     let mut mock_iam = MockIamApi::new();
-//!     mock_iam
-//!         .expect_create_role()
-//!         .withf(|request| {
+//!     let create_role_rule = mock!(IamClient::create_role)
+//!         .match_requests(|request| {
 //!             request
 //!                 .assume_role_policy_document()
 //!                 .map(|document| {
@@ -232,7 +236,7 @@
 //!                 })
 //!                 .unwrap_or(false)
 //!         })
-//!         .returning(|_| Ok(success_response()));
+//!         .then_output(success_response);
 //!     
 //!     // ... rest of test
 //! }

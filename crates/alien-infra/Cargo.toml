@@ -195,6 +195,7 @@ aws-sdk-codebuild = { workspace = true, features = ["test-util"] }
 aws-sdk-dynamodb = { workspace = true, features = ["test-util"] }
 aws-sdk-ecr = { workspace = true, features = ["test-util"] }
 aws-sdk-eventbridge = { workspace = true, features = ["test-util"] }
+aws-sdk-iam = { workspace = true, features = ["test-util"] }
 aws-sdk-lambda = { workspace = true, features = ["test-util"] }
 aws-sdk-s3 = { workspace = true, features = ["test-util"] }
 aws-sdk-sqs = { workspace = true, features = ["test-util"] }

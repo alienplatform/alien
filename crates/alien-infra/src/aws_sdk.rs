@@ -1,6 +1,5 @@
 use alien_core::{AwsClientConfig, AwsCredentials, Platform};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
-use async_trait::async_trait;
 use aws_config::{BehaviorVersion, SdkConfig};
 use aws_credential_types::Credentials;
 use aws_sdk_acm::Client as AcmClient;
@@ -10,7 +9,20 @@ use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
-use aws_sdk_iam::{error::ProvideErrorMetadata, Client as IamClient};
+use aws_sdk_iam::{
+    error::ProvideErrorMetadata,
+    operation::{
+        create_policy::CreatePolicyOutput,
+        create_policy_version::CreatePolicyVersionOutput,
+        create_role::{CreateRoleInput, CreateRoleOutput},
+        get_role::GetRoleOutput,
+        get_role_policy::GetRolePolicyOutput,
+        list_attached_role_policies::ListAttachedRolePoliciesOutput,
+        list_policy_versions::ListPolicyVersionsOutput,
+        list_role_policies::ListRolePoliciesOutput,
+    },
+    Client as IamClient,
+};
 use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
@@ -18,398 +30,354 @@ use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
 
-pub use aws_sdk_iam::{
-    operation::{
-        create_policy::CreatePolicyOutput as CreatePolicyResponse,
-        create_policy_version::CreatePolicyVersionOutput as CreatePolicyVersionResponse,
-        create_role::{CreateRoleInput, CreateRoleOutput as CreateRoleResponse},
-        get_role::GetRoleOutput as GetRoleResponse,
-        get_role_policy::GetRolePolicyOutput as GetRolePolicyResponse,
-        list_attached_role_policies::ListAttachedRolePoliciesOutput as ListAttachedRolePoliciesResponse,
-        list_policy_versions::ListPolicyVersionsOutput as ListPolicyVersionsResponse,
-        list_role_policies::ListRolePoliciesOutput as ListRolePoliciesResponse,
-    },
-    types::{AttachedPolicy, Policy, PolicyVersion, Role, Tag as IamTag},
-};
-/// Minimal IAM operations required by infra controllers.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-#[async_trait]
-pub trait IamApi: Send + Sync {
-    /// Create an IAM role.
-    async fn create_role(&self, request: CreateRoleInput) -> Result<CreateRoleResponse>;
-    /// Get an IAM role.
-    async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
-    /// Delete an IAM role.
-    async fn delete_role(&self, role_name: &str) -> Result<()>;
-    /// Put an inline role policy.
-    async fn put_role_policy(
-        &self,
-        role_name: &str,
-        policy_name: &str,
-        policy_document: &str,
-    ) -> Result<()>;
-    /// Get an inline role policy.
-    async fn get_role_policy(
-        &self,
-        role_name: &str,
-        policy_name: &str,
-    ) -> Result<GetRolePolicyResponse>;
-    /// Delete an inline role policy.
-    async fn delete_role_policy(&self, role_name: &str, policy_name: &str) -> Result<()>;
-    /// Update a role trust policy.
-    async fn update_assume_role_policy(&self, role_name: &str, policy_document: &str)
-        -> Result<()>;
-    /// List managed policies attached to a role.
-    async fn list_attached_role_policies(
-        &self,
-        role_name: &str,
-    ) -> Result<ListAttachedRolePoliciesResponse>;
-    /// Create a managed policy.
-    async fn create_policy(
-        &self,
-        policy_name: &str,
-        policy_document: &str,
-        path: Option<String>,
-    ) -> Result<CreatePolicyResponse>;
-    /// Delete a managed policy.
-    async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
-    /// Create a managed policy version.
-    async fn create_policy_version(
-        &self,
-        policy_arn: &str,
-        policy_document: &str,
-        set_as_default: bool,
-    ) -> Result<CreatePolicyVersionResponse>;
-    /// Delete a managed policy version.
-    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()>;
-    /// List managed policy versions.
-    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse>;
-    /// Attach a managed policy to a role.
-    async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
-    /// Detach a managed policy from a role.
-    async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
-    /// List inline role policies.
-    async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
+pub async fn create_iam_role(
+    client: &IamClient,
+    request: CreateRoleInput,
+) -> Result<CreateRoleOutput> {
+    let role_name = request
+        .role_name()
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "CreateRole request did not include roleName".to_string(),
+                resource_id: None,
+            })
+        })?;
+    if request.assume_role_policy_document().is_none() {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "CreateRole request for '{role_name}' did not include assumeRolePolicyDocument"
+            ),
+            resource_id: None,
+        }));
+    }
+
+    let response = iam_result(
+        client
+            .create_role()
+            .set_role_name(request.role_name)
+            .set_assume_role_policy_document(request.assume_role_policy_document)
+            .set_path(request.path)
+            .set_description(request.description)
+            .set_max_session_duration(request.max_session_duration)
+            .set_permissions_boundary(request.permissions_boundary)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "CreateRole",
+        "IAM Role",
+        &role_name,
+    )?;
+
+    response.role().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("IAM CreateRole response for '{role_name}' did not include a role"),
+            resource_id: None,
+        })
+    })?;
+
+    Ok(response)
 }
 
-#[async_trait]
-impl IamApi for IamClient {
-    async fn create_role(&self, request: CreateRoleInput) -> Result<CreateRoleResponse> {
-        let role_name = request
-            .role_name()
-            .map(ToString::to_string)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "CreateRole request did not include roleName".to_string(),
-                    resource_id: None,
-                })
-            })?;
-        if request.assume_role_policy_document().is_none() {
+pub async fn get_iam_role(client: &IamClient, role_name: &str) -> Result<GetRoleOutput> {
+    let response = iam_result(
+        client.get_role().role_name(role_name).send().await,
+        "GetRole",
+        "IAM Role",
+        role_name,
+    )?;
+
+    response.role().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("IAM GetRole response for '{role_name}' did not include a role"),
+            resource_id: None,
+        })
+    })?;
+
+    Ok(response)
+}
+
+pub async fn delete_iam_role(client: &IamClient, role_name: &str) -> Result<()> {
+    iam_result(
+        client.delete_role().role_name(role_name).send().await,
+        "DeleteRole",
+        "IAM Role",
+        role_name,
+    )?;
+    Ok(())
+}
+
+pub async fn put_iam_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_name: &str,
+    policy_document: &str,
+) -> Result<()> {
+    let resource_name = format!("{role_name}/{policy_name}");
+    iam_result(
+        client
+            .put_role_policy()
+            .role_name(role_name)
+            .policy_name(policy_name)
+            .policy_document(policy_document)
+            .send()
+            .await,
+        "PutRolePolicy",
+        "IAM RolePolicy",
+        &resource_name,
+    )?;
+    Ok(())
+}
+
+pub async fn get_iam_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_name: &str,
+) -> Result<GetRolePolicyOutput> {
+    let resource_name = format!("{role_name}/{policy_name}");
+    iam_result(
+        client
+            .get_role_policy()
+            .role_name(role_name)
+            .policy_name(policy_name)
+            .send()
+            .await,
+        "GetRolePolicy",
+        "IAM RolePolicy",
+        &resource_name,
+    )
+}
+
+pub async fn delete_iam_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_name: &str,
+) -> Result<()> {
+    let resource_name = format!("{role_name}/{policy_name}");
+    iam_result(
+        client
+            .delete_role_policy()
+            .role_name(role_name)
+            .policy_name(policy_name)
+            .send()
+            .await,
+        "DeleteRolePolicy",
+        "IAM RolePolicy",
+        &resource_name,
+    )?;
+    Ok(())
+}
+
+pub async fn update_iam_assume_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_document: &str,
+) -> Result<()> {
+    iam_result(
+        client
+            .update_assume_role_policy()
+            .role_name(role_name)
+            .policy_document(policy_document)
+            .send()
+            .await,
+        "UpdateAssumeRolePolicy",
+        "IAM Role",
+        role_name,
+    )?;
+    Ok(())
+}
+
+pub async fn list_iam_attached_role_policies(
+    client: &IamClient,
+    role_name: &str,
+) -> Result<ListAttachedRolePoliciesOutput> {
+    let response = iam_result(
+        client
+            .list_attached_role_policies()
+            .role_name(role_name)
+            .send()
+            .await,
+        "ListAttachedRolePolicies",
+        "IAM Role",
+        role_name,
+    )?;
+
+    for policy in response.attached_policies() {
+        if policy.policy_name().is_none() || policy.policy_arn().is_none() {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
-                    "CreateRole request for '{role_name}' did not include assumeRolePolicyDocument"
+                    "IAM ListAttachedRolePolicies response for '{role_name}' included a policy without both name and ARN"
                 ),
                 resource_id: None,
             }));
         }
-
-        let response = iam_result(
-            self.create_role()
-                .set_role_name(request.role_name)
-                .set_assume_role_policy_document(request.assume_role_policy_document)
-                .set_path(request.path)
-                .set_description(request.description)
-                .set_max_session_duration(request.max_session_duration)
-                .set_permissions_boundary(request.permissions_boundary)
-                .set_tags(request.tags)
-                .send()
-                .await,
-            "CreateRole",
-            "IAM Role",
-            &role_name,
-        )?;
-
-        response.role().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "IAM CreateRole response for '{role_name}' did not include a role"
-                ),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(response)
     }
 
-    async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse> {
-        let response = iam_result(
-            self.get_role().role_name(role_name).send().await,
-            "GetRole",
-            "IAM Role",
-            role_name,
-        )?;
+    Ok(response)
+}
 
-        response.role().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("IAM GetRole response for '{role_name}' did not include a role"),
-                resource_id: None,
-            })
-        })?;
+pub async fn create_iam_policy(
+    client: &IamClient,
+    policy_name: &str,
+    policy_document: &str,
+    path: Option<String>,
+) -> Result<CreatePolicyOutput> {
+    let response = iam_result(
+        client
+            .create_policy()
+            .policy_name(policy_name)
+            .policy_document(policy_document)
+            .set_path(path)
+            .send()
+            .await,
+        "CreatePolicy",
+        "IAM Policy",
+        policy_name,
+    )?;
 
-        Ok(response)
-    }
+    response.policy().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "IAM CreatePolicy response for '{policy_name}' did not include a policy"
+            ),
+            resource_id: None,
+        })
+    })?;
 
-    async fn delete_role(&self, role_name: &str) -> Result<()> {
-        iam_result(
-            self.delete_role().role_name(role_name).send().await,
-            "DeleteRole",
-            "IAM Role",
-            role_name,
-        )?;
-        Ok(())
-    }
+    Ok(response)
+}
 
-    async fn put_role_policy(
-        &self,
-        role_name: &str,
-        policy_name: &str,
-        policy_document: &str,
-    ) -> Result<()> {
-        let resource_name = format!("{role_name}/{policy_name}");
-        iam_result(
-            self.put_role_policy()
-                .role_name(role_name)
-                .policy_name(policy_name)
-                .policy_document(policy_document)
-                .send()
-                .await,
-            "PutRolePolicy",
-            "IAM RolePolicy",
-            &resource_name,
-        )?;
-        Ok(())
-    }
+pub async fn delete_iam_policy(client: &IamClient, policy_arn: &str) -> Result<()> {
+    iam_result(
+        client.delete_policy().policy_arn(policy_arn).send().await,
+        "DeletePolicy",
+        "IAM Policy",
+        policy_arn,
+    )?;
+    Ok(())
+}
 
-    async fn get_role_policy(
-        &self,
-        role_name: &str,
-        policy_name: &str,
-    ) -> Result<GetRolePolicyResponse> {
-        let resource_name = format!("{role_name}/{policy_name}");
-        let response = iam_result(
-            self.get_role_policy()
-                .role_name(role_name)
-                .policy_name(policy_name)
-                .send()
-                .await,
-            "GetRolePolicy",
-            "IAM RolePolicy",
-            &resource_name,
-        )?;
+pub async fn create_iam_policy_version(
+    client: &IamClient,
+    policy_arn: &str,
+    policy_document: &str,
+    set_as_default: bool,
+) -> Result<CreatePolicyVersionOutput> {
+    let response = iam_result(
+        client
+            .create_policy_version()
+            .policy_arn(policy_arn)
+            .policy_document(policy_document)
+            .set_as_default(set_as_default)
+            .send()
+            .await,
+        "CreatePolicyVersion",
+        "IAM Policy",
+        policy_arn,
+    )?;
 
-        Ok(response)
-    }
+    response.policy_version().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "IAM CreatePolicyVersion response for '{policy_arn}' did not include a version"
+            ),
+            resource_id: None,
+        })
+    })?;
 
-    async fn delete_role_policy(&self, role_name: &str, policy_name: &str) -> Result<()> {
-        let resource_name = format!("{role_name}/{policy_name}");
-        iam_result(
-            self.delete_role_policy()
-                .role_name(role_name)
-                .policy_name(policy_name)
-                .send()
-                .await,
-            "DeleteRolePolicy",
-            "IAM RolePolicy",
-            &resource_name,
-        )?;
-        Ok(())
-    }
+    Ok(response)
+}
 
-    async fn update_assume_role_policy(
-        &self,
-        role_name: &str,
-        policy_document: &str,
-    ) -> Result<()> {
-        iam_result(
-            self.update_assume_role_policy()
-                .role_name(role_name)
-                .policy_document(policy_document)
-                .send()
-                .await,
-            "UpdateAssumeRolePolicy",
-            "IAM Role",
-            role_name,
-        )?;
-        Ok(())
-    }
+pub async fn delete_iam_policy_version(
+    client: &IamClient,
+    policy_arn: &str,
+    version_id: &str,
+) -> Result<()> {
+    let resource_name = format!("{policy_arn}/{version_id}");
+    iam_result(
+        client
+            .delete_policy_version()
+            .policy_arn(policy_arn)
+            .version_id(version_id)
+            .send()
+            .await,
+        "DeletePolicyVersion",
+        "IAM PolicyVersion",
+        &resource_name,
+    )?;
+    Ok(())
+}
 
-    async fn list_attached_role_policies(
-        &self,
-        role_name: &str,
-    ) -> Result<ListAttachedRolePoliciesResponse> {
-        let response = iam_result(
-            self.list_attached_role_policies()
-                .role_name(role_name)
-                .send()
-                .await,
-            "ListAttachedRolePolicies",
-            "IAM Role",
-            role_name,
-        )?;
+pub async fn list_iam_policy_versions(
+    client: &IamClient,
+    policy_arn: &str,
+) -> Result<ListPolicyVersionsOutput> {
+    iam_result(
+        client
+            .list_policy_versions()
+            .policy_arn(policy_arn)
+            .send()
+            .await,
+        "ListPolicyVersions",
+        "IAM Policy",
+        policy_arn,
+    )
+}
 
-        for policy in response.attached_policies() {
-            if policy.policy_name().is_none() || policy.policy_arn().is_none() {
-                return Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "IAM ListAttachedRolePolicies response for '{role_name}' included a policy without both name and ARN"
-                    ),
-                    resource_id: None,
-                }));
-            }
-        }
+pub async fn attach_iam_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_arn: &str,
+) -> Result<()> {
+    let resource_name = format!("{role_name}/{policy_arn}");
+    iam_result(
+        client
+            .attach_role_policy()
+            .role_name(role_name)
+            .policy_arn(policy_arn)
+            .send()
+            .await,
+        "AttachRolePolicy",
+        "IAM RolePolicyAttachment",
+        &resource_name,
+    )?;
+    Ok(())
+}
 
-        Ok(response)
-    }
+pub async fn detach_iam_role_policy(
+    client: &IamClient,
+    role_name: &str,
+    policy_arn: &str,
+) -> Result<()> {
+    let resource_name = format!("{role_name}/{policy_arn}");
+    iam_result(
+        client
+            .detach_role_policy()
+            .role_name(role_name)
+            .policy_arn(policy_arn)
+            .send()
+            .await,
+        "DetachRolePolicy",
+        "IAM RolePolicyAttachment",
+        &resource_name,
+    )?;
+    Ok(())
+}
 
-    async fn create_policy(
-        &self,
-        policy_name: &str,
-        policy_document: &str,
-        path: Option<String>,
-    ) -> Result<CreatePolicyResponse> {
-        let response = iam_result(
-            self.create_policy()
-                .policy_name(policy_name)
-                .policy_document(policy_document)
-                .set_path(path)
-                .send()
-                .await,
-            "CreatePolicy",
-            "IAM Policy",
-            policy_name,
-        )?;
-
-        response.policy().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "IAM CreatePolicy response for '{policy_name}' did not include a policy"
-                ),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(response)
-    }
-
-    async fn delete_policy(&self, policy_arn: &str) -> Result<()> {
-        iam_result(
-            self.delete_policy().policy_arn(policy_arn).send().await,
-            "DeletePolicy",
-            "IAM Policy",
-            policy_arn,
-        )?;
-        Ok(())
-    }
-
-    async fn create_policy_version(
-        &self,
-        policy_arn: &str,
-        policy_document: &str,
-        set_as_default: bool,
-    ) -> Result<CreatePolicyVersionResponse> {
-        let response = iam_result(
-            self.create_policy_version()
-                .policy_arn(policy_arn)
-                .policy_document(policy_document)
-                .set_as_default(set_as_default)
-                .send()
-                .await,
-            "CreatePolicyVersion",
-            "IAM Policy",
-            policy_arn,
-        )?;
-
-        response.policy_version().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "IAM CreatePolicyVersion response for '{policy_arn}' did not include a version"
-                ),
-                resource_id: None,
-            })
-        })?;
-
-        Ok(response)
-    }
-
-    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()> {
-        let resource_name = format!("{policy_arn}/{version_id}");
-        iam_result(
-            self.delete_policy_version()
-                .policy_arn(policy_arn)
-                .version_id(version_id)
-                .send()
-                .await,
-            "DeletePolicyVersion",
-            "IAM PolicyVersion",
-            &resource_name,
-        )?;
-        Ok(())
-    }
-
-    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse> {
-        let response = iam_result(
-            self.list_policy_versions()
-                .policy_arn(policy_arn)
-                .send()
-                .await,
-            "ListPolicyVersions",
-            "IAM Policy",
-            policy_arn,
-        )?;
-
-        Ok(response)
-    }
-
-    async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
-        let resource_name = format!("{role_name}/{policy_arn}");
-        iam_result(
-            self.attach_role_policy()
-                .role_name(role_name)
-                .policy_arn(policy_arn)
-                .send()
-                .await,
-            "AttachRolePolicy",
-            "IAM RolePolicyAttachment",
-            &resource_name,
-        )?;
-        Ok(())
-    }
-
-    async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
-        let resource_name = format!("{role_name}/{policy_arn}");
-        iam_result(
-            self.detach_role_policy()
-                .role_name(role_name)
-                .policy_arn(policy_arn)
-                .send()
-                .await,
-            "DetachRolePolicy",
-            "IAM RolePolicyAttachment",
-            &resource_name,
-        )?;
-        Ok(())
-    }
-
-    async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse> {
-        let response = iam_result(
-            self.list_role_policies().role_name(role_name).send().await,
-            "ListRolePolicies",
-            "IAM Role",
-            role_name,
-        )?;
-
-        Ok(response)
-    }
+pub async fn list_iam_role_policies(
+    client: &IamClient,
+    role_name: &str,
+) -> Result<ListRolePoliciesOutput> {
+    iam_result(
+        client
+            .list_role_policies()
+            .role_name(role_name)
+            .send()
+            .await,
+        "ListRolePolicies",
+        "IAM Role",
+        role_name,
+    )
 }
 
 fn iam_result<T, E>(

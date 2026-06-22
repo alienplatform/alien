@@ -5,7 +5,6 @@ use crate::aws_sdk::{
     ec2_client_from_alien_config, ecr_client_from_alien_config,
     eventbridge_client_from_alien_config, iam_client_from_alien_config,
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
-    IamApi,
 };
 use crate::azure_container_apps::{
     ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
@@ -4609,7 +4608,7 @@ impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
 #[async_trait::async_trait]
 pub trait PlatformServiceProvider: Send + Sync {
     // AWS clients
-    async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
+    async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_iam::Client>;
     async fn get_aws_lambda_client(
         &self,
         config: &AwsClientConfig,
@@ -4869,8 +4868,8 @@ impl DefaultPlatformServiceProvider {
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     // AWS implementations
-    async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>> {
-        Ok(Arc::new(iam_client_from_alien_config(config).await?))
+    async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_iam::Client> {
+        iam_client_from_alien_config(config).await
     }
 
     async fn get_aws_lambda_client(

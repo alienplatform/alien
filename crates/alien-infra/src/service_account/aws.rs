@@ -1,7 +1,10 @@
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::aws_sdk::{CreateRoleInput, IamTag, Role};
+use crate::aws_sdk::{
+    create_iam_role, delete_iam_role, delete_iam_role_policy, detach_iam_role_policy, get_iam_role,
+    list_iam_attached_role_policies, list_iam_role_policies, put_iam_role_policy,
+};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -15,6 +18,10 @@ use alien_macros::controller;
 use alien_permissions::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
+};
+use aws_sdk_iam::{
+    operation::create_role::CreateRoleInput,
+    types::{Role, Tag},
 };
 use chrono::Utc;
 use serde_json::json;
@@ -68,7 +75,7 @@ impl AwsServiceAccountController {
         let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
             .into_iter()
             .map(|(key, value)| {
-                IamTag::builder()
+                Tag::builder()
                     .key(key)
                     .value(value)
                     .build()
@@ -100,14 +107,12 @@ impl AwsServiceAccountController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let created_role =
-            client
-                .create_role(role_request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create IAM role '{}'", role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let created_role = create_iam_role(&client, role_request).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to create IAM role '{}'", role_name),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
 
         let role_arn = created_role
             .role()
@@ -158,8 +163,7 @@ impl AwsServiceAccountController {
         let policy_document = self.generate_stack_policy_document(config, ctx)?;
 
         if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
+            put_iam_role_policy(&client, role_name, MANAGED_POLICY_NAME, &policy_document)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -239,13 +243,13 @@ impl AwsServiceAccountController {
         let role_name = self.role_name.as_ref().unwrap();
 
         // Heartbeat check: verify role still exists
-        let role = client
-            .get_role(role_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get IAM role during heartbeat check".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let role =
+            get_iam_role(&client, role_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get IAM role during heartbeat check".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         // Check if role ARN matches what we expect
         let role_metadata = role.role().ok_or_else(|| {
@@ -268,8 +272,7 @@ impl AwsServiceAccountController {
             }
         }
 
-        let attached_policy_response = client
-            .list_attached_role_policies(role_name)
+        let attached_policy_response = list_iam_attached_role_policies(&client, role_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to list attached IAM role policies during heartbeat check"
@@ -295,8 +298,7 @@ impl AwsServiceAccountController {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let inline_policy_names = client
-            .list_role_policies(role_name)
+        let inline_policy_names = list_iam_role_policies(&client, role_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to list inline IAM role policies during heartbeat check"
@@ -344,8 +346,7 @@ impl AwsServiceAccountController {
         let policy_document = self.generate_stack_policy_document(config, ctx)?;
 
         if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
+            put_iam_role_policy(&client, role_name, MANAGED_POLICY_NAME, &policy_document)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -361,10 +362,7 @@ impl AwsServiceAccountController {
             );
         } else {
             // Remove policy if no permissions are needed
-            match client
-                .delete_role_policy(role_name, MANAGED_POLICY_NAME)
-                .await
-            {
+            match delete_iam_role_policy(&client, role_name, MANAGED_POLICY_NAME).await {
                 Ok(_) => {
                     info!(role_name = %role_name, "Removed empty policy from IAM role");
                 }
@@ -410,7 +408,7 @@ impl AwsServiceAccountController {
         );
 
         // Step 1: List and detach all managed policies
-        match client.list_attached_role_policies(role_name).await {
+        match list_iam_attached_role_policies(&client, role_name).await {
             Ok(response) => {
                 let resource_id = ctx.desired_resource_config::<ServiceAccount>()?.id.clone();
                 if response.attached_policies().is_empty() {
@@ -446,7 +444,7 @@ impl AwsServiceAccountController {
                         "Detaching managed policy"
                     );
 
-                    match client.detach_role_policy(role_name, &policy_arn).await {
+                    match detach_iam_role_policy(&client, role_name, &policy_arn).await {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,
@@ -499,7 +497,7 @@ impl AwsServiceAccountController {
         }
 
         // Step 2: List and delete all inline policies
-        match client.list_role_policies(role_name).await {
+        match list_iam_role_policies(&client, role_name).await {
             Ok(response) => {
                 if response.policy_names().is_empty() {
                     info!(role_name = %role_name, "No inline policies attached to role");
@@ -512,7 +510,7 @@ impl AwsServiceAccountController {
                         "Deleting inline policy"
                     );
 
-                    match client.delete_role_policy(role_name, policy_name).await {
+                    match delete_iam_role_policy(&client, role_name, policy_name).await {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,
@@ -590,7 +588,7 @@ impl AwsServiceAccountController {
             "Deleting IAM role"
         );
 
-        match client.delete_role(role_name).await {
+        match delete_iam_role(&client, role_name).await {
             Ok(_) => {
                 info!(
                     role_name = %role_name,

@@ -5271,6 +5271,7 @@ mod tests {
         types::RuleState,
         Client as EventBridgeClient,
     };
+    use aws_sdk_iam::{operation::put_role_policy::PutRolePolicyOutput, Client as IamClient};
     use aws_sdk_lambda::{
         error::ErrorMetadata as LambdaErrorMetadata,
         operation::{
@@ -5297,7 +5298,6 @@ mod tests {
     use httpmock::prelude::*;
     use rstest::rstest;
 
-    use crate::aws_sdk::MockIamApi;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::{
@@ -5775,12 +5775,21 @@ mod tests {
         )
     }
 
-    fn create_aws_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_put_role_policy()
-            .returning(|_, _, _| Ok(()));
-        Arc::new(mock_iam)
+    fn create_aws_iam_mock_for_resource_permissions() -> IamClient {
+        let put_role_policy_rule = mock!(IamClient::put_role_policy)
+            .match_requests(|request| {
+                request.role_name().is_some()
+                    && request.policy_name().is_some()
+                    && request.policy_document().is_some()
+            })
+            .then_output(|| PutRolePolicyOutput::builder().build());
+
+        mock_client!(
+            aws_sdk_iam,
+            RuleMode::MatchAny,
+            [&put_role_policy_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
     fn setup_mock_service_provider(

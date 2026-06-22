@@ -4,7 +4,11 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::aws_sdk::{CreateRoleInput, IamApi, IamTag};
+use crate::aws_sdk::{
+    create_iam_role, delete_iam_role, delete_iam_role_policy, detach_iam_role_policy,
+    list_iam_attached_role_policies, list_iam_role_policies, put_iam_role_policy,
+    update_iam_assume_role_policy,
+};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -19,6 +23,7 @@ use aws_sdk_ecr::{
     types::{ReplicationConfiguration, ReplicationDestination, ReplicationRule, Repository},
     Client as EcrClient,
 };
+use aws_sdk_iam::{operation::create_role::CreateRoleInput, types::Tag, Client as IamClient};
 
 use chrono::Utc;
 
@@ -118,7 +123,7 @@ impl AwsArtifactRegistryController {
         let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
             .into_iter()
             .map(|(key, value)| {
-                IamTag::builder()
+                Tag::builder()
                     .key(key)
                     .value(value)
                     .build()
@@ -148,8 +153,7 @@ impl AwsArtifactRegistryController {
             })?;
 
         let response =
-            iam_client
-                .create_role(request)
+            create_iam_role(&iam_client, request)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create pull role '{}'", pull_role_name),
@@ -198,8 +202,7 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR pull permissions
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        iam_client
-            .put_role_policy(&pull_role_name, policy_name, &policy_document)
+        put_iam_role_policy(&iam_client, &pull_role_name, policy_name, &policy_document)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to attach pull policy to role '{}'", pull_role_name),
@@ -243,7 +246,7 @@ impl AwsArtifactRegistryController {
         let tags = standard_resource_tags(ctx.resource_prefix, &config.id)
             .into_iter()
             .map(|(key, value)| {
-                IamTag::builder()
+                Tag::builder()
                     .key(key)
                     .value(value)
                     .build()
@@ -273,8 +276,7 @@ impl AwsArtifactRegistryController {
             })?;
 
         let response =
-            iam_client
-                .create_role(request)
+            create_iam_role(&iam_client, request)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create push role '{}'", push_role_name),
@@ -323,8 +325,7 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR push+pull permissions
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        iam_client
-            .put_role_policy(&push_role_name, policy_name, &policy_document)
+        put_iam_role_policy(&iam_client, &push_role_name, policy_name, &policy_document)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to attach push policy to role '{}'", push_role_name),
@@ -459,8 +460,7 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        iam_client
-            .update_assume_role_policy(&pull_role_name, &assume_role_policy)
+        update_iam_assume_role_policy(&iam_client, &pull_role_name, &assume_role_policy)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -500,8 +500,7 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        iam_client
-            .put_role_policy(&pull_role_name, policy_name, &policy_document)
+        put_iam_role_policy(&iam_client, &pull_role_name, policy_name, &policy_document)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to update pull role policy for '{}'", pull_role_name),
@@ -537,8 +536,7 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        iam_client
-            .update_assume_role_policy(&push_role_name, &assume_role_policy)
+        update_iam_assume_role_policy(&iam_client, &push_role_name, &assume_role_policy)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -578,8 +576,7 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        iam_client
-            .put_role_policy(&push_role_name, policy_name, &policy_document)
+        put_iam_role_policy(&iam_client, &push_role_name, policy_name, &policy_document)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to update push role policy for '{}'", push_role_name),
@@ -680,7 +677,7 @@ impl AwsArtifactRegistryController {
             .map(str::to_string)
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
 
-        self.cleanup_role_policies(&*iam_client, &pull_role_name, "pull", &config.id)
+        self.cleanup_role_policies(&iam_client, &pull_role_name, "pull", &config.id)
             .await?;
 
         Ok(HandlerAction::Continue {
@@ -710,7 +707,7 @@ impl AwsArtifactRegistryController {
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
 
         // Delete pull role - treat NotFound as success for idempotent deletion
-        match iam_client.delete_role(&pull_role_name).await {
+        match delete_iam_role(&iam_client, &pull_role_name).await {
             Ok(_) => {
                 info!(role_name = %pull_role_name, "Pull role deleted successfully");
             }
@@ -763,7 +760,7 @@ impl AwsArtifactRegistryController {
             .map(str::to_string)
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
 
-        self.cleanup_role_policies(&*iam_client, &push_role_name, "push", &config.id)
+        self.cleanup_role_policies(&iam_client, &push_role_name, "push", &config.id)
             .await?;
 
         Ok(HandlerAction::Continue {
@@ -793,7 +790,7 @@ impl AwsArtifactRegistryController {
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
 
         // Delete push role - treat NotFound as success for idempotent deletion
-        match iam_client.delete_role(&push_role_name).await {
+        match delete_iam_role(&iam_client, &push_role_name).await {
             Ok(_) => {
                 info!(role_name = %push_role_name, "Push role deleted successfully");
             }
@@ -969,12 +966,12 @@ impl AwsArtifactRegistryController {
 impl AwsArtifactRegistryController {
     async fn cleanup_role_policies(
         &self,
-        iam_client: &dyn IamApi,
+        iam_client: &IamClient,
         role_name: &str,
         role_label: &str,
         resource_id: &str,
     ) -> Result<()> {
-        match iam_client.list_attached_role_policies(role_name).await {
+        match list_iam_attached_role_policies(iam_client, role_name).await {
             Ok(response) => {
                 for policy in response.attached_policies() {
                     let policy_arn = policy.policy_arn().ok_or_else(|| {
@@ -987,7 +984,7 @@ impl AwsArtifactRegistryController {
                         })
                     })?;
                     let policy_arn = policy_arn.to_string();
-                    match iam_client.detach_role_policy(role_name, &policy_arn).await {
+                    match detach_iam_role_policy(iam_client, role_name, &policy_arn).await {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,
@@ -1032,10 +1029,10 @@ impl AwsArtifactRegistryController {
             }
         }
 
-        match iam_client.list_role_policies(role_name).await {
+        match list_iam_role_policies(iam_client, role_name).await {
             Ok(response) => {
                 for policy_name in response.policy_names() {
-                    match iam_client.delete_role_policy(role_name, policy_name).await {
+                    match delete_iam_role_policy(iam_client, role_name, policy_name).await {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,
@@ -1523,10 +1520,6 @@ fn ecr_repository_required_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aws_sdk::{
-        CreateRoleResponse, ListAttachedRolePoliciesResponse, ListRolePoliciesResponse, MockIamApi,
-        Role,
-    };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
@@ -1534,16 +1527,27 @@ mod tests {
         operation::describe_repositories::DescribeRepositoriesOutput, primitives::DateTime,
         types::ImageTagMutability, Client as EcrClient,
     };
+    use aws_sdk_iam::{
+        operation::{
+            create_role::CreateRoleOutput, delete_role::DeleteRoleOutput,
+            delete_role_policy::DeleteRolePolicyOutput,
+            list_attached_role_policies::ListAttachedRolePoliciesOutput,
+            list_role_policies::ListRolePoliciesOutput, put_role_policy::PutRolePolicyOutput,
+            update_assume_role_policy::UpdateAssumeRolePolicyOutput,
+        },
+        types::Role,
+        Client as IamClient,
+    };
     use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
-    use aws_smithy_mocks::{mock, mock_client, RuleMode};
+    use aws_smithy_mocks::{mock, mock_client, MockResponse, RuleMode};
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
         ArtifactRegistry::new("my-registry".to_string()).build()
     }
 
-    fn create_successful_role_response(role_name: &str) -> CreateRoleResponse {
-        CreateRoleResponse::builder()
+    fn create_successful_role_response(role_name: &str) -> CreateRoleOutput {
+        CreateRoleOutput::builder()
             .role(
                 Role::builder()
                     .path("/")
@@ -1557,85 +1561,110 @@ mod tests {
             .build()
     }
 
-    fn setup_mock_client_for_creation_and_deletion() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-
-        // Mock successful pull role creation
-        mock_iam.expect_create_role().returning(|request| {
-            Ok(create_successful_role_response(
-                request
+    fn setup_mock_client_for_creation_and_deletion() -> IamClient {
+        let create_role_rule = mock!(IamClient::create_role)
+            .match_requests(|request| request.role_name().is_some())
+            .then_compute_response(|request| {
+                MockResponse::Output(create_successful_role_response(
+                    request
+                        .role_name()
+                        .expect("create role request should include role name"),
+                ))
+            });
+        let put_role_policy_rule = mock!(IamClient::put_role_policy)
+            .match_requests(|request| {
+                request.role_name().is_some() && request.policy_name().is_some()
+            })
+            .then_output(|| PutRolePolicyOutput::builder().build());
+        let list_attached_rule = mock!(IamClient::list_attached_role_policies)
+            .match_requests(|request| {
+                let role_name = request
                     .role_name()
-                    .expect("create role request should include role name"),
-            ))
-        });
-
-        // Mock successful policy attachment
-        mock_iam
-            .expect_put_role_policy()
-            .returning(|_, _, _| Ok(()));
-
-        mock_iam
-            .expect_list_attached_role_policies()
-            .returning(|role_name| {
+                    .expect("list attached policies request should include role name");
                 assert!(
                     matches!(role_name, "test-my-registry-pull" | "test-my-registry-push"),
                     "expected artifact registry role name, got {role_name}"
                 );
-                Ok(empty_attached_role_policies_response())
-            });
-
-        // Mock successful policy deletion (for both roles)
-        mock_iam
-            .expect_list_attached_role_policies()
-            .returning(|_| Ok(empty_attached_role_policies_response()));
-        mock_iam.expect_list_role_policies().returning(|role_name| {
-            let policy_name = if role_name.ends_with("-pull") {
-                "ECRPullPolicy"
-            } else {
-                "ECRPushPolicy"
-            };
-            Ok(ListRolePoliciesResponse::builder()
-                .policy_names(policy_name)
-                .is_truncated(false)
-                .build()
-                .expect("test list role policies response should build"))
-        });
-        mock_iam
-            .expect_delete_role_policy()
-            .returning(|_, _| Ok(()));
-
-        // Mock successful role deletion (for both roles)
-        mock_iam.expect_delete_role().returning(|_| Ok(()));
-
-        Arc::new(mock_iam)
-    }
-
-    fn setup_mock_client_for_creation_and_update() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-
-        // Mock successful pull role creation
-        mock_iam.expect_create_role().returning(|request| {
-            Ok(create_successful_role_response(
-                request
+                true
+            })
+            .then_output(empty_attached_role_policies_response);
+        let list_role_policies_rule = mock!(IamClient::list_role_policies)
+            .match_requests(|request| request.role_name().is_some())
+            .then_compute_response(|request| {
+                let role_name = request
                     .role_name()
-                    .expect("create role request should include role name"),
-            ))
-        });
+                    .expect("list role policies request should include role name");
+                let policy_name = if role_name.ends_with("-pull") {
+                    "ECRPullPolicy"
+                } else {
+                    "ECRPushPolicy"
+                };
+                MockResponse::Output(
+                    ListRolePoliciesOutput::builder()
+                        .policy_names(policy_name)
+                        .is_truncated(false)
+                        .build()
+                        .expect("test list role policies response should build"),
+                )
+            });
+        let delete_role_policy_rule = mock!(IamClient::delete_role_policy)
+            .match_requests(|request| {
+                request.role_name().is_some() && request.policy_name().is_some()
+            })
+            .then_output(|| DeleteRolePolicyOutput::builder().build());
+        let delete_role_rule = mock!(IamClient::delete_role)
+            .match_requests(|request| request.role_name().is_some())
+            .then_output(|| DeleteRoleOutput::builder().build());
 
-        // Mock successful policy attachment (for both create and update)
-        mock_iam
-            .expect_put_role_policy()
-            .returning(|_, _, _| Ok(()));
-
-        // Mock successful trust policy update (for updates)
-        mock_iam
-            .expect_update_assume_role_policy()
-            .returning(|_, _| Ok(()));
-
-        Arc::new(mock_iam)
+        mock_client!(
+            aws_sdk_iam,
+            RuleMode::MatchAny,
+            [
+                &create_role_rule,
+                &put_role_policy_rule,
+                &list_attached_rule,
+                &list_role_policies_rule,
+                &delete_role_policy_rule,
+                &delete_role_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
-    fn setup_mock_service_provider(mock_iam: Arc<MockIamApi>) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_client_for_creation_and_update() -> IamClient {
+        let create_role_rule = mock!(IamClient::create_role)
+            .match_requests(|request| request.role_name().is_some())
+            .then_compute_response(|request| {
+                MockResponse::Output(create_successful_role_response(
+                    request
+                        .role_name()
+                        .expect("create role request should include role name"),
+                ))
+            });
+        let put_role_policy_rule = mock!(IamClient::put_role_policy)
+            .match_requests(|request| {
+                request.role_name().is_some() && request.policy_name().is_some()
+            })
+            .then_output(|| PutRolePolicyOutput::builder().build());
+        let update_assume_role_policy_rule = mock!(IamClient::update_assume_role_policy)
+            .match_requests(|request| {
+                request.role_name().is_some() && request.policy_document().is_some()
+            })
+            .then_output(|| UpdateAssumeRolePolicyOutput::builder().build());
+
+        mock_client!(
+            aws_sdk_iam,
+            RuleMode::MatchAny,
+            [
+                &create_role_rule,
+                &put_role_policy_rule,
+                &update_assume_role_policy_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
+    }
+
+    fn setup_mock_service_provider(mock_iam: IamClient) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
@@ -1657,14 +1686,14 @@ mod tests {
         Arc::new(mock_provider)
     }
 
-    fn empty_attached_role_policies_response() -> ListAttachedRolePoliciesResponse {
-        ListAttachedRolePoliciesResponse::builder()
+    fn empty_attached_role_policies_response() -> ListAttachedRolePoliciesOutput {
+        ListAttachedRolePoliciesOutput::builder()
             .is_truncated(false)
             .build()
     }
 
-    fn empty_inline_role_policies_response() -> ListRolePoliciesResponse {
-        ListRolePoliciesResponse::builder()
+    fn empty_inline_role_policies_response() -> ListRolePoliciesOutput {
+        ListRolePoliciesOutput::builder()
             .set_policy_names(Some(vec![]))
             .is_truncated(false)
             .build()
@@ -1741,32 +1770,50 @@ mod tests {
         )
         .build();
 
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_list_attached_role_policies()
-            .returning(|role_name| {
+        let list_attached_rule = mock!(IamClient::list_attached_role_policies)
+            .match_requests(|request| {
+                let role_name = request
+                    .role_name()
+                    .expect("list attached policies request should include role name");
                 assert!(
                     matches!(role_name, "short-registry-pull" | "short-registry-push"),
                     "expected ARN-derived role name, got {role_name}"
                 );
-                Ok(empty_attached_role_policies_response())
-            });
-        mock_iam.expect_list_role_policies().returning(|role_name| {
-            assert!(
-                matches!(role_name, "short-registry-pull" | "short-registry-push"),
-                "expected ARN-derived role name, got {role_name}"
-            );
-            Ok(empty_inline_role_policies_response())
-        });
-        mock_iam.expect_delete_role().returning(|role_name| {
-            assert!(
-                matches!(role_name, "short-registry-pull" | "short-registry-push"),
-                "expected ARN-derived role name, got {role_name}"
-            );
-            Ok(())
-        });
+                true
+            })
+            .then_output(empty_attached_role_policies_response);
+        let list_inline_rule = mock!(IamClient::list_role_policies)
+            .match_requests(|request| {
+                let role_name = request
+                    .role_name()
+                    .expect("list inline policies request should include role name");
+                assert!(
+                    matches!(role_name, "short-registry-pull" | "short-registry-push"),
+                    "expected ARN-derived role name, got {role_name}"
+                );
+                true
+            })
+            .then_output(empty_inline_role_policies_response);
+        let delete_role_rule = mock!(IamClient::delete_role)
+            .match_requests(|request| {
+                let role_name = request
+                    .role_name()
+                    .expect("delete role request should include role name");
+                assert!(
+                    matches!(role_name, "short-registry-pull" | "short-registry-push"),
+                    "expected ARN-derived role name, got {role_name}"
+                );
+                true
+            })
+            .then_output(|| DeleteRoleOutput::builder().build());
+        let mock_iam = mock_client!(
+            aws_sdk_iam,
+            RuleMode::MatchAny,
+            [&list_attached_rule, &list_inline_rule, &delete_role_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_iam));
+        let mock_provider = setup_mock_service_provider(mock_iam);
         let controller = AwsArtifactRegistryController {
             state: AwsArtifactRegistryState::Ready,
             account_id: Some("123456789012".to_string()),
