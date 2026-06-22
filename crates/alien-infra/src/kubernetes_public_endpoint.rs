@@ -35,7 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{RouteApi, SecretsApi, ServiceApi};
+use crate::kubernetes_client::{KubernetesClient, RouteApi, SecretsApi, ServiceApi};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -160,11 +160,11 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
         .service_provider
-        .get_kubernetes_service_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let route_client = ctx
         .service_provider
-        .get_kubernetes_route_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
 
     let service_name = format!("{}-public", target.workload_name);
@@ -191,7 +191,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         } => {
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             upsert_tls_secret(
                 &secrets_client,
@@ -216,7 +216,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         EndpointCertificate::TlsSecretRef(secret_ref) => {
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             let secret_namespace = resolve_tls_secret_namespace(
                 secret_ref.namespace.as_deref(),
@@ -447,15 +447,15 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
         .service_provider
-        .get_kubernetes_service_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let route_client = ctx
         .service_provider
-        .get_kubernetes_route_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let secrets_client = ctx
         .service_provider
-        .get_kubernetes_secrets_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
 
     if let Some(route_name) = state.http_route_name.take() {
@@ -538,7 +538,7 @@ async fn cleanup_stale_endpoint_objects(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     resource_id: &str,
-    route_client: &std::sync::Arc<dyn RouteApi>,
+    route_client: &std::sync::Arc<KubernetesClient>,
     previous: PreviousEndpointObjects,
     active: ActiveEndpointObjects,
     state: &mut KubernetesPublicEndpointState,
@@ -593,7 +593,7 @@ async fn cleanup_stale_endpoint_objects(
             let kubernetes_config = ctx.get_kubernetes_config()?;
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             delete_not_found_ok(
                 secrets_client.delete_secret(namespace, &secret_name).await,
@@ -1461,7 +1461,7 @@ fn build_azure_health_check_policy(
 }
 
 async fn upsert_service(
-    client: &std::sync::Arc<dyn ServiceApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut service: Service,
@@ -1494,7 +1494,7 @@ async fn upsert_service(
 }
 
 async fn upsert_tls_secret(
-    client: &std::sync::Arc<dyn SecretsApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     certificate_chain: &str,
@@ -1557,7 +1557,7 @@ async fn upsert_tls_secret(
 }
 
 async fn upsert_ingress(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut ingress: K8sIngress,
@@ -1590,7 +1590,7 @@ async fn upsert_ingress(
 }
 
 async fn upsert_gateway(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut gateway: Value,
@@ -1623,7 +1623,7 @@ async fn upsert_gateway(
 }
 
 async fn upsert_http_route(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut route: Value,
@@ -1656,7 +1656,7 @@ async fn upsert_http_route(
 }
 
 async fn upsert_gke_health_check_policy(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut policy: Value,
@@ -1696,7 +1696,7 @@ async fn upsert_gke_health_check_policy(
 }
 
 async fn upsert_azure_health_check_policy(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     mut policy: Value,
@@ -1736,7 +1736,7 @@ async fn upsert_azure_health_check_policy(
 }
 
 async fn observe_ingress_endpoint(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
     profile: &KubernetesIngressRouteProfile,
@@ -1775,7 +1775,7 @@ async fn observe_ingress_endpoint(
 }
 
 async fn observe_gateway_endpoint(
-    client: &std::sync::Arc<dyn RouteApi>,
+    client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     name: &str,
 ) -> Result<Option<LoadBalancerEndpoint>> {

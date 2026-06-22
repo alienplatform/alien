@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::SecretsApi;
+use crate::kubernetes_client::{KubernetesClient, SecretsApi};
 use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 pub(crate) async fn ensure_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn SecretsApi>,
+    secrets_client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     secret_name: &str,
     proxy_url: &str,

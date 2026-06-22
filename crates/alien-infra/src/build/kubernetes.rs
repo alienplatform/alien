@@ -6,6 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::JobApi;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
@@ -63,7 +64,7 @@ impl KubernetesBuildController {
         // Create the Job
         let job_client = ctx
             .service_provider
-            .get_kubernetes_job_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         let job = self
             .build_job(config, &job_name, &namespace, &service_account_name, ctx)
@@ -115,7 +116,7 @@ impl KubernetesBuildController {
 
         let job_client = ctx
             .service_provider
-            .get_kubernetes_job_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         match job_client.get_job(namespace, job_name).await {
@@ -188,7 +189,7 @@ impl KubernetesBuildController {
         if let (Some(job_name), Some(namespace)) = (&self.job_name, &self.namespace) {
             let job_client = ctx
                 .service_provider
-                .get_kubernetes_job_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             let job = job_client.get_job(namespace, job_name).await.context(
@@ -248,7 +249,7 @@ impl KubernetesBuildController {
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
                 .service_provider
-                .get_kubernetes_job_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match job_client.delete_job(namespace, job_name).await {
@@ -306,7 +307,7 @@ impl KubernetesBuildController {
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
                 .service_provider
-                .get_kubernetes_job_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match job_client.get_job(namespace, job_name).await {
@@ -377,7 +378,7 @@ impl KubernetesBuildController {
 
         let job_client = ctx
             .service_provider
-            .get_kubernetes_job_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         let job = self
             .build_job(config, &job_name, namespace, &service_account_name, ctx)
@@ -429,7 +430,7 @@ impl KubernetesBuildController {
 
         let job_client = ctx
             .service_provider
-            .get_kubernetes_job_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         match job_client.get_job(namespace, job_name).await {
@@ -507,7 +508,7 @@ impl KubernetesBuildController {
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
                 .service_provider
-                .get_kubernetes_job_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match job_client.delete_job(namespace, job_name).await {
@@ -569,7 +570,7 @@ impl KubernetesBuildController {
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
                 .service_provider
-                .get_kubernetes_job_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match job_client.get_job(namespace, job_name).await {

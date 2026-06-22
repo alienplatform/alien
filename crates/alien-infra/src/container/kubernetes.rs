@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::SecretsApi;
+use crate::kubernetes_client::{DeploymentApi, KubernetesClient, ServiceApi};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -44,7 +44,7 @@ use crate::core::applicable_secret_environment_variables;
 const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn SecretsApi>,
+    secrets_client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,
@@ -131,7 +131,7 @@ impl KubernetesContainerController {
             let secret_name = format!("{}-registry", container_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
                 .await?;
@@ -152,7 +152,7 @@ impl KubernetesContainerController {
             // Create StatefulSet for stateful containers
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             let statefulset = self
                 .build_statefulset(
@@ -207,7 +207,7 @@ impl KubernetesContainerController {
             // Create Deployment for stateless containers
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             let deployment = self
                 .build_deployment(
@@ -294,7 +294,7 @@ impl KubernetesContainerController {
 
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         // Check workload status (different API for Deployment vs StatefulSet)
@@ -448,7 +448,7 @@ impl KubernetesContainerController {
         if let (Some(workload_name), Some(namespace)) = (&self.workload_name, &self.namespace) {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             let (ready_replicas, replicas, workload) = if self.is_stateful {
@@ -605,7 +605,7 @@ impl KubernetesContainerController {
             let secret_name = format!("{}-registry", workload_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
                 .await?;
@@ -621,7 +621,7 @@ impl KubernetesContainerController {
             .await?;
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         if self.is_stateful {
@@ -727,7 +727,7 @@ impl KubernetesContainerController {
 
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         let (ready_replicas, replicas) = if self.is_stateful {
@@ -883,7 +883,7 @@ impl KubernetesContainerController {
         if let Some(workload_name) = &self.workload_name {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             let delete_result = if self.is_stateful {
@@ -959,7 +959,7 @@ impl KubernetesContainerController {
         if let Some(workload_name) = &self.workload_name {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             let get_result = if self.is_stateful {
@@ -1183,7 +1183,7 @@ impl KubernetesContainerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let service_client = ctx
             .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         let Some(mut service) = self.build_internal_service(config, service_name, namespace) else {
@@ -1231,7 +1231,7 @@ impl KubernetesContainerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let service_client = ctx
             .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         match service_client.delete_service(namespace, service_name).await {

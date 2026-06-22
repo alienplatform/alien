@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::SecretsApi;
+use crate::kubernetes_client::{DeploymentApi, KubernetesClient};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -59,7 +59,7 @@ impl KubernetesDaemonController {
             let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
                 .await?;
@@ -70,7 +70,7 @@ impl KubernetesDaemonController {
 
         let workload_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         let daemonset = self
             .build_daemonset(
@@ -143,7 +143,7 @@ impl KubernetesDaemonController {
         if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
             let workload_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             let daemonset = workload_client
                 .get_daemonset(namespace, daemon_set_name)
@@ -201,7 +201,7 @@ impl KubernetesDaemonController {
 
         let workload_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         let existing = workload_client
             .get_daemonset(namespace, daemon_set_name)
@@ -227,7 +227,7 @@ impl KubernetesDaemonController {
             let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
                 .await?;
@@ -303,7 +303,7 @@ impl KubernetesDaemonController {
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             match workload_client
                 .delete_daemonset(namespace, daemon_set_name)
@@ -359,7 +359,7 @@ impl KubernetesDaemonController {
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             match workload_client
                 .get_daemonset(namespace, daemon_set_name)
@@ -437,7 +437,7 @@ impl KubernetesDaemonController {
 
         let workload_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         match workload_client
             .get_daemonset(namespace, daemon_set_name)
@@ -613,7 +613,7 @@ impl KubernetesDaemonController {
 }
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn SecretsApi>,
+    secrets_client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

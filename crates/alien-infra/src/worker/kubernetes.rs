@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::SecretsApi;
+use crate::kubernetes_client::{DeploymentApi, KubernetesClient};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -82,7 +82,7 @@ impl KubernetesWorkerController {
             let secret_name = format!("{}-registry", function_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
                 .await?;
@@ -97,7 +97,7 @@ impl KubernetesWorkerController {
         // Create the Deployment
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
         let deployment = self
             .build_deployment(
@@ -158,7 +158,7 @@ impl KubernetesWorkerController {
 
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         match deployment_client
@@ -271,7 +271,7 @@ impl KubernetesWorkerController {
         if let (Some(deployment_name), Some(namespace)) = (&self.deployment_name, &self.namespace) {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             let deployment = deployment_client
@@ -377,7 +377,7 @@ impl KubernetesWorkerController {
 
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         // Get the existing deployment to carry over resourceVersion (required for PUT)
@@ -407,7 +407,7 @@ impl KubernetesWorkerController {
             let secret_name = format!("{}-registry", deployment_name);
             let secrets_client = ctx
                 .service_provider
-                .get_kubernetes_secrets_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
                 .await?;
@@ -476,7 +476,7 @@ impl KubernetesWorkerController {
 
         let deployment_client = ctx
             .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
+            .get_kubernetes_client(kubernetes_config)
             .await?;
 
         match deployment_client
@@ -596,7 +596,7 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match deployment_client
@@ -660,7 +660,7 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             let deployment_client = ctx
                 .service_provider
-                .get_kubernetes_deployment_client(kubernetes_config)
+                .get_kubernetes_client(kubernetes_config)
                 .await?;
 
             match deployment_client
@@ -1133,7 +1133,7 @@ mod tests {
 /// Create a Kubernetes Docker config Secret for authenticating with the
 /// manager's registry.
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<dyn SecretsApi>,
+    secrets_client: &std::sync::Arc<KubernetesClient>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

@@ -12,10 +12,7 @@ use crate::azure_container_apps::{
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 #[cfg(feature = "kubernetes")]
-use crate::kubernetes_client::{
-    DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
-    SecretsApi, ServiceApi, VersionApi,
-};
+use crate::kubernetes_client::KubernetesClient;
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesClientConfig;
 use alien_core::{
@@ -405,55 +402,10 @@ pub trait PlatformServiceProvider: Send + Sync {
 
     // Kubernetes clients
     #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_deployment_client<'a>(
+    async fn get_kubernetes_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn DeploymentApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_job_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn JobApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_pod_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn PodApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_event_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn EventApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_node_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn NodeApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_metrics_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn MetricsApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_secrets_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn SecretsApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_service_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn ServiceApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_route_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn RouteApi>>;
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_version_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn VersionApi>>;
+    ) -> Result<Arc<KubernetesClient>>;
 
     // Local platform service managers (return None for non-local platforms)
     #[cfg(feature = "local")]
@@ -883,139 +835,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     // Kubernetes implementations
     #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_deployment_client<'a>(
+    async fn get_kubernetes_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn DeploymentApi>> {
+    ) -> Result<Arc<KubernetesClient>> {
         let client = KubernetesClient::new(config.clone()).await.context(
             crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes deployment client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_job_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn JobApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes job client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_pod_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn PodApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes pod client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_event_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn EventApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes event client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_node_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn NodeApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes node client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_metrics_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn MetricsApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes metrics client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_secrets_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn SecretsApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes secrets client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_service_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn ServiceApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes service client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_route_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn RouteApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes route client".to_string(),
-                resource_id: None,
-            },
-        )?;
-        Ok(Arc::new(client))
-    }
-
-    #[cfg(feature = "kubernetes")]
-    async fn get_kubernetes_version_client<'a>(
-        &'a self,
-        config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<dyn VersionApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create Kubernetes version client".to_string(),
+                message: "Failed to create Kubernetes client".to_string(),
                 resource_id: None,
             },
         )?;

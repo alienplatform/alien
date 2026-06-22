@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
+    optional_events_read, optional_metrics_read, optional_nodes_read, EventApi, MetricsApi,
+    NodeApi, OptionalKubernetesReadStatus, PodApi, VersionApi,
 };
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
@@ -37,23 +38,23 @@ pub async fn emit_kubernetes_cluster_heartbeat(
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let pod_client = ctx
         .service_provider
-        .get_kubernetes_pod_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let event_client = ctx
         .service_provider
-        .get_kubernetes_event_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let node_client = ctx
         .service_provider
-        .get_kubernetes_node_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let metrics_client = ctx
         .service_provider
-        .get_kubernetes_metrics_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     let version_client = ctx
         .service_provider
-        .get_kubernetes_version_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
 
     let pods = pod_client

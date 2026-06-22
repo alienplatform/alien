@@ -3,6 +3,7 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::DeploymentApi;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_cluster_heartbeat::{
     emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,
@@ -354,7 +355,7 @@ async fn verify_agent_runtime(
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let deployment_client = ctx
         .service_provider
-        .get_kubernetes_deployment_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
     deployment_client
         .list_deployments(&config.namespace, None, None)

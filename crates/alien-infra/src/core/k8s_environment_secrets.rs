@@ -8,6 +8,7 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::SecretsApi;
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -107,7 +108,7 @@ pub async fn reconcile_environment_secret(
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let secrets_client = ctx
         .service_provider
-        .get_kubernetes_secrets_client(kubernetes_config)
+        .get_kubernetes_client(kubernetes_config)
         .await?;
 
     match secrets_client.create_secret(namespace, &secret).await {

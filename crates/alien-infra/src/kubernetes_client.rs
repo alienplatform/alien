@@ -78,29 +78,18 @@ pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
 pub trait JobApi: Send + Sync + std::fmt::Debug {
     async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job>;
     async fn get_job(&self, namespace: &str, name: &str) -> Result<Job>;
-    async fn list_jobs(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Job>>;
-    async fn update_job(&self, namespace: &str, name: &str, job: &Job) -> Result<Job>;
     async fn delete_job(&self, namespace: &str, name: &str) -> Result<()>;
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait]
 pub trait PodApi: Send + Sync + std::fmt::Debug {
-    async fn create_pod(&self, namespace: &str, pod: &Pod) -> Result<Pod>;
-    async fn get_pod(&self, namespace: &str, name: &str) -> Result<Pod>;
     async fn list_pods(
         &self,
         namespace: &str,
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<Pod>>;
-    async fn update_pod(&self, namespace: &str, name: &str, pod: &Pod) -> Result<Pod>;
-    async fn delete_pod(&self, namespace: &str, name: &str) -> Result<()>;
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -143,12 +132,6 @@ pub trait MetricsApi: Send + Sync + std::fmt::Debug {
 pub trait SecretsApi: Send + Sync + std::fmt::Debug {
     async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret>;
     async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret>;
-    async fn list_secrets(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Secret>>;
     async fn update_secret(&self, namespace: &str, name: &str, secret: &Secret) -> Result<Secret>;
     async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()>;
 }
@@ -158,12 +141,6 @@ pub trait SecretsApi: Send + Sync + std::fmt::Debug {
 pub trait ServiceApi: Send + Sync + std::fmt::Debug {
     async fn create_service(&self, namespace: &str, service: &Service) -> Result<Service>;
     async fn get_service(&self, namespace: &str, name: &str) -> Result<Service>;
-    async fn list_services(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Service>>;
     async fn update_service(
         &self,
         namespace: &str,
@@ -911,19 +888,6 @@ impl JobApi for KubernetesClient {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn list_jobs(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Job>> {
-        list(self.namespaced(namespace), label_selector, field_selector).await
-    }
-
-    async fn update_job(&self, namespace: &str, name: &str, job: &Job) -> Result<Job> {
-        replace(self.namespaced(namespace), name, job).await
-    }
-
     async fn delete_job(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Job>(self.namespaced(namespace), name).await
     }
@@ -931,14 +895,6 @@ impl JobApi for KubernetesClient {
 
 #[async_trait]
 impl PodApi for KubernetesClient {
-    async fn create_pod(&self, namespace: &str, pod: &Pod) -> Result<Pod> {
-        create(self.namespaced(namespace), pod).await
-    }
-
-    async fn get_pod(&self, namespace: &str, name: &str) -> Result<Pod> {
-        get(self.namespaced(namespace), name).await
-    }
-
     async fn list_pods(
         &self,
         namespace: &str,
@@ -946,14 +902,6 @@ impl PodApi for KubernetesClient {
         field_selector: Option<String>,
     ) -> Result<List<Pod>> {
         list(self.namespaced(namespace), label_selector, field_selector).await
-    }
-
-    async fn update_pod(&self, namespace: &str, name: &str, pod: &Pod) -> Result<Pod> {
-        replace(self.namespaced(namespace), name, pod).await
-    }
-
-    async fn delete_pod(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Pod>(self.namespaced(namespace), name).await
     }
 }
 
@@ -1020,15 +968,6 @@ impl SecretsApi for KubernetesClient {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn list_secrets(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Secret>> {
-        list(self.namespaced(namespace), label_selector, field_selector).await
-    }
-
     async fn update_secret(&self, namespace: &str, name: &str, secret: &Secret) -> Result<Secret> {
         replace(self.namespaced(namespace), name, secret).await
     }
@@ -1046,15 +985,6 @@ impl ServiceApi for KubernetesClient {
 
     async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
         get(self.namespaced(namespace), name).await
-    }
-
-    async fn list_services(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Service>> {
-        list(self.namespaced(namespace), label_selector, field_selector).await
     }
 
     async fn update_service(
