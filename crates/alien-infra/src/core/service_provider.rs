@@ -65,10 +65,6 @@ pub use azure_mgmt_storage::package_2023_05::models::{
 use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::client::ServiceUsage;
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry;
-pub use google_cloud_artifactregistry_v1::model::{
-    repository::Format as ArtifactRegistryRepositoryFormat,
-    Repository as ArtifactRegistryRepository,
-};
 use google_cloud_auth::credentials::{
     self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
 };
@@ -82,7 +78,6 @@ pub use google_cloud_iam_admin_v1::model::{
 };
 use google_cloud_iam_v1::client::IAMPolicy;
 pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
-use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
 use google_cloud_resourcemanager_v3::client::Projects;
 use google_cloud_scheduler_v1::client::CloudScheduler;
@@ -1002,247 +997,6 @@ impl GcsApi for OfficialGcpGcsClient {
             Some(bucket_name),
         )
         .await
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait ArtifactRegistryApi: Send + Sync + std::fmt::Debug {
-    async fn create_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-        repository: ArtifactRegistryRepository,
-    ) -> Result<Operation>;
-
-    async fn delete_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<Operation>;
-
-    async fn get_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<ArtifactRegistryRepository>;
-
-    async fn get_repository_iam_policy(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<Policy>;
-
-    async fn set_repository_iam_policy(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-        iam_policy: Policy,
-    ) -> Result<Policy>;
-
-    async fn get_operation(
-        &self,
-        project_id: String,
-        location: String,
-        operation_name: String,
-    ) -> Result<Operation>;
-}
-
-struct OfficialGcpArtifactRegistryClient {
-    config: GcpClientConfig,
-    client: OnceCell<ArtifactRegistry>,
-}
-
-impl std::fmt::Debug for OfficialGcpArtifactRegistryClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialGcpArtifactRegistryClient")
-            .field("project_id", &self.config.project_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialGcpArtifactRegistryClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<ArtifactRegistry> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                artifact_registry_client_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
-    async fn create_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-        repository: ArtifactRegistryRepository,
-    ) -> Result<Operation> {
-        self.client()
-            .await?
-            .create_repository()
-            .set_parent(format!("projects/{project_id}/locations/{location}"))
-            .set_repository_id(repository_id.clone())
-            .set_repository(repository)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Artifact Registry create_repository request failed".to_string(),
-                resource_id: Some(repository_id),
-            })
-    }
-
-    async fn delete_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<Operation> {
-        let resource_name =
-            artifact_registry_repository_resource_name(&project_id, &location, &repository_id);
-        match self
-            .client()
-            .await?
-            .delete_repository()
-            .set_name(resource_name.clone())
-            .send()
-            .await
-        {
-            Ok(operation) => Ok(operation),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Artifact Registry repository".to_string(),
-                    resource_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Artifact Registry delete_repository request failed".to_string(),
-                        resource_id: Some(repository_id),
-                    }))
-            }
-        }
-    }
-
-    async fn get_repository(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<ArtifactRegistryRepository> {
-        let resource_name =
-            artifact_registry_repository_resource_name(&project_id, &location, &repository_id);
-        match self
-            .client()
-            .await?
-            .get_repository()
-            .set_name(resource_name.clone())
-            .send()
-            .await
-        {
-            Ok(repository) => Ok(repository),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Artifact Registry repository".to_string(),
-                    resource_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Artifact Registry get_repository request failed".to_string(),
-                        resource_id: Some(repository_id),
-                    }))
-            }
-        }
-    }
-
-    async fn get_repository_iam_policy(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-    ) -> Result<Policy> {
-        self.client()
-            .await?
-            .get_iam_policy()
-            .set_resource(artifact_registry_repository_resource_name(
-                &project_id,
-                &location,
-                &repository_id,
-            ))
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Artifact Registry get_iam_policy request failed".to_string(),
-                resource_id: Some(repository_id),
-            })
-    }
-
-    async fn set_repository_iam_policy(
-        &self,
-        project_id: String,
-        location: String,
-        repository_id: String,
-        iam_policy: Policy,
-    ) -> Result<Policy> {
-        self.client()
-            .await?
-            .set_iam_policy()
-            .set_resource(artifact_registry_repository_resource_name(
-                &project_id,
-                &location,
-                &repository_id,
-            ))
-            .set_policy(iam_policy)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Artifact Registry set_iam_policy request failed".to_string(),
-                resource_id: Some(repository_id),
-            })
-    }
-
-    async fn get_operation(
-        &self,
-        _project_id: String,
-        _location: String,
-        operation_name: String,
-    ) -> Result<Operation> {
-        self.client()
-            .await?
-            .get_operation()
-            .set_name(operation_name.clone())
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Artifact Registry get_operation request failed".to_string(),
-                resource_id: Some(operation_name),
-            })
     }
 }
 
@@ -3872,10 +3626,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects>;
     async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
-    fn get_gcp_artifact_registry_client(
+    async fn get_gcp_artifact_registry_client(
         &self,
         config: &GcpClientConfig,
-    ) -> Result<Arc<dyn ArtifactRegistryApi>>;
+    ) -> Result<ArtifactRegistry>;
     async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin>;
     async fn get_gcp_pubsub_topic_admin_client(
         &self,
@@ -4182,13 +3936,11 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         Ok(Arc::new(OfficialGcpGcsClient::new(config.clone())?))
     }
 
-    fn get_gcp_artifact_registry_client(
+    async fn get_gcp_artifact_registry_client(
         &self,
         config: &GcpClientConfig,
-    ) -> Result<Arc<dyn ArtifactRegistryApi>> {
-        Ok(Arc::new(OfficialGcpArtifactRegistryClient::new(
-            config.clone(),
-        )))
+    ) -> Result<ArtifactRegistry> {
+        artifact_registry_client_from_alien_config(config).await
     }
 
     async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin> {
@@ -4790,14 +4542,6 @@ async fn resource_manager_projects_client_from_alien_config(
             message: "Failed to build official GCP Resource Manager Projects client".to_string(),
             resource_id: None,
         })
-}
-
-fn artifact_registry_repository_resource_name(
-    project_id: &str,
-    location: &str,
-    repository_id: &str,
-) -> String {
-    format!("projects/{project_id}/locations/{location}/repositories/{repository_id}")
 }
 
 fn service_account_resource_name(project_id: &str, service_account_name: &str) -> String {
