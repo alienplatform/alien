@@ -1526,7 +1526,7 @@ pub(crate) fn azure_container_apps_management_client_from_alien_config(
     build_azure_management_client(config, "Container Apps", |endpoint, credential| {
         let mut options = azure_core_021::ClientOptions::default();
         options.per_call_policies_mut().push(Arc::new(
-            crate::azure_container_apps::ContainerAppUserAssignedIdentityPolicy,
+            crate::azure_container_apps_identity_policy::ContainerAppUserAssignedIdentityPolicy,
         ));
         let scopes = vec![endpoint
             .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)?

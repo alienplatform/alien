@@ -1,7 +1,7 @@
 mod core;
 pub use core::*;
 
-mod azure_container_apps;
+mod azure_container_apps_identity_policy;
 
 mod gcp_compute;
 

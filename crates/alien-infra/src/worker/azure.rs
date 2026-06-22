@@ -1,4 +1,3 @@
-use crate::azure_container_apps;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
     HeartbeatBackend, Ingress, ObservedHealth, Platform, ProviderLifecycleState,
@@ -1659,13 +1658,24 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_config)?;
 
-        match azure_container_apps::create_or_update_dapr_component(
-            &client,
-            azure_config,
-            &env_resource_group_name,
-            &environment_name,
+        let result = client
+            .dapr_components_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                env_resource_group_name.clone(),
+                environment_name.clone(),
+                component_name.clone(),
+                dapr_component,
+            )
+            .send()
+            .await;
+        match map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "Dapr component create or update",
+            "Azure Container Apps Dapr Component",
             &component_name,
-            &dapr_component,
+            |response| response.into_body(),
         )
         .await
         {
@@ -2759,11 +2769,21 @@ impl AzureWorkerController {
                 .service_provider
                 .get_azure_container_apps_management_client(azure_config)?;
 
-            match azure_container_apps::delete_dapr_component(
-                &client,
-                azure_config,
-                &env_outputs.resource_group_name,
-                &env_outputs.environment_name,
+            let result = client
+                .dapr_components_client()
+                .delete(
+                    azure_config.subscription_id.clone(),
+                    env_outputs.resource_group_name.clone(),
+                    env_outputs.environment_name.clone(),
+                    component_name.clone(),
+                )
+                .send()
+                .await;
+            match map_azure_core_021_delete_lro_response(
+                "Azure Container Apps",
+                result,
+                "Dapr component delete",
+                "Azure Container Apps Dapr Component",
                 &component_name,
             )
             .await
@@ -3460,13 +3480,24 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_config)?;
 
-        match azure_container_apps::create_or_update_dapr_component(
-            &client,
-            azure_config,
-            &env_resource_group_name,
-            &environment_name,
+        let result = client
+            .dapr_components_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                env_resource_group_name.clone(),
+                environment_name.clone(),
+                component_name.clone(),
+                dapr_component,
+            )
+            .send()
+            .await;
+        match map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "Dapr component create or update",
+            "Azure Container Apps Dapr Component",
             &component_name,
-            &dapr_component,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4161,13 +4192,24 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(&azure_config)?;
 
-        match azure_container_apps::create_or_update_dapr_component(
-            &client,
-            &azure_config,
-            &resource_group_name,
-            &environment_name,
+        let result = client
+            .dapr_components_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                component_name.clone(),
+                dapr_component,
+            )
+            .send()
+            .await;
+        match map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "Dapr component create or update",
+            "Azure Container Apps Dapr Component",
             &component_name,
-            &dapr_component,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4293,13 +4335,24 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(&azure_config)?;
 
-        match azure_container_apps::create_or_update_dapr_component(
-            &client,
-            &azure_config,
-            &resource_group_name,
-            &environment_name,
+        let result = client
+            .dapr_components_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                component_name.clone(),
+                dapr_component,
+            )
+            .send()
+            .await;
+        match map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "Dapr component create or update",
+            "Azure Container Apps Dapr Component",
             &component_name,
-            &dapr_component,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4378,13 +4431,24 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(&azure_config)?;
 
-        match azure_container_apps::create_or_update_dapr_component(
-            &client,
-            &azure_config,
-            &resource_group_name,
-            &environment_name,
+        let result = client
+            .dapr_components_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                component_name.clone(),
+                dapr_component,
+            )
+            .send()
+            .await;
+        match map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "Dapr component create or update",
+            "Azure Container Apps Dapr Component",
             &component_name,
-            &dapr_component,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4440,11 +4504,21 @@ impl AzureWorkerController {
             .get_azure_container_apps_management_client(&azure_config)?;
 
         for component_name in &self.dapr_components.clone() {
-            match azure_container_apps::delete_dapr_component(
-                &client,
-                &azure_config,
-                &resource_group_name,
-                &environment_name,
+            let result = client
+                .dapr_components_client()
+                .delete(
+                    azure_config.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    environment_name.clone(),
+                    component_name.clone(),
+                )
+                .send()
+                .await;
+            match map_azure_core_021_delete_lro_response(
+                "Azure Container Apps",
+                result,
+                "Dapr component delete",
+                "Azure Container Apps Dapr Component",
                 component_name,
             )
             .await
@@ -5082,7 +5156,7 @@ mod tests {
         let mut options =
             ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport)));
         options.per_call_policies_mut().push(Arc::new(
-            crate::azure_container_apps::ContainerAppUserAssignedIdentityPolicy,
+            crate::azure_container_apps_identity_policy::ContainerAppUserAssignedIdentityPolicy,
         ));
 
         azure_app_2024_08::Client::new(endpoint, credential, scopes, options)
