@@ -56,7 +56,7 @@ impl ResourceImporter for AzureNetworkImporter {
             location: None,
             cidr_block: None,
             is_byo_vnet: data.is_byo_vnet,
-            last_byo_vnet_verification_error: None,
+            last_byo_vnet_verification_error_code: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

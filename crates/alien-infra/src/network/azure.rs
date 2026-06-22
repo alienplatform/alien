@@ -27,7 +27,6 @@ use azure_mgmt_network::package_2024_03::models::{
     SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, info, warn};
 
@@ -39,13 +38,6 @@ fn managed_azure_network_resource(location: String) -> Resource {
     resource.location = Some(location);
     resource.tags = Some(json!({ "managed-by": "runtime" }));
     resource
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AzureByoVnetVerificationError {
-    pub code: String,
-    pub message: String,
 }
 
 fn emit_azure_network_heartbeat(
@@ -86,9 +78,8 @@ fn emit_azure_network_heartbeat(
                 nsg_id: controller.nsg_id.clone(),
                 is_byo_vnet: controller.is_byo_vnet,
                 last_byo_vnet_verification_error_code: controller
-                    .last_byo_vnet_verification_error
-                    .as_ref()
-                    .map(|error| error.code.clone()),
+                    .last_byo_vnet_verification_error_code
+                    .clone(),
             },
         )),
         raw: vec![],
@@ -122,7 +113,7 @@ pub struct AzureNetworkController {
     pub(crate) location: Option<String>,
     pub cidr_block: Option<String>,
     pub(crate) is_byo_vnet: bool,
-    pub(crate) last_byo_vnet_verification_error: Option<AzureByoVnetVerificationError>,
+    pub(crate) last_byo_vnet_verification_error_code: Option<String>,
 }
 
 impl AzureNetworkController {
@@ -260,7 +251,7 @@ impl AzureNetworkController {
             location: Some("eastus".to_string()),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vnet: false,
-            last_byo_vnet_verification_error: None,
+            last_byo_vnet_verification_error_code: None,
             _internal_stay_count: None,
         }
     }
@@ -374,15 +365,11 @@ impl AzureNetworkController {
                     resource_id: Some(config.id.clone()),
                 }) {
                     Ok(vnet) => {
-                        self.last_byo_vnet_verification_error = None;
+                        self.last_byo_vnet_verification_error_code = None;
                         vnet
                     }
                     Err(err) if azure_utils::is_azure_authorization_propagation_error(&err) => {
-                        self.last_byo_vnet_verification_error =
-                            Some(AzureByoVnetVerificationError {
-                                code: err.code.clone(),
-                                message: err.to_string(),
-                            });
+                        self.last_byo_vnet_verification_error_code = Some(err.code.clone());
 
                         warn!(
                             network_id = %config.id,
