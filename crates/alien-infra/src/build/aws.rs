@@ -2,19 +2,17 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use aws_sdk_codebuild::{
-    operation::{
-        create_project::CreateProjectInput as CodeBuildCreateProjectRequest,
-        update_project::UpdateProjectInput as CodeBuildUpdateProjectRequest,
-    },
+    operation::{create_project::CreateProjectInput, update_project::UpdateProjectInput},
     types::{
         ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
         EnvironmentType, EnvironmentVariable as AwsCodeBuildEnvironmentVariable,
-        ImagePullCredentialsType, LogsConfig, LogsConfigStatusType, ProjectArtifacts,
-        ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType, Tag as CodeBuildTag,
+        ImagePullCredentialsType, LogsConfig, LogsConfigStatusType, Project as CodeBuildProject,
+        ProjectArtifacts, ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType,
+        Tag as CodeBuildTag,
     },
+    Client as CodeBuildClient,
 };
 
-use crate::aws_sdk::CodeBuildProjectDescription;
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -106,14 +104,12 @@ impl AwsBuildController {
             env_vars,
         )?;
 
-        let response =
-            client
-                .create_project(project_config)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to create CodeBuild project".to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                })?;
+        let response = create_codebuild_project(&client, project_config)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create CodeBuild project".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
 
         self.project_arn = response.arn().map(ToString::to_string);
         self.project_name = Some(aws_project_name.clone());
@@ -176,14 +172,12 @@ impl AwsBuildController {
 
         // Heartbeat check: verify CodeBuild project still exists and check basic properties
         if let Some(project_name) = &self.project_name {
-            let project =
-                client
-                    .get_project(project_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to check CodeBuild project status".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+            let project = get_codebuild_project(&client, project_name).await.context(
+                ErrorData::CloudPlatformError {
+                    message: "Failed to check CodeBuild project status".to_string(),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
 
             let project = match project {
                 Some(project) => project,
@@ -272,14 +266,12 @@ impl AwsBuildController {
             env_vars,
         )?;
 
-        let response =
-            client
-                .update_project(project_config)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to update CodeBuild project".to_string(),
-                    resource_id: Some(current_config.id.clone()),
-                })?;
+        let response = update_codebuild_project(&client, project_config)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to update CodeBuild project".to_string(),
+                resource_id: Some(current_config.id.clone()),
+            })?;
 
         self.project_arn = response.arn().map(ToString::to_string);
         self.project_name = Some(aws_project_name.clone());
@@ -310,7 +302,7 @@ impl AwsBuildController {
 
         info!(name=%aws_project_name, "Deleting CodeBuild project");
 
-        match client.get_project(&aws_project_name).await {
+        match get_codebuild_project(&client, &aws_project_name).await {
             Ok(None) => {
                 warn!(name=%aws_project_name, "CodeBuild project was already deleted");
                 self.project_arn = None;
@@ -318,12 +310,12 @@ impl AwsBuildController {
                 self.build_env_vars = None;
             }
             Ok(Some(_)) => {
-                client.delete_project(&aws_project_name).await.context(
-                    ErrorData::CloudPlatformError {
+                delete_codebuild_project(&client, &aws_project_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
                         message: "Failed to delete CodeBuild project".to_string(),
                         resource_id: Some(build_config.id.clone()),
-                    },
-                )?;
+                    })?;
                 info!(name=%aws_project_name, "CodeBuild project deleted successfully");
                 self.project_arn = None;
                 self.project_name = None;
@@ -451,13 +443,13 @@ fn build_codebuild_create_project_request(
     project_name: String,
     service_role: String,
     environment_variables: HashMap<String, String>,
-) -> Result<CodeBuildCreateProjectRequest> {
+) -> Result<CreateProjectInput> {
     let description = format!("Runtime build project: {}", build.id);
     let tags = codebuild_tags(standard_resource_tags(resource_prefix, &build.id));
     let (source, artifacts, environment, logs_config) =
         codebuild_project_components(&project_name, build, environment_variables)?;
 
-    CodeBuildCreateProjectRequest::builder()
+    CreateProjectInput::builder()
         .name(project_name)
         .description(description)
         .source(source)
@@ -483,13 +475,13 @@ fn build_codebuild_update_project_request(
     project_name: String,
     service_role: String,
     environment_variables: HashMap<String, String>,
-) -> Result<CodeBuildUpdateProjectRequest> {
+) -> Result<UpdateProjectInput> {
     let description = format!("Runtime build project: {}", build.id);
     let tags = codebuild_tags(standard_resource_tags(resource_prefix, &build.id));
     let (source, artifacts, environment, logs_config) =
         codebuild_project_components(&project_name, build, environment_variables)?;
 
-    CodeBuildUpdateProjectRequest::builder()
+    UpdateProjectInput::builder()
         .name(project_name)
         .description(description)
         .source(source)
@@ -616,10 +608,139 @@ fn codebuild_tags(tags: HashMap<String, String>) -> Vec<CodeBuildTag> {
         .collect()
 }
 
+async fn create_codebuild_project(
+    client: &CodeBuildClient,
+    request: CreateProjectInput,
+) -> Result<CodeBuildProject> {
+    let project_name = request.name().unwrap_or("<unknown>").to_string();
+
+    let response = client
+        .create_project()
+        .set_name(request.name)
+        .set_description(request.description)
+        .set_source(request.source)
+        .set_secondary_sources(request.secondary_sources)
+        .set_source_version(request.source_version)
+        .set_secondary_source_versions(request.secondary_source_versions)
+        .set_artifacts(request.artifacts)
+        .set_secondary_artifacts(request.secondary_artifacts)
+        .set_cache(request.cache)
+        .set_environment(request.environment)
+        .set_service_role(request.service_role)
+        .set_timeout_in_minutes(request.timeout_in_minutes)
+        .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
+        .set_encryption_key(request.encryption_key)
+        .set_tags(request.tags)
+        .set_vpc_config(request.vpc_config)
+        .set_badge_enabled(request.badge_enabled)
+        .set_logs_config(request.logs_config)
+        .set_file_system_locations(request.file_system_locations)
+        .set_build_batch_config(request.build_batch_config)
+        .set_concurrent_build_limit(request.concurrent_build_limit)
+        .set_auto_retry_limit(request.auto_retry_limit)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("CodeBuild CreateProject API failed for project '{project_name}'"),
+            resource_id: None,
+        })?;
+
+    response.project().cloned().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "CodeBuild CreateProject response for '{project_name}' did not include a project"
+            ),
+            resource_id: None,
+        })
+    })
+}
+
+async fn update_codebuild_project(
+    client: &CodeBuildClient,
+    request: UpdateProjectInput,
+) -> Result<CodeBuildProject> {
+    let project_name = request.name().unwrap_or("<unknown>").to_string();
+
+    let response = client
+        .update_project()
+        .set_name(request.name)
+        .set_description(request.description)
+        .set_source(request.source)
+        .set_secondary_sources(request.secondary_sources)
+        .set_source_version(request.source_version)
+        .set_secondary_source_versions(request.secondary_source_versions)
+        .set_artifacts(request.artifacts)
+        .set_secondary_artifacts(request.secondary_artifacts)
+        .set_cache(request.cache)
+        .set_environment(request.environment)
+        .set_service_role(request.service_role)
+        .set_timeout_in_minutes(request.timeout_in_minutes)
+        .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
+        .set_encryption_key(request.encryption_key)
+        .set_tags(request.tags)
+        .set_vpc_config(request.vpc_config)
+        .set_badge_enabled(request.badge_enabled)
+        .set_logs_config(request.logs_config)
+        .set_file_system_locations(request.file_system_locations)
+        .set_build_batch_config(request.build_batch_config)
+        .set_concurrent_build_limit(request.concurrent_build_limit)
+        .set_auto_retry_limit(request.auto_retry_limit)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("CodeBuild UpdateProject API failed for project '{project_name}'"),
+            resource_id: None,
+        })?;
+
+    response.project().cloned().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "CodeBuild UpdateProject response for '{project_name}' did not include a project"
+            ),
+            resource_id: None,
+        })
+    })
+}
+
+async fn get_codebuild_project(
+    client: &CodeBuildClient,
+    project_name: &str,
+) -> Result<Option<CodeBuildProject>> {
+    let response = client
+        .batch_get_projects()
+        .names(project_name)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("CodeBuild BatchGetProjects API failed for project '{project_name}'"),
+            resource_id: None,
+        })?;
+
+    Ok(response.projects().first().cloned())
+}
+
+async fn delete_codebuild_project(client: &CodeBuildClient, project_name: &str) -> Result<()> {
+    client
+        .delete_project()
+        .name(project_name)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("CodeBuild DeleteProject API failed for project '{project_name}'"),
+            resource_id: None,
+        })?;
+
+    Ok(())
+}
+
 fn emit_aws_build_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    project: &CodeBuildProjectDescription,
+    project: &CodeBuildProject,
 ) {
     let project_name = project.name().unwrap_or_default().to_string();
     let source = project.source();
@@ -696,75 +817,29 @@ mod tests {
 
     use std::sync::Arc;
 
-    use aws_sdk_codebuild::types::{
-        ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
-        EnvironmentType, ImagePullCredentialsType, LogsConfig, LogsConfigStatusType,
-        ProjectArtifacts, ProjectEnvironment, ProjectSource, S3LogsConfig, SourceType,
-    };
-
-    use crate::aws_sdk::{
-        CodeBuildApi, CodeBuildCreateProjectRequest, CodeBuildProjectDescription,
-        CodeBuildUpdateProjectRequest,
-    };
-    use crate::error::Result;
     use alien_core::{Build, BuildOutputs, Platform, ResourceStatus};
+    use aws_sdk_codebuild::{
+        operation::{
+            batch_get_projects::BatchGetProjectsOutput, create_project::CreateProjectOutput,
+            delete_project::DeleteProjectOutput, update_project::UpdateProjectOutput,
+        },
+        types::{
+            ArtifactsType, CloudWatchLogsConfig, ComputeType as AwsCodeBuildComputeType,
+            EnvironmentType, ImagePullCredentialsType, LogsConfig, LogsConfigStatusType,
+            Project as CodeBuildProject, ProjectArtifacts, ProjectEnvironment, ProjectSource,
+            S3LogsConfig, SourceType,
+        },
+        Client,
+    };
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use rstest::rstest;
 
+    use crate::build::aws::map_compute_type;
     use crate::build::{fixtures::*, AwsBuildController};
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
 
-    struct TestCodeBuildClient {
-        project_name: String,
-    }
-
-    #[async_trait::async_trait]
-    impl CodeBuildApi for TestCodeBuildClient {
-        async fn create_project(
-            &self,
-            request: CodeBuildCreateProjectRequest,
-        ) -> Result<CodeBuildProjectDescription> {
-            let project_name = request
-                .name()
-                .expect("create request should include a name");
-            let compute_type = request
-                .environment()
-                .map(|environment| environment.compute_type())
-                .map(|compute_type| compute_type.as_str().to_string());
-
-            Ok(project_description(project_name, compute_type))
-        }
-
-        async fn update_project(
-            &self,
-            request: CodeBuildUpdateProjectRequest,
-        ) -> Result<CodeBuildProjectDescription> {
-            let project_name = request
-                .name()
-                .expect("update request should include a name");
-            let compute_type = request
-                .environment()
-                .map(|environment| environment.compute_type())
-                .map(|compute_type| compute_type.as_str().to_string());
-
-            Ok(project_description(project_name, compute_type))
-        }
-
-        async fn get_project(
-            &self,
-            _project_name: &str,
-        ) -> Result<Option<CodeBuildProjectDescription>> {
-            Ok(Some(project_description(&self.project_name, None)))
-        }
-
-        async fn delete_project(&self, _project_name: &str) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    fn project_description(
-        project_name: &str,
-        compute_type: Option<String>,
-    ) -> CodeBuildProjectDescription {
+    fn project_description(project_name: &str, compute_type: Option<String>) -> CodeBuildProject {
         let source = ProjectSource::builder()
             .r#type(SourceType::NoSource)
             .build()
@@ -795,7 +870,7 @@ mod tests {
             .s3_logs(s3_logs)
             .build();
 
-        CodeBuildProjectDescription::builder()
+        CodeBuildProject::builder()
             .name(project_name)
             .arn(format!(
                 "arn:aws:codebuild:us-east-1:123456789012:project/{}",
@@ -810,20 +885,12 @@ mod tests {
             .build()
     }
 
-    fn setup_mock_client(project_name: &str) -> Arc<dyn CodeBuildApi> {
-        Arc::new(TestCodeBuildClient {
-            project_name: project_name.to_string(),
-        })
-    }
-
-    fn setup_mock_service_provider(
-        mock_codebuild: Arc<dyn CodeBuildApi>,
-    ) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_service_provider(codebuild_client: Client) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_aws_codebuild_client()
-            .returning(move |_| Ok(mock_codebuild.clone()));
+            .returning(move |_| Ok(codebuild_client.clone()));
 
         Arc::new(mock_provider)
     }
@@ -838,8 +905,49 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] build: Build) {
         let project_name = format!("test-{}", build.id);
-        let mock_codebuild = setup_mock_client(&project_name);
-        let mock_provider = setup_mock_service_provider(mock_codebuild);
+        let create_project_name = project_name.clone();
+        let create_project_output_name = project_name.clone();
+        let create_compute_type = map_compute_type(&build.compute_type);
+        let create_output_compute_type = create_compute_type.clone();
+        let create_rule = mock!(Client::create_project)
+            .match_requests(move |request| {
+                request.name() == Some(create_project_name.as_str())
+                    && request
+                        .environment()
+                        .map(|environment| environment.compute_type().as_str())
+                        == Some(create_compute_type.as_str())
+                    && request.service_role().is_some()
+            })
+            .then_output(move || {
+                CreateProjectOutput::builder()
+                    .project(project_description(
+                        &create_project_output_name,
+                        Some(create_output_compute_type.clone()),
+                    ))
+                    .build()
+            });
+        let get_project_name = project_name.clone();
+        let get_project_output_name = project_name.clone();
+        let get_rule = mock!(Client::batch_get_projects)
+            .match_requests(move |request| {
+                request.names().iter().any(|name| name == &get_project_name)
+            })
+            .then_output(move || {
+                BatchGetProjectsOutput::builder()
+                    .projects(project_description(&get_project_output_name, None))
+                    .build()
+            });
+        let delete_project_name = project_name.clone();
+        let delete_rule = mock!(Client::delete_project)
+            .match_requests(move |request| request.name() == Some(delete_project_name.as_str()))
+            .then_output(|| DeleteProjectOutput::builder().build());
+        let codebuild_client = mock_client!(
+            aws_sdk_codebuild,
+            RuleMode::Sequential,
+            [&create_rule, &get_rule, &delete_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_service_provider(codebuild_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(build)
@@ -869,6 +977,9 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+        assert_eq!(create_rule.num_calls(), 1);
+        assert_eq!(get_rule.num_calls(), 1);
+        assert_eq!(delete_rule.num_calls(), 1);
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
@@ -887,8 +998,34 @@ mod tests {
         to_build.id = build_id.clone();
 
         let project_name = format!("test-{}", build_id);
-        let mock_codebuild = setup_mock_client(&project_name);
-        let mock_provider = setup_mock_service_provider(mock_codebuild);
+        let update_project_name = project_name.clone();
+        let update_project_output_name = project_name.clone();
+        let update_compute_type = map_compute_type(&to_build.compute_type);
+        let update_output_compute_type = update_compute_type.clone();
+        let update_rule = mock!(Client::update_project)
+            .match_requests(move |request| {
+                request.name() == Some(update_project_name.as_str())
+                    && request
+                        .environment()
+                        .map(|environment| environment.compute_type().as_str())
+                        == Some(update_compute_type.as_str())
+                    && request.service_role().is_some()
+            })
+            .then_output(move || {
+                UpdateProjectOutput::builder()
+                    .project(project_description(
+                        &update_project_output_name,
+                        Some(update_output_compute_type.clone()),
+                    ))
+                    .build()
+            });
+        let codebuild_client = mock_client!(
+            aws_sdk_codebuild,
+            RuleMode::Sequential,
+            [&update_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_service_provider(codebuild_client);
 
         // Start with the "from" build in Ready state
         let ready_controller = AwsBuildController::mock_ready(&project_name);
@@ -912,5 +1049,6 @@ mod tests {
         // Run the update flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(update_rule.num_calls(), 1);
     }
 }

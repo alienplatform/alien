@@ -93,14 +93,6 @@ pub use aws_sdk_apigatewayv2::{
     },
 };
 
-pub use aws_sdk_codebuild::{
-    operation::{
-        create_project::CreateProjectInput as CodeBuildCreateProjectRequest,
-        update_project::UpdateProjectInput as CodeBuildUpdateProjectRequest,
-    },
-    types::Project as CodeBuildProjectDescription,
-};
-
 pub use aws_sdk_dynamodb::types::{
     TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
 };
@@ -476,28 +468,6 @@ pub trait DynamoDbApi: Send + Sync {
 
     /// Delete a table. Returns false when it was already absent.
     async fn delete_table(&self, table_name: &str) -> Result<bool>;
-}
-
-/// Minimal CodeBuild operations required by infra controllers.
-#[async_trait]
-pub trait CodeBuildApi: Send + Sync {
-    /// Create a CodeBuild project.
-    async fn create_project(
-        &self,
-        request: CodeBuildCreateProjectRequest,
-    ) -> Result<CodeBuildProjectDescription>;
-
-    /// Update a CodeBuild project.
-    async fn update_project(
-        &self,
-        request: CodeBuildUpdateProjectRequest,
-    ) -> Result<CodeBuildProjectDescription>;
-
-    /// Get a project by name.
-    async fn get_project(&self, project_name: &str) -> Result<Option<CodeBuildProjectDescription>>;
-
-    /// Delete a project by name.
-    async fn delete_project(&self, project_name: &str) -> Result<()>;
 }
 
 /// Minimal ECR operations required by infra artifact registry controllers.
@@ -1909,142 +1879,6 @@ impl DynamoDbApi for DynamoDbClient {
                     resource_id: None,
                 })),
         }
-    }
-}
-
-#[async_trait]
-impl CodeBuildApi for CodeBuildClient {
-    async fn create_project(
-        &self,
-        request: CodeBuildCreateProjectRequest,
-    ) -> Result<CodeBuildProjectDescription> {
-        let project_name = request.name().unwrap_or("<unknown>").to_string();
-
-        let response = self
-            .create_project()
-            .set_name(request.name)
-            .set_description(request.description)
-            .set_source(request.source)
-            .set_secondary_sources(request.secondary_sources)
-            .set_source_version(request.source_version)
-            .set_secondary_source_versions(request.secondary_source_versions)
-            .set_artifacts(request.artifacts)
-            .set_secondary_artifacts(request.secondary_artifacts)
-            .set_cache(request.cache)
-            .set_environment(request.environment)
-            .set_service_role(request.service_role)
-            .set_timeout_in_minutes(request.timeout_in_minutes)
-            .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
-            .set_encryption_key(request.encryption_key)
-            .set_tags(request.tags)
-            .set_vpc_config(request.vpc_config)
-            .set_badge_enabled(request.badge_enabled)
-            .set_logs_config(request.logs_config)
-            .set_file_system_locations(request.file_system_locations)
-            .set_build_batch_config(request.build_batch_config)
-            .set_concurrent_build_limit(request.concurrent_build_limit)
-            .set_auto_retry_limit(request.auto_retry_limit)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("CodeBuild CreateProject API failed for project '{project_name}'"),
-                resource_id: None,
-            })?;
-
-        response
-            .project()
-            .cloned()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "CodeBuild CreateProject response for '{project_name}' did not include a project"
-                    ),
-                    resource_id: None,
-                })
-            })
-    }
-
-    async fn update_project(
-        &self,
-        request: CodeBuildUpdateProjectRequest,
-    ) -> Result<CodeBuildProjectDescription> {
-        let project_name = request.name().unwrap_or("<unknown>").to_string();
-
-        let response = self
-            .update_project()
-            .set_name(request.name)
-            .set_description(request.description)
-            .set_source(request.source)
-            .set_secondary_sources(request.secondary_sources)
-            .set_source_version(request.source_version)
-            .set_secondary_source_versions(request.secondary_source_versions)
-            .set_artifacts(request.artifacts)
-            .set_secondary_artifacts(request.secondary_artifacts)
-            .set_cache(request.cache)
-            .set_environment(request.environment)
-            .set_service_role(request.service_role)
-            .set_timeout_in_minutes(request.timeout_in_minutes)
-            .set_queued_timeout_in_minutes(request.queued_timeout_in_minutes)
-            .set_encryption_key(request.encryption_key)
-            .set_tags(request.tags)
-            .set_vpc_config(request.vpc_config)
-            .set_badge_enabled(request.badge_enabled)
-            .set_logs_config(request.logs_config)
-            .set_file_system_locations(request.file_system_locations)
-            .set_build_batch_config(request.build_batch_config)
-            .set_concurrent_build_limit(request.concurrent_build_limit)
-            .set_auto_retry_limit(request.auto_retry_limit)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("CodeBuild UpdateProject API failed for project '{project_name}'"),
-                resource_id: None,
-            })?;
-
-        response
-            .project()
-            .cloned()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "CodeBuild UpdateProject response for '{project_name}' did not include a project"
-                    ),
-                    resource_id: None,
-                })
-            })
-    }
-
-    async fn get_project(&self, project_name: &str) -> Result<Option<CodeBuildProjectDescription>> {
-        let response = self
-            .batch_get_projects()
-            .names(project_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "CodeBuild BatchGetProjects API failed for project '{project_name}'"
-                ),
-                resource_id: None,
-            })?;
-
-        Ok(response.projects().first().cloned())
-    }
-
-    async fn delete_project(&self, project_name: &str) -> Result<()> {
-        self.delete_project()
-            .name(project_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("CodeBuild DeleteProject API failed for project '{project_name}'"),
-                resource_id: None,
-            })?;
-
-        Ok(())
     }
 }
 
