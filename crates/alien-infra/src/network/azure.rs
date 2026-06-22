@@ -7,6 +7,7 @@
 //! - Public IP addresses for NAT
 //! - Network Security Groups (NSGs) for traffic control
 
+use crate::azure_network;
 use crate::core::{OperationResult, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -360,14 +361,18 @@ impl AzureNetworkController {
                     .service_provider
                     .get_azure_network_client(azure_config)?;
 
-                let vnet = match network_client
-                    .get_virtual_network(&resource_group, &vnet_name)
-                    .await
-                    .context(ErrorData::InfrastructureError {
-                        message: format!("BYO-VNet '{}' not found", vnet_name),
-                        operation: Some("verify_byo_vnet".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    }) {
+                let vnet = match azure_network::get_virtual_network(
+                    &network_client,
+                    azure_config,
+                    &resource_group,
+                    &vnet_name,
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: format!("BYO-VNet '{}' not found", vnet_name),
+                    operation: Some("verify_byo_vnet".to_string()),
+                    resource_id: Some(config.id.clone()),
+                }) {
                     Ok(vnet) => {
                         self.last_byo_vnet_verification_error = None;
                         vnet
@@ -458,14 +463,19 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_virtual_network(&resource_group, &vnet_name, &vnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create VNet '{}'", vnet_name),
-                operation: Some("create_or_update_virtual_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_virtual_network(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &vnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create VNet '{}'", vnet_name),
+            operation: Some("create_or_update_virtual_network".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(created_vnet) => {
@@ -500,14 +510,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let vnet = network_client
-            .get_virtual_network(&resource_group, &vnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check VNet creation status".to_string(),
-                operation: Some("get_virtual_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let vnet = azure_network::get_virtual_network(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check VNet creation status".to_string(),
+            operation: Some("get_virtual_network".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.vnet_resource_id = vnet.resource.id;
         info!(vnet_name = %vnet_name, "VNet created successfully");
@@ -549,14 +563,20 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_subnet(&resource_group, &vnet_name, &public_subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create public subnet '{}'", public_subnet_name),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &public_subnet_name,
+            &subnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create public subnet '{}'", public_subnet_name),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.public_subnet_name = Some(public_subnet_name);
 
@@ -591,14 +611,19 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = network_client
-            .get_subnet(&resource_group, &vnet_name, &public_subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check public subnet creation status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let _ = azure_network::get_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &public_subnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check public subnet creation status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(subnet_name = %public_subnet_name, "Public subnet created");
 
@@ -639,14 +664,20 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_subnet(&resource_group, &vnet_name, &private_subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create private subnet '{}'", private_subnet_name),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+            &subnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create private subnet '{}'", private_subnet_name),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.private_subnet_name = Some(private_subnet_name);
 
@@ -681,14 +712,19 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = network_client
-            .get_subnet(&resource_group, &vnet_name, &private_subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check private subnet creation status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let _ = azure_network::get_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check private subnet creation status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(subnet_name = %private_subnet_name, "Private subnet created");
 
@@ -729,17 +765,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_subnet(&resource_group, &vnet_name, &subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!(
-                    "Failed to create Application Gateway subnet '{}'",
-                    subnet_name
-                ),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &subnet_name,
+            &subnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!(
+                "Failed to create Application Gateway subnet '{}'",
+                subnet_name
+            ),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.application_gateway_subnet_name = Some(subnet_name);
 
@@ -774,14 +816,19 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = network_client
-            .get_subnet(&resource_group, &vnet_name, &subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check Application Gateway subnet creation status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let _ = azure_network::get_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &subnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check Application Gateway subnet creation status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(subnet_name = %subnet_name, "Application Gateway subnet created");
 
@@ -825,14 +872,19 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_public_ip_address(&resource_group, &public_ip_name, &public_ip)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create public IP '{}'", public_ip_name),
-                operation: Some("create_or_update_public_ip_address".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_public_ip_address(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &public_ip_name,
+            &public_ip,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create public IP '{}'", public_ip_name),
+            operation: Some("create_or_update_public_ip_address".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.public_ip_name = Some(public_ip_name);
 
@@ -869,14 +921,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let public_ip = network_client
-            .get_public_ip_address(&resource_group, &public_ip_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check public IP creation status".to_string(),
-                operation: Some("get_public_ip_address".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let public_ip = azure_network::get_public_ip_address(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &public_ip_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check public IP creation status".to_string(),
+            operation: Some("get_public_ip_address".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.public_ip_id = public_ip.resource.id;
         info!(public_ip_name = %public_ip_name, "Public IP created");
@@ -924,14 +980,19 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_nat_gateway(&resource_group, &nat_gateway_name, &nat_gateway)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create NAT Gateway '{}'", nat_gateway_name),
-                operation: Some("create_or_update_nat_gateway".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_nat_gateway(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nat_gateway_name,
+            &nat_gateway,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create NAT Gateway '{}'", nat_gateway_name),
+            operation: Some("create_or_update_nat_gateway".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.nat_gateway_name = Some(nat_gateway_name);
 
@@ -968,14 +1029,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let nat_gateway = network_client
-            .get_nat_gateway(&resource_group, &nat_gateway_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check NAT Gateway creation status".to_string(),
-                operation: Some("get_nat_gateway".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let nat_gateway = azure_network::get_nat_gateway(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nat_gateway_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check NAT Gateway creation status".to_string(),
+            operation: Some("get_nat_gateway".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.nat_gateway_id = nat_gateway.resource.id;
         info!(nat_gateway_name = %nat_gateway_name, "NAT Gateway created");
@@ -1020,17 +1085,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_subnet(&resource_group, &vnet_name, &private_subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!(
-                    "Failed to associate NAT Gateway with subnet '{}'",
-                    private_subnet_name
-                ),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+            &subnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!(
+                "Failed to associate NAT Gateway with subnet '{}'",
+                private_subnet_name
+            ),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
@@ -1063,14 +1134,19 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let subnet = network_client
-            .get_subnet(&resource_group, &vnet_name, &private_subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check NAT association status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let subnet = azure_network::get_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check NAT association status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if let Some(props) = subnet.properties {
             if props.nat_gateway.is_some() {
@@ -1132,14 +1208,19 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_network_security_group(&resource_group, &nsg_name, &nsg)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create NSG '{}'", nsg_name),
-                operation: Some("create_or_update_network_security_group".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_network_security_group(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nsg_name,
+            &nsg,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to create NSG '{}'", nsg_name),
+            operation: Some("create_or_update_network_security_group".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.nsg_name = Some(nsg_name);
 
@@ -1177,14 +1258,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let nsg = network_client
-            .get_network_security_group(&resource_group, &nsg_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check NSG creation status".to_string(),
-                operation: Some("get_network_security_group".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let nsg = azure_network::get_network_security_group(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nsg_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check NSG creation status".to_string(),
+            operation: Some("get_network_security_group".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.nsg_id = nsg.resource.id;
         info!(nsg_name = %nsg_name, vnet_name = ?self.vnet_name, "Azure Network infrastructure created successfully");
@@ -1222,13 +1307,17 @@ impl AzureNetworkController {
                 .service_provider
                 .get_azure_network_client(azure_config)?;
 
-            let _ = network_client
-                .get_virtual_network(resource_group, vnet_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to verify VNet during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let _ = azure_network::get_virtual_network(
+                &network_client,
+                azure_config,
+                resource_group,
+                vnet_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to verify VNet during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             debug!(vnet_name = %vnet_name, "VNet exists and is accessible");
         }
@@ -1331,14 +1420,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = network_client
-            .delete_network_security_group(&resource_group, &nsg_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete NSG '{}'", nsg_name),
-                operation: Some("delete_network_security_group".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::delete_network_security_group(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nsg_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete NSG '{}'", nsg_name),
+            operation: Some("delete_network_security_group".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(()) => {
@@ -1380,9 +1473,13 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match network_client
-            .get_network_security_group(&resource_group, &nsg_name)
-            .await
+        match azure_network::get_network_security_group(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nsg_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!("NSG deletion still in progress");
@@ -1440,17 +1537,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = network_client
-            .create_or_update_subnet(&resource_group, &vnet_name, &private_subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!(
-                    "Failed to dissociate NAT Gateway from subnet '{}'",
-                    private_subnet_name
-                ),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::create_or_update_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+            &subnet,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!(
+                "Failed to dissociate NAT Gateway from subnet '{}'",
+                private_subnet_name
+            ),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
@@ -1483,14 +1586,19 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let subnet = network_client
-            .get_subnet(&resource_group, &vnet_name, &private_subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check NAT dissociation status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let subnet = azure_network::get_subnet(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+            &private_subnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: "Failed to check NAT dissociation status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if let Some(props) = subnet.properties {
             if props.nat_gateway.is_none() {
@@ -1528,14 +1636,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = network_client
-            .delete_nat_gateway(&resource_group, &nat_gateway_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete NAT Gateway '{}'", nat_gateway_name),
-                operation: Some("delete_nat_gateway".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::delete_nat_gateway(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nat_gateway_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete NAT Gateway '{}'", nat_gateway_name),
+            operation: Some("delete_nat_gateway".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(()) => {
@@ -1570,9 +1682,13 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match network_client
-            .get_nat_gateway(&resource_group, &nat_gateway_name)
-            .await
+        match azure_network::get_nat_gateway(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &nat_gateway_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!("NAT Gateway deletion still in progress");
@@ -1620,14 +1736,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = network_client
-            .delete_public_ip_address(&resource_group, &public_ip_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete Public IP '{}'", public_ip_name),
-                operation: Some("delete_public_ip_address".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::delete_public_ip_address(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &public_ip_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete Public IP '{}'", public_ip_name),
+            operation: Some("delete_public_ip_address".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(()) => {
@@ -1662,9 +1782,13 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match network_client
-            .get_public_ip_address(&resource_group, &public_ip_name)
-            .await
+        match azure_network::get_public_ip_address(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &public_ip_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!("Public IP deletion still in progress");
@@ -1704,14 +1828,18 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = network_client
-            .delete_virtual_network(&resource_group, &vnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete VNet '{}'", vnet_name),
-                operation: Some("delete_virtual_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = azure_network::delete_virtual_network(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+        )
+        .await
+        .context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete VNet '{}'", vnet_name),
+            operation: Some("delete_virtual_network".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(()) => {
@@ -1745,9 +1873,13 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match network_client
-            .get_virtual_network(&resource_group, &vnet_name)
-            .await
+        match azure_network::get_virtual_network(
+            &network_client,
+            azure_config,
+            &resource_group,
+            &vnet_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!("VNet deletion still in progress");

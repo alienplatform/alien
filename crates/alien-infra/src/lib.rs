@@ -10,6 +10,8 @@ mod azure_keyvault;
 
 mod azure_msi;
 
+mod azure_network;
+
 mod azure_resources;
 
 mod azure_servicebus;

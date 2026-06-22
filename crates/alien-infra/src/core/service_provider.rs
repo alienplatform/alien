@@ -40,9 +40,6 @@ use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregi
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
 use azure_mgmt_network::package_2024_03 as azure_network_2024_03;
-use azure_mgmt_network::package_2024_03::models::{
-    NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
-};
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
 use azure_mgmt_servicebus::package_2024_01;
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
@@ -69,7 +66,6 @@ use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::OnceCell;
 
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
@@ -239,564 +235,6 @@ fn azure_core_021_header(
         .map(std::string::ToString::to_string)
 }
 
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait AzureNetworkApi: Send + Sync + std::fmt::Debug {
-    async fn create_or_update_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        virtual_network: &VirtualNetwork,
-    ) -> Result<OperationResult<VirtualNetwork>>;
-
-    async fn get_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-    ) -> Result<VirtualNetwork>;
-
-    async fn delete_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-    ) -> Result<OperationResult<()>>;
-
-    async fn create_or_update_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-        subnet: &Subnet,
-    ) -> Result<OperationResult<Subnet>>;
-
-    async fn get_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-    ) -> Result<Subnet>;
-
-    async fn delete_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-    ) -> Result<OperationResult<()>>;
-
-    async fn create_or_update_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-        nat_gateway: &NatGateway,
-    ) -> Result<OperationResult<NatGateway>>;
-
-    async fn get_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-    ) -> Result<NatGateway>;
-
-    async fn delete_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-    ) -> Result<OperationResult<()>>;
-
-    async fn create_or_update_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-        public_ip_address: &PublicIpAddress,
-    ) -> Result<OperationResult<PublicIpAddress>>;
-
-    async fn get_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-    ) -> Result<PublicIpAddress>;
-
-    async fn delete_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-    ) -> Result<OperationResult<()>>;
-
-    async fn create_or_update_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-        network_security_group: &NetworkSecurityGroup,
-    ) -> Result<OperationResult<NetworkSecurityGroup>>;
-
-    async fn get_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-    ) -> Result<NetworkSecurityGroup>;
-
-    async fn delete_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-    ) -> Result<OperationResult<()>>;
-}
-
-struct OfficialAzureNetworkClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_network_2024_03::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureNetworkClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureNetworkClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureNetworkClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_network_2024_03::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_network_2024_03::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Network client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AzureNetworkApi for OfficialAzureNetworkClient {
-    async fn create_or_update_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        virtual_network: &VirtualNetwork,
-    ) -> Result<OperationResult<VirtualNetwork>> {
-        let result = self
-            .client()
-            .await?
-            .virtual_networks_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                virtual_network.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Network",
-            result,
-            "virtual network create or update",
-            "Azure virtual network",
-            virtual_network_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-    ) -> Result<VirtualNetwork> {
-        let result = self
-            .client()
-            .await?
-            .virtual_networks_client()
-            .get(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Network",
-            result,
-            "virtual network get",
-            "Azure virtual network",
-            virtual_network_name,
-        )
-    }
-
-    async fn delete_virtual_network(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .virtual_networks_client()
-            .delete(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Network",
-            result,
-            "virtual network delete",
-            "Azure virtual network",
-            virtual_network_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-        subnet: &Subnet,
-    ) -> Result<OperationResult<Subnet>> {
-        let result = self
-            .client()
-            .await?
-            .subnets_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                subnet_name.to_string(),
-                subnet.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Network",
-            result,
-            "subnet create or update",
-            "Azure subnet",
-            subnet_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-    ) -> Result<Subnet> {
-        let result = self
-            .client()
-            .await?
-            .subnets_client()
-            .get(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                subnet_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Network",
-            result,
-            "subnet get",
-            "Azure subnet",
-            subnet_name,
-        )
-    }
-
-    async fn delete_subnet(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .subnets_client()
-            .delete(
-                resource_group_name.to_string(),
-                virtual_network_name.to_string(),
-                subnet_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Network",
-            result,
-            "subnet delete",
-            "Azure subnet",
-            subnet_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-        nat_gateway: &NatGateway,
-    ) -> Result<OperationResult<NatGateway>> {
-        let result = self
-            .client()
-            .await?
-            .nat_gateways_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                nat_gateway_name.to_string(),
-                nat_gateway.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Network",
-            result,
-            "NAT gateway create or update",
-            "Azure NAT gateway",
-            nat_gateway_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-    ) -> Result<NatGateway> {
-        let result = self
-            .client()
-            .await?
-            .nat_gateways_client()
-            .get(
-                resource_group_name.to_string(),
-                nat_gateway_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Network",
-            result,
-            "NAT gateway get",
-            "Azure NAT gateway",
-            nat_gateway_name,
-        )
-    }
-
-    async fn delete_nat_gateway(
-        &self,
-        resource_group_name: &str,
-        nat_gateway_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .nat_gateways_client()
-            .delete(
-                resource_group_name.to_string(),
-                nat_gateway_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Network",
-            result,
-            "NAT gateway delete",
-            "Azure NAT gateway",
-            nat_gateway_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-        public_ip_address: &PublicIpAddress,
-    ) -> Result<OperationResult<PublicIpAddress>> {
-        let result = self
-            .client()
-            .await?
-            .public_ip_addresses_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                public_ip_address_name.to_string(),
-                public_ip_address.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Network",
-            result,
-            "public IP address create or update",
-            "Azure public IP address",
-            public_ip_address_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-    ) -> Result<PublicIpAddress> {
-        let result = self
-            .client()
-            .await?
-            .public_ip_addresses_client()
-            .get(
-                resource_group_name.to_string(),
-                public_ip_address_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Network",
-            result,
-            "public IP address get",
-            "Azure public IP address",
-            public_ip_address_name,
-        )
-    }
-
-    async fn delete_public_ip_address(
-        &self,
-        resource_group_name: &str,
-        public_ip_address_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .public_ip_addresses_client()
-            .delete(
-                resource_group_name.to_string(),
-                public_ip_address_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Network",
-            result,
-            "public IP address delete",
-            "Azure public IP address",
-            public_ip_address_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-        network_security_group: &NetworkSecurityGroup,
-    ) -> Result<OperationResult<NetworkSecurityGroup>> {
-        let result = self
-            .client()
-            .await?
-            .network_security_groups_client()
-            .create_or_update(
-                resource_group_name.to_string(),
-                network_security_group_name.to_string(),
-                network_security_group.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Network",
-            result,
-            "network security group create or update",
-            "Azure network security group",
-            network_security_group_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-    ) -> Result<NetworkSecurityGroup> {
-        let result = self
-            .client()
-            .await?
-            .network_security_groups_client()
-            .get(
-                resource_group_name.to_string(),
-                network_security_group_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Network",
-            result,
-            "network security group get",
-            "Azure network security group",
-            network_security_group_name,
-        )
-    }
-
-    async fn delete_network_security_group(
-        &self,
-        resource_group_name: &str,
-        network_security_group_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .network_security_groups_client()
-            .delete(
-                resource_group_name.to_string(),
-                network_security_group_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Network",
-            result,
-            "network security group delete",
-            "Azure network security group",
-            network_security_group_name,
-        )
-        .await
-    }
-}
-
 /// Trait that provides methods to get platform service clients.
 /// This enables dependency injection for testing by allowing mock clients to be provided.
 ///
@@ -951,7 +389,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_network_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureNetworkApi>>;
+    ) -> Result<azure_network_2024_03::Client>;
 
     /// Resolve the caller's Azure AD principal ID (object ID) from the current credentials.
     ///
@@ -1412,11 +850,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_network_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureNetworkApi>> {
-        Ok(Arc::new(OfficialAzureNetworkClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_network_2024_03::Client> {
+        azure_network_client_from_alien_config(config)
     }
 
     async fn get_azure_caller_principal_id(&self, config: &AzureClientConfig) -> Result<String> {
@@ -2463,6 +1898,29 @@ pub(crate) fn azure_msi_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Managed Identity client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_network_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_network_2024_03::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_network_2024_03::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Network client".to_string(),
             resource_id: None,
         })
 }
