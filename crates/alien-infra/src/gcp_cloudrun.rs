@@ -5,7 +5,7 @@ use alien_error::AlienError;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 pub use google_cloud_longrunning::model::{operation::Result as OperationResult, Operation};
 pub use google_cloud_run_v2::{
-    client::Services as OfficialCloudRunServices,
+    client::Services,
     model::{
         condition::State as ConditionState, vpc_access::NetworkInterface, vpc_access::VpcEgress,
         Condition, Container, ContainerPort, EnvVar, ExecutionEnvironment,
@@ -76,7 +76,7 @@ pub trait CloudRunApi: Send + Sync + std::fmt::Debug {
 
 pub struct OfficialGcpCloudRunClient {
     config: GcpClientConfig,
-    services: OnceCell<OfficialCloudRunServices>,
+    services: OnceCell<Services>,
 }
 
 impl std::fmt::Debug for OfficialGcpCloudRunClient {
@@ -97,7 +97,7 @@ impl OfficialGcpCloudRunClient {
         }
     }
 
-    async fn services(&self) -> CloudClientResult<&OfficialCloudRunServices> {
+    async fn services(&self) -> CloudClientResult<&Services> {
         self.services
             .get_or_try_init(|| async { cloud_run_services_from_alien_config(&self.config).await })
             .await
@@ -272,13 +272,13 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
 
 async fn cloud_run_services_from_alien_config(
     config: &GcpClientConfig,
-) -> CloudClientResult<OfficialCloudRunServices> {
+) -> CloudClientResult<Services> {
     let credentials = crate::core::gcp_credentials_from_alien_config(config).map_err(|error| {
         AlienError::new(CloudClientErrorData::AuthenticationError {
             message: error.to_string(),
         })
     })?;
-    let mut builder = OfficialCloudRunServices::builder().with_credentials(credentials);
+    let mut builder = Services::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides

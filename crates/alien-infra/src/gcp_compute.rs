@@ -3,16 +3,11 @@ use alien_core::GcpClientConfig;
 use alien_error::AlienError;
 use google_cloud_compute_v1::{
     client::{
-        BackendServices as OfficialBackendServices, Firewalls as OfficialFirewalls,
-        GlobalAddresses as OfficialGlobalAddresses,
-        GlobalForwardingRules as OfficialGlobalForwardingRules,
-        GlobalOperations as OfficialGlobalOperations, Networks as OfficialNetworks,
-        RegionNetworkEndpointGroups as OfficialRegionNetworkEndpointGroups,
-        RegionOperations as OfficialRegionOperations, Routers as OfficialRouters,
-        SslCertificates as OfficialSslCertificates, Subnetworks as OfficialSubnetworks,
-        TargetHttpsProxies as OfficialTargetHttpsProxies, UrlMaps as OfficialUrlMaps,
+        BackendServices, Firewalls, GlobalAddresses, GlobalForwardingRules, GlobalOperations,
+        Networks, RegionNetworkEndpointGroups, RegionOperations, Routers, SslCertificates,
+        Subnetworks, TargetHttpsProxies, UrlMaps,
     },
-    model::TargetHttpsProxiesSetSslCertificatesRequest as OfficialSetSslCertificatesRequest,
+    model::TargetHttpsProxiesSetSslCertificatesRequest,
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use http::StatusCode;
@@ -167,19 +162,19 @@ pub fn operation_has_error(operation: &Operation) -> bool {
 
 pub struct OfficialGcpComputeClient {
     config: GcpClientConfig,
-    networks: OnceCell<OfficialNetworks>,
-    subnetworks: OnceCell<OfficialSubnetworks>,
-    routers: OnceCell<OfficialRouters>,
-    firewalls: OnceCell<OfficialFirewalls>,
-    global_operations: OnceCell<OfficialGlobalOperations>,
-    region_operations: OnceCell<OfficialRegionOperations>,
-    backend_services: OnceCell<OfficialBackendServices>,
-    url_maps: OnceCell<OfficialUrlMaps>,
-    target_https_proxies: OnceCell<OfficialTargetHttpsProxies>,
-    ssl_certificates: OnceCell<OfficialSslCertificates>,
-    global_addresses: OnceCell<OfficialGlobalAddresses>,
-    global_forwarding_rules: OnceCell<OfficialGlobalForwardingRules>,
-    region_network_endpoint_groups: OnceCell<OfficialRegionNetworkEndpointGroups>,
+    networks: OnceCell<Networks>,
+    subnetworks: OnceCell<Subnetworks>,
+    routers: OnceCell<Routers>,
+    firewalls: OnceCell<Firewalls>,
+    global_operations: OnceCell<GlobalOperations>,
+    region_operations: OnceCell<RegionOperations>,
+    backend_services: OnceCell<BackendServices>,
+    url_maps: OnceCell<UrlMaps>,
+    target_https_proxies: OnceCell<TargetHttpsProxies>,
+    ssl_certificates: OnceCell<SslCertificates>,
+    global_addresses: OnceCell<GlobalAddresses>,
+    global_forwarding_rules: OnceCell<GlobalForwardingRules>,
+    region_network_endpoint_groups: OnceCell<RegionNetworkEndpointGroups>,
 }
 
 impl std::fmt::Debug for OfficialGcpComputeClient {
@@ -212,109 +207,108 @@ impl OfficialGcpComputeClient {
         }
     }
 
-    async fn networks(&self) -> CloudClientResult<&OfficialNetworks> {
+    async fn networks(&self) -> CloudClientResult<&Networks> {
         self.networks
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialNetworks::builder).await
+                build_compute_client(&self.config, Networks::builder).await
             })
             .await
     }
 
-    async fn subnetworks(&self) -> CloudClientResult<&OfficialSubnetworks> {
+    async fn subnetworks(&self) -> CloudClientResult<&Subnetworks> {
         self.subnetworks
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialSubnetworks::builder).await
+                build_compute_client(&self.config, Subnetworks::builder).await
             })
             .await
     }
 
-    async fn routers(&self) -> CloudClientResult<&OfficialRouters> {
+    async fn routers(&self) -> CloudClientResult<&Routers> {
         self.routers
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialRouters::builder).await
+                build_compute_client(&self.config, Routers::builder).await
             })
             .await
     }
 
-    async fn firewalls(&self) -> CloudClientResult<&OfficialFirewalls> {
+    async fn firewalls(&self) -> CloudClientResult<&Firewalls> {
         self.firewalls
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialFirewalls::builder).await
+                build_compute_client(&self.config, Firewalls::builder).await
             })
             .await
     }
 
-    async fn global_operations(&self) -> CloudClientResult<&OfficialGlobalOperations> {
+    async fn global_operations(&self) -> CloudClientResult<&GlobalOperations> {
         self.global_operations
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialGlobalOperations::builder).await
+                build_compute_client(&self.config, GlobalOperations::builder).await
             })
             .await
     }
 
-    async fn region_operations(&self) -> CloudClientResult<&OfficialRegionOperations> {
+    async fn region_operations(&self) -> CloudClientResult<&RegionOperations> {
         self.region_operations
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialRegionOperations::builder).await
+                build_compute_client(&self.config, RegionOperations::builder).await
             })
             .await
     }
 
-    async fn backend_services(&self) -> CloudClientResult<&OfficialBackendServices> {
+    async fn backend_services(&self) -> CloudClientResult<&BackendServices> {
         self.backend_services
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialBackendServices::builder).await
+                build_compute_client(&self.config, BackendServices::builder).await
             })
             .await
     }
 
-    async fn url_maps(&self) -> CloudClientResult<&OfficialUrlMaps> {
+    async fn url_maps(&self) -> CloudClientResult<&UrlMaps> {
         self.url_maps
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialUrlMaps::builder).await
+                build_compute_client(&self.config, UrlMaps::builder).await
             })
             .await
     }
 
-    async fn target_https_proxies(&self) -> CloudClientResult<&OfficialTargetHttpsProxies> {
+    async fn target_https_proxies(&self) -> CloudClientResult<&TargetHttpsProxies> {
         self.target_https_proxies
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialTargetHttpsProxies::builder).await
+                build_compute_client(&self.config, TargetHttpsProxies::builder).await
             })
             .await
     }
 
-    async fn ssl_certificates(&self) -> CloudClientResult<&OfficialSslCertificates> {
+    async fn ssl_certificates(&self) -> CloudClientResult<&SslCertificates> {
         self.ssl_certificates
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialSslCertificates::builder).await
+                build_compute_client(&self.config, SslCertificates::builder).await
             })
             .await
     }
 
-    async fn global_addresses(&self) -> CloudClientResult<&OfficialGlobalAddresses> {
+    async fn global_addresses(&self) -> CloudClientResult<&GlobalAddresses> {
         self.global_addresses
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialGlobalAddresses::builder).await
+                build_compute_client(&self.config, GlobalAddresses::builder).await
             })
             .await
     }
 
-    async fn global_forwarding_rules(&self) -> CloudClientResult<&OfficialGlobalForwardingRules> {
+    async fn global_forwarding_rules(&self) -> CloudClientResult<&GlobalForwardingRules> {
         self.global_forwarding_rules
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialGlobalForwardingRules::builder).await
+                build_compute_client(&self.config, GlobalForwardingRules::builder).await
             })
             .await
     }
 
     async fn region_network_endpoint_groups(
         &self,
-    ) -> CloudClientResult<&OfficialRegionNetworkEndpointGroups> {
+    ) -> CloudClientResult<&RegionNetworkEndpointGroups> {
         self.region_network_endpoint_groups
             .get_or_try_init(|| async {
-                build_compute_client(&self.config, OfficialRegionNetworkEndpointGroups::builder)
-                    .await
+                build_compute_client(&self.config, RegionNetworkEndpointGroups::builder).await
             })
             .await
     }
@@ -586,8 +580,8 @@ impl GcpComputeApi for OfficialGcpComputeClient {
         target_https_proxy_name: String,
         ssl_certificates: Vec<String>,
     ) -> CloudClientResult<Operation> {
-        let request =
-            OfficialSetSslCertificatesRequest::new().set_ssl_certificates(ssl_certificates);
+        let request = TargetHttpsProxiesSetSslCertificatesRequest::new()
+            .set_ssl_certificates(ssl_certificates);
         self.target_https_proxies()
             .await?
             .set_ssl_certificates()
@@ -805,55 +799,55 @@ macro_rules! impl_compute_client_builder {
 
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::networks::ClientBuilder,
-    OfficialNetworks
+    Networks
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::subnetworks::ClientBuilder,
-    OfficialSubnetworks
+    Subnetworks
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::routers::ClientBuilder,
-    OfficialRouters
+    Routers
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::firewalls::ClientBuilder,
-    OfficialFirewalls
+    Firewalls
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::global_operations::ClientBuilder,
-    OfficialGlobalOperations
+    GlobalOperations
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::region_operations::ClientBuilder,
-    OfficialRegionOperations
+    RegionOperations
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::backend_services::ClientBuilder,
-    OfficialBackendServices
+    BackendServices
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::url_maps::ClientBuilder,
-    OfficialUrlMaps
+    UrlMaps
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::target_https_proxies::ClientBuilder,
-    OfficialTargetHttpsProxies
+    TargetHttpsProxies
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::ssl_certificates::ClientBuilder,
-    OfficialSslCertificates
+    SslCertificates
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::global_addresses::ClientBuilder,
-    OfficialGlobalAddresses
+    GlobalAddresses
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::global_forwarding_rules::ClientBuilder,
-    OfficialGlobalForwardingRules
+    GlobalForwardingRules
 );
 impl_compute_client_builder!(
     google_cloud_compute_v1::builder::region_network_endpoint_groups::ClientBuilder,
-    OfficialRegionNetworkEndpointGroups
+    RegionNetworkEndpointGroups
 );
 
 fn compute_error(

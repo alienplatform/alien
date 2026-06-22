@@ -66,7 +66,7 @@ pub use azure_mgmt_storage::package_2023_05::models::{
 };
 use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
-use google_cloud_artifactregistry_v1::client::ArtifactRegistry as OfficialArtifactRegistry;
+use google_cloud_artifactregistry_v1::client::ArtifactRegistry;
 pub use google_cloud_artifactregistry_v1::model::{
     repository::Format as ArtifactRegistryRepositoryFormat,
     Repository as ArtifactRegistryRepository,
@@ -79,26 +79,24 @@ use google_cloud_firestore_admin_v1::{
     client::FirestoreAdmin, model::Database as FirestoreDatabase,
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
-use google_cloud_iam_admin_v1::client::Iam as OfficialGcpIam;
+use google_cloud_iam_admin_v1::client::Iam;
 pub use google_cloud_iam_admin_v1::model::{
     role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
     ServiceAccount,
 };
 pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_longrunning::model::Operation;
-use google_cloud_pubsub::client::{
-    SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
-};
+use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
 pub use google_cloud_pubsub::model::{push_config::OidcToken, PushConfig, Subscription, Topic};
 use google_cloud_resourcemanager_v3::client::Projects;
 pub use google_cloud_resourcemanager_v3::model::Project;
-use google_cloud_scheduler_v1::client::CloudScheduler as OfficialCloudScheduler;
+use google_cloud_scheduler_v1::client::CloudScheduler;
 pub use google_cloud_scheduler_v1::model::{
     HttpMethod as SchedulerHttpMethod, HttpTarget, Job as SchedulerJob,
     OidcToken as SchedulerOidcToken,
 };
 use google_cloud_storage::{
-    client::StorageControl as OfficialStorageControl,
+    client::StorageControl,
     model::{Bucket, DeleteObjectRequest},
 };
 pub use google_cloud_type::model::Expr;
@@ -209,21 +207,21 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Role>;
 }
 
-struct OfficialGcpIamClient {
+struct IamClient {
     config: GcpClientConfig,
-    client: OnceCell<OfficialGcpIam>,
+    client: OnceCell<Iam>,
 }
 
-impl std::fmt::Debug for OfficialGcpIamClient {
+impl std::fmt::Debug for IamClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("OfficialGcpIamClient")
+            .debug_struct("IamClient")
             .field("project_id", &self.config.project_id)
             .finish_non_exhaustive()
     }
 }
 
-impl OfficialGcpIamClient {
+impl IamClient {
     fn new(config: GcpClientConfig) -> Self {
         Self {
             config,
@@ -231,7 +229,7 @@ impl OfficialGcpIamClient {
         }
     }
 
-    async fn client(&self) -> Result<OfficialGcpIam> {
+    async fn client(&self) -> Result<Iam> {
         let client = self
             .client
             .get_or_try_init(|| async { iam_admin_client_from_alien_config(&self.config).await })
@@ -249,7 +247,7 @@ impl OfficialGcpIamClient {
 }
 
 #[async_trait::async_trait]
-impl GcpIamApi for OfficialGcpIamClient {
+impl GcpIamApi for IamClient {
     async fn create_service_account(
         &self,
         mut request: CreateServiceAccountRequest,
@@ -577,8 +575,8 @@ pub trait PubSubApi: Send + Sync + std::fmt::Debug {
 
 struct OfficialGcpPubSubClient {
     config: GcpClientConfig,
-    topic_admin: OnceCell<OfficialTopicAdmin>,
-    subscription_admin: OnceCell<OfficialSubscriptionAdmin>,
+    topic_admin: OnceCell<TopicAdmin>,
+    subscription_admin: OnceCell<SubscriptionAdmin>,
     credentials: Credentials,
     http_client: reqwest::Client,
 }
@@ -604,7 +602,7 @@ impl OfficialGcpPubSubClient {
         })
     }
 
-    async fn topic_admin(&self) -> Result<OfficialTopicAdmin> {
+    async fn topic_admin(&self) -> Result<TopicAdmin> {
         let client = self
             .topic_admin
             .get_or_try_init(|| async { pubsub_topic_admin_from_alien_config(&self.config).await })
@@ -612,7 +610,7 @@ impl OfficialGcpPubSubClient {
         Ok(client.clone())
     }
 
-    async fn subscription_admin(&self) -> Result<OfficialSubscriptionAdmin> {
+    async fn subscription_admin(&self) -> Result<SubscriptionAdmin> {
         let client = self
             .subscription_admin
             .get_or_try_init(|| async {
@@ -926,7 +924,7 @@ pub trait GcsApi: Send + Sync + std::fmt::Debug {
 
 struct OfficialGcpGcsClient {
     config: GcpClientConfig,
-    storage_control: OnceCell<OfficialStorageControl>,
+    storage_control: OnceCell<StorageControl>,
     credentials: Credentials,
     http_client: reqwest::Client,
 }
@@ -951,7 +949,7 @@ impl OfficialGcpGcsClient {
         })
     }
 
-    async fn storage_control(&self) -> Result<OfficialStorageControl> {
+    async fn storage_control(&self) -> Result<StorageControl> {
         let client = self
             .storage_control
             .get_or_try_init(|| async { gcs_storage_control_from_alien_config(&self.config).await })
@@ -1457,7 +1455,7 @@ pub trait CloudSchedulerApi: Send + Sync + std::fmt::Debug {
 
 struct OfficialGcpCloudSchedulerClient {
     config: GcpClientConfig,
-    client: OnceCell<OfficialCloudScheduler>,
+    client: OnceCell<CloudScheduler>,
 }
 
 impl std::fmt::Debug for OfficialGcpCloudSchedulerClient {
@@ -1477,7 +1475,7 @@ impl OfficialGcpCloudSchedulerClient {
         }
     }
 
-    async fn client(&self) -> Result<OfficialCloudScheduler> {
+    async fn client(&self) -> Result<CloudScheduler> {
         let client = self
             .client
             .get_or_try_init(|| async {
@@ -1747,7 +1745,7 @@ pub trait ArtifactRegistryApi: Send + Sync + std::fmt::Debug {
 
 struct OfficialGcpArtifactRegistryClient {
     config: GcpClientConfig,
-    client: OnceCell<OfficialArtifactRegistry>,
+    client: OnceCell<ArtifactRegistry>,
 }
 
 impl std::fmt::Debug for OfficialGcpArtifactRegistryClient {
@@ -1767,7 +1765,7 @@ impl OfficialGcpArtifactRegistryClient {
         }
     }
 
-    async fn client(&self) -> Result<OfficialArtifactRegistry> {
+    async fn client(&self) -> Result<ArtifactRegistry> {
         let client = self
             .client
             .get_or_try_init(|| async {
@@ -4978,7 +4976,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     // GCP implementations
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>> {
-        Ok(Arc::new(OfficialGcpIamClient::new(config.clone())))
+        Ok(Arc::new(IamClient::new(config.clone())))
     }
 
     fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>> {
@@ -5397,9 +5395,9 @@ async fn service_usage_client_from_alien_config(config: &GcpClientConfig) -> Res
         })
 }
 
-async fn iam_admin_client_from_alien_config(config: &GcpClientConfig) -> Result<OfficialGcpIam> {
+async fn iam_admin_client_from_alien_config(config: &GcpClientConfig) -> Result<Iam> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialGcpIam::builder().with_credentials(credentials);
+    let mut builder = Iam::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
@@ -5419,11 +5417,9 @@ async fn iam_admin_client_from_alien_config(config: &GcpClientConfig) -> Result<
         })
 }
 
-async fn pubsub_topic_admin_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<OfficialTopicAdmin> {
+async fn pubsub_topic_admin_from_alien_config(config: &GcpClientConfig) -> Result<TopicAdmin> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialTopicAdmin::builder().with_credentials(credentials);
+    let mut builder = TopicAdmin::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
@@ -5445,9 +5441,9 @@ async fn pubsub_topic_admin_from_alien_config(
 
 async fn pubsub_subscription_admin_from_alien_config(
     config: &GcpClientConfig,
-) -> Result<OfficialSubscriptionAdmin> {
+) -> Result<SubscriptionAdmin> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialSubscriptionAdmin::builder().with_credentials(credentials);
+    let mut builder = SubscriptionAdmin::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
@@ -5467,11 +5463,9 @@ async fn pubsub_subscription_admin_from_alien_config(
         })
 }
 
-async fn gcs_storage_control_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<OfficialStorageControl> {
+async fn gcs_storage_control_from_alien_config(config: &GcpClientConfig) -> Result<StorageControl> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialStorageControl::builder().with_credentials(credentials);
+    let mut builder = StorageControl::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
@@ -5517,9 +5511,9 @@ async fn firestore_admin_client_from_alien_config(
 
 async fn artifact_registry_client_from_alien_config(
     config: &GcpClientConfig,
-) -> Result<OfficialArtifactRegistry> {
+) -> Result<ArtifactRegistry> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialArtifactRegistry::builder().with_credentials(credentials);
+    let mut builder = ArtifactRegistry::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
@@ -5541,9 +5535,9 @@ async fn artifact_registry_client_from_alien_config(
 
 async fn cloud_scheduler_client_from_alien_config(
     config: &GcpClientConfig,
-) -> Result<OfficialCloudScheduler> {
+) -> Result<CloudScheduler> {
     let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = OfficialCloudScheduler::builder().with_credentials(credentials);
+    let mut builder = CloudScheduler::builder().with_credentials(credentials);
 
     if let Some(endpoint) = config
         .service_overrides
