@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    list, list_params, optional_events_read, optional_metrics_read, optional_nodes_read,
+    list_params, optional_events_read, optional_metrics_read, optional_nodes_read,
     OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -58,35 +58,36 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    let pods = list(
-        kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.config.namespace),
-        None,
-        None,
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!(
-            "Failed to list pods for Kubernetes cluster heartbeat in namespace '{}'",
-            input.config.namespace
-        ),
-        resource_id: Some(input.config.id.clone()),
-    })?;
+    let pods = kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.config.namespace)
+        .list(&list_params(None, None))
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes pod list operation failed".to_string(),
+        })
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to list pods for Kubernetes cluster heartbeat in namespace '{}'",
+                input.config.namespace
+            ),
+            resource_id: Some(input.config.id.clone()),
+        })?;
 
-    let events_read = optional_events_read(
-        &input.config.id,
-        &input.config.namespace,
-        None,
-        list(
-            kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.config.namespace),
-            None,
-            None,
-        ),
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: "Failed optional Kubernetes cluster event collection".to_string(),
-        resource_id: Some(input.config.id.clone()),
-    })?;
+    let events_read =
+        optional_events_read(&input.config.id, &input.config.namespace, None, async {
+            kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.config.namespace)
+                .list(&list_params(None, None))
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: "Kubernetes event list operation failed".to_string(),
+                })
+        })
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed optional Kubernetes cluster event collection".to_string(),
+            resource_id: Some(input.config.id.clone()),
+        })?;
 
     let pod_metrics = optional_metrics_read(
         &input.config.id,
@@ -119,10 +120,15 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         resource_id: Some(input.config.id.clone()),
     })?;
 
-    let nodes = optional_nodes_read(
-        &input.config.id,
-        list(kube::Api::all(node_client.as_ref().clone()), None, None),
-    )
+    let nodes = optional_nodes_read(&input.config.id, async {
+        kube::Api::<Node>::all(node_client.as_ref().clone())
+            .list(&list_params(None, None))
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes node list operation failed".to_string(),
+            })
+    })
     .await
     .context(ErrorData::CloudPlatformError {
         message: "Failed optional Kubernetes node collection".to_string(),

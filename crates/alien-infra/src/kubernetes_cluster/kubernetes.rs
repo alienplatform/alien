@@ -4,17 +4,17 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 #[cfg(feature = "kubernetes")]
-use crate::kubernetes_client::list;
-#[cfg(feature = "kubernetes")]
 use crate::kubernetes_cluster_heartbeat::{
     emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,
 };
+#[cfg(feature = "kubernetes")]
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
     KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
     KubernetesHeartbeatMode, Platform, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 #[cfg(feature = "kubernetes")]
 use k8s_openapi::api::apps::v1::Deployment;
@@ -360,19 +360,20 @@ async fn verify_agent_runtime(
         .service_provider
         .get_kubernetes_client(kubernetes_config)
         .await?;
-    list(
-        kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &config.namespace),
-        None,
-        None,
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!(
-            "Failed to verify alien-agent Kubernetes API access in namespace '{}'",
-            config.namespace
-        ),
-        resource_id: Some(config.id.clone()),
-    })?;
+    kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &config.namespace)
+        .list(&kube::api::ListParams::default())
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes deployment list operation failed".to_string(),
+        })
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to verify alien-agent Kubernetes API access in namespace '{}'",
+                config.namespace
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
     Ok(KubernetesClusterRuntimeStatus {
         kubernetes_api_reachable: true,

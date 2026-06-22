@@ -2,9 +2,8 @@ use alien_client_core::{ErrorData, Result};
 use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
-use k8s_openapi::List;
 use kube::{
-    api::{Api, DeleteParams, DynamicObject, ListParams, ObjectList, PostParams},
+    api::{Api, DeleteParams, DynamicObject, ListParams, PostParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
@@ -423,21 +422,6 @@ pub(crate) fn list_params(
     params
 }
 
-pub(crate) fn convert_list<K>(list: ObjectList<K>) -> Result<List<K>>
-where
-    K: Clone + DeserializeOwned + Serialize + k8s_openapi::ListableResource,
-{
-    serde_json::from_value(serde_json::to_value(list).into_alien_error().context(
-        ErrorData::HttpRequestFailed {
-            message: "Failed to serialize Kubernetes list response".to_string(),
-        },
-    )?)
-    .into_alien_error()
-    .context(ErrorData::HttpRequestFailed {
-        message: "Failed to deserialize Kubernetes list response".to_string(),
-    })
-}
-
 pub(crate) fn dynamic_value(value: Value) -> Result<DynamicObject> {
     serde_json::from_value(value)
         .into_alien_error()
@@ -476,24 +460,6 @@ where
         .context(ErrorData::HttpRequestFailed {
             message: format!("Kubernetes get operation failed for '{name}'"),
         })
-}
-
-pub(crate) async fn list<K>(
-    api: Api<K>,
-    label_selector: Option<String>,
-    field_selector: Option<String>,
-) -> Result<List<K>>
-where
-    K: Clone + Debug + DeserializeOwned + Serialize + k8s_openapi::ListableResource,
-{
-    let list = api
-        .list(&list_params(label_selector, field_selector))
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Kubernetes list operation failed".to_string(),
-        })?;
-    convert_list(list)
 }
 
 pub(crate) async fn replace<K>(api: Api<K>, name: &str, value: &K) -> Result<K>

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    list, list_params, optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
+    list_params, optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -161,29 +161,34 @@ pub async fn emit_kubernetes_workload_heartbeat(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    let pods = list(
-        kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.namespace),
-        Some(input.label_selector.clone()),
-        None,
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!(
-            "Failed to list pods for Kubernetes workload '{}'",
-            input.workload_name
-        ),
-        resource_id: Some(input.resource_id.clone()),
-    })?;
+    let pods = kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.namespace)
+        .list(&list_params(Some(input.label_selector.clone()), None))
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes pod list operation failed".to_string(),
+        })
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to list pods for Kubernetes workload '{}'",
+                input.workload_name
+            ),
+            resource_id: Some(input.resource_id.clone()),
+        })?;
 
     let events = optional_events_read(
         &input.resource_id,
         &input.namespace,
         Some(&input.workload_name),
-        list(
-            kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.namespace),
-            None,
-            None,
-        ),
+        async {
+            kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.namespace)
+                .list(&list_params(None, None))
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: "Kubernetes event list operation failed".to_string(),
+                })
+        },
     )
     .await
     .context(ErrorData::CloudPlatformError {
