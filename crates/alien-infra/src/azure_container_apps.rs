@@ -1,101 +1,11 @@
 use crate::core::{
-    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response,
-    map_azure_core_021_sdk_error, OperationResult,
+    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response, OperationResult,
 };
-use crate::error::{ErrorData, Result};
+use crate::error::Result;
 use alien_core::AzureClientConfig;
-use alien_error::{Context, IntoAlienError};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
-use azure_mgmt_app::package_preview_2024_08::models::{
-    Certificate, DaprComponent, TrackedResource,
-};
+use azure_mgmt_app::package_preview_2024_08::models::DaprComponent;
 use std::sync::Arc;
-
-pub(crate) async fn create_or_update_managed_environment_certificate(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    environment_name: &str,
-    certificate_name: &str,
-    certificate: &Certificate,
-) -> Result<Certificate> {
-    let result = client
-        .certificates_client()
-        .create_or_update(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            environment_name.to_string(),
-            certificate_name.to_string(),
-        )
-        .certificate_envelope(certificate.clone())
-        .send()
-        .await;
-    let response = map_azure_core_021_sdk_error(
-        "Azure Container Apps",
-        result,
-        "managed environment certificate create or update",
-        "Azure Container Apps Managed Environment Certificate",
-        certificate_name,
-    )?;
-    parse_azure_core_021_response_body_or_default_certificate(
-        response.into_raw_response(),
-        "Azure Container Apps Managed Environment Certificate",
-        certificate_name,
-    )
-    .await
-}
-
-pub(crate) async fn delete_managed_environment_certificate(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    environment_name: &str,
-    certificate_name: &str,
-) -> Result<OperationResult<()>> {
-    let result = client
-        .certificates_client()
-        .delete(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            environment_name.to_string(),
-            certificate_name.to_string(),
-        )
-        .send()
-        .await;
-    map_azure_core_021_delete_lro_response(
-        "Azure Container Apps",
-        result,
-        "managed environment certificate delete",
-        "Azure Container Apps Managed Environment Certificate",
-        certificate_name,
-    )
-    .await
-}
-
-pub(crate) async fn get_managed_environment_certificate(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    environment_name: &str,
-    certificate_name: &str,
-) -> Result<Certificate> {
-    let result = client
-        .certificates_client()
-        .get(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            environment_name.to_string(),
-            certificate_name.to_string(),
-        )
-        .await;
-    map_azure_core_021_sdk_error(
-        "Azure Container Apps",
-        result,
-        "managed environment certificate get",
-        "Azure Container Apps Managed Environment Certificate",
-        certificate_name,
-    )
-}
 
 pub(crate) async fn create_or_update_dapr_component(
     client: &azure_app_2024_08::Client,
@@ -292,31 +202,4 @@ mod tests {
         };
         assert_eq!(mutated_body.as_ref(), body.as_bytes());
     }
-}
-
-async fn parse_azure_core_021_response_body_or_default_certificate(
-    response: azure_core_021::Response,
-    resource_type: &str,
-    resource_name: &str,
-) -> Result<Certificate> {
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to read {resource_type} '{resource_name}' response"),
-            resource_id: None,
-        })?;
-
-    if body.is_empty() {
-        return Ok(Certificate::new(TrackedResource::new(String::new())));
-    }
-
-    serde_json::from_slice(&body)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to parse {resource_type} '{resource_name}' response"),
-            resource_id: None,
-        })
 }

@@ -183,6 +183,33 @@ fn get_container_apps_certificate_name(prefix: &str, worker_id: &str) -> String 
         .to_lowercase()
 }
 
+async fn parse_azure_core_021_response_body_or_default_certificate(
+    response: azure_core_021::Response,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<Certificate> {
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read {resource_type} '{resource_name}' response"),
+            resource_id: None,
+        })?;
+
+    if body.is_empty() {
+        return Ok(Certificate::new(TrackedResource::new(String::new())));
+    }
+
+    serde_json::from_slice(&body)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to parse {resource_type} '{resource_name}' response"),
+            resource_id: None,
+        })
+}
+
 /// Domain information for a worker.
 struct DomainInfo {
     fqdn: String,
@@ -971,13 +998,28 @@ impl AzureWorkerController {
         let container_apps_management_client = ctx
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
-        let response = azure_container_apps::create_or_update_managed_environment_certificate(
-            &container_apps_management_client,
-            azure_cfg,
-            &resource_group_name,
-            &environment_name,
+        let result = container_apps_management_client
+            .certificates_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                certificate_name.clone(),
+            )
+            .certificate_envelope(certificate)
+            .send()
+            .await;
+        let response = map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "managed environment certificate create or update",
+            "Azure Container Apps Managed Environment Certificate",
             &certificate_name,
-            &certificate,
+        )?;
+        let response = parse_azure_core_021_response_body_or_default_certificate(
+            response.into_raw_response(),
+            "Azure Container Apps Managed Environment Certificate",
+            &certificate_name,
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -1077,13 +1119,28 @@ impl AzureWorkerController {
             let management_client = ctx
                 .service_provider
                 .get_azure_container_apps_management_client(azure_cfg)?;
-            let response = azure_container_apps::create_or_update_managed_environment_certificate(
-                &management_client,
-                azure_cfg,
-                &resource_group_name,
-                &environment_name,
+            let result = management_client
+                .certificates_client()
+                .create_or_update(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    environment_name.clone(),
+                    certificate_name.clone(),
+                )
+                .certificate_envelope(certificate)
+                .send()
+                .await;
+            let response = map_azure_core_021_sdk_error(
+                "Azure Container Apps",
+                result,
+                "managed environment certificate create or update",
+                "Azure Container Apps Managed Environment Certificate",
                 &certificate_name,
-                &certificate,
+            )?;
+            let response = parse_azure_core_021_response_body_or_default_certificate(
+                response.into_raw_response(),
+                "Azure Container Apps Managed Environment Certificate",
+                &certificate_name,
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -2023,13 +2080,28 @@ impl AzureWorkerController {
         let container_apps_client = ctx
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
-        let response = azure_container_apps::create_or_update_managed_environment_certificate(
-            &container_apps_client,
-            azure_cfg,
-            &resource_group_name,
-            &environment_name,
+        let result = container_apps_client
+            .certificates_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                certificate_name.clone(),
+            )
+            .certificate_envelope(certificate)
+            .send()
+            .await;
+        let response = map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "managed environment certificate create or update",
+            "Azure Container Apps Managed Environment Certificate",
             &certificate_name,
-            &certificate,
+        )?;
+        let response = parse_azure_core_021_response_body_or_default_certificate(
+            response.into_raw_response(),
+            "Azure Container Apps Managed Environment Certificate",
+            &certificate_name,
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -3016,11 +3088,21 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match azure_container_apps::delete_managed_environment_certificate(
-            &client,
-            azure_cfg,
-            &resource_group_name,
-            &environment_name,
+        let result = client
+            .certificates_client()
+            .delete(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name,
+                environment_name,
+                certificate_name.clone(),
+            )
+            .send()
+            .await;
+        match map_azure_core_021_delete_lro_response(
+            "Azure Container Apps",
+            result,
+            "managed environment certificate delete",
+            "Azure Container Apps Managed Environment Certificate",
             &certificate_name,
         )
         .await
@@ -3083,15 +3165,22 @@ impl AzureWorkerController {
         let certificate_name =
             get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
 
-        match azure_container_apps::get_managed_environment_certificate(
-            &client,
-            azure_config,
-            &resource_group_name,
-            &environment_name,
+        let result = client
+            .certificates_client()
+            .get(
+                azure_config.subscription_id.clone(),
+                resource_group_name,
+                environment_name,
+                certificate_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "managed environment certificate get",
+            "Azure Container Apps Managed Environment Certificate",
             &certificate_name,
-        )
-        .await
-        {
+        ) {
             Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 self.pending_operation_url = None;
                 self.pending_operation_retry_after = None;
