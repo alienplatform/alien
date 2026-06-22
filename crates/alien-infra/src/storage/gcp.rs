@@ -11,6 +11,7 @@ use alien_core::{
 };
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_iam_v1::model::{Binding, Policy};
 use google_cloud_storage::model::{
     bucket::{
         iam_config::UniformBucketLevelAccess,
@@ -23,7 +24,7 @@ use google_cloud_storage::model::{
     Bucket,
 };
 
-use crate::core::{Binding, GcsApi, Policy, ResourceControllerContext};
+use crate::core::{GcsApi, ResourceControllerContext};
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -922,12 +923,13 @@ mod tests {
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
+    use google_cloud_iam_v1::model::{Binding, Policy};
     use google_cloud_storage::model::Bucket;
     use rstest::{fixture, rstest};
 
     use crate::core::{
-        controller_test::SingleControllerExecutor, Binding, MockGcpIamApi, MockGcsApi,
-        MockPlatformServiceProvider, Policy,
+        controller_test::SingleControllerExecutor, MockGcpIamApi, MockGcsApi,
+        MockPlatformServiceProvider,
     };
     use crate::error::ErrorData;
     use crate::storage::GcpStorageController;

@@ -2,10 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, Policy,
-    ResourcePermissionsHelper,
-};
+use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -32,6 +29,7 @@ use alien_macros::controller;
 use chrono::Utc;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::client::IAMPolicy;
+use google_cloud_iam_v1::model::{Binding as GcpBinding, Policy};
 use google_cloud_longrunning::model::{operation::Result as OperationResult, Operation};
 use google_cloud_pubsub::{
     client::{SubscriptionAdmin, TopicAdmin},
@@ -53,6 +51,7 @@ use google_cloud_scheduler_v1::{
         OidcToken as SchedulerOidcToken,
     },
 };
+use google_cloud_type::model::Expr as GcpExpr;
 use sha2::{Digest, Sha256};
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
@@ -6000,13 +5999,14 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::core::{MockGcpIamApi, Policy};
+    use crate::core::MockGcpIamApi;
     use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
         ResourceStatus, Worker, WorkerOutputs,
     };
     use google_cloud_gax::{options::RequestOptions, response::Response};
+    use google_cloud_iam_v1::model::Policy;
     use google_cloud_longrunning::model::Operation as LongRunningOperation;
     use google_cloud_run_v2::{
         client::Services as CloudRunServices,

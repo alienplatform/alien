@@ -72,12 +72,11 @@ use google_cloud_auth::errors::CredentialsError;
 use google_cloud_firestore_admin_v1::client::FirestoreAdmin;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_admin_v1::client::Iam;
-pub use google_cloud_iam_admin_v1::model::{
-    role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
-    ServiceAccount,
+use google_cloud_iam_admin_v1::model::{
+    CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role, ServiceAccount,
 };
 use google_cloud_iam_v1::client::IAMPolicy;
-pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
+use google_cloud_iam_v1::model::Policy;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
 use google_cloud_resourcemanager_v3::client::Projects;
 use google_cloud_run_v2::client::Services;
@@ -86,7 +85,6 @@ use google_cloud_storage::{
     client::StorageControl,
     model::{Bucket, DeleteObjectRequest},
 };
-pub use google_cloud_type::model::Expr;
 use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;

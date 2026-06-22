@@ -1,10 +1,7 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{
-    Binding, CreateServiceAccountRequest, Expr, GetPolicyOptions, Policy,
-    ResourceControllerContext, ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
-};
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::permissions::PermissionSet;
@@ -21,6 +18,11 @@ use alien_permissions::{
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+use google_cloud_iam_admin_v1::model::{
+    CreateServiceAccountRequest, ServiceAccount as GcpServiceAccount,
+};
+use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
+use google_cloud_type::model::Expr;
 
 /// Generates the GCP service account ID for RemoteStackManagement.
 fn get_gcp_management_service_account_id(prefix: &str) -> String {

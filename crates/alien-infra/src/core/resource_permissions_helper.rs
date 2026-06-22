@@ -7,14 +7,16 @@ use std::collections::HashSet;
 
 use crate::aws_sdk::{get_iam_role_policy, put_iam_role_policy};
 use crate::core::{
-    azure_permissions_helper::AzurePermissionsHelper, Binding, CreateRoleRequest, Expr, Policy,
-    ResourceControllerContext, Role, RoleLaunchStage, Scope,
+    azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext, Scope,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
+use google_cloud_iam_admin_v1::model::{role::RoleLaunchStage, CreateRoleRequest, Role};
+use google_cloud_iam_v1::model::{Binding, Policy};
+use google_cloud_type::model::Expr;
 
 use tracing::{debug, info, warn};
 

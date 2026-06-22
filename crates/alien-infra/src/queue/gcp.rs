@@ -1,6 +1,6 @@
 // Stub module for future GCP Queue controller implementation.
 
-use crate::core::{Policy, ResourceControllerContext};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpPubSubQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -13,6 +13,7 @@ use alien_permissions::generators::GcpBindingResourceKind;
 use chrono::Utc;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::client::IAMPolicy;
+use google_cloud_iam_v1::model::Policy;
 use google_cloud_pubsub::{
     client::{SubscriptionAdmin, TopicAdmin},
     model::{Subscription, Topic},

@@ -3,7 +3,7 @@ use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{GetPolicyOptions, Policy, ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::{
@@ -16,6 +16,7 @@ use alien_permissions::{
     PermissionContext,
 };
 use chrono::Utc;
+use google_cloud_iam_v1::model::{GetPolicyOptions, Policy};
 
 /// GCP Vault controller.
 ///

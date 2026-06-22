@@ -1,10 +1,7 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{
-    Binding, CreateServiceAccountRequest, GetPolicyOptions, Policy, ResourceControllerContext,
-    ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
-};
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::{
@@ -20,6 +17,10 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+use google_cloud_iam_admin_v1::model::{
+    CreateServiceAccountRequest, ServiceAccount as GcpServiceAccount,
+};
+use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 
 /// Generates the GCP service account ID from the ServiceAccount name.
 fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
