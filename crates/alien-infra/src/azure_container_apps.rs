@@ -5,8 +5,9 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
 pub use azure_mgmt_app::package_preview_2024_08::models::{
     certificate, dapr_component, managed_environment, Certificate, CertificateKeyVaultProperties,
-    CustomDomainConfiguration, DaprComponent, DaprMetadata, ManagedEnvironment, TrackedResource,
-    VnetConfiguration, WorkloadProfile,
+    ContainerResources, CustomDomainConfiguration, DaprComponent, DaprMetadata, EnvironmentVar,
+    ManagedEnvironment, RegistryCredentials, Secret, TrackedResource, VnetConfiguration,
+    WorkloadProfile,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
@@ -627,32 +628,6 @@ pub struct Container {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct EnvironmentVar {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(rename = "secretRef", default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerResources {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu: Option<f64>,
-    #[serde(
-        rename = "ephemeralStorage",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub ephemeral_storage: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct Scale {
     #[serde(
         rename = "cooldownPeriod",
@@ -684,40 +659,6 @@ pub struct Scale {
 
 fn default_max_replicas() -> i32 {
     10
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Secret {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
-    #[serde(
-        rename = "keyVaultUrl",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub key_vault_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RegistryCredentials {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
-    #[serde(
-        rename = "passwordSecretRef",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub password_secret_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
