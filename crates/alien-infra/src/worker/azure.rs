@@ -3704,7 +3704,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
         app: &ContainerApp,
     ) {
-        self.resource_id = app.id.clone();
+        self.resource_id = app.tracked_resource.resource.id.clone();
 
         let container_app_url = self.extract_url_from_container_app(app);
 
@@ -4034,12 +4034,14 @@ impl AzureWorkerController {
         };
 
         Ok(ContainerApp {
+            tracked_resource: {
+                let mut tracked_resource = TrackedResource::new(location.to_string());
+                tracked_resource.tags = Some(serde_json::json!(tags));
+                tracked_resource
+            },
             extended_location: None,
-            id: None,
             identity: managed_identity,
-            location: location.to_string(),
             managed_by: None,
-            name: None,
             properties: Some(ContainerAppProperties {
                 sdk: container_app::Properties {
                     configuration: Some(configuration),
@@ -4049,9 +4051,6 @@ impl AzureWorkerController {
                 },
                 running_status: None,
             }),
-            system_data: None,
-            tags,
-            type_: None,
         })
     }
 
@@ -4544,7 +4543,7 @@ mod tests {
     use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
     use azure_mgmt_app::package_preview_2024_08::models::{
         configuration, container_app, ingress, Configuration, Ingress as AzureContainerAppsIngress,
-        TrafficWeight,
+        TrackedResource, TrafficWeight,
     };
     use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
     use httpmock::MockServer;
@@ -4661,12 +4660,15 @@ mod tests {
         };
 
         ContainerApp {
-            id: Some(format!(
-                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
-                app_name
-            )),
-            name: Some(app_name.to_string()),
-            location: "East US".to_string(),
+            tracked_resource: {
+                let mut tracked_resource = TrackedResource::new("East US".to_string());
+                tracked_resource.resource.id = Some(format!(
+                    "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
+                    app_name
+                ));
+                tracked_resource.resource.name = Some(app_name.to_string());
+                tracked_resource
+            },
             properties: Some(ContainerAppProperties {
                 sdk: container_app::Properties {
                     provisioning_state: Some(
@@ -4687,23 +4689,23 @@ mod tests {
                 },
                 running_status: None,
             }),
-            tags: std::collections::HashMap::new(),
             extended_location: None,
             identity: None,
             managed_by: None,
-            system_data: None,
-            type_: None,
         }
     }
 
     fn create_in_progress_container_app_response(app_name: &str) -> ContainerApp {
         ContainerApp {
-            id: Some(format!(
-                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
-                app_name
-            )),
-            name: Some(app_name.to_string()),
-            location: "East US".to_string(),
+            tracked_resource: {
+                let mut tracked_resource = TrackedResource::new("East US".to_string());
+                tracked_resource.resource.id = Some(format!(
+                    "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
+                    app_name
+                ));
+                tracked_resource.resource.name = Some(app_name.to_string());
+                tracked_resource
+            },
             properties: Some(ContainerAppProperties {
                 sdk: container_app::Properties {
                     provisioning_state: Some(
@@ -4713,12 +4715,9 @@ mod tests {
                 },
                 running_status: None,
             }),
-            tags: std::collections::HashMap::new(),
             extended_location: None,
             identity: None,
             managed_by: None,
-            system_data: None,
-            type_: None,
         }
     }
 
@@ -5354,12 +5353,15 @@ mod tests {
         });
 
         ContainerApp {
-            id: Some(format!(
-                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
-                app_name
-            )),
-            name: Some(app_name.to_string()),
-            location: "East US".to_string(),
+            tracked_resource: {
+                let mut tracked_resource = TrackedResource::new("East US".to_string());
+                tracked_resource.resource.id = Some(format!(
+                    "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
+                    app_name
+                ));
+                tracked_resource.resource.name = Some(app_name.to_string());
+                tracked_resource
+            },
             properties: Some(ContainerAppProperties {
                 sdk: container_app::Properties {
                     provisioning_state: Some(
@@ -5380,12 +5382,9 @@ mod tests {
                 },
                 running_status: None,
             }),
-            tags: std::collections::HashMap::new(),
             extended_location: None,
             identity: None,
             managed_by: None,
-            system_data: None,
-            type_: None,
         }
     }
 

@@ -4,49 +4,46 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
-    container_app, Certificate, DaprComponent, ManagedEnvironment, TrackedResource,
+    container_app, Certificate, DaprComponent, ExtendedLocation, ManagedEnvironment,
+    TrackedResource,
 };
 use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, ops, sync::Arc, time::Duration};
+use std::{fmt::Debug, ops, sync::Arc, time::Duration};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerApp {
-    /// Fully qualified Azure resource ID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(flatten)]
+    pub tracked_resource: TrackedResource,
     /// Managed identity assigned to the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<serde_json::Value>,
-    /// Azure region.
-    pub location: String,
-    /// Optional resource name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Container App properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<ContainerAppProperties>,
-    /// Resource tags.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    /// Resource type.
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
     #[serde(
         rename = "extendedLocation",
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub extended_location: Option<serde_json::Value>,
+    pub extended_location: Option<ExtendedLocation>,
     #[serde(rename = "managedBy", default, skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
-    #[serde(
-        rename = "systemData",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub system_data: Option<serde_json::Value>,
+}
+
+impl ops::Deref for ContainerApp {
+    type Target = TrackedResource;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tracked_resource
+    }
+}
+
+impl ops::DerefMut for ContainerApp {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tracked_resource
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
