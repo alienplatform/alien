@@ -52,6 +52,7 @@ pub use azure_mgmt_network::package_2024_03::models::{
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 use azure_mgmt_servicebus::package_2024_01;
 pub use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue, SbQueueProperties};
+use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
 use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 pub use azure_mgmt_storage::package_2023_05::models::{
     Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
@@ -4328,43 +4329,6 @@ impl OfficialAzureServiceBusManagementClient {
             .await?;
         Ok(client.clone())
     }
-
-    fn map_sdk_error<T>(
-        result: azure_core_021::Result<T>,
-        action: &str,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<T> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                let not_found = matches!(
-                    error.kind(),
-                    azure_core_021::error::ErrorKind::HttpResponse {
-                        status: azure_core_021::StatusCode::NotFound,
-                        ..
-                    }
-                );
-                if not_found {
-                    Err(AlienError::new(
-                        crate::error::ErrorData::CloudResourceNotFound {
-                            resource_type: resource_type.to_string(),
-                            resource_name: resource_name.to_string(),
-                        },
-                    ))
-                } else {
-                    Err(error.into_alien_error().context(
-                        crate::error::ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Azure Service Bus {action} failed for {resource_type} '{resource_name}'"
-                            ),
-                            resource_id: None,
-                        },
-                    ))
-                }
-            }
-        }
-    }
 }
 
 #[async_trait::async_trait]
@@ -4386,7 +4350,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
                 self.config.subscription_id.clone(),
             )
             .await;
-        Self::map_sdk_error(
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
             result,
             "namespace create or update",
             "Azure Service Bus namespace",
@@ -4409,7 +4374,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
                 self.config.subscription_id.clone(),
             )
             .await;
-        Self::map_sdk_error(
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
             result,
             "namespace get",
             "Azure Service Bus namespace",
@@ -4434,7 +4400,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
             .send()
             .await
             .map(|_| ());
-        Self::map_sdk_error(
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
             result,
             "namespace delete",
             "Azure Service Bus namespace",
@@ -4461,7 +4428,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
                 self.config.subscription_id.clone(),
             )
             .await;
-        Self::map_sdk_error(
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
             result,
             "queue create or update",
             "Azure Service Bus queue",
@@ -4486,7 +4454,13 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
                 self.config.subscription_id.clone(),
             )
             .await;
-        Self::map_sdk_error(result, "queue get", "Azure Service Bus queue", &queue_name)
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "queue get",
+            "Azure Service Bus queue",
+            &queue_name,
+        )
     }
 
     async fn delete_queue(
@@ -4508,7 +4482,8 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
             .send()
             .await
             .map(|_| ());
-        Self::map_sdk_error(
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
             result,
             "queue delete",
             "Azure Service Bus queue",
@@ -4543,7 +4518,7 @@ pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureStorageAccountsClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_storage_2023_05::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureStorageAccountsClient {
@@ -4560,90 +4535,35 @@ impl OfficialAzureStorageAccountsClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn storage_account_url(&self, resource_group_name: &str, account_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}?api-version=2023-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            account_name
-        )
-    }
+    async fn client(&self) -> Result<azure_storage_2023_05::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
+
+                azure_storage_2023_05::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Storage client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -4655,23 +4575,26 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
         account_name: &str,
         parameters: &StorageAccountCreateParameters,
     ) -> Result<()> {
-        let body = serde_json::to_string(parameters)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Storage account '{account_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        self.request(
-            Method::PUT,
-            self.storage_account_url(resource_group_name, account_name),
-            Some(body),
+        let result = self
+            .client()
+            .await?
+            .storage_accounts_client()
+            .create(
+                resource_group_name.to_string(),
+                account_name.to_string(),
+                parameters.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account create",
             "Azure Storage account",
             account_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn delete_storage_account(
@@ -4679,15 +4602,25 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
         resource_group_name: &str,
         account_name: &str,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.storage_account_url(resource_group_name, account_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .storage_accounts_client()
+            .delete(
+                resource_group_name.to_string(),
+                account_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account delete",
             "Azure Storage account",
             account_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_storage_account_properties(
@@ -4695,20 +4628,22 @@ impl StorageAccountsApi for OfficialAzureStorageAccountsClient {
         resource_group_name: &str,
         account_name: &str,
     ) -> Result<StorageAccount> {
-        let response = self
-            .request(
-                Method::GET,
-                self.storage_account_url(resource_group_name, account_name),
-                None,
-                "Azure Storage account",
-                account_name,
+        let result = self
+            .client()
+            .await?
+            .storage_accounts_client()
+            .get_properties(
+                resource_group_name.to_string(),
+                account_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Storage account '{account_name}' response"),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account get properties",
+            "Azure Storage account",
+            account_name,
         )
     }
 }
@@ -4756,7 +4691,7 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureBlobContainerClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_storage_2023_05::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureBlobContainerClient {
@@ -4773,106 +4708,35 @@ impl OfficialAzureBlobContainerClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn blob_container_url(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-    ) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}?api-version=2024-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            storage_account_name,
-            container_name
-        )
-    }
+    async fn client(&self) -> Result<azure_storage_2023_05::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn blob_service_url(&self, resource_group_name: &str, storage_account_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default?api-version=2024-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            storage_account_name
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                azure_storage_2023_05::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Storage client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -4885,30 +4749,24 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         container_name: &str,
         blob_container: &BlobContainer,
     ) -> Result<BlobContainer> {
-        let body = serde_json::to_string(blob_container)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Blob container '{container_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.blob_container_url(resource_group_name, storage_account_name, container_name),
-                Some(body),
-                "Azure Blob container",
-                container_name,
+        let result = self
+            .client()
+            .await?
+            .blob_containers_client()
+            .create(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                container_name.to_string(),
+                blob_container.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Blob container '{container_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob container create",
+            "Azure Blob container",
+            container_name,
         )
     }
 
@@ -4918,22 +4776,23 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         storage_account_name: &str,
         container_name: &str,
     ) -> Result<BlobContainer> {
-        let response = self
-            .request(
-                Method::GET,
-                self.blob_container_url(resource_group_name, storage_account_name, container_name),
-                None,
-                "Azure Blob container",
-                container_name,
+        let result = self
+            .client()
+            .await?
+            .blob_containers_client()
+            .get(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                container_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Blob container '{container_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob container get",
+            "Azure Blob container",
+            container_name,
         )
     }
 
@@ -4942,22 +4801,23 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         resource_group_name: &str,
         storage_account_name: &str,
     ) -> Result<BlobServiceProperties> {
-        let response = self
-            .request(
-                Method::GET,
-                self.blob_service_url(resource_group_name, storage_account_name),
-                None,
-                "Azure Blob service",
-                storage_account_name,
+        let result = self
+            .client()
+            .await?
+            .blob_services_client()
+            .get_service_properties(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                self.config.subscription_id.clone(),
+                "default".to_string(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Blob service '{storage_account_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob service get properties",
+            "Azure Blob service",
+            storage_account_name,
         )
     }
 
@@ -4967,15 +4827,26 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         storage_account_name: &str,
         container_name: &str,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.blob_container_url(resource_group_name, storage_account_name, container_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .blob_containers_client()
+            .delete(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                container_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob container delete",
             "Azure Blob container",
             container_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn update_blob_container(
@@ -4985,30 +4856,24 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         container_name: &str,
         blob_container: &BlobContainer,
     ) -> Result<BlobContainer> {
-        let body = serde_json::to_string(blob_container)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Blob container '{container_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PATCH,
-                self.blob_container_url(resource_group_name, storage_account_name, container_name),
-                Some(body),
-                "Azure Blob container",
-                container_name,
+        let result = self
+            .client()
+            .await?
+            .blob_containers_client()
+            .update(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                container_name.to_string(),
+                blob_container.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Blob container '{container_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob container update",
+            "Azure Blob container",
+            container_name,
         )
     }
 }
@@ -6451,6 +6316,44 @@ impl azure_core_021::auth::TokenCredential for AzureCore021Credential {
 
     async fn clear_cache(&self) -> azure_core_021::Result<()> {
         Ok(())
+    }
+}
+
+fn map_azure_core_021_sdk_error<T>(
+    service_name: &str,
+    result: azure_core_021::Result<T>,
+    action: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let not_found = matches!(
+                error.kind(),
+                azure_core_021::error::ErrorKind::HttpResponse {
+                    status: azure_core_021::StatusCode::NotFound,
+                    ..
+                }
+            );
+            if not_found {
+                Err(AlienError::new(
+                    crate::error::ErrorData::CloudResourceNotFound {
+                        resource_type: resource_type.to_string(),
+                        resource_name: resource_name.to_string(),
+                    },
+                ))
+            } else {
+                Err(error
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: format!(
+                            "{service_name} {action} failed for {resource_type} '{resource_name}'"
+                        ),
+                        resource_id: None,
+                    }))
+            }
+        }
     }
 }
 
