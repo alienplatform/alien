@@ -766,9 +766,7 @@ fn nonnegative_i32_to_u32(value: i32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        controller_test::SingleControllerExecutor, MockGcpIamApi, MockPlatformServiceProvider,
-    };
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use alien_core::{Platform, Queue, ResourceStatus};
     use google_cloud_gax::{options::RequestOptions, response::Response};
     use google_cloud_pubsub::{
@@ -882,10 +880,6 @@ mod tests {
         )
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
-        Arc::new(MockGcpIamApi::new())
-    }
-
     fn setup_mock_provider(
         topic_admin: TopicAdmin,
         subscription_admin: SubscriptionAdmin,
@@ -897,12 +891,6 @@ mod tests {
         provider
             .expect_get_gcp_pubsub_subscription_admin_client()
             .returning(move |_| Ok(subscription_admin.clone()));
-
-        // Mock IAM client for resource-scoped permissions.
-        let mock_iam = create_gcp_iam_mock_for_resource_permissions();
-        provider
-            .expect_get_gcp_iam_client()
-            .returning(move |_| Ok(mock_iam.clone()));
 
         Arc::new(provider)
     }

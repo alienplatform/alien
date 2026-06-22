@@ -3,7 +3,10 @@ use tracing::info;
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use crate::gcp_iam_admin::{get_service_account_iam_policy, set_service_account_iam_policy};
+use crate::gcp_iam_admin::{
+    create_service_account, delete_service_account, get_service_account,
+    get_service_account_iam_policy, set_service_account_iam_policy,
+};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
@@ -82,7 +85,10 @@ impl GcpRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
 
         let service_account_id = get_gcp_management_service_account_id(ctx.resource_prefix);
 
@@ -115,15 +121,15 @@ impl GcpRemoteStackManagementController {
             .set_account_id(service_account_id.clone())
             .set_service_account(service_account);
 
-        let created_sa = client.create_service_account(request).await.context(
-            ErrorData::CloudPlatformError {
+        let created_sa = create_service_account(&client, &gcp_config.project_id, request)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create GCP management service account '{}'",
                     service_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         let email = if created_sa.email.is_empty() {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
@@ -446,13 +452,15 @@ impl GcpRemoteStackManagementController {
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
         // Heartbeat check: verify service account still exists
         if let Some(service_account_email) = &self.service_account_email {
-            let sa = client
-                .get_service_account(service_account_email.clone())
+            let sa = get_service_account(&client, &gcp_config.project_id, service_account_email)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to get management service account during heartbeat check"
@@ -603,10 +611,12 @@ impl GcpRemoteStackManagementController {
 
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let client = ctx
+                .service_provider
+                .get_gcp_iam_admin_client(gcp_config)
+                .await?;
 
-            match client
-                .delete_service_account(service_account_email.clone())
+            match delete_service_account(&client, &gcp_config.project_id, service_account_email)
                 .await
             {
                 Ok(_) => {

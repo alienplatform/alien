@@ -10,6 +10,9 @@ use crate::core::{
     azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext, Scope,
 };
 use crate::error::{ErrorData, Result};
+use crate::gcp_iam_admin::{
+    create_role, delete_role, get_role, list_roles, patch_role, undelete_role,
+};
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -303,7 +306,10 @@ impl ResourcePermissionsHelper {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
 
         let mut seen_role_names = HashSet::new();
         for custom_role in custom_roles {
@@ -333,11 +339,10 @@ impl ResourcePermissionsHelper {
 
             let updated_role = desired_role;
 
-            match iam_client.get_role(custom_role.name.clone()).await {
+            match get_role(&iam_client, &gcp_config.project_id, &custom_role.name).await {
                 Ok(existing_role) => {
                     if existing_role.deleted {
-                        iam_client
-                            .undelete_role(custom_role.name.clone())
+                        undelete_role(&iam_client, &custom_role.name)
                             .await
                             .context(ErrorData::CloudPlatformError {
                                 message: format!(
@@ -346,20 +351,21 @@ impl ResourcePermissionsHelper {
                                 ),
                                 resource_id: Some(permission_set_id.to_string()),
                             })?;
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update undeleted custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
+                        patch_role(
+                            &iam_client,
+                            &gcp_config.project_id,
+                            &custom_role.name,
+                            updated_role,
+                            Some("includedPermissions,title,description,stage".to_string()),
+                        )
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to update undeleted custom role '{}'",
+                                role_id
+                            ),
+                            resource_id: Some(permission_set_id.to_string()),
+                        })?;
                     } else if gcp_custom_role_matches(&existing_role, &updated_role) {
                         info!(
                             role_id = %role_id,
@@ -367,29 +373,27 @@ impl ResourcePermissionsHelper {
                             "GCP custom role already matches desired permissions"
                         );
                     } else {
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update existing custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
+                        patch_role(
+                            &iam_client,
+                            &gcp_config.project_id,
+                            &custom_role.name,
+                            updated_role,
+                            Some("includedPermissions,title,description,stage".to_string()),
+                        )
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to update existing custom role '{}'", role_id),
+                            resource_id: Some(permission_set_id.to_string()),
+                        })?;
                     }
                 }
                 Err(e) if is_gcp_not_found(&e) => {
-                    iam_client.create_role(role_request).await.context(
-                        ErrorData::CloudPlatformError {
+                    create_role(&iam_client, &gcp_config.project_id, role_request)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to create custom role '{}'", role_id),
                             resource_id: Some(permission_set_id.to_string()),
-                        },
-                    )?;
+                        })?;
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -412,7 +416,10 @@ impl ResourcePermissionsHelper {
         permission_context: &PermissionContext,
     ) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
         let role_name_prefix = format!(
             "projects/{}/roles/{}",
             gcp_config.project_id,
@@ -422,13 +429,18 @@ impl ResourcePermissionsHelper {
         let mut page_token = None;
 
         loop {
-            let response = iam_client
-                .list_roles(Some(100), page_token, Some(false))
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to list GCP custom roles before cleanup".to_string(),
-                    resource_id: Some(ctx.resource_prefix.to_string()),
-                })?;
+            let response = list_roles(
+                &iam_client,
+                &gcp_config.project_id,
+                Some(100),
+                page_token,
+                Some(false),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list GCP custom roles before cleanup".to_string(),
+                resource_id: Some(ctx.resource_prefix.to_string()),
+            })?;
 
             for role in response.roles {
                 let role_name = role.name;
@@ -449,7 +461,7 @@ impl ResourcePermissionsHelper {
                 .next()
                 .unwrap_or(role_name.as_str())
                 .to_string();
-            match iam_client.delete_role(role_name.clone()).await {
+            match delete_role(&iam_client, &role_name).await {
                 Ok(_) => {
                     info!(
                         role_id = %role_id,

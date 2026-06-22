@@ -12,6 +12,7 @@ use tracing::{debug, info};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
+use crate::gcp_iam_admin::{create_service_account, delete_service_account, get_service_account};
 use alien_core::{
     bindings::ArtifactRegistryBinding, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, GcpArtifactRegistryHeartbeatData,
@@ -265,7 +266,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_cfg)
+            .await?;
 
         let pull_account_id =
             get_gcp_artifact_registry_pull_service_account_id(ctx.resource_prefix, &config.id);
@@ -290,15 +294,15 @@ impl GcpArtifactRegistryController {
             .set_account_id(pull_account_id.clone())
             .set_service_account(service_account);
 
-        let response = iam_client.create_service_account(request).await.context(
-            ErrorData::CloudPlatformError {
+        let response = create_service_account(&iam_client, &gcp_cfg.project_id, request)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create pull service account '{}'",
                     pull_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         self.pull_service_account_email = if response.email.is_empty() {
             None
@@ -329,7 +333,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_cfg)
+            .await?;
 
         let push_account_id =
             get_gcp_artifact_registry_push_service_account_id(ctx.resource_prefix, &config.id);
@@ -354,15 +361,15 @@ impl GcpArtifactRegistryController {
             .set_account_id(push_account_id.clone())
             .set_service_account(service_account);
 
-        let response = iam_client.create_service_account(request).await.context(
-            ErrorData::CloudPlatformError {
+        let response = create_service_account(&iam_client, &gcp_cfg.project_id, request)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create push service account '{}'",
                     push_account_id
                 ),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         self.push_service_account_email = if response.email.is_empty() {
             None
@@ -466,11 +473,14 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_cfg)
+            .await?;
 
         if let Some(ref email) = self.pull_service_account_email {
             // Delete pull service account - treat NotFound as success for idempotent deletion
-            match iam_client.delete_service_account(email.clone()).await {
+            match delete_service_account(&iam_client, &gcp_cfg.project_id, email).await {
                 Ok(_) => {
                     info!(email = %email, "Pull service account deleted successfully");
                 }
@@ -505,11 +515,14 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_cfg)
+            .await?;
 
         if let Some(ref email) = self.push_service_account_email {
             // Delete push service account - treat NotFound as success for idempotent deletion
-            match iam_client.delete_service_account(email.clone()).await {
+            match delete_service_account(&iam_client, &gcp_cfg.project_id, email).await {
                 Ok(_) => {
                     info!(email = %email, "Push service account deleted successfully");
                 }
@@ -624,11 +637,14 @@ impl GcpArtifactRegistryController {
             }
 
             // Verify service accounts still exist
-            let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+            let iam_client = ctx
+                .service_provider
+                .get_gcp_iam_admin_client(gcp_cfg)
+                .await?;
 
             // Check pull service account
             if let Some(ref email) = self.pull_service_account_email {
-                match iam_client.get_service_account(email.clone()).await {
+                match get_service_account(&iam_client, &gcp_cfg.project_id, email).await {
                     Ok(_) => {
                         debug!(email = %email, "Pull service account verified successfully");
                     }
@@ -646,7 +662,7 @@ impl GcpArtifactRegistryController {
 
             // Check push service account
             if let Some(ref email) = self.push_service_account_email {
-                match iam_client.get_service_account(email.clone()).await {
+                match get_service_account(&iam_client, &gcp_cfg.project_id, email).await {
                     Ok(_) => {
                         debug!(email = %email, "Push service account verified successfully");
                     }
@@ -1093,7 +1109,6 @@ fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockGcpIamApi;
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
     use google_cloud_artifactregistry_v1::{
@@ -1107,6 +1122,11 @@ mod tests {
         },
         options::RequestOptions,
         response::Response,
+    };
+    use google_cloud_iam_admin_v1::{
+        client::Iam as IamAdminClient,
+        model::{DeleteServiceAccountRequest, GetServiceAccountRequest},
+        stub::Iam as IamAdminStubTrait,
     };
     use std::sync::Arc;
 
@@ -1141,6 +1161,31 @@ mod tests {
         }
     }
 
+    mockall::mock! {
+        #[derive(Debug)]
+        IamAdminSdk {}
+
+        impl IamAdminStubTrait for IamAdminSdk {
+            async fn create_service_account(
+                &self,
+                request: CreateServiceAccountRequest,
+                options: RequestOptions,
+            ) -> google_cloud_iam_admin_v1::Result<Response<ServiceAccount>>;
+
+            async fn delete_service_account(
+                &self,
+                request: DeleteServiceAccountRequest,
+                options: RequestOptions,
+            ) -> google_cloud_iam_admin_v1::Result<Response<()>>;
+
+            async fn get_service_account(
+                &self,
+                request: GetServiceAccountRequest,
+                options: RequestOptions,
+            ) -> google_cloud_iam_admin_v1::Result<Response<ServiceAccount>>;
+        }
+    }
+
     fn basic_artifact_registry() -> ArtifactRegistry {
         ArtifactRegistry::new("my-registry".to_string()).build()
     }
@@ -1160,48 +1205,50 @@ mod tests {
             .set_display_name(format!("Test service account {}", account_id))
     }
 
-    fn setup_mock_client_for_creation_and_deletion() -> Arc<MockGcpIamApi> {
-        let mut mock_iam = MockGcpIamApi::new();
+    fn setup_mock_client_for_creation_and_deletion() -> IamAdminClient {
+        let mut mock_iam = MockIamAdminSdk::new();
 
         // Mock successful service account creation (for both pull and push)
         mock_iam
             .expect_create_service_account()
-            .returning(|request| {
-                Ok(create_successful_service_account_response(
+            .returning(|request, _| {
+                Ok(Response::from(create_successful_service_account_response(
                     &request.account_id,
-                ))
+                )))
             });
 
         // Mock successful service account deletion (for both pull and push)
         mock_iam
             .expect_delete_service_account()
-            .returning(|_| Ok(()));
+            .returning(|_, _| Ok(Response::from(())));
 
-        Arc::new(mock_iam)
+        IamAdminClient::from_stub(mock_iam)
     }
 
-    fn setup_mock_client_for_creation_and_update() -> Arc<MockGcpIamApi> {
-        let mut mock_iam = MockGcpIamApi::new();
+    fn setup_mock_client_for_creation_and_update() -> IamAdminClient {
+        let mut mock_iam = MockIamAdminSdk::new();
 
         // Mock successful service account creation (for both pull and push)
         mock_iam
             .expect_create_service_account()
-            .returning(|request| {
-                Ok(create_successful_service_account_response(
+            .returning(|request, _| {
+                Ok(Response::from(create_successful_service_account_response(
                     &request.account_id,
-                ))
+                )))
             });
 
         // Mock successful service account retrieval for heartbeat checks
         mock_iam
             .expect_get_service_account()
-            .returning(|service_account_name| {
+            .returning(|request, _| {
                 // Extract account ID from the service account name
-                let account_id = service_account_name.split('/').last().unwrap_or("unknown");
-                Ok(create_successful_service_account_response(account_id))
+                let account_id = request.name.split('/').last().unwrap_or("unknown");
+                Ok(Response::from(create_successful_service_account_response(
+                    account_id,
+                )))
             });
 
-        Arc::new(mock_iam)
+        IamAdminClient::from_stub(mock_iam)
     }
 
     fn setup_mock_ar_client_existing_repo() -> ArtifactRegistryClient {
@@ -1254,14 +1301,12 @@ mod tests {
         )
     }
 
-    fn setup_mock_service_provider(
-        mock_iam: Arc<MockGcpIamApi>,
-    ) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_service_provider(mock_iam: IamAdminClient) -> Arc<MockPlatformServiceProvider> {
         let mock_ar = setup_mock_ar_client_existing_repo();
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
-            .expect_get_gcp_iam_client()
+            .expect_get_gcp_iam_admin_client()
             .returning(move |_| Ok(mock_iam.clone()));
 
         mock_provider
@@ -1272,13 +1317,13 @@ mod tests {
     }
 
     fn setup_mock_service_provider_with_ar_client(
-        mock_iam: Arc<MockGcpIamApi>,
+        mock_iam: IamAdminClient,
         ar_client: ArtifactRegistryClient,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
-            .expect_get_gcp_iam_client()
+            .expect_get_gcp_iam_admin_client()
             .returning(move |_| Ok(mock_iam.clone()));
 
         mock_provider

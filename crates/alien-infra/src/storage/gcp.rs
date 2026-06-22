@@ -928,8 +928,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use crate::core::{
-        controller_test::SingleControllerExecutor, MockGcpIamApi, MockGcsApi,
-        MockPlatformServiceProvider,
+        controller_test::SingleControllerExecutor, MockGcsApi, MockPlatformServiceProvider,
     };
     use crate::error::ErrorData;
     use crate::storage::GcpStorageController;
@@ -1075,22 +1074,12 @@ mod tests {
         Arc::new(mock_gcs)
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
-        Arc::new(MockGcpIamApi::new())
-    }
-
     fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_gcp_gcs_client()
             .returning(move |_| Ok(mock_gcs.clone()));
-
-        // Mock IAM client for resource-scoped permissions.
-        let mock_iam = create_gcp_iam_mock_for_resource_permissions();
-        mock_provider
-            .expect_get_gcp_iam_client()
-            .returning(move |_| Ok(mock_iam.clone()));
 
         Arc::new(mock_provider)
     }

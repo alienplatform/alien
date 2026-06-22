@@ -6009,7 +6009,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::core::MockGcpIamApi;
     use crate::gcp_compute::MockGcpComputeApi;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
@@ -6607,10 +6606,6 @@ mod tests {
         }
     }
 
-    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
-        Arc::new(MockGcpIamApi::new())
-    }
-
     fn setup_mock_service_provider(
         mock_cloudrun: FakeCloudRunServices,
         mock_compute: Option<Arc<MockGcpComputeApi>>,
@@ -6627,12 +6622,6 @@ mod tests {
                 .expect_get_gcp_compute_client()
                 .returning(move |_| Ok(compute.clone()));
         }
-
-        // Mock IAM client for resource-scoped permissions.
-        let mock_iam = create_gcp_iam_mock_for_resource_permissions();
-        mock_provider
-            .expect_get_gcp_iam_client()
-            .returning(move |_| Ok(mock_iam.clone()));
 
         mock_provider
             .expect_get_gcp_pubsub_topic_admin_client()

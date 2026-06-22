@@ -13,7 +13,6 @@ use crate::azure_container_apps::{
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
-use crate::gcp_iam_admin::service_account_resource_name;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
     DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
@@ -69,9 +68,6 @@ use google_cloud_auth::errors::CredentialsError;
 use google_cloud_firestore_admin_v1::client::FirestoreAdmin;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_admin_v1::client::Iam;
-use google_cloud_iam_admin_v1::model::{
-    CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role, ServiceAccount,
-};
 use google_cloud_iam_v1::client::IAMPolicy;
 use google_cloud_iam_v1::model::Policy;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
@@ -136,353 +132,6 @@ impl CredentialsProvider for StaticGcpAccessTokenCredentials {
 
     fn universe_domain(&self) -> impl Future<Output = Option<String>> + Send {
         async { None }
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
-    async fn create_service_account(
-        &self,
-        request: CreateServiceAccountRequest,
-    ) -> Result<ServiceAccount>;
-
-    async fn delete_service_account(&self, service_account_name: String) -> Result<()>;
-
-    async fn get_service_account(&self, service_account_name: String) -> Result<ServiceAccount>;
-
-    async fn patch_service_account(
-        &self,
-        service_account_name: String,
-        service_account: ServiceAccount,
-        update_mask: Option<String>,
-    ) -> Result<ServiceAccount>;
-
-    async fn create_role(&self, request: CreateRoleRequest) -> Result<Role>;
-
-    async fn delete_role(&self, role_name: String) -> Result<Role>;
-
-    async fn undelete_role(&self, role_name: String) -> Result<Role>;
-
-    async fn get_role(&self, role_name: String) -> Result<Role>;
-
-    async fn list_roles(
-        &self,
-        page_size: Option<i32>,
-        page_token: Option<String>,
-        show_deleted: Option<bool>,
-    ) -> Result<ListRolesResponse>;
-
-    async fn patch_role(
-        &self,
-        role_name: String,
-        role: Role,
-        update_mask: Option<String>,
-    ) -> Result<Role>;
-}
-
-struct IamClient {
-    config: GcpClientConfig,
-    client: OnceCell<Iam>,
-}
-
-impl std::fmt::Debug for IamClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("IamClient")
-            .field("project_id", &self.config.project_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl IamClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<Iam> {
-        let client = self
-            .client
-            .get_or_try_init(|| async { iam_admin_client_from_alien_config(&self.config).await })
-            .await?;
-        Ok(client.clone())
-    }
-
-    fn role_name(&self, role_name: &str) -> String {
-        if role_name.starts_with("projects/") || role_name.starts_with("organizations/") {
-            role_name.to_string()
-        } else {
-            format!("projects/{}/roles/{role_name}", self.config.project_id)
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl GcpIamApi for IamClient {
-    async fn create_service_account(
-        &self,
-        mut request: CreateServiceAccountRequest,
-    ) -> Result<ServiceAccount> {
-        if request.name.is_empty() {
-            request.name = format!("projects/{}", self.config.project_id);
-        }
-        let account_id = request.account_id.clone();
-
-        match self
-            .client()
-            .await?
-            .create_service_account()
-            .with_request(request)
-            .send()
-            .await
-        {
-            Ok(service_account) => Ok(service_account),
-            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: "GCP service account".to_string(),
-                    resource_name: account_id,
-                    message: "create_service_account reported the account already exists"
-                        .to_string(),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "IAM create_service_account request failed".to_string(),
-                        resource_id: Some(account_id),
-                    }))
-            }
-        }
-    }
-
-    async fn delete_service_account(&self, service_account_name: String) -> Result<()> {
-        match self
-            .client()
-            .await?
-            .delete_service_account()
-            .set_name(service_account_resource_name(
-                &self.config.project_id,
-                &service_account_name,
-            ))
-            .send()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "GCP service account".to_string(),
-                    resource_name: service_account_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "IAM delete_service_account request failed".to_string(),
-                        resource_id: Some(service_account_name),
-                    }))
-            }
-        }
-    }
-
-    async fn get_service_account(&self, service_account_name: String) -> Result<ServiceAccount> {
-        match self
-            .client()
-            .await?
-            .get_service_account()
-            .set_name(service_account_resource_name(
-                &self.config.project_id,
-                &service_account_name,
-            ))
-            .send()
-            .await
-        {
-            Ok(service_account) => Ok(service_account),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "GCP service account".to_string(),
-                    resource_name: service_account_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "IAM get_service_account request failed".to_string(),
-                        resource_id: Some(service_account_name),
-                    }))
-            }
-        }
-    }
-
-    async fn patch_service_account(
-        &self,
-        service_account_name: String,
-        service_account: ServiceAccount,
-        update_mask: Option<String>,
-    ) -> Result<ServiceAccount> {
-        let mut request = google_cloud_iam_admin_v1::model::PatchServiceAccountRequest::new()
-            .set_service_account(service_account);
-        if let Some(update_mask) = update_mask {
-            request = request.set_update_mask(field_mask_from_comma_separated(update_mask));
-        }
-
-        self.client()
-            .await?
-            .patch_service_account()
-            .with_request(request)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "IAM patch_service_account request failed".to_string(),
-                resource_id: Some(service_account_name),
-            })
-    }
-
-    async fn create_role(&self, mut request: CreateRoleRequest) -> Result<Role> {
-        if request.parent.is_empty() {
-            request.parent = format!("projects/{}", self.config.project_id);
-        }
-        let role_id = request.role_id.clone();
-
-        match self
-            .client()
-            .await?
-            .create_role()
-            .with_request(request)
-            .send()
-            .await
-        {
-            Ok(role) => Ok(role),
-            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: "GCP custom role".to_string(),
-                    resource_name: role_id,
-                    message: "create_role reported the role already exists".to_string(),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "IAM create_role request failed".to_string(),
-                        resource_id: Some(role_id),
-                    }))
-            }
-        }
-    }
-
-    async fn delete_role(&self, role_name: String) -> Result<Role> {
-        self.client()
-            .await?
-            .delete_role()
-            .set_name(self.role_name(&role_name))
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "IAM delete_role request failed".to_string(),
-                resource_id: Some(role_name),
-            })
-    }
-
-    async fn undelete_role(&self, role_name: String) -> Result<Role> {
-        self.client()
-            .await?
-            .undelete_role()
-            .set_name(self.role_name(&role_name))
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "IAM undelete_role request failed".to_string(),
-                resource_id: Some(role_name),
-            })
-    }
-
-    async fn get_role(&self, role_name: String) -> Result<Role> {
-        match self
-            .client()
-            .await?
-            .get_role()
-            .set_name(self.role_name(&role_name))
-            .send()
-            .await
-        {
-            Ok(role) => Ok(role),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "GCP custom role".to_string(),
-                    resource_name: role_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "IAM get_role request failed".to_string(),
-                        resource_id: Some(role_name),
-                    }))
-            }
-        }
-    }
-
-    async fn list_roles(
-        &self,
-        page_size: Option<i32>,
-        page_token: Option<String>,
-        show_deleted: Option<bool>,
-    ) -> Result<ListRolesResponse> {
-        let mut request = self
-            .client()
-            .await?
-            .list_roles()
-            .set_parent(format!("projects/{}", self.config.project_id));
-        if let Some(page_size) = page_size {
-            request = request.set_page_size(page_size);
-        }
-        if let Some(page_token) = page_token {
-            request = request.set_page_token(page_token);
-        }
-        if let Some(show_deleted) = show_deleted {
-            request = request.set_show_deleted(show_deleted);
-        }
-
-        request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "IAM list_roles request failed".to_string(),
-                resource_id: Some(self.config.project_id.clone()),
-            },
-        )
-    }
-
-    async fn patch_role(
-        &self,
-        role_name: String,
-        role: Role,
-        update_mask: Option<String>,
-    ) -> Result<Role> {
-        let mut request = self
-            .client()
-            .await?
-            .update_role()
-            .set_name(self.role_name(&role_name))
-            .set_role(role);
-        if let Some(update_mask) = update_mask {
-            request = request.set_update_mask(field_mask_from_comma_separated(update_mask));
-        }
-
-        request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "IAM patch_role request failed".to_string(),
-                resource_id: Some(role_name),
-            },
-        )
     }
 }
 
@@ -3570,7 +3219,6 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<aws_sdk_eventbridge::Client>;
 
     // GCP clients
-    fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
     async fn get_gcp_iam_admin_client(&self, config: &GcpClientConfig) -> Result<Iam>;
     async fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Services>;
     async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects>;
@@ -3866,10 +3514,6 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     // GCP implementations
-    fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>> {
-        Ok(Arc::new(IamClient::new(config.clone())))
-    }
-
     async fn get_gcp_iam_admin_client(&self, config: &GcpClientConfig) -> Result<Iam> {
         iam_admin_client_from_alien_config(config).await
     }
@@ -4563,15 +4207,6 @@ async fn gcs_http_error(
             resource_id,
         })
     }
-}
-
-fn field_mask_from_comma_separated(update_mask: String) -> wkt::FieldMask {
-    wkt::FieldMask::default().set_paths(
-        update_mask
-            .split(',')
-            .map(str::trim)
-            .filter(|path| !path.is_empty()),
-    )
 }
 
 fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
