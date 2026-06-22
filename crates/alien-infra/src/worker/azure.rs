@@ -1,4 +1,3 @@
-use crate::azure_authorization;
 use crate::azure_container_apps;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
@@ -2651,11 +2650,19 @@ impl AzureWorkerController {
             .get_azure_authorization_client(azure_config)?;
 
         if let Some(assignment_id) = self.commands_sender_role_assignment_id.take() {
-            match azure_authorization::delete_role_assignment_by_id(
-                &authorization_client,
+            let result = authorization_client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
                 &assignment_id,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(assignment_id=%assignment_id, "Commands sender role assignment deleted");
@@ -2672,11 +2679,19 @@ impl AzureWorkerController {
 
         // Delete commands receiver role assignment (best-effort)
         if let Some(assignment_id) = self.commands_receiver_role_assignment_id.take() {
-            match azure_authorization::delete_role_assignment_by_id(
-                &authorization_client,
+            let result = authorization_client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
                 &assignment_id,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(assignment_id=%assignment_id, "Commands receiver role assignment deleted");
@@ -3374,10 +3389,10 @@ impl AzureWorkerController {
                 .as_bytes(),
             )
             .to_string();
-            let full_assignment_id = azure_authorization::role_assignment_id(
-                azure_config,
-                &queue_scope,
-                &role_assignment_id,
+            let full_assignment_id = format!(
+                "/{}/providers/Microsoft.Authorization/roleAssignments/{}",
+                queue_scope.to_scope_string(azure_config),
+                role_assignment_id
             );
             let role_definition_id = format!(
                 "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",

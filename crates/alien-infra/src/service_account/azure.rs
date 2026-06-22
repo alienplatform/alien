@@ -2,7 +2,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::azure_authorization;
 use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -365,14 +364,21 @@ impl AzureServiceAccountController {
                     ..Default::default()
                 };
 
-                let created_role = azure_authorization::create_or_update_role_definition(
-                    &client,
-                    &azure_cfg,
-                    &scope,
+                let result = client
+                    .role_definitions_client()
+                    .create_or_update(
+                        scope.to_scope_string(&azure_cfg),
+                        role_definition_id.clone(),
+                        role_definition,
+                    )
+                    .await;
+                let created_role = map_azure_core_021_sdk_error(
+                    "Azure Authorization",
+                    result,
+                    "role definition create or update",
+                    "Azure role definition",
                     &role_definition_id,
-                    &role_definition,
                 )
-                .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create custom role definition '{}'", role_name),
                     resource_id: Some(config_id.clone()),
@@ -518,12 +524,17 @@ impl AzureServiceAccountController {
                         binding.scope, assignment_id
                     );
 
-                    azure_authorization::create_or_update_role_assignment_by_id(
-                        &client,
+                    let result = client
+                        .role_assignments_client()
+                        .create_by_id(full_assignment_id.clone(), role_assignment)
+                        .await;
+                    map_azure_core_021_sdk_error(
+                        "Azure Authorization",
+                        result,
+                        "role assignment create or update",
+                        "Azure role assignment",
                         &full_assignment_id,
-                        &role_assignment,
                     )
-                    .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
                             "Failed to assign role to managed identity '{}'",
@@ -689,7 +700,20 @@ impl AzureServiceAccountController {
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
-            match azure_authorization::delete_role_assignment_by_id(&client, assignment_id).await {
+            let result = client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
+                assignment_id,
+            )
+            .map(|_| ())
+            {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted for update");
                 }
@@ -716,13 +740,19 @@ impl AzureServiceAccountController {
                 .unwrap_or(role_definition_id);
             let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
-            match azure_authorization::delete_role_definition(
-                &client,
-                azure_cfg,
-                &scope,
+            let result = client
+                .role_definitions_client()
+                .delete(scope.to_scope_string(azure_cfg), role_def_uuid.to_string())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role definition delete",
+                "Azure role definition",
                 role_def_uuid,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted for update");
@@ -809,7 +839,20 @@ impl AzureServiceAccountController {
 
         // Delete all role assignments
         for assignment_id in &self.role_assignment_ids {
-            match azure_authorization::delete_role_assignment_by_id(&client, assignment_id).await {
+            let result = client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
+                assignment_id,
+            )
+            .map(|_| ())
+            {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted successfully");
                 }
@@ -865,13 +908,19 @@ impl AzureServiceAccountController {
                 .unwrap_or(role_definition_id);
             let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
-            match azure_authorization::delete_role_definition(
-                &client,
-                azure_cfg,
-                &scope,
+            let result = client
+                .role_definitions_client()
+                .delete(scope.to_scope_string(azure_cfg), role_def_uuid.to_string())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role definition delete",
+                "Azure role definition",
                 role_def_uuid,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted successfully");

@@ -3,8 +3,7 @@
 //! This module provides shared functionality for Azure resource controllers to apply
 //! resource-scoped permissions using the Azure Authorization API.
 
-use crate::azure_authorization;
-use crate::core::{ResourceControllerContext, Scope};
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
 use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context};
@@ -389,14 +388,21 @@ impl AzurePermissionsHelper {
             ..Default::default()
         };
 
-        azure_authorization::create_or_update_role_definition(
-            authorization_client,
-            azure_config,
-            role_definition_scope,
+        let result = authorization_client
+            .role_definitions_client()
+            .create_or_update(
+                role_definition_scope.to_scope_string(azure_config),
+                role_definition_id.to_string(),
+                role_definition,
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role definition create or update",
+            "Azure role definition",
             role_definition_id,
-            &role_definition,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to create Azure custom role definition '{role_name}'"),
             resource_id: Some(permission_set_id.to_string()),
@@ -456,8 +462,11 @@ impl AzurePermissionsHelper {
         principal_id: &str,
         role_definition_id: &str,
     ) -> Result<()> {
-        let full_assignment_id =
-            azure_authorization::role_assignment_id(azure_config, scope, role_assignment_id);
+        let full_assignment_id = format!(
+            "/{}/providers/Microsoft.Authorization/roleAssignments/{}",
+            scope.to_scope_string(azure_config),
+            role_assignment_id
+        );
 
         let role_assignment = RoleAssignmentCreateParameters::new(RoleAssignmentProperties {
             principal_id: principal_id.to_string(),
@@ -476,12 +485,17 @@ impl AzurePermissionsHelper {
             updated_on: None,
         });
 
-        azure_authorization::create_or_update_role_assignment_by_id(
-            authorization_client,
-            &full_assignment_id,
-            &role_assignment,
+        let result = authorization_client
+            .role_assignments_client()
+            .create_by_id(full_assignment_id, role_assignment)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role assignment create or update",
+            "Azure role assignment",
+            role_assignment_id,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to create Azure role assignment".to_string(),
             resource_id: Some(role_assignment_id.to_string()),

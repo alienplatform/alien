@@ -2,7 +2,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::azure_authorization;
 use crate::core::{
     map_azure_core_021_sdk_error, ResourceControllerContext, ResourcePermissionsHelper, Scope,
 };
@@ -400,14 +399,21 @@ impl AzureRemoteStackManagementController {
             &resource_group_name,
         );
 
-        let created = azure_authorization::create_or_update_role_definition(
-            &client,
-            azure_cfg,
-            &scope,
+        let result = client
+            .role_definitions_client()
+            .create_or_update(
+                scope.to_scope_string(azure_cfg),
+                role_definition_uuid.clone(),
+                role_definition,
+            )
+            .await;
+        let created = map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role definition create or update",
+            "Azure role definition",
             &role_definition_uuid,
-            &role_definition,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create management role definition for stack '{}'",
@@ -655,8 +661,19 @@ impl AzureRemoteStackManagementController {
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
-            match azure_authorization::delete_role_assignment_by_id(&auth_client, assignment_id)
-                .await
+            let result = auth_client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
+                assignment_id,
+            )
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Management role assignment deleted for update");
@@ -681,13 +698,19 @@ impl AzureRemoteStackManagementController {
             let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
             let scope = role_definition_scope_from_id(role_def_id, &resource_group_name);
 
-            match azure_authorization::delete_role_definition(
-                &auth_client,
-                azure_cfg,
-                &scope,
+            let result = auth_client
+                .role_definitions_client()
+                .delete(scope.to_scope_string(azure_cfg), role_def_uuid.to_string())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role definition delete",
+                "Azure role definition",
                 role_def_uuid,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_def_id, "Management role definition deleted for update");
@@ -783,7 +806,20 @@ impl AzureRemoteStackManagementController {
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
-            match azure_authorization::delete_role_assignment_by_id(&client, assignment_id).await {
+            let result = client
+                .role_assignments_client()
+                .delete_by_id(assignment_id.clone())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role assignment delete",
+                "Azure role assignment",
+                assignment_id,
+            )
+            .map(|_| ())
+            {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted");
                 }
@@ -828,13 +864,19 @@ impl AzureRemoteStackManagementController {
 
             let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
 
-            match azure_authorization::delete_role_definition(
-                &client,
-                azure_cfg,
-                &scope,
+            let result = client
+                .role_definitions_client()
+                .delete(scope.to_scope_string(azure_cfg), role_def_uuid.to_string())
+                .send()
+                .await;
+            match map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                result,
+                "role definition delete",
+                "Azure role definition",
                 role_def_uuid,
             )
-            .await
+            .map(|_| ())
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_def_id, "Role definition deleted");
@@ -1667,12 +1709,17 @@ impl AzureRemoteStackManagementController {
             updated_on: None,
         });
 
-        let create_result = azure_authorization::create_or_update_role_assignment_by_id(
-            client,
+        let result = client
+            .role_assignments_client()
+            .create_by_id(full_assignment_id.clone(), role_assignment)
+            .await;
+        let create_result = map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role assignment create or update",
+            "Azure role assignment",
             &full_assignment_id,
-            &role_assignment,
-        )
-        .await;
+        );
 
         if let Err(err) = create_result {
             if let Some(existing_assignment_id) =
