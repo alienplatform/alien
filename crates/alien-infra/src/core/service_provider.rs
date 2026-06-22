@@ -49,7 +49,6 @@ use azure_mgmt_network::package_2024_03::models::{
 };
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
 use azure_mgmt_servicebus::package_2024_01;
-use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue};
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
 use azure_mgmt_storage::package_2023_05::models::{
     BlobContainer, BlobServiceProperties, StorageAccount, StorageAccountCreateParameters,
@@ -1437,264 +1436,6 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
-pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
-    async fn create_or_update_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        parameters: SbNamespace,
-    ) -> Result<SbNamespace>;
-
-    async fn get_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-    ) -> Result<SbNamespace>;
-
-    async fn delete_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-    ) -> Result<()>;
-
-    async fn create_or_update_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-        parameters: SbQueue,
-    ) -> Result<SbQueue>;
-
-    async fn get_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-    ) -> Result<SbQueue>;
-
-    async fn delete_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-    ) -> Result<()>;
-}
-
-struct OfficialAzureServiceBusManagementClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<package_2024_01::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureServiceBusManagementClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureServiceBusManagementClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureServiceBusManagementClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<package_2024_01::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                package_2024_01::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Service Bus client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
-    async fn create_or_update_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        parameters: SbNamespace,
-    ) -> Result<SbNamespace> {
-        let result = self
-            .client()
-            .await?
-            .namespaces_client()
-            .create_or_update(
-                resource_group_name,
-                namespace_name.clone(),
-                parameters,
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "namespace create or update",
-            "Azure Service Bus namespace",
-            &namespace_name,
-        )
-    }
-
-    async fn get_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-    ) -> Result<SbNamespace> {
-        let result = self
-            .client()
-            .await?
-            .namespaces_client()
-            .get(
-                resource_group_name,
-                namespace_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "namespace get",
-            "Azure Service Bus namespace",
-            &namespace_name,
-        )
-    }
-
-    async fn delete_namespace(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .namespaces_client()
-            .delete(
-                resource_group_name,
-                namespace_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "namespace delete",
-            "Azure Service Bus namespace",
-            &namespace_name,
-        )
-    }
-
-    async fn create_or_update_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-        parameters: SbQueue,
-    ) -> Result<SbQueue> {
-        let result = self
-            .client()
-            .await?
-            .queues_client()
-            .create_or_update(
-                resource_group_name,
-                namespace_name,
-                queue_name.clone(),
-                parameters,
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "queue create or update",
-            "Azure Service Bus queue",
-            &queue_name,
-        )
-    }
-
-    async fn get_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-    ) -> Result<SbQueue> {
-        let result = self
-            .client()
-            .await?
-            .queues_client()
-            .get(
-                resource_group_name,
-                namespace_name,
-                queue_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "queue get",
-            "Azure Service Bus queue",
-            &queue_name,
-        )
-    }
-
-    async fn delete_queue(
-        &self,
-        resource_group_name: String,
-        namespace_name: String,
-        queue_name: String,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .queues_client()
-            .delete(
-                resource_group_name,
-                namespace_name,
-                queue_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Service Bus",
-            result,
-            "queue delete",
-            "Azure Service Bus queue",
-            &queue_name,
-        )
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
 pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
     async fn create_storage_account(
         &self,
@@ -2229,7 +1970,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_service_bus_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureServiceBusManagementApi>>;
+    ) -> Result<package_2024_01::Client>;
     fn get_azure_network_client(
         &self,
         config: &AzureClientConfig,
@@ -2699,11 +2440,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_service_bus_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureServiceBusManagementApi>> {
-        Ok(Arc::new(OfficialAzureServiceBusManagementClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<package_2024_01::Client> {
+        azure_servicebus_client_from_alien_config(config)
     }
 
     fn get_azure_network_client(
@@ -3691,6 +3429,29 @@ pub(crate) fn azure_keyvault_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Key Vault client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_servicebus_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<package_2024_01::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    package_2024_01::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Service Bus client".to_string(),
             resource_id: None,
         })
 }

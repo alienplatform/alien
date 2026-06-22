@@ -1,3 +1,4 @@
+use crate::azure_servicebus;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -61,10 +62,12 @@ impl AzureQueueController {
         // Create the queue in the existing namespace
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-        mgmt.create_or_update_queue(
-            resource_group,
-            namespace_name.clone(),
-            queue_name.clone(),
+        azure_servicebus::create_or_update_queue(
+            &mgmt,
+            &cfg.subscription_id,
+            &resource_group,
+            namespace_name,
+            &queue_name,
             service_bus_queue_request(&queue_name),
         )
         .await
@@ -150,13 +153,18 @@ impl AzureQueueController {
 
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-        let queue_properties = mgmt
-            .get_queue(resource_group, namespace.clone(), queue.clone())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get Service Bus queue during heartbeat".to_string(),
-                resource_id: Some(q.id.clone()),
-            })?;
+        let queue_properties = azure_servicebus::get_queue(
+            &mgmt,
+            &cfg.subscription_id,
+            &resource_group,
+            namespace,
+            queue,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to get Service Bus queue during heartbeat".to_string(),
+            resource_id: Some(q.id.clone()),
+        })?;
         emit_azure_service_bus_queue_heartbeat(
             ctx,
             &q.id,
@@ -203,9 +211,14 @@ impl AzureQueueController {
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {
             let resource_group =
                 crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-            let _ = mgmt
-                .delete_queue(resource_group, ns.clone(), qn.clone())
-                .await;
+            let _ = azure_servicebus::delete_queue(
+                &mgmt,
+                &cfg.subscription_id,
+                &resource_group,
+                ns,
+                qn,
+            )
+            .await;
         }
         self.namespace_name = None;
         self.queue_name = None;
@@ -376,32 +389,105 @@ fn nonnegative_i32_to_u32(value: Option<i32>) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockAuthorizationApi;
-    use crate::core::MockAzureServiceBusManagementApi;
-    use crate::core::MockPlatformServiceProvider;
+    use crate::core::{
+        azure_credential_from_config, AzureCore021Credential, MockAuthorizationApi,
+        MockPlatformServiceProvider,
+    };
     use alien_core::{Platform, Queue, ResourceStatus};
-    use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, TrackedResource};
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
+        Response, StatusCode, TransportOptions,
+    };
+    use azure_mgmt_servicebus::package_2024_01 as azure_servicebus_2024_01;
+    use serde_json::json;
     use std::sync::Arc;
 
-    fn setup_mock_mgmt() -> Arc<MockAzureServiceBusManagementApi> {
-        let mut mock = MockAzureServiceBusManagementApi::new();
-        mock.expect_create_or_update_namespace()
-            .returning(|_, _, _| Ok(SbNamespace::new(TrackedResource::new("eastus".to_string()))));
-        mock.expect_create_or_update_queue()
-            .returning(|_, _, _, _| Ok(SbQueue::default()));
-        mock.expect_get_queue()
-            .returning(|_, _, _| Ok(SbQueue::default()));
-        mock.expect_delete_queue().returning(|_, _, _| Ok(()));
-        Arc::new(mock)
+    #[derive(Debug)]
+    struct QueueControllerTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for QueueControllerTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(
+                request.url().path(),
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/default-resource-group/providers/Microsoft.ServiceBus/namespaces/default-service-bus-namespace/queues/test-azure-queue"
+            );
+            assert_eq!(request.url().query(), Some("api-version=2024-01-01"));
+
+            match request.method() {
+                &Method::Put => {
+                    match request.body() {
+                        Body::Bytes(bytes) => {
+                            let body: serde_json::Value = serde_json::from_slice(bytes)
+                                .expect("queue create body should be JSON");
+                            assert_eq!(body["name"], "test-azure-queue");
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        Body::SeekableStream(_) => panic!("queue create should use JSON bytes"),
+                    }
+                    Ok(queue_response(StatusCode::Ok))
+                }
+                &Method::Get => Ok(queue_response(StatusCode::Ok)),
+                &Method::Delete => Ok(Response::new(
+                    StatusCode::Ok,
+                    Headers::new(),
+                    Box::pin(BytesStream::new("{}")),
+                )),
+                method => panic!("unexpected Service Bus queue method: {method:?}"),
+            }
+        }
+    }
+
+    fn queue_response(status: StatusCode) -> Response {
+        let response = json!({
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/default-resource-group/providers/Microsoft.ServiceBus/namespaces/default-service-bus-namespace/queues/test-azure-queue",
+            "name": "test-azure-queue",
+            "type": "Microsoft.ServiceBus/namespaces/queues",
+            "properties": { "status": "Active" }
+        });
+        Response::new(
+            status,
+            Headers::new(),
+            Box::pin(BytesStream::new(response.to_string())),
+        )
+    }
+
+    fn servicebus_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_servicebus_2024_01::Client {
+        let config = alien_core::AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: alien_core::AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_servicebus_2024_01::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Service Bus client should build")
     }
 
     fn setup_mock_provider(
-        mock_mgmt: Arc<MockAzureServiceBusManagementApi>,
+        client: azure_servicebus_2024_01::Client,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_azure_service_bus_management_client()
-            .returning(move |_| Ok(mock_mgmt.clone()));
+            .returning(move |_| Ok(client.clone()));
 
         // Mock authorization client for resource-scoped permissions
         provider
@@ -414,8 +500,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_servicebus_queue_succeeds() {
         let queue = Queue::new("azure-queue".to_string()).build();
-        let mock_mgmt = setup_mock_mgmt();
-        let mock_provider = setup_mock_provider(mock_mgmt);
+        let servicebus_client = servicebus_client_with_transport(QueueControllerTransport);
+        let mock_provider = setup_mock_provider(servicebus_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(queue)

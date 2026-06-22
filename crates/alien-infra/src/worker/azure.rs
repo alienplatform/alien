@@ -1,4 +1,5 @@
 use crate::azure_container_apps::{ContainerApp, ContainerAppProperties};
+use crate::azure_servicebus;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
@@ -1558,10 +1559,12 @@ impl AzureWorkerController {
             "Creating commands Service Bus queue"
         );
 
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
+        azure_servicebus::create_or_update_queue(
+            &mgmt,
+            &azure_config.subscription_id,
+            &service_bus_resource_group,
+            &namespace_name,
+            &queue_name,
             service_bus_queue_request(&queue_name),
         )
         .await
@@ -2845,13 +2848,14 @@ impl AzureWorkerController {
             let mgmt = ctx
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
-            match mgmt
-                .delete_queue(
-                    resource_group_name,
-                    namespace_name.clone(),
-                    queue_name.clone(),
-                )
-                .await
+            match azure_servicebus::delete_queue(
+                &mgmt,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &namespace_name,
+                &queue_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(queue=%queue_name, "Commands Service Bus queue deleted");
@@ -3340,10 +3344,12 @@ impl AzureWorkerController {
             "Pre-creating commands Service Bus queue (before Container App)"
         );
 
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
+        azure_servicebus::create_or_update_queue(
+            &mgmt,
+            &azure_config.subscription_id,
+            &service_bus_resource_group,
+            &namespace_name,
+            &queue_name,
             service_bus_queue_request(&queue_name),
         )
         .await

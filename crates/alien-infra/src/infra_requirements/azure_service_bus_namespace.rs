@@ -1,6 +1,7 @@
 use std::time::Duration;
 use tracing::{debug, error, info};
 
+use crate::azure_servicebus;
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -59,17 +60,18 @@ impl AzureServiceBusNamespaceController {
             .get_azure_service_bus_management_client(azure_config)?;
         let namespace = self.build_namespace(azure_config, ctx);
 
-        client
-            .create_or_update_namespace(
-                resource_group_name.clone(),
-                self.namespace_name.as_ref().unwrap().clone(),
-                namespace,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create Azure Service Bus Namespace".to_string(),
-                resource_id: Some(desired_config.id.clone()),
-            })?;
+        azure_servicebus::create_or_update_namespace(
+            &client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            self.namespace_name.as_ref().unwrap(),
+            namespace,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create Azure Service Bus Namespace".to_string(),
+            resource_id: Some(desired_config.id.clone()),
+        })?;
 
         info!(namespace_name=%self.namespace_name.as_ref().unwrap(), "Service Bus namespace creation initiated");
 
@@ -106,9 +108,13 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match client
-            .get_namespace(resource_group_name.clone(), namespace_name.clone())
-            .await
+        match azure_servicebus::get_namespace(
+            &client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            namespace_name,
+        )
+        .await
         {
             Ok(namespace) => {
                 if let Some(properties) = &namespace.properties {
@@ -229,13 +235,17 @@ impl AzureServiceBusNamespaceController {
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
 
-            let namespace = client
-                .get_namespace(resource_group_name.clone(), namespace_name.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get Service Bus Namespace '{}'", namespace_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let namespace = azure_servicebus::get_namespace(
+                &client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                namespace_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get Service Bus Namespace '{}'", namespace_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_service_bus_namespace_heartbeat(
                 ctx,
@@ -295,9 +305,13 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match client
-            .delete_namespace(resource_group_name, namespace_name.clone())
-            .await
+        match azure_servicebus::delete_namespace(
+            &client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            namespace_name,
+        )
+        .await
         {
             Ok(_) => {
                 info!(namespace_name=%namespace_name, "Namespace deletion initiated");
@@ -353,9 +367,13 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match client
-            .get_namespace(resource_group_name, namespace_name.clone())
-            .await
+        match azure_servicebus::get_namespace(
+            &client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            namespace_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!(namespace_name=%namespace_name, "Namespace still exists, continuing to wait");

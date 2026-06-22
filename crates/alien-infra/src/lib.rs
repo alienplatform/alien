@@ -8,6 +8,8 @@ mod azure_keyvault;
 
 mod azure_resources;
 
+mod azure_servicebus;
+
 mod azure_storage;
 
 mod gcp_compute;
