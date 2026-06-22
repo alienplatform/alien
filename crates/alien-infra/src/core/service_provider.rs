@@ -41,7 +41,6 @@ use azure_mgmt_authorization::package_2022_04_01::models::{
 };
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
-use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
 use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 use azure_mgmt_network::package_2024_03 as azure_network_2024_03;
@@ -1438,21 +1437,6 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
-pub trait AzureKeyVaultManagementApi: Send + Sync + std::fmt::Debug {
-    async fn create_or_update_vault(
-        &self,
-        resource_group_name: String,
-        vault_name: String,
-        parameters: VaultCreateOrUpdateParameters,
-    ) -> Result<Vault>;
-
-    async fn delete_vault(&self, resource_group_name: String, vault_name: String) -> Result<()>;
-
-    async fn get_vault(&self, resource_group_name: String, vault_name: String) -> Result<Vault>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
 pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
     async fn create_or_update_namespace(
         &self,
@@ -2095,129 +2079,6 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
     }
 }
 
-struct OfficialAzureKeyVaultManagementClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_keyvault_2022_02::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureKeyVaultManagementClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureKeyVaultManagementClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureKeyVaultManagementClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_keyvault_2022_02::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_keyvault_2022_02::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Key Vault client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
-    async fn create_or_update_vault(
-        &self,
-        resource_group_name: String,
-        vault_name: String,
-        parameters: VaultCreateOrUpdateParameters,
-    ) -> Result<Vault> {
-        let result = self
-            .client()
-            .await?
-            .vaults_client()
-            .create_or_update(
-                resource_group_name,
-                vault_name.clone(),
-                parameters,
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Key Vault",
-            result,
-            "vault create or update",
-            "Azure Key Vault",
-            &vault_name,
-        )
-    }
-
-    async fn delete_vault(&self, resource_group_name: String, vault_name: String) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .vaults_client()
-            .delete(
-                resource_group_name,
-                vault_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Key Vault",
-            result,
-            "vault delete",
-            "Azure Key Vault",
-            &vault_name,
-        )
-    }
-
-    async fn get_vault(&self, resource_group_name: String, vault_name: String) -> Result<Vault> {
-        let result = self
-            .client()
-            .await?
-            .vaults_client()
-            .get(
-                resource_group_name,
-                vault_name.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Key Vault",
-            result,
-            "vault get",
-            "Azure Key Vault",
-            &vault_name,
-        )
-    }
-}
-
 /// Trait that provides methods to get platform service clients.
 /// This enables dependency injection for testing by allowing mock clients to be provided.
 ///
@@ -2360,7 +2221,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_key_vault_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureKeyVaultManagementApi>>;
+    ) -> Result<azure_keyvault_2022_02::Client>;
     fn get_azure_table_management_client(
         &self,
         config: &AzureClientConfig,
@@ -2824,11 +2685,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_key_vault_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureKeyVaultManagementApi>> {
-        Ok(Arc::new(OfficialAzureKeyVaultManagementClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_keyvault_2022_02::Client> {
+        azure_keyvault_client_from_alien_config(config)
     }
 
     fn get_azure_table_management_client(
@@ -3810,6 +3668,29 @@ pub(crate) fn azure_resources_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Resources client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_keyvault_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_keyvault_2022_02::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_keyvault_2022_02::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Key Vault client".to_string(),
             resource_id: None,
         })
 }

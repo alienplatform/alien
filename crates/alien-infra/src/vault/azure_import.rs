@@ -27,9 +27,6 @@ impl ResourceImporter for AzureVaultImporter {
             vault_name: Some(data.vault_name),
             resource_group_name: Some(data.resource_group),
             vault_uri: Some(data.vault_uri),
-            // `vault_client` is a runtime-only Arc<dyn …> trait object — we
-            // never persist it; the heartbeat path constructs a fresh one.
-            vault_client: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

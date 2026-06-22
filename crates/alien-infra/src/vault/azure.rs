@@ -1,10 +1,10 @@
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{AzureKeyVaultManagementApi, ResourceControllerContext};
+use crate::azure_keyvault;
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -31,9 +31,6 @@ pub struct AzureVaultController {
     pub(crate) resource_group_name: Option<String>,
     /// The vault URI
     pub(crate) vault_uri: Option<String>,
-    /// Key Vault management client for Azure operations
-    #[serde(skip)]
-    pub(crate) vault_client: Option<Arc<dyn AzureKeyVaultManagementApi>>,
 }
 
 impl AzureVaultController {
@@ -44,7 +41,6 @@ impl AzureVaultController {
             vault_name: Some(format!("test-{vault_id}")),
             resource_group_name: Some("test-rg".to_string()),
             vault_uri: Some(format!("https://test-{vault_id}.vault.azure.net")),
-            vault_client: None,
             _internal_stay_count: None,
         }
     }
@@ -63,11 +59,9 @@ impl AzureVaultController {
         let config = ctx.desired_resource_config::<Vault>()?;
         let azure_config = ctx.get_azure_config()?;
 
-        // Initialize the Key Vault management client
-        self.vault_client = Some(
-            ctx.service_provider
-                .get_azure_key_vault_management_client(azure_config)?,
-        );
+        let client = ctx
+            .service_provider
+            .get_azure_key_vault_management_client(azure_config)?;
 
         // Generate vault name and look up resource group from infra requirements
         self.vault_name = Some(format!("{}-{}", ctx.resource_prefix, config.id));
@@ -86,7 +80,7 @@ impl AzureVaultController {
         );
 
         // Create the Azure Key Vault
-        self.create_azure_key_vault(azure_config)
+        self.create_azure_key_vault(azure_config, &client)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -195,39 +189,36 @@ impl AzureVaultController {
             "Deleting Azure Key Vault"
         );
 
-        // Initialize client if not already done
-        if self.vault_client.is_none() {
-            self.vault_client = Some(
-                ctx.service_provider
-                    .get_azure_key_vault_management_client(azure_config)?,
-            );
-        }
+        let client = ctx
+            .service_provider
+            .get_azure_key_vault_management_client(azure_config)?;
 
         // Delete the Azure Key Vault if it exists
         if let (Some(vault_name), Some(resource_group_name), Some(_vault_uri)) =
             (&self.vault_name, &self.resource_group_name, &self.vault_uri)
         {
-            if let Some(client) = &self.vault_client {
-                client
-                    .delete_vault(resource_group_name.clone(), vault_name.clone())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete Azure Key Vault '{}'", vault_name),
-                        resource_id: Some(vault_name.clone()),
-                    })?;
+            azure_keyvault::delete_vault(
+                &client,
+                &azure_config.subscription_id,
+                resource_group_name,
+                vault_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete Azure Key Vault '{}'", vault_name),
+                resource_id: Some(vault_name.clone()),
+            })?;
 
-                info!(
-                    vault_id = %config.id,
-                    vault_name = %vault_name,
-                    "Azure Key Vault deleted successfully"
-                );
-            }
+            info!(
+                vault_id = %config.id,
+                vault_name = %vault_name,
+                "Azure Key Vault deleted successfully"
+            );
         }
 
         self.vault_name = None;
         self.resource_group_name = None;
         self.vault_uri = None;
-        self.vault_client = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -245,25 +236,24 @@ impl AzureVaultController {
         let config = ctx.desired_resource_config::<Vault>()?;
         let azure_config = ctx.get_azure_config()?;
 
-        if self.vault_client.is_none() {
-            self.vault_client = Some(
-                ctx.service_provider
-                    .get_azure_key_vault_management_client(azure_config)?,
-            );
-        }
+        let client = ctx
+            .service_provider
+            .get_azure_key_vault_management_client(azure_config)?;
 
-        if let (Some(vault_name), Some(resource_group_name), Some(client)) = (
-            &self.vault_name,
-            &self.resource_group_name,
-            &self.vault_client,
-        ) {
-            let vault = client
-                .get_vault(resource_group_name.clone(), vault_name.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get Azure Key Vault '{}'", vault_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        if let (Some(vault_name), Some(resource_group_name)) =
+            (&self.vault_name, &self.resource_group_name)
+        {
+            let vault = azure_keyvault::get_vault(
+                &client,
+                &azure_config.subscription_id,
+                resource_group_name,
+                vault_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get Azure Key Vault '{}'", vault_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_key_vault_heartbeat(ctx, &config.id, resource_group_name, vault);
         }
@@ -408,7 +398,11 @@ fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
 
 impl AzureVaultController {
     /// Create an Azure Key Vault with proper access policies
-    async fn create_azure_key_vault(&self, azure_config: &AzureClientConfig) -> Result<()> {
+    async fn create_azure_key_vault(
+        &self,
+        azure_config: &AzureClientConfig,
+        client: &azure_mgmt_keyvault::package_preview_2022_02::Client,
+    ) -> Result<()> {
         let vault_name = self.vault_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Vault name not set".to_string(),
@@ -420,14 +414,6 @@ impl AzureVaultController {
         let resource_group_name = self.resource_group_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Resource group name not set".to_string(),
-                operation: Some("create_azure_key_vault".to_string()),
-                resource_id: None,
-            })
-        })?;
-
-        let client = self.vault_client.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Key Vault client not initialized".to_string(),
                 operation: Some("create_azure_key_vault".to_string()),
                 resource_id: None,
             })
@@ -464,17 +450,18 @@ impl AzureVaultController {
             "Creating Azure Key Vault with parameters"
         );
 
-        client
-            .create_or_update_vault(
-                resource_group_name.clone(),
-                vault_name.clone(),
-                vault_params,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Azure Key Vault creation failed for vault '{}'", vault_name),
-                resource_id: Some(vault_name.clone()),
-            })?;
+        azure_keyvault::create_or_update_vault(
+            client,
+            &azure_config.subscription_id,
+            resource_group_name,
+            vault_name,
+            vault_params,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Azure Key Vault creation failed for vault '{}'", vault_name),
+            resource_id: Some(vault_name.clone()),
+        })?;
 
         Ok(())
     }
