@@ -44,6 +44,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     RoleDefinitionProperties,
 };
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
+use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 pub use azure_mgmt_network::package_2024_03::models::{
@@ -4813,7 +4814,7 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
 struct OfficialAzureKeyVaultManagementClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_keyvault_2022_02::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureKeyVaultManagementClient {
@@ -4830,89 +4831,35 @@ impl OfficialAzureKeyVaultManagementClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn vault_url(&self, resource_group_name: &str, vault_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}?api-version=2022-07-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            vault_name
-        )
-    }
+    async fn client(&self) -> Result<azure_keyvault_2022_02::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
+
+                azure_keyvault_2022_02::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Key Vault client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        vault_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure Key Vault ARM request failed for vault '{vault_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure Key Vault ARM response for vault '{vault_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Azure Key Vault".to_string(),
-                    resource_name: vault_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure Key Vault ARM request for vault '{vault_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -4924,53 +4871,65 @@ impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
         vault_name: String,
         parameters: VaultCreateOrUpdateParameters,
     ) -> Result<Vault> {
-        let body = serde_json::to_string(&parameters)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to serialize Azure Key Vault '{vault_name}' request"),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.vault_url(&resource_group_name, &vault_name),
-                Some(body),
-                &vault_name,
+        let result = self
+            .client()
+            .await?
+            .vaults_client()
+            .create_or_update(
+                resource_group_name,
+                vault_name.clone(),
+                parameters,
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Key Vault '{vault_name}' response"),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Key Vault",
+            result,
+            "vault create or update",
+            "Azure Key Vault",
+            &vault_name,
         )
     }
 
     async fn delete_vault(&self, resource_group_name: String, vault_name: String) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.vault_url(&resource_group_name, &vault_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .vaults_client()
+            .delete(
+                resource_group_name,
+                vault_name.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Key Vault",
+            result,
+            "vault delete",
+            "Azure Key Vault",
             &vault_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_vault(&self, resource_group_name: String, vault_name: String) -> Result<Vault> {
-        let response = self
-            .request(
-                Method::GET,
-                self.vault_url(&resource_group_name, &vault_name),
-                None,
-                &vault_name,
+        let result = self
+            .client()
+            .await?
+            .vaults_client()
+            .get(
+                resource_group_name,
+                vault_name.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Key Vault '{vault_name}' response"),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Key Vault",
+            result,
+            "vault get",
+            "Azure Key Vault",
+            &vault_name,
         )
     }
 }
