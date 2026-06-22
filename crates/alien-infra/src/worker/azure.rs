@@ -1,6 +1,5 @@
 use crate::azure_authorization;
 use crate::azure_container_apps;
-use crate::azure_servicebus;
 use alien_core::{
     AzureClientConfig, AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
     HeartbeatBackend, Ingress, ObservedHealth, Platform, ProviderLifecycleState,
@@ -17,7 +16,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::OperationResult;
-use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
+use crate::core::{
+    map_azure_core_021_sdk_error, AzurePermissionsHelper, ResourceController,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -1475,15 +1477,23 @@ impl AzureWorkerController {
             "Creating commands Service Bus queue"
         );
 
-        azure_servicebus::create_or_update_queue(
-            &mgmt,
-            &azure_config.subscription_id,
-            &service_bus_resource_group,
-            &namespace_name,
+        let result = mgmt
+            .queues_client()
+            .create_or_update(
+                service_bus_resource_group.to_string(),
+                namespace_name.to_string(),
+                queue_name.to_string(),
+                service_bus_queue_request(&queue_name),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "queue create or update",
+            "Azure Service Bus queue",
             &queue_name,
-            service_bus_queue_request(&queue_name),
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create commands Service Bus queue '{}'",
@@ -2700,15 +2710,24 @@ impl AzureWorkerController {
             let mgmt = ctx
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
-            match azure_servicebus::delete_queue(
-                &mgmt,
-                &azure_config.subscription_id,
-                &resource_group_name,
-                &namespace_name,
+            let result = mgmt
+                .queues_client()
+                .delete(
+                    resource_group_name.to_string(),
+                    namespace_name.to_string(),
+                    queue_name.to_string(),
+                    azure_config.subscription_id.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            match map_azure_core_021_sdk_error(
+                "Azure Service Bus",
+                result,
+                "queue delete",
+                "Azure Service Bus queue",
                 &queue_name,
-            )
-            .await
-            {
+            ) {
                 Ok(_) => {
                     info!(queue=%queue_name, "Commands Service Bus queue deleted");
                 }
@@ -3160,15 +3179,23 @@ impl AzureWorkerController {
             "Pre-creating commands Service Bus queue (before Container App)"
         );
 
-        azure_servicebus::create_or_update_queue(
-            &mgmt,
-            &azure_config.subscription_id,
-            &service_bus_resource_group,
-            &namespace_name,
+        let result = mgmt
+            .queues_client()
+            .create_or_update(
+                service_bus_resource_group.to_string(),
+                namespace_name.to_string(),
+                queue_name.to_string(),
+                service_bus_queue_request(&queue_name),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "queue create or update",
+            "Azure Service Bus queue",
             &queue_name,
-            service_bus_queue_request(&queue_name),
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create commands Service Bus queue '{}'",

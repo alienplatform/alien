@@ -1,5 +1,4 @@
-use crate::azure_servicebus;
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureServiceBusQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -62,15 +61,23 @@ impl AzureQueueController {
         // Create the queue in the existing namespace
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-        azure_servicebus::create_or_update_queue(
-            &mgmt,
-            &cfg.subscription_id,
-            &resource_group,
-            namespace_name,
+        let result = mgmt
+            .queues_client()
+            .create_or_update(
+                resource_group.to_string(),
+                namespace_name.to_string(),
+                queue_name.to_string(),
+                service_bus_queue_request(&queue_name),
+                cfg.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "queue create or update",
+            "Azure Service Bus queue",
             &queue_name,
-            service_bus_queue_request(&queue_name),
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to create Service Bus queue '{}'", queue_name),
             resource_id: Some(q.id.clone()),
@@ -153,14 +160,22 @@ impl AzureQueueController {
 
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-        let queue_properties = azure_servicebus::get_queue(
-            &mgmt,
-            &cfg.subscription_id,
-            &resource_group,
-            namespace,
+        let result = mgmt
+            .queues_client()
+            .get(
+                resource_group.to_string(),
+                namespace.to_string(),
+                queue.to_string(),
+                cfg.subscription_id.clone(),
+            )
+            .await;
+        let queue_properties = map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "queue get",
+            "Azure Service Bus queue",
             queue,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to get Service Bus queue during heartbeat".to_string(),
             resource_id: Some(q.id.clone()),
@@ -211,14 +226,24 @@ impl AzureQueueController {
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {
             let resource_group =
                 crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-            let _ = azure_servicebus::delete_queue(
-                &mgmt,
-                &cfg.subscription_id,
-                &resource_group,
-                ns,
+            let result = mgmt
+                .queues_client()
+                .delete(
+                    resource_group.to_string(),
+                    ns.to_string(),
+                    qn.to_string(),
+                    cfg.subscription_id.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            let _ = map_azure_core_021_sdk_error(
+                "Azure Service Bus",
+                result,
+                "queue delete",
+                "Azure Service Bus queue",
                 qn,
-            )
-            .await;
+            );
         }
         self.namespace_name = None;
         self.queue_name = None;

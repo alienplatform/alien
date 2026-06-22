@@ -1,9 +1,8 @@
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_servicebus;
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
@@ -60,14 +59,23 @@ impl AzureServiceBusNamespaceController {
             .get_azure_service_bus_management_client(azure_config)?;
         let namespace = self.build_namespace(azure_config, ctx);
 
-        azure_servicebus::create_or_update_namespace(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
-            self.namespace_name.as_ref().unwrap(),
-            namespace,
+        let namespace_name = self.namespace_name.as_ref().unwrap();
+        let result = client
+            .namespaces_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                namespace_name.to_string(),
+                namespace,
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "namespace create or update",
+            "Azure Service Bus namespace",
+            namespace_name,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to create Azure Service Bus Namespace".to_string(),
             resource_id: Some(desired_config.id.clone()),
@@ -108,14 +116,21 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match azure_servicebus::get_namespace(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .namespaces_client()
+            .get(
+                resource_group_name.to_string(),
+                namespace_name.to_string(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "namespace get",
+            "Azure Service Bus namespace",
             namespace_name,
-        )
-        .await
-        {
+        ) {
             Ok(namespace) => {
                 if let Some(properties) = &namespace.properties {
                     match properties.status.as_deref() {
@@ -235,13 +250,21 @@ impl AzureServiceBusNamespaceController {
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
 
-            let namespace = azure_servicebus::get_namespace(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
+            let result = client
+                .namespaces_client()
+                .get(
+                    resource_group_name.to_string(),
+                    namespace_name.to_string(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            let namespace = map_azure_core_021_sdk_error(
+                "Azure Service Bus",
+                result,
+                "namespace get",
+                "Azure Service Bus namespace",
                 namespace_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get Service Bus Namespace '{}'", namespace_name),
                 resource_id: Some(config.id.clone()),
@@ -305,14 +328,23 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match azure_servicebus::delete_namespace(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .namespaces_client()
+            .delete(
+                resource_group_name.to_string(),
+                namespace_name.to_string(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        match map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "namespace delete",
+            "Azure Service Bus namespace",
             namespace_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 info!(namespace_name=%namespace_name, "Namespace deletion initiated");
                 // Always go to DeletingNamespace for verification
@@ -367,14 +399,21 @@ impl AzureServiceBusNamespaceController {
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
-        match azure_servicebus::get_namespace(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .namespaces_client()
+            .get(
+                resource_group_name.to_string(),
+                namespace_name.to_string(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Service Bus",
+            result,
+            "namespace get",
+            "Azure Service Bus namespace",
             namespace_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!(namespace_name=%namespace_name, "Namespace still exists, continuing to wait");
                 Ok(HandlerAction::Stay {
