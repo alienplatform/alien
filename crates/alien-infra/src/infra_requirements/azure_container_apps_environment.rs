@@ -3,10 +3,11 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_container_apps;
 use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
-use crate::core::{LongRunningOperation, OperationResult};
+use crate::core::{
+    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response,
+    map_azure_core_021_sdk_error, LongRunningOperation, OperationResult, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
@@ -17,11 +18,13 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
     managed_environment, managed_environment::properties::ProvisioningState, ManagedEnvironment,
     TrackedResource, VnetConfiguration,
 };
 use chrono::Utc;
+use futures_util::StreamExt;
 
 #[controller]
 pub struct AzureContainerAppsEnvironmentController {
@@ -67,12 +70,24 @@ impl AzureContainerAppsEnvironmentController {
             .get_azure_container_apps_management_client(azure_config)?;
         let managed_env = self.build_managed_environment(azure_config, ctx);
 
-        let operation_result = azure_container_apps::create_or_update_managed_environment(
-            &client,
-            azure_config,
-            &resource_group_name,
-            self.environment_name.as_ref().unwrap(),
-            &managed_env,
+        let environment_name = self.environment_name.as_ref().unwrap();
+        let result = client
+            .managed_environments_client()
+            .create_or_update(
+                azure_config.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+                managed_env,
+            )
+            .send()
+            .await;
+        let operation_result = map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "managed environment create or update",
+            "Azure Container Apps Managed Environment",
+            environment_name,
+            |response| response.into_body(),
         )
         .await
         .map_err(|e| {
@@ -175,14 +190,21 @@ impl AzureContainerAppsEnvironmentController {
             .service_provider
             .get_azure_container_apps_management_client(azure_config)?;
 
-        match azure_container_apps::get_managed_environment(
-            &client,
-            azure_config,
-            &resource_group_name,
+        let result = client
+            .managed_environments_client()
+            .get(
+                azure_config.subscription_id.clone(),
+                resource_group_name,
+                environment_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "managed environment get",
+            "Azure Container Apps Managed Environment",
             environment_name,
-        )
-        .await
-        {
+        ) {
             Ok(managed_env) => {
                 if let Some(properties) = &managed_env.properties {
                     match properties.provisioning_state.as_ref() {
@@ -300,13 +322,21 @@ impl AzureContainerAppsEnvironmentController {
                 .service_provider
                 .get_azure_container_apps_management_client(azure_config)?;
 
-            let managed_env = azure_container_apps::get_managed_environment(
-                &client,
-                azure_config,
-                &resource_group_name,
+            let result = client
+                .managed_environments_client()
+                .get(
+                    azure_config.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    environment_name.clone(),
+                )
+                .await;
+            let managed_env = map_azure_core_021_sdk_error(
+                "Azure Container Apps",
+                result,
+                "managed environment get",
+                "Azure Container Apps Managed Environment",
                 environment_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to get Container Apps Environment '{}'",
@@ -407,12 +437,33 @@ impl AzureContainerAppsEnvironmentController {
             )
         });
         // List container apps from the stack's resource group (where the apps live)
-        let apps = azure_container_apps::list_container_apps_by_resource_group(
-            &container_apps_client,
-            azure_config,
-            &resource_group_name,
-        )
-        .await;
+        let apps = {
+            let mut stream = container_apps_client
+                .container_apps_client()
+                .list_by_resource_group(
+                    azure_config.subscription_id.clone(),
+                    resource_group_name.clone(),
+                )
+                .into_stream();
+            let mut apps = Vec::new();
+            let mut result = Ok(());
+            while let Some(page) = stream.next().await {
+                match map_azure_core_021_sdk_error(
+                    "Azure Container Apps",
+                    page,
+                    "container apps list by resource group",
+                    "Azure Container Apps",
+                    &resource_group_name,
+                ) {
+                    Ok(page) => apps.extend(page.value),
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+            result.map(|()| azure_app_2024_08::models::ContainerAppCollection::new(apps))
+        };
         if let Ok(collection) = apps {
             let remaining: Vec<_> = collection
                 .value
@@ -444,10 +495,20 @@ impl AzureContainerAppsEnvironmentController {
             .service_provider
             .get_azure_container_apps_management_client(azure_config)?;
 
-        match azure_container_apps::delete_managed_environment(
-            &management_client,
-            azure_config,
-            &resource_group_name,
+        let result = management_client
+            .managed_environments_client()
+            .delete(
+                azure_config.subscription_id.clone(),
+                resource_group_name.clone(),
+                environment_name.clone(),
+            )
+            .send()
+            .await;
+        match map_azure_core_021_delete_lro_response(
+            "Azure Container Apps",
+            result,
+            "managed environment delete",
+            "Azure Container Apps Managed Environment",
             environment_name,
         )
         .await
@@ -568,14 +629,21 @@ impl AzureContainerAppsEnvironmentController {
             .service_provider
             .get_azure_container_apps_management_client(azure_config)?;
 
-        match azure_container_apps::get_managed_environment(
-            &client,
-            azure_config,
-            &resource_group_name,
+        let result = client
+            .managed_environments_client()
+            .get(
+                azure_config.subscription_id.clone(),
+                resource_group_name,
+                environment_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "managed environment get",
+            "Azure Container Apps Managed Environment",
             environment_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!(environment_name=%environment_name, "Environment still exists, continuing to wait");
                 Ok(HandlerAction::Stay {
