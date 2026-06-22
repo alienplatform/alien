@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    list_params, optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
+    optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -20,7 +20,7 @@ use k8s_openapi::api::apps::v1::{
 use k8s_openapi::api::core::v1::{Event, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
-use kube::api::{ApiResource, DynamicObject};
+use kube::api::{ApiResource, DynamicObject, ListParams};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -162,7 +162,7 @@ pub async fn emit_kubernetes_workload_heartbeat(
         .await?;
 
     let pods = kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.namespace)
-        .list(&list_params(Some(input.label_selector.clone()), None))
+        .list(&ListParams::default().labels(&input.label_selector))
         .await
         .into_alien_error()
         .context(CloudClientErrorData::HttpRequestFailed {
@@ -182,7 +182,7 @@ pub async fn emit_kubernetes_workload_heartbeat(
         Some(&input.workload_name),
         async {
             kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.namespace)
-                .list(&list_params(None, None))
+                .list(&ListParams::default())
                 .await
                 .into_alien_error()
                 .context(CloudClientErrorData::HttpRequestFailed {
@@ -216,7 +216,7 @@ pub async fn emit_kubernetes_workload_heartbeat(
                 &input.namespace,
                 &pod_metrics,
             )
-            .list(&list_params(Some(input.label_selector.clone()), None))
+            .list(&ListParams::default().labels(&input.label_selector))
             .await
             .into_alien_error()
             .context(CloudClientErrorData::HttpRequestFailed {

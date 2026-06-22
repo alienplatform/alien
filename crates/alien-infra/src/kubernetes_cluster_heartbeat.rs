@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    list_params, optional_events_read, optional_metrics_read, optional_nodes_read,
-    OptionalKubernetesReadStatus,
+    optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -17,7 +16,7 @@ use alien_error::{Context, IntoAlienError};
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
-use kube::api::{ApiResource, DynamicObject};
+use kube::api::{ApiResource, DynamicObject, ListParams};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -59,7 +58,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         .await?;
 
     let pods = kube::Api::<Pod>::namespaced(pod_client.as_ref().clone(), &input.config.namespace)
-        .list(&list_params(None, None))
+        .list(&ListParams::default())
         .await
         .into_alien_error()
         .context(CloudClientErrorData::HttpRequestFailed {
@@ -76,7 +75,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
     let events_read =
         optional_events_read(&input.config.id, &input.config.namespace, None, async {
             kube::Api::<Event>::namespaced(event_client.as_ref().clone(), &input.config.namespace)
-                .list(&list_params(None, None))
+                .list(&ListParams::default())
                 .await
                 .into_alien_error()
                 .context(CloudClientErrorData::HttpRequestFailed {
@@ -106,7 +105,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
                 &input.config.namespace,
                 &pod_metrics,
             )
-            .list(&list_params(None, None))
+            .list(&ListParams::default())
             .await
             .into_alien_error()
             .context(CloudClientErrorData::HttpRequestFailed {
@@ -122,7 +121,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
 
     let nodes = optional_nodes_read(&input.config.id, async {
         kube::Api::<Node>::all(node_client.as_ref().clone())
-            .list(&list_params(None, None))
+            .list(&ListParams::default())
             .await
             .into_alien_error()
             .context(CloudClientErrorData::HttpRequestFailed {
@@ -144,7 +143,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
             plural: "nodes".to_string(),
         };
         kube::Api::<DynamicObject>::all_with(metrics_client.as_ref().clone(), &node_metrics)
-            .list(&list_params(None, None))
+            .list(&ListParams::default())
             .await
             .into_alien_error()
             .context(CloudClientErrorData::HttpRequestFailed {

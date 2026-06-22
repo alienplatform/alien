@@ -3,7 +3,6 @@ use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use kube::{
-    api::ListParams,
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
@@ -403,18 +402,4 @@ fn apply_headers(
     }
 
     Ok(())
-}
-
-pub(crate) fn list_params(
-    label_selector: Option<String>,
-    field_selector: Option<String>,
-) -> ListParams {
-    let mut params = ListParams::default();
-    if let Some(label_selector) = label_selector {
-        params = params.labels(&label_selector);
-    }
-    if let Some(field_selector) = field_selector {
-        params = params.fields(&field_selector);
-    }
-    params
 }
