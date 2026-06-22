@@ -13,6 +13,7 @@ use crate::azure_container_apps::{
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
+use crate::gcp_iam_admin::service_account_resource_name;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
     DeploymentApi, EventApi, JobApi, KubernetesClient, MetricsApi, NodeApi, PodApi, RouteApi,
@@ -156,14 +157,6 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
         service_account: ServiceAccount,
         update_mask: Option<String>,
     ) -> Result<ServiceAccount>;
-
-    async fn get_service_account_iam_policy(&self, service_account_name: String) -> Result<Policy>;
-
-    async fn set_service_account_iam_policy(
-        &self,
-        service_account_name: String,
-        iam_policy: Policy,
-    ) -> Result<Policy>;
 
     async fn create_role(&self, request: CreateRoleRequest) -> Result<Role>;
 
@@ -347,45 +340,6 @@ impl GcpIamApi for IamClient {
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "IAM patch_service_account request failed".to_string(),
-                resource_id: Some(service_account_name),
-            })
-    }
-
-    async fn get_service_account_iam_policy(&self, service_account_name: String) -> Result<Policy> {
-        self.client()
-            .await?
-            .get_iam_policy()
-            .set_resource(service_account_resource_name(
-                &self.config.project_id,
-                &service_account_name,
-            ))
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "IAM get_iam_policy request failed".to_string(),
-                resource_id: Some(service_account_name),
-            })
-    }
-
-    async fn set_service_account_iam_policy(
-        &self,
-        service_account_name: String,
-        iam_policy: Policy,
-    ) -> Result<Policy> {
-        self.client()
-            .await?
-            .set_iam_policy()
-            .set_resource(service_account_resource_name(
-                &self.config.project_id,
-                &service_account_name,
-            ))
-            .set_policy(iam_policy)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "IAM set_iam_policy request failed".to_string(),
                 resource_id: Some(service_account_name),
             })
     }
@@ -3617,6 +3571,7 @@ pub trait PlatformServiceProvider: Send + Sync {
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
+    async fn get_gcp_iam_admin_client(&self, config: &GcpClientConfig) -> Result<Iam>;
     async fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Services>;
     async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects>;
     async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage>;
@@ -3913,6 +3868,10 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     // GCP implementations
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>> {
         Ok(Arc::new(IamClient::new(config.clone())))
+    }
+
+    async fn get_gcp_iam_admin_client(&self, config: &GcpClientConfig) -> Result<Iam> {
+        iam_admin_client_from_alien_config(config).await
     }
 
     async fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Services> {
@@ -4537,14 +4496,6 @@ async fn resource_manager_projects_client_from_alien_config(
             message: "Failed to build official GCP Resource Manager Projects client".to_string(),
             resource_id: None,
         })
-}
-
-fn service_account_resource_name(project_id: &str, service_account_name: &str) -> String {
-    if service_account_name.starts_with("projects/") {
-        service_account_name.to_string()
-    } else {
-        format!("projects/{project_id}/serviceAccounts/{service_account_name}")
-    }
 }
 
 fn pubsub_admin_endpoint(endpoint: &str) -> String {

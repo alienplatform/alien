@@ -3,6 +3,7 @@ use tracing::info;
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
+use crate::gcp_iam_admin::{get_service_account_iam_policy, set_service_account_iam_policy};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
@@ -353,11 +354,18 @@ impl GcpRemoteStackManagementController {
             "Granting impersonation permissions to management service account"
         );
 
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
 
         // Get current service account IAM policy
-        let current_policy = iam_client
-            .get_service_account_iam_policy(service_account_email.clone())
+        let current_policy = get_service_account_iam_policy(
+            &iam_client,
+            &gcp_config.project_id,
+            service_account_email,
+            None,
+        )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get IAM policy for service account '{}' before granting impersonation. Refusing to proceed to avoid overwriting existing bindings.", service_account_email),
@@ -404,16 +412,20 @@ impl GcpRemoteStackManagementController {
             .set_audit_configs(current_policy.audit_configs)
             .set_etag(current_policy.etag);
 
-        iam_client
-            .set_service_account_iam_policy(service_account_email.clone(), new_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to grant impersonation permissions on service account '{}'",
-                    service_account_email
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        set_service_account_iam_policy(
+            &iam_client,
+            &gcp_config.project_id,
+            service_account_email,
+            new_policy,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to grant impersonation permissions on service account '{}'",
+                service_account_email
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             target_service_account = %service_account_email,

@@ -3,6 +3,7 @@ use tracing::info;
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
+use crate::gcp_iam_admin::{get_service_account_iam_policy, set_service_account_iam_policy};
 use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
@@ -187,6 +188,10 @@ impl GcpServiceAccountController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_admin_client = ctx
+            .service_provider
+            .get_gcp_iam_admin_client(gcp_config)
+            .await?;
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
 
         // Heartbeat check: verify service account still exists
@@ -210,14 +215,18 @@ impl GcpServiceAccountController {
                 }));
             }
 
-            let service_account_policy = client
-                .get_service_account_iam_policy(service_account_email.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get service account IAM policy during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let service_account_policy = get_service_account_iam_policy(
+                &iam_admin_client,
+                &gcp_config.project_id,
+                service_account_email,
+                None,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get service account IAM policy during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             let rm_client = ctx
                 .service_provider
@@ -633,9 +642,13 @@ impl GcpServiceAccountController {
         // not at the project level.
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let client = ctx
+                .service_provider
+                .get_gcp_iam_admin_client(gcp_config)
+                .await?;
             let sa_email_owned = service_account_email.clone();
             let config_id_owned = config.id.clone();
+            let project_id_owned = gcp_config.project_id.clone();
 
             ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
                 ctx,
@@ -645,16 +658,20 @@ impl GcpServiceAccountController {
                 "service-account",
                 client,
                 |client, iam_policy| async move {
-                    client
-                        .set_service_account_iam_policy(sa_email_owned.clone(), iam_policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to apply IAM policy to service account '{}'",
-                                sa_email_owned
-                            ),
-                            resource_id: Some(config_id_owned),
-                        })?;
+                    set_service_account_iam_policy(
+                        &client,
+                        &project_id_owned,
+                        &sa_email_owned,
+                        iam_policy,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to apply IAM policy to service account '{}'",
+                            sa_email_owned
+                        ),
+                        resource_id: Some(config_id_owned),
+                    })?;
                     info!(
                         service_account = %sa_email_owned,
                         "Applied resource-level IAM policy to service account"
