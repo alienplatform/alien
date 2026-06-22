@@ -6,7 +6,6 @@ mod azure_container_apps_identity_policy;
 mod gcp_compute;
 
 mod gcp_iam_admin;
-mod gcp_resource_manager;
 mod gcp_storage;
 
 mod error;

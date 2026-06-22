@@ -7,7 +7,6 @@ use crate::gcp_iam_admin::{
     create_service_account, delete_service_account, get_service_account,
     get_service_account_iam_policy, set_service_account_iam_policy,
 };
-use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
     GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
@@ -15,7 +14,7 @@ use alien_core::{
     RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
@@ -273,12 +272,13 @@ impl GcpRemoteStackManagementController {
             .get_gcp_resource_manager_client(gcp_config)
             .await?;
 
-        let current_policy = get_project_iam_policy(
-            &rm_client,
-            project_id,
-            Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-        )
-        .await
+        let current_policy = rm_client
+            .get_iam_policy()
+            .set_resource(format!("projects/{project_id}"))
+            .set_options(GetPolicyOptions::new().set_requested_policy_version(3))
+            .send()
+            .await
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -302,8 +302,13 @@ impl GcpRemoteStackManagementController {
                 .set_audit_configs(current_policy.audit_configs)
                 .set_etag(current_policy.etag);
 
-            set_project_iam_policy(&rm_client, project_id, new_policy, None)
+            rm_client
+                .set_iam_policy()
+                .set_resource(format!("projects/{project_id}"))
+                .set_policy(new_policy)
+                .send()
                 .await
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to bind management roles to service account '{}' at project level",
@@ -529,13 +534,14 @@ impl GcpRemoteStackManagementController {
                 .get_gcp_resource_manager_client(gcp_config)
                 .await?;
 
-            match get_project_iam_policy(
-                &rm_client,
-                project_id,
-                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-            )
-            .await
-            {
+            let result = rm_client
+                .get_iam_policy()
+                .set_resource(format!("projects/{project_id}"))
+                .set_options(GetPolicyOptions::new().set_requested_policy_version(3))
+                .send()
+                .await
+                .into_alien_error();
+            match result {
                 Ok(mut current_policy) => {
                     let service_account_member =
                         format!("serviceAccount:{}", service_account_email);
@@ -547,8 +553,13 @@ impl GcpRemoteStackManagementController {
                         None,
                     );
 
-                    set_project_iam_policy(&rm_client, project_id, current_policy, None)
+                    rm_client
+                        .set_iam_policy()
+                        .set_resource(format!("projects/{project_id}"))
+                        .set_policy(current_policy)
+                        .send()
                         .await
+                        .into_alien_error()
                         .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to unbind roles from management service account '{}' at project level", service_account_email),
                             resource_id: Some(config.id.clone()),

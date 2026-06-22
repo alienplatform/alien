@@ -7,7 +7,6 @@ use crate::gcp_iam_admin::{
     create_service_account, delete_service_account, get_service_account,
     get_service_account_iam_policy, set_service_account_iam_policy,
 };
-use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
     ObservedHealth, PermissionSet, Platform, ProviderLifecycleState, ResourceHeartbeat,
@@ -240,17 +239,18 @@ impl GcpServiceAccountController {
                 .service_provider
                 .get_gcp_resource_manager_client(gcp_config)
                 .await?;
-            let project_policy = get_project_iam_policy(
-                &rm_client,
-                &gcp_config.project_id,
-                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get project IAM policy during service account heartbeat"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let project_policy = rm_client
+                .get_iam_policy()
+                .set_resource(format!("projects/{}", gcp_config.project_id))
+                .set_options(GetPolicyOptions::new().set_requested_policy_version(3))
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get project IAM policy during service account heartbeat"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
             emit_gcp_service_account_heartbeat(
                 ctx,
@@ -514,16 +514,17 @@ impl GcpServiceAccountController {
             .get_gcp_resource_manager_client(gcp_config)
             .await?;
 
-        let current_policy = get_project_iam_policy(
-            &rm_client,
-            project_id,
-            Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to get project IAM policy before binding stack roles".to_string(),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let current_policy = rm_client
+            .get_iam_policy()
+            .set_resource(format!("projects/{project_id}"))
+            .set_options(GetPolicyOptions::new().set_requested_policy_version(3))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get project IAM policy before binding stack roles".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let member = format!("serviceAccount:{service_account_email}");
         let owned_role_prefixes =
@@ -553,8 +554,13 @@ impl GcpServiceAccountController {
             .set_audit_configs(current_policy.audit_configs)
             .set_etag(current_policy.etag);
 
-        set_project_iam_policy(&rm_client, project_id, new_policy, None)
+        rm_client
+            .set_iam_policy()
+            .set_resource(format!("projects/{project_id}"))
+            .set_policy(new_policy)
+            .send()
             .await
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to bind stack roles to service account '{}' at project level",
@@ -708,16 +714,18 @@ impl GcpServiceAccountController {
             .get_gcp_resource_manager_client(gcp_config)
             .await?;
 
-        let mut current_policy = get_project_iam_policy(
-            &rm_client,
-            project_id,
-            Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to get project IAM policy before unbinding stack roles".to_string(),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let mut current_policy = rm_client
+            .get_iam_policy()
+            .set_resource(format!("projects/{project_id}"))
+            .set_options(GetPolicyOptions::new().set_requested_policy_version(3))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get project IAM policy before unbinding stack roles"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let mut changed = false;
 
@@ -738,8 +746,13 @@ impl GcpServiceAccountController {
             return Ok(());
         }
 
-        set_project_iam_policy(&rm_client, project_id, current_policy, None)
+        rm_client
+            .set_iam_policy()
+            .set_resource(format!("projects/{project_id}"))
+            .set_policy(current_policy)
+            .send()
             .await
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to unbind stack roles from service account '{}' at project level",
