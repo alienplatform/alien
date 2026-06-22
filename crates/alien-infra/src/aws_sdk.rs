@@ -26,6 +26,7 @@ use aws_sdk_iam::{
 use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
+use aws_sdk_ssm::Client as SsmClient;
 use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
@@ -505,200 +506,121 @@ pub async fn sdk_config_from_alien_config(config: &AwsClientConfig) -> Result<Sd
     Ok(loader.load().await)
 }
 
-/// Create an official AWS SDK CodeBuild client with Alien endpoint override support.
-pub async fn codebuild_client_from_alien_config(
-    config: &AwsClientConfig,
-) -> Result<CodeBuildClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut codebuild_config = aws_sdk_codebuild::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
+fn aws_service_endpoint<'a>(config: &'a AwsClientConfig, service_name: &str) -> Option<&'a String> {
+    config
         .service_overrides
         .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("codebuild"))
-    {
-        codebuild_config = codebuild_config.endpoint_url(endpoint);
-    }
-
-    Ok(CodeBuildClient::from_conf(codebuild_config.build()))
+        .and_then(|overrides| overrides.endpoints.get(service_name))
 }
 
-/// Create an official AWS SDK ACM client with Alien endpoint override support.
-pub async fn acm_client_from_alien_config(config: &AwsClientConfig) -> Result<AcmClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut acm_config = aws_sdk_acm::config::Builder::from(&sdk_config);
+macro_rules! official_aws_client_constructor {
+    ($(#[$meta:meta])* $fn_name:ident, $client:path, $builder:path, $service_name:literal) => {
+        $(#[$meta])*
+        pub async fn $fn_name(config: &AwsClientConfig) -> Result<$client> {
+            let sdk_config = sdk_config_from_alien_config(config).await?;
+            let mut service_config = <$builder>::from(&sdk_config);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("acm"))
-    {
-        acm_config = acm_config.endpoint_url(endpoint);
-    }
+            if let Some(endpoint) = aws_service_endpoint(config, $service_name) {
+                service_config = service_config.endpoint_url(endpoint);
+            }
 
-    Ok(AcmClient::from_conf(acm_config.build()))
+            Ok(<$client>::from_conf(service_config.build()))
+        }
+    };
 }
 
-/// Create an official AWS SDK Lambda client with Alien endpoint override support.
-pub async fn lambda_client_from_alien_config(config: &AwsClientConfig) -> Result<LambdaClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut lambda_config = aws_sdk_lambda::config::Builder::from(&sdk_config);
+official_aws_client_constructor!(
+    /// Create an official AWS SDK CodeBuild client with Alien endpoint override support.
+    codebuild_client_from_alien_config,
+    CodeBuildClient,
+    aws_sdk_codebuild::config::Builder,
+    "codebuild"
+);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("lambda"))
-    {
-        lambda_config = lambda_config.endpoint_url(endpoint);
-    }
+official_aws_client_constructor!(
+    /// Create an official AWS SDK ACM client with Alien endpoint override support.
+    acm_client_from_alien_config,
+    AcmClient,
+    aws_sdk_acm::config::Builder,
+    "acm"
+);
 
-    Ok(LambdaClient::from_conf(lambda_config.build()))
-}
+official_aws_client_constructor!(
+    /// Create an official AWS SDK Lambda client with Alien endpoint override support.
+    lambda_client_from_alien_config,
+    LambdaClient,
+    aws_sdk_lambda::config::Builder,
+    "lambda"
+);
 
-/// Create an official AWS SDK API Gateway V2 client with Alien endpoint override support.
-pub async fn apigatewayv2_client_from_alien_config(
-    config: &AwsClientConfig,
-) -> Result<ApiGatewayV2Client> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut apigatewayv2_config = aws_sdk_apigatewayv2::config::Builder::from(&sdk_config);
+official_aws_client_constructor!(
+    /// Create an official AWS SDK API Gateway V2 client with Alien endpoint override support.
+    apigatewayv2_client_from_alien_config,
+    ApiGatewayV2Client,
+    aws_sdk_apigatewayv2::config::Builder,
+    "apigateway"
+);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("apigateway"))
-    {
-        apigatewayv2_config = apigatewayv2_config.endpoint_url(endpoint);
-    }
+official_aws_client_constructor!(
+    /// Create an official AWS SDK EventBridge client with Alien endpoint override support.
+    eventbridge_client_from_alien_config,
+    EventBridgeClient,
+    aws_sdk_eventbridge::config::Builder,
+    "events"
+);
 
-    Ok(ApiGatewayV2Client::from_conf(apigatewayv2_config.build()))
-}
+official_aws_client_constructor!(
+    /// Create an official AWS SDK EC2 client with Alien endpoint override support.
+    ec2_client_from_alien_config,
+    Ec2Client,
+    aws_sdk_ec2::config::Builder,
+    "ec2"
+);
 
-/// Create an official AWS SDK EventBridge client with Alien endpoint override support.
-pub async fn eventbridge_client_from_alien_config(
-    config: &AwsClientConfig,
-) -> Result<EventBridgeClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut eventbridge_config = aws_sdk_eventbridge::config::Builder::from(&sdk_config);
+official_aws_client_constructor!(
+    /// Create an official AWS SDK ECR client with Alien endpoint override support.
+    ecr_client_from_alien_config,
+    EcrClient,
+    aws_sdk_ecr::config::Builder,
+    "ecr"
+);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("events"))
-    {
-        eventbridge_config = eventbridge_config.endpoint_url(endpoint);
-    }
+official_aws_client_constructor!(
+    /// Create an official AWS SDK IAM client with Alien endpoint override support.
+    iam_client_from_alien_config,
+    IamClient,
+    aws_sdk_iam::config::Builder,
+    "iam"
+);
 
-    Ok(EventBridgeClient::from_conf(eventbridge_config.build()))
-}
+official_aws_client_constructor!(
+    /// Create an official AWS SDK SSM client with Alien endpoint override support.
+    ssm_client_from_alien_config,
+    SsmClient,
+    aws_sdk_ssm::config::Builder,
+    "ssm"
+);
 
-/// Create an official AWS SDK EC2 client with Alien endpoint override support.
-pub async fn ec2_client_from_alien_config(config: &AwsClientConfig) -> Result<Ec2Client> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut ec2_config = aws_sdk_ec2::config::Builder::from(&sdk_config);
+official_aws_client_constructor!(
+    /// Create an official AWS SDK DynamoDB client with Alien endpoint override support.
+    dynamodb_client_from_alien_config,
+    DynamoDbClient,
+    aws_sdk_dynamodb::config::Builder,
+    "dynamodb"
+);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("ec2"))
-    {
-        ec2_config = ec2_config.endpoint_url(endpoint);
-    }
+official_aws_client_constructor!(
+    /// Create an official AWS SDK SQS client with Alien endpoint override support.
+    sqs_client_from_alien_config,
+    SqsClient,
+    aws_sdk_sqs::config::Builder,
+    "sqs"
+);
 
-    Ok(Ec2Client::from_conf(ec2_config.build()))
-}
-
-/// Create an official AWS SDK ECR client with Alien endpoint override support.
-pub async fn ecr_client_from_alien_config(config: &AwsClientConfig) -> Result<EcrClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut ecr_config = aws_sdk_ecr::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("ecr"))
-    {
-        ecr_config = ecr_config.endpoint_url(endpoint);
-    }
-
-    Ok(EcrClient::from_conf(ecr_config.build()))
-}
-
-/// Create an official AWS SDK IAM client with Alien endpoint override support.
-pub async fn iam_client_from_alien_config(config: &AwsClientConfig) -> Result<IamClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut iam_config = aws_sdk_iam::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("iam"))
-    {
-        iam_config = iam_config.endpoint_url(endpoint);
-    }
-
-    Ok(IamClient::from_conf(iam_config.build()))
-}
-
-/// Create an official AWS SDK SSM client with Alien endpoint override support.
-pub async fn ssm_client_from_alien_config(config: &AwsClientConfig) -> Result<aws_sdk_ssm::Client> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut ssm_config = aws_sdk_ssm::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("ssm"))
-    {
-        ssm_config = ssm_config.endpoint_url(endpoint);
-    }
-
-    Ok(aws_sdk_ssm::Client::from_conf(ssm_config.build()))
-}
-
-/// Create an official AWS SDK DynamoDB client with Alien endpoint override support.
-pub async fn dynamodb_client_from_alien_config(config: &AwsClientConfig) -> Result<DynamoDbClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut dynamodb_config = aws_sdk_dynamodb::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("dynamodb"))
-    {
-        dynamodb_config = dynamodb_config.endpoint_url(endpoint);
-    }
-
-    Ok(DynamoDbClient::from_conf(dynamodb_config.build()))
-}
-
-/// Create an official AWS SDK SQS client with Alien endpoint override support.
-pub async fn sqs_client_from_alien_config(config: &AwsClientConfig) -> Result<SqsClient> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut sqs_config = aws_sdk_sqs::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("sqs"))
-    {
-        sqs_config = sqs_config.endpoint_url(endpoint);
-    }
-
-    Ok(SqsClient::from_conf(sqs_config.build()))
-}
-
-/// Create an official AWS SDK S3 client with Alien endpoint override support.
-pub async fn s3_client_from_alien_config(config: &AwsClientConfig) -> Result<S3Client> {
-    let sdk_config = sdk_config_from_alien_config(config).await?;
-    let mut s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("s3"))
-    {
-        s3_config = s3_config.endpoint_url(endpoint);
-    }
-
-    Ok(S3Client::from_conf(s3_config.build()))
-}
+official_aws_client_constructor!(
+    /// Create an official AWS SDK S3 client with Alien endpoint override support.
+    s3_client_from_alien_config,
+    S3Client,
+    aws_sdk_s3::config::Builder,
+    "s3"
+);
