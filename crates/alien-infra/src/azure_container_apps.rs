@@ -7,88 +7,9 @@ use alien_core::AzureClientConfig;
 use alien_error::{Context, IntoAlienError};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
-    Certificate, ContainerApp, DaprComponent, TrackedResource,
+    Certificate, DaprComponent, TrackedResource,
 };
 use std::sync::Arc;
-
-pub(crate) async fn get_container_app(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    container_app_name: &str,
-) -> Result<ContainerApp> {
-    let result = client
-        .container_apps_client()
-        .get(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            container_app_name.to_string(),
-        )
-        .await;
-    map_azure_core_021_sdk_error(
-        "Azure Container Apps",
-        result,
-        "container app get",
-        "Azure Container App",
-        container_app_name,
-    )
-}
-
-pub(crate) async fn create_or_update_container_app(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    container_app_name: &str,
-    container_app: &ContainerApp,
-) -> Result<OperationResult<ContainerApp>> {
-    let result = client
-        .container_apps_client()
-        .create_or_update(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            container_app_name.to_string(),
-            container_app.clone(),
-        )
-        .send()
-        .await;
-    map_azure_core_021_lro_response(
-        "Azure Container Apps",
-        result,
-        "container app create or update",
-        "Azure Container App",
-        container_app_name,
-        |response| response.into_body(),
-    )
-    .await
-}
-
-pub(crate) async fn update_container_app(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    container_app_name: &str,
-    container_app: &ContainerApp,
-) -> Result<OperationResult<ContainerApp>> {
-    let result = client
-        .container_apps_client()
-        .update(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            container_app_name.to_string(),
-            container_app.clone(),
-        )
-        .send()
-        .await;
-    map_azure_core_021_lro_response(
-        "Azure Container Apps",
-        result,
-        "container app update",
-        "Azure Container App",
-        container_app_name,
-        |response| response.into_body(),
-    )
-    .await
-}
 
 pub(crate) async fn create_or_update_managed_environment_certificate(
     client: &azure_app_2024_08::Client,
@@ -229,31 +150,6 @@ pub(crate) async fn delete_dapr_component(
         "Dapr component delete",
         "Azure Container Apps Dapr Component",
         component_name,
-    )
-    .await
-}
-
-pub(crate) async fn delete_container_app(
-    client: &azure_app_2024_08::Client,
-    config: &AzureClientConfig,
-    resource_group_name: &str,
-    container_app_name: &str,
-) -> Result<OperationResult<()>> {
-    let result = client
-        .container_apps_client()
-        .delete(
-            config.subscription_id.clone(),
-            resource_group_name.to_string(),
-            container_app_name.to_string(),
-        )
-        .send()
-        .await;
-    map_azure_core_021_delete_lro_response(
-        "Azure Container Apps",
-        result,
-        "container app delete",
-        "Azure Container App",
-        container_app_name,
     )
     .await
 }

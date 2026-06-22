@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::OperationResult;
 use crate::core::{
+    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response,
     map_azure_core_021_sdk_error, AzurePermissionsHelper, ResourceController,
     ResourceControllerContext,
 };
@@ -670,12 +671,23 @@ impl AzureWorkerController {
             .await?;
 
         // Fire the CREATE/UPDATE call.
-        let op_result = azure_container_apps::create_or_update_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                container_app_name.clone(),
+                container_app,
+            )
+            .send()
+            .await;
+        let op_result = map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "container app create or update",
+            "Azure Container App",
             &container_app_name,
-            &container_app,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -753,14 +765,21 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match azure_container_apps::get_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .get(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name,
+                container_app_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "container app get",
+            "Azure Container App",
             container_app_name,
-        )
-        .await
-        {
+        ) {
             Ok(app) => {
                 if let Some(props) = &app.properties {
                     match props.provisioning_state.as_ref() {
@@ -1106,12 +1125,23 @@ impl AzureWorkerController {
         );
 
         // Update the container app with custom domain
-        let _operation = azure_container_apps::create_or_update_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                container_app_name.clone(),
+                app,
+            )
+            .send()
+            .await;
+        let _operation = map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "container app create or update",
+            "Azure Container App",
             container_app_name,
-            &app,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -1845,13 +1875,21 @@ impl AzureWorkerController {
             .get_azure_container_apps_management_client(azure_cfg)?;
 
         // Heartbeat check: verify Container App still exists and is in correct state
-        let container_app = azure_container_apps::get_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .get(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                container_app_name.clone(),
+            )
+            .await;
+        let container_app = map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "container app get",
+            "Azure Container App",
             container_app_name,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to get Container App during heartbeat check".to_string(),
             resource_id: Some(func_cfg.id.clone()),
@@ -2032,12 +2070,23 @@ impl AzureWorkerController {
             let container_apps_client = ctx
                 .service_provider
                 .get_azure_container_apps_management_client(azure_cfg)?;
-            azure_container_apps::create_or_update_container_app(
-                &container_apps_client,
-                azure_cfg,
-                &resource_group_name,
+            let result = container_apps_client
+                .container_apps_client()
+                .create_or_update(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    container_app_name.clone(),
+                    app,
+                )
+                .send()
+                .await;
+            map_azure_core_021_lro_response(
+                "Azure Container Apps",
+                result,
+                "container app create or update",
+                "Azure Container App",
                 container_app_name,
-                &app,
+                |response| response.into_body(),
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -2103,12 +2152,23 @@ impl AzureWorkerController {
         }
 
         // Issue UPDATE
-        let op_result = azure_container_apps::update_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                container_app_name.clone(),
+                desired_app,
+            )
+            .send()
+            .await;
+        let op_result = map_azure_core_021_lro_response(
+            "Azure Container Apps",
+            result,
+            "container app update",
+            "Azure Container App",
             container_app_name,
-            &desired_app,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -2184,13 +2244,21 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
 
-        let app = azure_container_apps::get_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .get(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name,
+                container_app_name.clone(),
+            )
+            .await;
+        let app = map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "container app get",
+            "Azure Container App",
             container_app_name,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Error checking container app update status".to_string(),
             resource_id: Some(func_cfg.id.clone()),
@@ -2781,10 +2849,20 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match azure_container_apps::delete_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .delete(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name,
+                container_app_name.clone(),
+            )
+            .send()
+            .await;
+        match map_azure_core_021_delete_lro_response(
+            "Azure Container Apps",
+            result,
+            "container app delete",
+            "Azure Container App",
             &container_app_name,
         )
         .await
@@ -2875,14 +2953,21 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match azure_container_apps::get_container_app(
-            &client,
-            azure_cfg,
-            &resource_group_name,
+        let result = client
+            .container_apps_client()
+            .get(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name,
+                container_app_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Container Apps",
+            result,
+            "container app get",
+            "Azure Container App",
             &container_app_name,
-        )
-        .await
-        {
+        ) {
             Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 info!(name=%container_app_name, "Container app confirmed deleted");
                 Ok(HandlerAction::Continue {
