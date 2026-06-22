@@ -2,10 +2,7 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
-use crate::core::{
-    AzureServiceBusNamespaceProperties, AzureServiceBusResource, AzureServiceBusTrackedResource,
-    ResourceControllerContext, SbNamespace,
-};
+use crate::core::{ResourceControllerContext, SbNamespace};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
@@ -15,6 +12,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use azure_mgmt_servicebus::package_2024_01::models::{
+    sb_namespace_properties, Resource, SbNamespaceProperties, TrackedResource,
+};
 use chrono::Utc;
 use serde::Serialize;
 
@@ -548,8 +548,8 @@ impl AzureServiceBusNamespaceController {
             .region
             .clone()
             .unwrap_or_else(|| "eastus".to_string());
-        let mut namespace = SbNamespace::new(AzureServiceBusTrackedResource {
-            resource: AzureServiceBusResource {
+        let mut namespace = SbNamespace::new(TrackedResource {
+            resource: Resource {
                 id: None,
                 name: self.namespace_name.clone(),
                 type_: None,
@@ -557,10 +557,8 @@ impl AzureServiceBusNamespaceController {
             location,
             tags: None,
         });
-        namespace.properties = Some(AzureServiceBusNamespaceProperties {
-            public_network_access: Some(
-                azure_mgmt_servicebus::package_2024_01::models::sb_namespace_properties::PublicNetworkAccess::Enabled,
-            ),
+        namespace.properties = Some(SbNamespaceProperties {
+            public_network_access: Some(sb_namespace_properties::PublicNetworkAccess::Enabled),
             ..Default::default()
         });
         namespace

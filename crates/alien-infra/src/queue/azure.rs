@@ -380,16 +380,13 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
     use crate::core::SbNamespace;
     use alien_core::{Platform, Queue, ResourceStatus};
+    use azure_mgmt_servicebus::package_2024_01::models::TrackedResource;
     use std::sync::Arc;
 
     fn setup_mock_mgmt() -> Arc<MockAzureServiceBusManagementApi> {
         let mut mock = MockAzureServiceBusManagementApi::new();
         mock.expect_create_or_update_namespace()
-            .returning(|_, _, _| {
-                Ok(SbNamespace::new(
-                    crate::core::AzureServiceBusTrackedResource::new("eastus".to_string()),
-                ))
-            });
+            .returning(|_, _, _| Ok(SbNamespace::new(TrackedResource::new("eastus".to_string()))));
         mock.expect_create_or_update_queue()
             .returning(|_, _, _, _| Ok(SbQueue::default()));
         mock.expect_get_queue()

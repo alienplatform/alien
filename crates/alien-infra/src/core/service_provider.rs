@@ -50,11 +50,7 @@ pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
-pub use azure_mgmt_servicebus::package_2024_01::models::{
-    MessageCountDetails as AzureServiceBusMessageCountDetails, Resource as AzureServiceBusResource,
-    SbNamespace, SbNamespaceProperties as AzureServiceBusNamespaceProperties, SbQueue,
-    SbQueueProperties, TrackedResource as AzureServiceBusTrackedResource,
-};
+pub use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue, SbQueueProperties};
 use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 pub use azure_mgmt_storage::package_2023_05::models::{
     Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
