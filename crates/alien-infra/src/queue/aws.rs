@@ -8,7 +8,7 @@ use alien_core::{
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
 use aws_sdk_sqs::{types::QueueAttributeName, Client};
 use chrono::Utc;
@@ -245,14 +245,14 @@ impl AwsQueueController {
 
         if let Some(queue_url) = &self.queue_url {
             info!(url=%queue_url, "Deleting SQS queue");
-            match delete_sqs_queue(&client, queue_url).await {
+            match client.delete_queue().queue_url(queue_url).send().await {
                 Ok(_) => {
                     self.queue_url = None;
                     self.queue_name = None;
                 }
                 Err(e) => {
                     // Consider not found as successful deletion
-                    return Err(e.context(ErrorData::CloudPlatformError {
+                    return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete SQS queue '{}'", queue_url),
                         resource_id: Some(config.id.clone()),
                     }));
@@ -454,21 +454,6 @@ async fn set_sqs_queue_attributes(
         .into_alien_error()
         .context(ErrorData::CloudPlatformError {
             message: format!("SQS SetQueueAttributes API failed for queue '{queue_url}'"),
-            resource_id: None,
-        })?;
-
-    Ok(())
-}
-
-async fn delete_sqs_queue(client: &Client, queue_url: &str) -> Result<()> {
-    client
-        .delete_queue()
-        .queue_url(queue_url)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("SQS DeleteQueue API failed for queue '{queue_url}'"),
             resource_id: None,
         })?;
 

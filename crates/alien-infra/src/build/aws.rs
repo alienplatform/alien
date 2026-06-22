@@ -310,8 +310,12 @@ impl AwsBuildController {
                 self.build_env_vars = None;
             }
             Ok(Some(_)) => {
-                delete_codebuild_project(&client, &aws_project_name)
+                client
+                    .delete_project()
+                    .name(&aws_project_name)
+                    .send()
                     .await
+                    .into_alien_error()
                     .context(ErrorData::CloudPlatformError {
                         message: "Failed to delete CodeBuild project".to_string(),
                         resource_id: Some(build_config.id.clone()),
@@ -720,21 +724,6 @@ async fn get_codebuild_project(
         })?;
 
     Ok(response.projects().first().cloned())
-}
-
-async fn delete_codebuild_project(client: &CodeBuildClient, project_name: &str) -> Result<()> {
-    client
-        .delete_project()
-        .name(project_name)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("CodeBuild DeleteProject API failed for project '{project_name}'"),
-            resource_id: None,
-        })?;
-
-    Ok(())
 }
 
 fn emit_aws_build_heartbeat(

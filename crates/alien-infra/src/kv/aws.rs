@@ -353,15 +353,15 @@ impl AwsKvController {
             .get_aws_dynamodb_client(aws_config)
             .await?;
 
-        match delete_dynamodb_table(&client, table_name).await {
-            Ok(true) => {
+        match client.delete_table().table_name(table_name).send().await {
+            Ok(_) => {
                 info!(table_name=%table_name, "DynamoDB table deletion initiated");
                 Ok(HandlerAction::Continue {
                     state: WaitingForTableDeletion,
                     suggested_delay: Some(Duration::from_secs(10)),
                 })
             }
-            Ok(false) => {
+            Err(err) if is_dynamodb_delete_table_not_found(&err) => {
                 info!(table_name=%table_name, "DynamoDB table already deleted");
                 self.clear_state();
                 Ok(HandlerAction::Continue {
@@ -369,10 +369,12 @@ impl AwsKvController {
                     suggested_delay: None,
                 })
             }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete DynamoDB table '{}'", table_name),
-                resource_id: Some(config.id.clone()),
-            })),
+            Err(err) => Err(err
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete DynamoDB table '{}'", table_name),
+                    resource_id: Some(config.id.clone()),
+                })),
         }
     }
 
@@ -658,19 +660,6 @@ async fn describe_dynamodb_ttl(
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: format!("DynamoDB DescribeTimeToLive API failed for table '{table_name}'"),
-                resource_id: None,
-            })),
-    }
-}
-
-async fn delete_dynamodb_table(client: &DynamoDbClient, table_name: &str) -> Result<bool> {
-    match client.delete_table().table_name(table_name).send().await {
-        Ok(_) => Ok(true),
-        Err(err) if is_dynamodb_delete_table_not_found(&err) => Ok(false),
-        Err(err) => Err(err
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("DynamoDB DeleteTable API failed for table '{table_name}'"),
                 resource_id: None,
             })),
     }
