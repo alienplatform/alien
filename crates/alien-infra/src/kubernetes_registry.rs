@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
-use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, replace};
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::create;
 
 pub(crate) async fn ensure_registry_pull_secret(
     secrets_client: &std::sync::Arc<kube::Client>,
@@ -58,17 +60,18 @@ pub(crate) async fn ensure_registry_pull_secret(
         Err(e) => {
             let err = format!("{e}");
             if err.contains("AlreadyExists") || err.contains("409") {
-                replace(
-                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-                    secret_name,
-                    &secret,
-                )
-                .await
-                .map(|_| ())
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update registry pull secret '{secret_name}'"),
-                    resource_id: None,
-                })
+                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+                    .replace(secret_name, &kube::api::PostParams::default(), &secret)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes replace operation failed for '{secret_name}'"),
+                    })
+                    .map(|_| ())
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to update registry pull secret '{secret_name}'"),
+                        resource_id: None,
+                    })
             } else {
                 Err(e.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create registry pull secret '{secret_name}'"),

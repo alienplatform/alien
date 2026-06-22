@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, replace};
+use crate::kubernetes_client::{create, get};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -684,16 +684,21 @@ impl KubernetesContainerController {
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
-            replace(
-                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-                &new_statefulset,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update statefulset '{}'.", workload_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .replace(
+                    workload_name,
+                    &kube::api::PostParams::default(),
+                    &new_statefulset,
+                )
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{workload_name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update statefulset '{}'.", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
         } else {
             // Get existing Deployment to carry over resourceVersion
             let existing = get(
@@ -720,16 +725,21 @@ impl KubernetesContainerController {
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
-            replace(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-                &new_deployment,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update deployment '{}'.", workload_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .replace(
+                    workload_name,
+                    &kube::api::PostParams::default(),
+                    &new_deployment,
+                )
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{workload_name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update deployment '{}'.", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
         }
 
         info!(workload_name=%workload_name, workload_type=%workload_type, "Workload update submitted, waiting for rollout");
@@ -1282,16 +1292,19 @@ impl KubernetesContainerController {
                     resource_id: Some(config.id.clone()),
                 })?;
                 service.metadata.resource_version = existing.metadata.resource_version;
-                replace(
-                    kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
-                    service_name,
-                    &service,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update internal Service '{}'", service_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+                kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
+                    .replace(service_name, &kube::api::PostParams::default(), &service)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!(
+                            "Kubernetes replace operation failed for '{service_name}'"
+                        ),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to update internal Service '{}'", service_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
                 Ok(())
             }
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {

@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, replace};
+use crate::kubernetes_client::{create, get};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -440,16 +440,21 @@ impl KubernetesWorkerController {
             .await?;
         new_deployment.metadata.resource_version = resource_version;
 
-        replace(
-            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-            deployment_name,
-            &new_deployment,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to update deployment '{}'.", deployment_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+            .replace(
+                deployment_name,
+                &kube::api::PostParams::default(),
+                &new_deployment,
+            )
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes replace operation failed for '{deployment_name}'"),
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update deployment '{}'.", deployment_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         info!(deployment_name=%deployment_name, "Deployment update submitted, waiting for rollout");
 

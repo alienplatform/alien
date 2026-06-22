@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{EnvironmentVariable, EnvironmentVariableType};
-use alien_error::{Context, ContextError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, replace};
+use crate::kubernetes_client::{create, get};
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -130,18 +131,17 @@ pub async fn reconcile_environment_secret(
                         resource_id: Some(resource_id.to_string()),
                     })?;
                 secret.metadata.resource_version = existing.metadata.resource_version;
-                replace(
-                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-                    &secret_name,
-                    &secret,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update environment Secret for {resource_kind} '{resource_id}'",
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+                    .replace(&secret_name, &kube::api::PostParams::default(), &secret)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes replace operation failed for '{secret_name}'"),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to update environment Secret for {resource_kind} '{resource_id}'"),
+                        resource_id: Some(resource_id.to_string()),
+                    })?;
             } else {
                 return Err(e.context(ErrorData::CloudPlatformError {
                     message: format!(

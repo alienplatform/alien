@@ -35,7 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, replace};
+use crate::kubernetes_client::{create, get};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -1641,16 +1641,17 @@ async fn upsert_service(
                 resource_id: Some(resource_id.to_string()),
             })?;
             service.metadata.resource_version = existing.metadata.resource_version;
-            replace(
-                kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
-                name,
-                &service,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update Service '{}'", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace)
+                .replace(name, &kube::api::PostParams::default(), &service)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update Service '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1715,16 +1716,17 @@ async fn upsert_tls_secret(
                 resource_id: Some(resource_id.to_string()),
             })?;
             secret.metadata.resource_version = existing.metadata.resource_version;
-            replace(
-                kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
-                name,
-                &secret,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update TLS Secret '{}'", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace)
+                .replace(name, &kube::api::PostParams::default(), &secret)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update TLS Secret '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1759,16 +1761,17 @@ async fn upsert_ingress(
                 resource_id: Some(resource_id.to_string()),
             })?;
             ingress.metadata.resource_version = existing.metadata.resource_version;
-            replace(
-                kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
-                name,
-                &ingress,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update Ingress '{}'", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace)
+                .replace(name, &kube::api::PostParams::default(), &ingress)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update Ingress '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {

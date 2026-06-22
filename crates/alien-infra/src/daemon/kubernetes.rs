@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get, replace};
+use crate::kubernetes_client::{create, get};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -254,16 +254,21 @@ impl KubernetesDaemonController {
             .await?;
         new_daemonset.metadata.resource_version = resource_version;
 
-        replace(
-            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-            daemon_set_name,
-            &new_daemonset,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to update daemonset '{}'.", daemon_set_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+            .replace(
+                daemon_set_name,
+                &kube::api::PostParams::default(),
+                &new_daemonset,
+            )
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes replace operation failed for '{daemon_set_name}'"),
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update daemonset '{}'.", daemon_set_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         Ok(HandlerAction::Continue {
             state: WaitingForUpdate,

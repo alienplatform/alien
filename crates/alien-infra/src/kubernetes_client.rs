@@ -444,15 +444,3 @@ where
             message: format!("Kubernetes get operation failed for '{name}'"),
         })
 }
-
-pub(crate) async fn replace<K>(api: Api<K>, name: &str, value: &K) -> Result<K>
-where
-    K: Clone + Debug + DeserializeOwned + Serialize,
-{
-    api.replace(name, &PostParams::default(), value)
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Kubernetes replace operation failed for '{name}'"),
-        })
-}
