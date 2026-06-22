@@ -3,8 +3,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::core::{
-    Identity, Permission, ResourceControllerContext, RoleAssignment, RoleAssignmentProperties,
-    RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
+    Identity, Permission, ResourceControllerContext, RoleAssignmentCreateParameters,
+    RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
+    RoleDefinitionProperties, Scope,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -479,10 +480,8 @@ impl AzureServiceAccountController {
                     )
                     .to_string();
 
-                    let role_assignment = RoleAssignment {
-                        id: None,
-                        name: None,
-                        properties: Some(RoleAssignmentProperties {
+                    let role_assignment =
+                        RoleAssignmentCreateParameters::new(RoleAssignmentProperties {
                             condition: None,
                             condition_version: None,
                             created_by: None,
@@ -500,9 +499,7 @@ impl AzureServiceAccountController {
                             scope: Some(binding.scope.clone()),
                             updated_by: None,
                             updated_on: None,
-                        }),
-                        type_: None,
-                    };
+                        });
 
                     let full_assignment_id = format!(
                         "{}/providers/Microsoft.Authorization/roleAssignments/{}",

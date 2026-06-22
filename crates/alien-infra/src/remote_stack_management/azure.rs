@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::core::{
     AuthorizationApi, FederatedIdentityCredential, Identity, Permission, ResourceControllerContext,
-    ResourcePermissionsHelper, RoleAssignment, RoleAssignmentProperties,
+    ResourcePermissionsHelper, RoleAssignmentCreateParameters, RoleAssignmentProperties,
     RoleAssignmentPropertiesPrincipalType, RoleDefinition, RoleDefinitionProperties, Scope,
 };
 use crate::error::{ErrorData, Result};
@@ -1429,25 +1429,20 @@ impl AzureRemoteStackManagementController {
             scope, assignment_uuid
         );
 
-        let role_assignment = RoleAssignment {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(RoleAssignmentProperties {
-                principal_id: principal_id.to_string(),
-                role_definition_id: role_definition_id.to_string(),
-                scope: Some(scope.to_string()),
-                principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
-                description: Some(description.to_string()),
-                condition: None,
-                condition_version: None,
-                created_by: None,
-                created_on: None,
-                delegated_managed_identity_resource_id: None,
-                updated_by: None,
-                updated_on: None,
-            }),
-        };
+        let role_assignment = RoleAssignmentCreateParameters::new(RoleAssignmentProperties {
+            principal_id: principal_id.to_string(),
+            role_definition_id: role_definition_id.to_string(),
+            scope: Some(scope.to_string()),
+            principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
+            description: Some(description.to_string()),
+            condition: None,
+            condition_version: None,
+            created_by: None,
+            created_on: None,
+            delegated_managed_identity_resource_id: None,
+            updated_by: None,
+            updated_on: None,
+        });
 
         let create_result = client
             .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)

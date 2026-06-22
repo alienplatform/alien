@@ -4922,7 +4922,14 @@ mod tests {
                     });
                 mock_auth
                     .expect_create_or_update_role_assignment_by_id()
-                    .returning(|_, role_assignment| Ok(role_assignment.clone()));
+                    .returning(|_, role_assignment| {
+                        Ok(crate::core::RoleAssignment {
+                            id: None,
+                            name: None,
+                            properties: Some(role_assignment.properties.clone()),
+                            type_: None,
+                        })
+                    });
                 mock_auth
                     .expect_delete_role_assignment_by_id()
                     .returning(|_| Ok(None));

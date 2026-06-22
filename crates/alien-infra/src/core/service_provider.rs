@@ -38,10 +38,11 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
+use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
 pub use azure_mgmt_authorization::package_2022_04_01::models::{
     role_assignment_properties::{self, PrincipalType as RoleAssignmentPropertiesPrincipalType},
-    Permission, RoleAssignment, RoleAssignmentListResult, RoleAssignmentProperties, RoleDefinition,
-    RoleDefinitionProperties,
+    Permission, RoleAssignment, RoleAssignmentCreateParameters, RoleAssignmentProperties,
+    RoleDefinition, RoleDefinitionProperties,
 };
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
@@ -62,6 +63,7 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
     StorageAccountPropertiesCreateParameters, Table, TableProperties,
 };
+use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry as OfficialArtifactRegistry;
 pub use google_cloud_artifactregistry_v1::model::{
@@ -2140,7 +2142,7 @@ pub trait AuthorizationApi: Send + Sync + std::fmt::Debug {
     async fn create_or_update_role_assignment_by_id(
         &self,
         role_assignment_id: String,
-        role_assignment: &RoleAssignment,
+        role_assignment: &RoleAssignmentCreateParameters,
     ) -> Result<RoleAssignment>;
 
     async fn delete_role_assignment_by_id(
@@ -2179,7 +2181,7 @@ pub trait AuthorizationApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureAuthorizationClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_authorization_2022_04::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureAuthorizationClient {
@@ -2196,122 +2198,35 @@ impl OfficialAzureAuthorizationClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn arm_url(&self, path: &str, api_version: &str) -> String {
-        format!(
-            "{}/{}?api-version={}",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            path.trim_start_matches('/'),
-            api_version
-        )
-    }
+    async fn client(&self) -> Result<azure_authorization_2022_04::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn role_definition_url(&self, scope: &Scope, role_definition_id: &str) -> String {
-        self.arm_url(
-            &format!(
-                "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                scope.to_scope_string(&self.config),
-                role_definition_id
-            ),
-            "2022-04-01",
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    fn role_assignment_url(&self, role_assignment_id: &str) -> String {
-        self.arm_url(role_assignment_id, "2022-04-01")
-    }
-
-    fn role_assignments_url(&self, scope: &Scope) -> String {
-        format!(
-            "{}/{}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            scope.to_scope_string(&self.config)
-        )
-    }
-
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                azure_authorization_2022_04::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Authorization client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if status == StatusCode::CONFLICT {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                    message: text,
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -2323,28 +2238,23 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         role_definition_id: String,
         role_definition: &RoleDefinition,
     ) -> Result<RoleDefinition> {
-        let body = serde_json::to_string(role_definition)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to serialize Azure role definition request".to_string(),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.role_definition_url(scope, &role_definition_id),
-                Some(body),
-                "Azure role definition",
-                &role_definition_id,
+        let scope_string = scope.to_scope_string(&self.config);
+        let result = self
+            .client()
+            .await?
+            .role_definitions_client()
+            .create_or_update(
+                scope_string,
+                role_definition_id.clone(),
+                role_definition.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure role definition '{role_definition_id}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role definition create or update",
+            "Azure role definition",
+            &role_definition_id,
         )
     }
 
@@ -2353,25 +2263,33 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         scope: &Scope,
         role_definition_id: String,
     ) -> Result<Option<RoleDefinition>> {
+        let scope_string = scope.to_scope_string(&self.config);
         let response = self
-            .request(
-                Method::DELETE,
-                self.role_definition_url(scope, &role_definition_id),
-                None,
-                "Azure role definition",
-                &role_definition_id,
-            )
-            .await?;
-        if response.is_empty() {
+            .client()
+            .await?
+            .role_definitions_client()
+            .delete(scope_string, role_definition_id.clone())
+            .send()
+            .await;
+        let response = map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            response,
+            "role definition delete",
+            "Azure role definition",
+            &role_definition_id,
+        )?;
+        if response.as_raw_response().status() == azure_core_021::StatusCode::NoContent {
             Ok(None)
         } else {
-            serde_json::from_str(&response)
+            response
+                .into_body()
+                .await
                 .map(Some)
                 .into_alien_error()
                 .context(crate::error::ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to parse Azure role definition '{role_definition_id}' delete response"
-                    ),
+                    "Failed to parse Azure role definition '{role_definition_id}' delete response"
+                ),
                     resource_id: None,
                 })
         }
@@ -2382,52 +2300,39 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         scope: &Scope,
         role_definition_id: String,
     ) -> Result<RoleDefinition> {
-        let response = self
-            .request(
-                Method::GET,
-                self.role_definition_url(scope, &role_definition_id),
-                None,
-                "Azure role definition",
-                &role_definition_id,
-            )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure role definition '{role_definition_id}' response"
-                ),
-                resource_id: None,
-            },
+        let scope_string = scope.to_scope_string(&self.config);
+        let result = self
+            .client()
+            .await?
+            .role_definitions_client()
+            .get(scope_string, role_definition_id.clone())
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role definition get",
+            "Azure role definition",
+            &role_definition_id,
         )
     }
 
     async fn create_or_update_role_assignment_by_id(
         &self,
         role_assignment_id: String,
-        role_assignment: &RoleAssignment,
+        role_assignment: &RoleAssignmentCreateParameters,
     ) -> Result<RoleAssignment> {
-        let body = serde_json::to_string(role_assignment)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to serialize Azure role assignment request".to_string(),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.role_assignment_url(&role_assignment_id),
-                Some(body),
-                "Azure role assignment",
-                &role_assignment_id,
-            )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure role assignment '{role_assignment_id}' response"
-                ),
-                resource_id: None,
-            },
+        let result = self
+            .client()
+            .await?
+            .role_assignments_client()
+            .create_by_id(role_assignment_id.clone(), role_assignment.clone())
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role assignment create or update",
+            "Azure role assignment",
+            &role_assignment_id,
         )
     }
 
@@ -2436,24 +2341,31 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         role_assignment_id: String,
     ) -> Result<Option<RoleAssignment>> {
         let response = self
-            .request(
-                Method::DELETE,
-                self.role_assignment_url(&role_assignment_id),
-                None,
-                "Azure role assignment",
-                &role_assignment_id,
-            )
-            .await?;
-        if response.is_empty() {
+            .client()
+            .await?
+            .role_assignments_client()
+            .delete_by_id(role_assignment_id.clone())
+            .send()
+            .await;
+        let response = map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            response,
+            "role assignment delete",
+            "Azure role assignment",
+            &role_assignment_id,
+        )?;
+        if response.as_raw_response().status() == azure_core_021::StatusCode::NoContent {
             Ok(None)
         } else {
-            serde_json::from_str(&response)
+            response
+                .into_body()
+                .await
                 .map(Some)
                 .into_alien_error()
                 .context(crate::error::ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to parse Azure role assignment '{role_assignment_id}' delete response"
-                    ),
+                    "Failed to parse Azure role assignment '{role_assignment_id}' delete response"
+                ),
                     resource_id: None,
                 })
         }
@@ -2463,22 +2375,18 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         &self,
         role_assignment_id: String,
     ) -> Result<RoleAssignment> {
-        let response = self
-            .request(
-                Method::GET,
-                self.role_assignment_url(&role_assignment_id),
-                None,
-                "Azure role assignment",
-                &role_assignment_id,
-            )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure role assignment '{role_assignment_id}' response"
-                ),
-                resource_id: None,
-            },
+        let result = self
+            .client()
+            .await?
+            .role_assignments_client()
+            .get_by_id(role_assignment_id.clone())
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Authorization",
+            result,
+            "role assignment get",
+            "Azure role assignment",
+            &role_assignment_id,
         )
     }
 
@@ -2488,35 +2396,34 @@ impl AuthorizationApi for OfficialAzureAuthorizationClient {
         role_definition_id: Option<String>,
     ) -> Result<Vec<RoleAssignment>> {
         let scope_string = scope.to_scope_string(&self.config);
-        let response = self
-            .request(
-                Method::GET,
-                self.role_assignments_url(scope),
-                None,
+        let mut stream = self
+            .client()
+            .await?
+            .role_assignments_client()
+            .list_for_scope(scope_string.clone())
+            .filter("atScope()")
+            .into_stream();
+
+        let mut assignments = Vec::new();
+        while let Some(page) = stream.next().await {
+            let page = map_azure_core_021_sdk_error(
+                "Azure Authorization",
+                page,
+                "role assignments list",
                 "Azure role assignments",
                 &scope_string,
-            )
-            .await?;
-        let response = serde_json::from_str::<RoleAssignmentListResult>(&response)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure role assignments for '{scope_string}'"),
-                resource_id: None,
-            })?;
+            )?;
+            assignments.extend(page.value);
+        }
 
-        let assignments = if let Some(role_definition_id) = role_definition_id {
-            response
-                .value
-                .into_iter()
-                .filter(|assignment| {
-                    assignment.properties.as_ref().is_some_and(|properties| {
-                        properties.role_definition_id == role_definition_id
-                    })
-                })
-                .collect()
-        } else {
-            response.value
-        };
+        if let Some(role_definition_id) = role_definition_id {
+            assignments.retain(|assignment| {
+                assignment
+                    .properties
+                    .as_ref()
+                    .is_some_and(|properties| properties.role_definition_id == role_definition_id)
+            });
+        }
         Ok(assignments)
     }
 
@@ -6168,11 +6075,26 @@ fn map_azure_core_021_sdk_error<T>(
                     ..
                 }
             );
+            let conflict = matches!(
+                error.kind(),
+                azure_core_021::error::ErrorKind::HttpResponse {
+                    status: azure_core_021::StatusCode::Conflict,
+                    ..
+                }
+            );
             if not_found {
                 Err(AlienError::new(
                     crate::error::ErrorData::CloudResourceNotFound {
                         resource_type: resource_type.to_string(),
                         resource_name: resource_name.to_string(),
+                    },
+                ))
+            } else if conflict {
+                Err(AlienError::new(
+                    crate::error::ErrorData::CloudResourceConflict {
+                        resource_type: resource_type.to_string(),
+                        resource_name: resource_name.to_string(),
+                        message: error.to_string(),
                     },
                 ))
             } else {

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::core::{
-    AuthorizationApi, Permission, ResourceControllerContext, RoleAssignment,
+    AuthorizationApi, Permission, ResourceControllerContext, RoleAssignmentCreateParameters,
     RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType, RoleDefinition,
     RoleDefinitionProperties, Scope,
 };
@@ -457,27 +457,22 @@ impl AzurePermissionsHelper {
         let full_assignment_id =
             authorization_client.build_role_assignment_id(scope, role_assignment_id.to_string());
 
-        let role_assignment = RoleAssignment {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(RoleAssignmentProperties {
-                principal_id: principal_id.to_string(),
-                role_definition_id: role_definition_id.to_string(),
-                scope: Some(scope.to_resource_id_string(azure_config)),
-                principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
-                condition: None,
-                condition_version: None,
-                delegated_managed_identity_resource_id: None,
-                description: Some(
-                    "Runtime-managed role assignment for resource-scoped permissions".to_string(),
-                ),
-                created_by: None,
-                created_on: None,
-                updated_by: None,
-                updated_on: None,
-            }),
-        };
+        let role_assignment = RoleAssignmentCreateParameters::new(RoleAssignmentProperties {
+            principal_id: principal_id.to_string(),
+            role_definition_id: role_definition_id.to_string(),
+            scope: Some(scope.to_resource_id_string(azure_config)),
+            principal_type: Some(RoleAssignmentPropertiesPrincipalType::ServicePrincipal),
+            condition: None,
+            condition_version: None,
+            delegated_managed_identity_resource_id: None,
+            description: Some(
+                "Runtime-managed role assignment for resource-scoped permissions".to_string(),
+            ),
+            created_by: None,
+            created_on: None,
+            updated_by: None,
+            updated_on: None,
+        });
 
         authorization_client
             .create_or_update_role_assignment_by_id(full_assignment_id, &role_assignment)
