@@ -40,7 +40,6 @@ use azure_mgmt_authorization::package_2022_04_01::models::{
     RoleAssignment, RoleAssignmentCreateParameters, RoleDefinition,
 };
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
-use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
@@ -878,178 +877,6 @@ fn azure_core_021_header(
     headers
         .get_optional_str(&name)
         .map(std::string::ToString::to_string)
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
-    async fn create_registry(
-        &self,
-        resource_group_name: &str,
-        registry_name: &str,
-        parameters: &Registry,
-    ) -> Result<OperationResult<Registry>>;
-
-    async fn delete_registry(&self, resource_group_name: &str, registry_name: &str) -> Result<()>;
-
-    async fn get_registry(
-        &self,
-        resource_group_name: &str,
-        registry_name: &str,
-    ) -> Result<Registry>;
-}
-
-struct OfficialAzureContainerRegistryClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_containerregistry_2023_11::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureContainerRegistryClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureContainerRegistryClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureContainerRegistryClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_containerregistry_2023_11::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_containerregistry_2023_11::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Container Registry client"
-                            .to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl ContainerRegistryApi for OfficialAzureContainerRegistryClient {
-    async fn create_registry(
-        &self,
-        resource_group_name: &str,
-        registry_name: &str,
-        parameters: &Registry,
-    ) -> Result<OperationResult<Registry>> {
-        let response = self
-            .client()
-            .await?
-            .registries_client()
-            .create(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                registry_name.to_string(),
-                parameters.clone(),
-            )
-            .send()
-            .await;
-        let response = map_azure_core_021_sdk_error(
-            "Azure Container Registry",
-            response,
-            "registry create",
-            "Azure Container Registry",
-            registry_name,
-        )?;
-
-        if response.as_raw_response().status() == azure_core_021::StatusCode::Accepted {
-            let operation =
-                LongRunningOperation::from_azure_core_021_headers(response.as_raw_response().headers())?
-                    .ok_or_else(|| {
-                        AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Azure Container Registry '{registry_name}' returned 202 without an operation URL"
-                            ),
-                            resource_id: None,
-                        })
-                    })?;
-            Ok(OperationResult::LongRunning(operation))
-        } else {
-            let registry = response.into_body().await.into_alien_error().context(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to parse Azure Container Registry '{registry_name}' response"
-                    ),
-                    resource_id: None,
-                },
-            )?;
-            Ok(OperationResult::Completed(registry))
-        }
-    }
-
-    async fn delete_registry(&self, resource_group_name: &str, registry_name: &str) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .registries_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                registry_name.to_string(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Container Registry",
-            result,
-            "registry delete",
-            "Azure Container Registry",
-            registry_name,
-        )
-    }
-
-    async fn get_registry(
-        &self,
-        resource_group_name: &str,
-        registry_name: &str,
-    ) -> Result<Registry> {
-        let result = self
-            .client()
-            .await?
-            .registries_client()
-            .get(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                registry_name.to_string(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Container Registry",
-            result,
-            "registry get",
-            "Azure Container Registry",
-            registry_name,
-        )
-    }
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -2836,7 +2663,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_container_registry_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ContainerRegistryApi>>;
+    ) -> Result<azure_containerregistry_2023_11::Client>;
     fn get_azure_long_running_operation_client(
         &self,
         config: &AzureClientConfig,
@@ -3276,11 +3103,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_container_registry_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ContainerRegistryApi>> {
-        Ok(Arc::new(OfficialAzureContainerRegistryClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_containerregistry_2023_11::Client> {
+        azure_containerregistry_client_from_alien_config(config)
     }
 
     fn get_azure_long_running_operation_client(
@@ -3990,12 +3814,12 @@ struct StaticAzureAccessTokenCredential {
 }
 
 #[derive(Debug)]
-struct AzureCore021Credential {
+pub(crate) struct AzureCore021Credential {
     inner: Arc<dyn TokenCredential>,
 }
 
 impl AzureCore021Credential {
-    fn new(inner: Arc<dyn TokenCredential>) -> Self {
+    pub(crate) fn new(inner: Arc<dyn TokenCredential>) -> Self {
         Self { inner }
     }
 }
@@ -4025,7 +3849,7 @@ impl azure_core_021::auth::TokenCredential for AzureCore021Credential {
     }
 }
 
-fn map_azure_core_021_sdk_error<T>(
+pub(crate) fn map_azure_core_021_sdk_error<T>(
     service_name: &str,
     result: azure_core_021::Result<T>,
     action: &str,
@@ -4078,7 +3902,7 @@ fn map_azure_core_021_sdk_error<T>(
     }
 }
 
-async fn map_azure_core_021_lro_response<T, R, F, Fut>(
+pub(crate) async fn map_azure_core_021_lro_response<T, R, F, Fut>(
     service_name: &str,
     result: azure_core_021::Result<R>,
     action: &str,
@@ -4118,7 +3942,7 @@ where
     }
 }
 
-async fn map_azure_core_021_delete_lro_response<R>(
+pub(crate) async fn map_azure_core_021_delete_lro_response<R>(
     service_name: &str,
     result: azure_core_021::Result<R>,
     action: &str,
@@ -4271,6 +4095,29 @@ pub(crate) fn azure_management_endpoint(config: &AzureClientConfig) -> &str {
         .and_then(|overrides| overrides.endpoints.get("management"))
         .map(String::as_str)
         .unwrap_or("https://management.azure.com")
+}
+
+pub(crate) fn azure_containerregistry_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_containerregistry_2023_11::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_containerregistry_2023_11::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Container Registry client".to_string(),
+            resource_id: None,
+        })
 }
 
 fn extract_oid_from_token(token: &str) -> Result<String> {

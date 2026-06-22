@@ -3,7 +3,10 @@ use alien_macros::controller;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::{OperationResult, ResourceControllerContext};
+use crate::core::{
+    map_azure_core_021_lro_response, map_azure_core_021_sdk_error, OperationResult,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
@@ -11,6 +14,7 @@ use alien_core::{
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
+use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 use azure_mgmt_containerregistry::package_2023_11_preview::models::{
     registry_properties, sku, Registry, RegistryProperties, Resource, Sku,
 };
@@ -20,6 +24,85 @@ fn serialized_field<T: serde::Serialize>(value: &T) -> Option<String> {
     serde_json::to_value(value)
         .ok()
         .and_then(|value| value.as_str().map(ToString::to_string))
+}
+
+async fn create_registry(
+    client: &azure_containerregistry_2023_11::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    registry_name: &str,
+    parameters: Registry,
+) -> Result<OperationResult<Registry>> {
+    let response = client
+        .registries_client()
+        .create(
+            subscription_id.to_string(),
+            resource_group_name.to_string(),
+            registry_name.to_string(),
+            parameters,
+        )
+        .send()
+        .await;
+
+    map_azure_core_021_lro_response(
+        "Azure Container Registry",
+        response,
+        "registry create",
+        "Azure Container Registry",
+        registry_name,
+        |response| async { response.into_body().await },
+    )
+    .await
+}
+
+async fn get_registry(
+    client: &azure_containerregistry_2023_11::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    registry_name: &str,
+) -> Result<Registry> {
+    let response = client
+        .registries_client()
+        .get(
+            subscription_id.to_string(),
+            resource_group_name.to_string(),
+            registry_name.to_string(),
+        )
+        .await;
+
+    map_azure_core_021_sdk_error(
+        "Azure Container Registry",
+        response,
+        "registry get",
+        "Azure Container Registry",
+        registry_name,
+    )
+}
+
+async fn delete_registry(
+    client: &azure_containerregistry_2023_11::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    registry_name: &str,
+) -> Result<()> {
+    let response = client
+        .registries_client()
+        .delete(
+            subscription_id.to_string(),
+            resource_group_name.to_string(),
+            registry_name.to_string(),
+        )
+        .send()
+        .await
+        .map(|_| ());
+
+    map_azure_core_021_sdk_error(
+        "Azure Container Registry",
+        response,
+        "registry delete",
+        "Azure Container Registry",
+        registry_name,
+    )
 }
 
 /// Azure Artifact Registry controller.
@@ -95,16 +178,21 @@ impl AzureArtifactRegistryController {
             ..Default::default()
         });
 
-        let operation_result = acr_client
-            .create_registry(&resource_group_name, &registry_name, &registry)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Azure Container Registry '{}'",
-                    registry_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let operation_result = create_registry(
+            &acr_client,
+            &azure_cfg.subscription_id,
+            &resource_group_name,
+            &registry_name,
+            registry,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Azure Container Registry '{}'",
+                registry_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match operation_result {
             OperationResult::Completed(created_registry) => {
@@ -176,9 +264,13 @@ impl AzureArtifactRegistryController {
             .service_provider
             .get_azure_container_registry_client(azure_cfg)?;
 
-        match acr_client
-            .get_registry(resource_group_name, registry_name)
-            .await
+        match get_registry(
+            &acr_client,
+            &azure_cfg.subscription_id,
+            resource_group_name,
+            registry_name,
+        )
+        .await
         {
             Ok(registry) => {
                 let login_server = registry.properties.and_then(|p| p.login_server);
@@ -349,9 +441,13 @@ impl AzureArtifactRegistryController {
             .get_azure_container_registry_client(azure_cfg)?;
 
         // Delete registry - treat NotFound as success for idempotent deletion
-        match acr_client
-            .delete_registry(resource_group_name, registry_name)
-            .await
+        match delete_registry(
+            &acr_client,
+            &azure_cfg.subscription_id,
+            resource_group_name,
+            registry_name,
+        )
+        .await
         {
             Ok(_) => {
                 info!(
@@ -401,9 +497,13 @@ impl AzureArtifactRegistryController {
                 .get_azure_container_registry_client(azure_cfg)?;
 
             // Verify the registry still exists and is accessible
-            match acr_client
-                .get_registry(resource_group_name, registry_name)
-                .await
+            match get_registry(
+                &acr_client,
+                &azure_cfg.subscription_id,
+                resource_group_name,
+                registry_name,
+            )
+            .await
             {
                 Ok(registry) => {
                     // Check if the login server has changed (indicates drift)
@@ -709,29 +809,80 @@ fn emit_azure_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockContainerRegistryApi;
-    use crate::MockPlatformServiceProvider;
-    use alien_core::Platform;
+    use crate::core::{
+        azure_credential_from_config, AzureCore021Credential, MockPlatformServiceProvider,
+    };
+    use alien_core::{AzureClientConfig, AzureCredentials, Platform};
+    use azure_core_021::{
+        Context, Policy, PolicyResult, Request, Response, StatusCode, TransportOptions,
+    };
+    use futures_util::stream;
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
         ArtifactRegistry::new("my-registry".to_string()).build()
     }
 
+    #[derive(Debug)]
+    struct DeleteRegistryTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for DeleteRegistryTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(request.method(), &azure_core_021::Method::Delete);
+            assert_eq!(
+                request.url().path(),
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.ContainerRegistry/registries/testregistry"
+            );
+            assert_eq!(
+                request.url().query(),
+                Some("api-version=2023-11-01-preview")
+            );
+
+            Ok(Response::new(
+                StatusCode::NoContent,
+                azure_core_021::headers::Headers::new(),
+                Box::pin(stream::empty()),
+            ))
+        }
+    }
+
+    fn acr_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_containerregistry_2023_11::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_containerregistry_2023_11::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("ACR client should build")
+    }
+
     fn setup_mock_service_provider_for_deletion() -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
+        let acr_client = acr_client_with_transport(DeleteRegistryTransport);
 
-        // Mock the container registry client for delete operations
         mock_provider
             .expect_get_azure_container_registry_client()
-            .returning(|_| {
-                let mut mock_acr = MockContainerRegistryApi::new();
-
-                // Mock successful deletion
-                mock_acr.expect_delete_registry().returning(|_, _| Ok(()));
-
-                Ok(Arc::new(mock_acr))
-            });
+            .returning(move |_| Ok(acr_client.clone()));
 
         Arc::new(mock_provider)
     }
