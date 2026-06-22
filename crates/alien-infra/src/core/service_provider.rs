@@ -5,7 +5,7 @@ use crate::aws_sdk::{
     ec2_client_from_alien_config, ecr_client_from_alien_config,
     eventbridge_client_from_alien_config, iam_client_from_alien_config,
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
-    Ec2Api, IamApi, S3Api,
+    Ec2Api, IamApi,
 };
 use crate::azure_container_apps::{
     ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
@@ -4614,7 +4614,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<aws_sdk_lambda::Client>;
-    async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
+    async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_s3::Client>;
     async fn get_aws_codebuild_client(
         &self,
         config: &AwsClientConfig,
@@ -4880,8 +4880,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         lambda_client_from_alien_config(config).await
     }
 
-    async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>> {
-        Ok(Arc::new(s3_client_from_alien_config(config).await?))
+    async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_s3::Client> {
+        s3_client_from_alien_config(config).await
     }
 
     async fn get_aws_codebuild_client(

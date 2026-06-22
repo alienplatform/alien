@@ -4,10 +4,7 @@ use tracing::{debug, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 
-use crate::aws_sdk::{
-    DescribeNetworkInterfacesRequest, Filter, LambdaFunctionConfiguration,
-    NotificationConfiguration, S3Event,
-};
+use crate::aws_sdk::{DescribeNetworkInterfacesRequest, Filter};
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
@@ -78,6 +75,17 @@ use aws_sdk_lambda::{
         LastUpdateStatus as LambdaLastUpdateStatus, PackageType, State as LambdaState, VpcConfig,
     },
     Client as LambdaClient,
+};
+use aws_sdk_s3::{
+    error::{ProvideErrorMetadata as S3ProvideErrorMetadata, SdkError as S3SdkError},
+    operation::{
+        get_bucket_notification_configuration::{
+            GetBucketNotificationConfigurationError, GetBucketNotificationConfigurationOutput,
+        },
+        put_bucket_notification_configuration::PutBucketNotificationConfigurationOutput,
+    },
+    types::{Event as S3Event, LambdaFunctionConfiguration, NotificationConfiguration},
+    Client as S3Client,
 };
 use chrono::Utc;
 
@@ -1092,6 +1100,71 @@ fn s3_lambda_notification_config(
             message: "Invalid S3 Lambda notification configuration".to_string(),
             resource_id: Some(resource_id.to_string()),
         })
+}
+
+async fn get_s3_bucket_notification_configuration(
+    client: &S3Client,
+    bucket_name: &str,
+) -> Result<NotificationConfiguration> {
+    match client
+        .get_bucket_notification_configuration()
+        .bucket(bucket_name)
+        .send()
+        .await
+    {
+        Ok(output) => Ok(notification_configuration_from_get_output(output)),
+        Err(err) if is_s3_get_notification_not_found(&err) => {
+            Ok(NotificationConfiguration::builder().build())
+        }
+        Err(err) => Err(err
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "S3 GetBucketNotificationConfiguration API failed for bucket '{bucket_name}'"
+                ),
+                resource_id: None,
+            })),
+    }
+}
+
+async fn put_s3_bucket_notification_configuration(
+    client: &S3Client,
+    bucket_name: &str,
+    config: &NotificationConfiguration,
+) -> Result<PutBucketNotificationConfigurationOutput> {
+    client
+        .put_bucket_notification_configuration()
+        .bucket(bucket_name)
+        .notification_configuration(config.clone())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "S3 PutBucketNotificationConfiguration API failed for bucket '{bucket_name}'"
+            ),
+            resource_id: None,
+        })
+}
+
+fn is_s3_get_notification_not_found(
+    error: &S3SdkError<GetBucketNotificationConfigurationError>,
+) -> bool {
+    error
+        .as_service_error()
+        .and_then(S3ProvideErrorMetadata::code)
+        .is_some_and(|code| code == "NoSuchBucket")
+}
+
+fn notification_configuration_from_get_output(
+    output: GetBucketNotificationConfigurationOutput,
+) -> NotificationConfiguration {
+    NotificationConfiguration::builder()
+        .set_topic_configurations(output.topic_configurations)
+        .set_queue_configurations(output.queue_configurations)
+        .set_lambda_function_configurations(output.lambda_function_configurations)
+        .set_event_bridge_configuration(output.event_bridge_configuration)
+        .build()
 }
 
 impl AwsWorkerController {
@@ -2531,32 +2604,35 @@ impl AwsWorkerController {
 
                 // Get current notification config and merge in new Lambda config
                 let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                let mut notification_config = s3_client
-                    .get_bucket_notification_configuration(bucket_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to get notification configuration for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let mut notification_config =
+                    get_s3_bucket_notification_configuration(&s3_client, bucket_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to get notification configuration for bucket '{}'",
+                                bucket_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
 
                 replace_lambda_notification_config(
                     &mut notification_config,
                     s3_lambda_notification_config(&statement_id, function_arn, events, &config.id)?,
                 );
 
-                s3_client
-                    .put_bucket_notification_configuration(bucket_name, &notification_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to put notification configuration for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                put_s3_bucket_notification_configuration(
+                    &s3_client,
+                    bucket_name,
+                    &notification_config,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to put notification configuration for bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 if !self.s3_permission_statement_ids.contains(&statement_id) {
                     self.s3_permission_statement_ids.push(statement_id.clone());
@@ -3803,9 +3879,12 @@ impl AwsWorkerController {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::builder().build();
-                            if let Err(e) = s3_client
-                                .put_bucket_notification_configuration(bucket_name, &empty_config)
-                                .await
+                            if let Err(e) = put_s3_bucket_notification_configuration(
+                                &s3_client,
+                                bucket_name,
+                                &empty_config,
+                            )
+                            .await
                             {
                                 warn!(
                                     worker=%current_config.id,
@@ -3911,16 +3990,16 @@ impl AwsWorkerController {
                     }
 
                     let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                    let mut notification_config = s3_client
-                        .get_bucket_notification_configuration(bucket_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to get notification configuration for bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    let mut notification_config =
+                        get_s3_bucket_notification_configuration(&s3_client, bucket_name)
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to get notification configuration for bucket '{}'",
+                                    bucket_name
+                                ),
+                                resource_id: Some(current_config.id.clone()),
+                            })?;
 
                     replace_lambda_notification_config(
                         &mut notification_config,
@@ -3932,16 +4011,19 @@ impl AwsWorkerController {
                         )?,
                     );
 
-                    s3_client
-                        .put_bucket_notification_configuration(bucket_name, &notification_config)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to put notification configuration for bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    put_s3_bucket_notification_configuration(
+                        &s3_client,
+                        bucket_name,
+                        &notification_config,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to put notification configuration for bucket '{}'",
+                            bucket_name
+                        ),
+                        resource_id: Some(current_config.id.clone()),
+                    })?;
 
                     if !self.s3_permission_statement_ids.contains(&statement_id) {
                         self.s3_permission_statement_ids.push(statement_id);
@@ -4295,9 +4377,12 @@ impl AwsWorkerController {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::builder().build();
-                            if let Err(e) = s3_client
-                                .put_bucket_notification_configuration(bucket_name, &empty_config)
-                                .await
+                            if let Err(e) = put_s3_bucket_notification_configuration(
+                                &s3_client,
+                                bucket_name,
+                                &empty_config,
+                            )
+                            .await
                             {
                                 warn!(
                                     worker=%worker_config.id,
