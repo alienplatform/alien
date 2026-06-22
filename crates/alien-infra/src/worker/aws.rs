@@ -5,11 +5,8 @@ use tracing::{debug, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::aws_sdk::{
-    AddPermissionRequest, CreateEventSourceMappingRequest, CreateFunctionInput,
-    DescribeNetworkInterfacesRequest, Environment, Filter, FunctionCode,
-    GetFunctionConfigurationResponse, LambdaArchitecture, LambdaFunctionConfiguration,
-    LambdaLastUpdateStatus, LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration,
-    PackageType, S3Event, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    DescribeNetworkInterfacesRequest, Filter, LambdaFunctionConfiguration,
+    NotificationConfiguration, S3Event,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -60,6 +57,28 @@ use aws_sdk_eventbridge::{
     types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
     Client as EventBridgeClient,
 };
+use aws_sdk_lambda::{
+    error::{ProvideErrorMetadata as LambdaProvideErrorMetadata, SdkError as LambdaSdkError},
+    operation::{
+        add_permission::{AddPermissionInput, AddPermissionOutput},
+        create_event_source_mapping::{
+            CreateEventSourceMappingInput, CreateEventSourceMappingOutput,
+        },
+        create_function::{CreateFunctionInput, CreateFunctionOutput},
+        delete_event_source_mapping::DeleteEventSourceMappingOutput,
+        get_function_configuration::GetFunctionConfigurationOutput,
+        list_event_source_mappings::{ListEventSourceMappingsInput, ListEventSourceMappingsOutput},
+        update_function_code::{UpdateFunctionCodeInput, UpdateFunctionCodeOutput},
+        update_function_configuration::{
+            UpdateFunctionConfigurationInput, UpdateFunctionConfigurationOutput,
+        },
+    },
+    types::{
+        Architecture as LambdaArchitecture, Environment, FunctionCode,
+        LastUpdateStatus as LambdaLastUpdateStatus, PackageType, State as LambdaState, VpcConfig,
+    },
+    Client as LambdaClient,
+};
 use chrono::Utc;
 
 /// Generates the full, prefixed AWS resource name.
@@ -103,6 +122,385 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Result<Vec<EventBridgeTa
                 })
         })
         .collect()
+}
+
+async fn create_lambda_function(
+    client: &LambdaClient,
+    request: CreateFunctionInput,
+) -> Result<CreateFunctionOutput> {
+    let function_name = request.function_name.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "CreateFunction request did not include functionName".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    lambda_result(
+        client
+            .create_function()
+            .set_function_name(request.function_name)
+            .set_runtime(request.runtime)
+            .set_role(request.role)
+            .set_handler(request.handler)
+            .set_code(request.code)
+            .set_description(request.description)
+            .set_timeout(request.timeout)
+            .set_memory_size(request.memory_size)
+            .set_publish(request.publish)
+            .set_vpc_config(request.vpc_config)
+            .set_package_type(request.package_type)
+            .set_dead_letter_config(request.dead_letter_config)
+            .set_environment(request.environment)
+            .set_kms_key_arn(request.kms_key_arn)
+            .set_tracing_config(request.tracing_config)
+            .set_tags(request.tags)
+            .set_layers(request.layers)
+            .set_file_system_configs(request.file_system_configs)
+            .set_image_config(request.image_config)
+            .set_code_signing_config_arn(request.code_signing_config_arn)
+            .set_architectures(request.architectures)
+            .set_ephemeral_storage(request.ephemeral_storage)
+            .set_snap_start(request.snap_start)
+            .set_logging_config(request.logging_config)
+            .set_capacity_provider_config(request.capacity_provider_config)
+            .set_publish_to(request.publish_to)
+            .set_durable_config(request.durable_config)
+            .set_tenancy_config(request.tenancy_config)
+            .send()
+            .await,
+        "CreateFunction",
+        "LambdaFunction",
+        &function_name,
+    )
+}
+
+async fn add_lambda_permission(
+    client: &LambdaClient,
+    request: AddPermissionInput,
+) -> Result<AddPermissionOutput> {
+    let function_name = request.function_name.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "AddPermission request did not include functionName".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    lambda_result(
+        client
+            .add_permission()
+            .set_function_name(request.function_name)
+            .set_statement_id(request.statement_id)
+            .set_action(request.action)
+            .set_principal(request.principal)
+            .set_source_arn(request.source_arn)
+            .set_source_account(request.source_account)
+            .set_event_source_token(request.event_source_token)
+            .set_qualifier(request.qualifier)
+            .set_revision_id(request.revision_id)
+            .set_principal_org_id(request.principal_org_id)
+            .set_function_url_auth_type(request.function_url_auth_type)
+            .set_invoked_via_function_url(request.invoked_via_function_url)
+            .send()
+            .await,
+        "AddPermission",
+        "LambdaFunction",
+        &function_name,
+    )
+}
+
+async fn update_lambda_function_code(
+    client: &LambdaClient,
+    request: UpdateFunctionCodeInput,
+) -> Result<UpdateFunctionCodeOutput> {
+    let function_name = request.function_name.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "UpdateFunctionCode request did not include functionName".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    lambda_result(
+        client
+            .update_function_code()
+            .set_function_name(request.function_name)
+            .set_zip_file(request.zip_file)
+            .set_s3_bucket(request.s3_bucket)
+            .set_s3_key(request.s3_key)
+            .set_s3_object_version(request.s3_object_version)
+            .set_image_uri(request.image_uri)
+            .set_publish(request.publish)
+            .set_dry_run(request.dry_run)
+            .set_revision_id(request.revision_id)
+            .set_architectures(request.architectures)
+            .set_source_kms_key_arn(request.source_kms_key_arn)
+            .set_publish_to(request.publish_to)
+            .send()
+            .await,
+        "UpdateFunctionCode",
+        "LambdaFunction",
+        &function_name,
+    )
+}
+
+async fn update_lambda_function_configuration(
+    client: &LambdaClient,
+    request: UpdateFunctionConfigurationInput,
+) -> Result<UpdateFunctionConfigurationOutput> {
+    let function_name = request.function_name.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "UpdateFunctionConfiguration request did not include functionName".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    lambda_result(
+        client
+            .update_function_configuration()
+            .set_function_name(request.function_name)
+            .set_role(request.role)
+            .set_handler(request.handler)
+            .set_description(request.description)
+            .set_timeout(request.timeout)
+            .set_memory_size(request.memory_size)
+            .set_vpc_config(request.vpc_config)
+            .set_environment(request.environment)
+            .set_runtime(request.runtime)
+            .set_dead_letter_config(request.dead_letter_config)
+            .set_kms_key_arn(request.kms_key_arn)
+            .set_tracing_config(request.tracing_config)
+            .set_revision_id(request.revision_id)
+            .set_layers(request.layers)
+            .set_file_system_configs(request.file_system_configs)
+            .set_image_config(request.image_config)
+            .set_ephemeral_storage(request.ephemeral_storage)
+            .set_snap_start(request.snap_start)
+            .set_logging_config(request.logging_config)
+            .set_capacity_provider_config(request.capacity_provider_config)
+            .set_durable_config(request.durable_config)
+            .send()
+            .await,
+        "UpdateFunctionConfiguration",
+        "LambdaFunction",
+        &function_name,
+    )
+}
+
+async fn get_lambda_function_configuration(
+    client: &LambdaClient,
+    function_name: &str,
+    qualifier: Option<String>,
+) -> Result<GetFunctionConfigurationOutput> {
+    lambda_result(
+        client
+            .get_function_configuration()
+            .function_name(function_name)
+            .set_qualifier(qualifier)
+            .send()
+            .await,
+        "GetFunctionConfiguration",
+        "LambdaFunction",
+        function_name,
+    )
+}
+
+async fn delete_lambda_function(
+    client: &LambdaClient,
+    function_name: &str,
+    qualifier: Option<String>,
+) -> Result<()> {
+    lambda_result(
+        client
+            .delete_function()
+            .function_name(function_name)
+            .set_qualifier(qualifier)
+            .send()
+            .await,
+        "DeleteFunction",
+        "LambdaFunction",
+        function_name,
+    )?;
+    Ok(())
+}
+
+async fn create_lambda_event_source_mapping(
+    client: &LambdaClient,
+    request: CreateEventSourceMappingInput,
+) -> Result<CreateEventSourceMappingOutput> {
+    let resource_name = request
+        .event_source_arn
+        .as_deref()
+        .or(request.function_name.as_deref())
+        .unwrap_or("unknown")
+        .to_string();
+
+    lambda_result(
+        client
+            .create_event_source_mapping()
+            .set_event_source_arn(request.event_source_arn)
+            .set_function_name(request.function_name)
+            .set_enabled(request.enabled)
+            .set_batch_size(request.batch_size)
+            .set_filter_criteria(request.filter_criteria)
+            .set_maximum_batching_window_in_seconds(request.maximum_batching_window_in_seconds)
+            .set_parallelization_factor(request.parallelization_factor)
+            .set_starting_position(request.starting_position)
+            .set_starting_position_timestamp(request.starting_position_timestamp)
+            .set_destination_config(request.destination_config)
+            .set_maximum_record_age_in_seconds(request.maximum_record_age_in_seconds)
+            .set_bisect_batch_on_function_error(request.bisect_batch_on_function_error)
+            .set_maximum_retry_attempts(request.maximum_retry_attempts)
+            .set_tags(request.tags)
+            .set_tumbling_window_in_seconds(request.tumbling_window_in_seconds)
+            .set_topics(request.topics)
+            .set_queues(request.queues)
+            .set_source_access_configurations(request.source_access_configurations)
+            .set_self_managed_event_source(request.self_managed_event_source)
+            .set_function_response_types(request.function_response_types)
+            .set_amazon_managed_kafka_event_source_config(
+                request.amazon_managed_kafka_event_source_config,
+            )
+            .set_self_managed_kafka_event_source_config(
+                request.self_managed_kafka_event_source_config,
+            )
+            .set_scaling_config(request.scaling_config)
+            .set_document_db_event_source_config(request.document_db_event_source_config)
+            .set_kms_key_arn(request.kms_key_arn)
+            .set_metrics_config(request.metrics_config)
+            .set_logging_config(request.logging_config)
+            .set_provisioned_poller_config(request.provisioned_poller_config)
+            .send()
+            .await,
+        "CreateEventSourceMapping",
+        "EventSourceMapping",
+        &resource_name,
+    )
+}
+
+async fn delete_lambda_event_source_mapping(
+    client: &LambdaClient,
+    uuid: &str,
+) -> Result<DeleteEventSourceMappingOutput> {
+    lambda_result(
+        client.delete_event_source_mapping().uuid(uuid).send().await,
+        "DeleteEventSourceMapping",
+        "EventSourceMapping",
+        uuid,
+    )
+}
+
+async fn list_lambda_event_source_mappings(
+    client: &LambdaClient,
+    request: ListEventSourceMappingsInput,
+) -> Result<ListEventSourceMappingsOutput> {
+    let resource_name = request
+        .event_source_arn
+        .as_deref()
+        .or(request.function_name.as_deref())
+        .unwrap_or("all")
+        .to_string();
+
+    lambda_result(
+        client
+            .list_event_source_mappings()
+            .set_event_source_arn(request.event_source_arn)
+            .set_function_name(request.function_name)
+            .set_marker(request.marker)
+            .set_max_items(request.max_items)
+            .send()
+            .await,
+        "ListEventSourceMappings",
+        "EventSourceMapping",
+        &resource_name,
+    )
+}
+
+async fn put_lambda_function_concurrency(
+    client: &LambdaClient,
+    function_name: &str,
+    reserved_concurrent_executions: u32,
+) -> Result<()> {
+    let reserved_concurrent_executions =
+        i32::try_from(reserved_concurrent_executions).map_err(|_| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Lambda reserved concurrency '{reserved_concurrent_executions}' exceeds i32 range"
+                ),
+                resource_id: Some(function_name.to_string()),
+            })
+        })?;
+
+    lambda_result(
+        client
+            .put_function_concurrency()
+            .function_name(function_name)
+            .reserved_concurrent_executions(reserved_concurrent_executions)
+            .send()
+            .await,
+        "PutFunctionConcurrency",
+        "LambdaFunction",
+        function_name,
+    )?;
+    Ok(())
+}
+
+async fn delete_lambda_function_concurrency(
+    client: &LambdaClient,
+    function_name: &str,
+) -> Result<()> {
+    lambda_result(
+        client
+            .delete_function_concurrency()
+            .function_name(function_name)
+            .send()
+            .await,
+        "DeleteFunctionConcurrency",
+        "LambdaFunction",
+        function_name,
+    )?;
+    Ok(())
+}
+
+fn lambda_result<T, E>(
+    result: std::result::Result<T, LambdaSdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: LambdaProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                match service_error.code() {
+                    Some("ResourceNotFoundException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                        }));
+                    }
+                    Some("ResourceConflictException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceConflict {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                            message: format!("{operation} reported ResourceConflictException"),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Lambda {operation} API failed for {resource_type} '{resource_name}'"
+                    ),
+                    resource_id: None,
+                }))
+        }
+    }
 }
 
 async fn import_acm_certificate(
@@ -874,7 +1272,7 @@ fn emit_aws_lambda_worker_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     worker_config: &Worker,
     aws_worker_name: &str,
-    function_info: &GetFunctionConfigurationResponse,
+    function_info: &GetFunctionConfigurationOutput,
 ) {
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -1079,14 +1477,12 @@ impl AwsWorkerController {
                 resource_id: Some(cfg.id.clone()),
             })?;
 
-        let response =
-            client
-                .create_function(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to create Lambda worker".to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                })?;
+        let response = create_lambda_function(&client, request).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Failed to create Lambda worker".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            },
+        )?;
 
         self.arn = response.function_arn.clone();
         self.worker_name = Some(aws_worker_name.clone());
@@ -1113,8 +1509,7 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         debug!(name=%aws_worker_name, "Checking worker state");
 
-        let response = client
-            .get_function_configuration(&aws_worker_name, None)
+        let response = get_lambda_function_configuration(&client, &aws_worker_name, None)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Lambda worker configuration".to_string(),
@@ -1764,7 +2159,7 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
 
-        let request = AddPermissionRequest::builder()
+        let request = AddPermissionInput::builder()
             .function_name(aws_worker_name.clone())
             .statement_id("ApiGatewayInvoke")
             .action("lambda:InvokeFunction")
@@ -1776,8 +2171,7 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        client
-            .add_permission(request)
+        add_lambda_permission(&client, request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to add API Gateway permission".to_string(),
@@ -2005,7 +2399,7 @@ impl AwsWorkerController {
             })
         })?;
 
-        let request = UpdateFunctionConfigurationRequest::builder()
+        let request = UpdateFunctionConfigurationInput::builder()
             .function_name(arn.clone())
             .role(role_arn)
             .timeout(config.timeout_seconds as i32)
@@ -2019,8 +2413,7 @@ impl AwsWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        client
-            .update_function_configuration(request)
+        update_lambda_function_configuration(&client, request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to update Lambda function with resolved self-bindings".to_string(),
@@ -2103,7 +2496,7 @@ impl AwsWorkerController {
                 // Add Lambda permission for S3 to invoke this worker
                 let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
                 let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                let permission_request = AddPermissionRequest::builder()
+                let permission_request = AddPermissionInput::builder()
                     .function_name(worker_name)
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction")
@@ -2116,7 +2509,7 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                match lambda_client.add_permission(permission_request).await {
+                match add_lambda_permission(&lambda_client, permission_request).await {
                     Ok(_) => {}
                     Err(e) if is_remote_resource_conflict(&e) => {
                         info!(
@@ -2254,7 +2647,7 @@ impl AwsWorkerController {
                 // Add Lambda permission for EventBridge
                 let statement_id = format!("{}-eb-{}", worker_name, index);
                 let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                let permission_request = AddPermissionRequest::builder()
+                let permission_request = AddPermissionInput::builder()
                     .function_name(worker_name)
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction")
@@ -2267,7 +2660,7 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                match lambda_client.add_permission(permission_request).await {
+                match add_lambda_permission(&lambda_client, permission_request).await {
                     Ok(_) => {}
                     Err(e) if is_remote_resource_conflict(&e) => {
                         info!(
@@ -2358,8 +2751,7 @@ impl AwsWorkerController {
 
         if let Some(limit) = config.concurrency_limit {
             info!(worker=%config.id, limit=%limit, "Setting reserved concurrency on worker");
-            client
-                .put_function_concurrency(&aws_worker_name, limit)
+            put_lambda_function_concurrency(&client, &aws_worker_name, limit)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to set worker reserved concurrency".to_string(),
@@ -2388,8 +2780,7 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
 
         // Heartbeat check: verify worker still exists and is in correct state
-        let function_info = client
-            .get_function_configuration(&aws_worker_name, None)
+        let function_info = get_lambda_function_configuration(&client, &aws_worker_name, None)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get worker configuration during heartbeat check".to_string(),
@@ -2578,7 +2969,7 @@ impl AwsWorkerController {
                 })
             })?;
 
-            let request = UpdateFunctionCodeRequest::builder()
+            let request = UpdateFunctionCodeInput::builder()
                 .function_name(arn.clone())
                 .image_uri(image_uri)
                 .publish(true)
@@ -2589,8 +2980,7 @@ impl AwsWorkerController {
                     resource_id: Some(current_config.id.clone()),
                 })?;
 
-            client
-                .update_function_code(request)
+            update_lambda_function_code(&client, request)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to update Lambda worker code".to_string(),
@@ -2624,12 +3014,12 @@ impl AwsWorkerController {
                 resource_id: Some(aws_worker_name.clone()),
             })
         })?;
-        let result = client.get_function_configuration(arn, None).await.context(
-            ErrorData::CloudPlatformError {
+        let result = get_lambda_function_configuration(&client, arn, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to get worker configuration for code update".to_string(),
                 resource_id: Some(aws_worker_name.clone()),
-            },
-        )?;
+            })?;
 
         let is_active = result.state.as_ref() == Some(&LambdaState::Active);
         let is_successful =
@@ -2740,7 +3130,7 @@ impl AwsWorkerController {
             })
         })?;
 
-        let request = UpdateFunctionConfigurationRequest::builder()
+        let request = UpdateFunctionConfigurationInput::builder()
             .function_name(arn.clone())
             .role(role_arn)
             .timeout(current_config.timeout_seconds as i32)
@@ -2754,8 +3144,7 @@ impl AwsWorkerController {
                 resource_id: Some(current_config.id.clone()),
             })?;
 
-        client
-            .update_function_configuration(request)
+        update_lambda_function_configuration(&client, request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to update Lambda worker configuration".to_string(),
@@ -2788,12 +3177,12 @@ impl AwsWorkerController {
                 resource_id: Some(aws_worker_name.clone()),
             })
         })?;
-        let result = client.get_function_configuration(arn, None).await.context(
-            ErrorData::CloudPlatformError {
+        let result = get_lambda_function_configuration(&client, arn, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to get worker configuration for config update".to_string(),
                 resource_id: Some(aws_worker_name.clone()),
-            },
-        )?;
+            })?;
 
         let is_active = result.state.as_ref() == Some(&LambdaState::Active);
         let is_successful =
@@ -3373,7 +3762,7 @@ impl AwsWorkerController {
 
             // Delete existing mappings
             for uuid in &self.event_source_mappings.clone() {
-                match client.delete_event_source_mapping(uuid).await {
+                match delete_lambda_event_source_mapping(&client, uuid).await {
                     Ok(_) => {
                         info!(worker=%current_config.id, uuid=%uuid, "Deleted existing event source mapping");
                     }
@@ -3488,7 +3877,7 @@ impl AwsWorkerController {
 
                     let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                    let permission_request = AddPermissionRequest::builder()
+                    let permission_request = AddPermissionInput::builder()
                         .function_name(worker_name)
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction")
@@ -3501,7 +3890,7 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    match lambda_client.add_permission(permission_request).await {
+                    match add_lambda_permission(&lambda_client, permission_request).await {
                         Ok(_) => {}
                         Err(e) if is_remote_resource_conflict(&e) => {
                             info!(
@@ -3608,7 +3997,7 @@ impl AwsWorkerController {
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", worker_name, index);
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                    let permission_request = AddPermissionRequest::builder()
+                    let permission_request = AddPermissionInput::builder()
                         .function_name(worker_name)
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction")
@@ -3621,7 +4010,7 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    match lambda_client.add_permission(permission_request).await {
+                    match add_lambda_permission(&lambda_client, permission_request).await {
                         Ok(_) => {}
                         Err(e) if is_remote_resource_conflict(&e) => {
                             info!(
@@ -3712,8 +4101,7 @@ impl AwsWorkerController {
             match config.concurrency_limit {
                 Some(limit) => {
                     info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
-                    client
-                        .put_function_concurrency(&aws_worker_name, limit)
+                    put_lambda_function_concurrency(&client, &aws_worker_name, limit)
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: "Failed to update worker reserved concurrency".to_string(),
@@ -3722,8 +4110,7 @@ impl AwsWorkerController {
                 }
                 None => {
                     info!(worker=%config.id, "Removing reserved concurrency from worker");
-                    client
-                        .delete_function_concurrency(&aws_worker_name)
+                    delete_lambda_function_concurrency(&client, &aws_worker_name)
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: "Failed to remove worker reserved concurrency".to_string(),
@@ -3867,7 +4254,7 @@ impl AwsWorkerController {
 
             // Delete all event source mappings using best-effort approach (ignore NotFound)
             for uuid in &self.event_source_mappings.clone() {
-                match client.delete_event_source_mapping(uuid).await {
+                match delete_lambda_event_source_mapping(&client, uuid).await {
                     Ok(_) => {
                         info!(worker=%worker_config.id, uuid=%uuid, "Event source mapping deleted successfully");
                     }
@@ -4033,7 +4420,7 @@ impl AwsWorkerController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_identifier = self.arn.as_deref().unwrap_or(&aws_worker_name);
-        let request = UpdateFunctionConfigurationRequest::builder()
+        let request = UpdateFunctionConfigurationInput::builder()
             .function_name(function_identifier)
             .vpc_config(
                 VpcConfig::builder()
@@ -4048,7 +4435,7 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        match client.update_function_configuration(request).await {
+        match update_lambda_function_configuration(&client, request).await {
             Ok(_) => {
                 info!(worker=%worker_config.id, "Lambda VPC config detach requested");
                 Ok(HandlerAction::Continue {
@@ -4085,10 +4472,7 @@ impl AwsWorkerController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
-        match client
-            .get_function_configuration(function_identifier, None)
-            .await
-        {
+        match get_lambda_function_configuration(&client, function_identifier, None).await {
             Ok(result)
                 if result.state.as_ref() == Some(&LambdaState::Active)
                     && result.last_update_status.as_ref()
@@ -4144,7 +4528,7 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         info!(name=%aws_worker_name, "Deleting worker itself: {}", aws_worker_name);
 
-        match client.delete_function(&aws_worker_name, None).await {
+        match delete_lambda_function(&client, &aws_worker_name, None).await {
             Ok(_) => {
                 info!(name=%aws_worker_name, "Worker deleted successfully, proceeding to DeleteWaitForNotFound state");
             }
@@ -4181,10 +4565,7 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         let lookup_identifier = arn.map(|a| a.as_str()).unwrap_or(&aws_worker_name);
 
-        match client
-            .get_function_configuration(lookup_identifier, None)
-            .await
-        {
+        match get_lambda_function_configuration(&client, lookup_identifier, None).await {
             Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                 self.arn = None;
                 self.url = None;
@@ -4477,7 +4858,7 @@ impl AwsWorkerController {
             })
         })?;
 
-        let list_request = ListEventSourceMappingsRequest::builder()
+        let list_request = ListEventSourceMappingsInput::builder()
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
             .build()
@@ -4487,8 +4868,7 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        let existing_mappings = lambda_client
-            .list_event_source_mappings(list_request)
+        let existing_mappings = list_lambda_event_source_mappings(&lambda_client, list_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -4521,7 +4901,7 @@ impl AwsWorkerController {
             }
         }
 
-        let request = CreateEventSourceMappingRequest::builder()
+        let request = CreateEventSourceMappingInput::builder()
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
             .batch_size(1) // Always 1 message per invocation as per design
@@ -4533,10 +4913,10 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        let mapping_uuid = match lambda_client.create_event_source_mapping(request).await {
+        let mapping_uuid = match create_lambda_event_source_mapping(&lambda_client, request).await {
             Ok(response) => response.uuid,
             Err(e) if is_remote_resource_conflict(&e) => {
-                let list_request = ListEventSourceMappingsRequest::builder()
+                let list_request = ListEventSourceMappingsInput::builder()
                     .event_source_arn(queue_arn.clone())
                     .function_name(worker_name.clone())
                     .build()
@@ -4546,16 +4926,16 @@ impl AwsWorkerController {
                         resource_id: Some(worker_config.id.clone()),
                     })?;
 
-                let existing_mappings = lambda_client
-                    .list_event_source_mappings(list_request)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
+                let existing_mappings =
+                    list_lambda_event_source_mappings(&lambda_client, list_request)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
                             "Failed to list event source mappings for queue '{}' after conflict",
                             queue_name
                         ),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?;
+                            resource_id: Some(worker_config.id.clone()),
+                        })?;
 
                 existing_mappings
                     .event_source_mappings
@@ -4713,7 +5093,6 @@ mod tests {
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
         ResourceStatus, Worker, WorkerCode, WorkerOutputs, WorkerTrigger,
     };
-    use alien_error::AlienError;
     use aws_sdk_acm::{
         operation::{
             delete_certificate::DeleteCertificateOutput,
@@ -4737,25 +5116,41 @@ mod tests {
         types::RuleState,
         Client as EventBridgeClient,
     };
+    use aws_sdk_lambda::{
+        error::ErrorMetadata as LambdaErrorMetadata,
+        operation::{
+            add_permission::AddPermissionOutput,
+            create_event_source_mapping::CreateEventSourceMappingOutput,
+            create_function::CreateFunctionOutput,
+            delete_event_source_mapping::DeleteEventSourceMappingOutput,
+            delete_function::{DeleteFunctionError, DeleteFunctionOutput},
+            delete_function_concurrency::DeleteFunctionConcurrencyOutput,
+            get_function_configuration::GetFunctionConfigurationOutput,
+            list_event_source_mappings::ListEventSourceMappingsOutput,
+            put_function_concurrency::PutFunctionConcurrencyOutput,
+            update_function_code::UpdateFunctionCodeOutput,
+            update_function_configuration::UpdateFunctionConfigurationOutput,
+        },
+        types::{
+            error::ResourceNotFoundException, Architecture as LambdaArchitecture,
+            LastUpdateStatus as LambdaLastUpdateStatus, PackageType, State as LambdaState,
+        },
+        Client as LambdaClient,
+    };
     use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
-    use aws_smithy_mocks::{mock, mock_client, RuleMode};
+    use aws_smithy_mocks::{mock, mock_client, MockResponse, RuleMode};
     use httpmock::prelude::*;
     use rstest::rstest;
 
-    use crate::aws_sdk::{
-        AddPermissionResponse, CreateFunctionResponse, GetFunctionConfigurationResponse,
-        LambdaArchitecture, LambdaLastUpdateStatus, LambdaState, MockIamApi, MockLambdaApi,
-        PackageType, UpdateFunctionCodeResponse, UpdateFunctionConfigurationResponse,
-    };
+    use crate::aws_sdk::MockIamApi;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
-    use crate::error::ErrorData;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
     };
 
-    fn create_successful_create_function_response(worker_name: &str) -> CreateFunctionResponse {
-        CreateFunctionResponse::builder()
+    fn create_successful_create_function_response(worker_name: &str) -> CreateFunctionOutput {
+        CreateFunctionOutput::builder()
             .function_name(worker_name)
             .function_arn(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
@@ -4768,8 +5163,8 @@ mod tests {
 
     fn create_successful_get_function_response(
         worker_name: &str,
-    ) -> GetFunctionConfigurationResponse {
-        GetFunctionConfigurationResponse::builder()
+    ) -> GetFunctionConfigurationOutput {
+        GetFunctionConfigurationOutput::builder()
             .function_name(worker_name)
             .function_arn(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
@@ -4780,8 +5175,8 @@ mod tests {
             .build()
     }
 
-    fn create_successful_update_code_response(worker_name: &str) -> UpdateFunctionCodeResponse {
-        UpdateFunctionCodeResponse::builder()
+    fn create_successful_update_code_response(worker_name: &str) -> UpdateFunctionCodeOutput {
+        UpdateFunctionCodeOutput::builder()
             .function_name(worker_name)
             .function_arn(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
@@ -4794,8 +5189,8 @@ mod tests {
 
     fn create_successful_update_config_response(
         worker_name: &str,
-    ) -> UpdateFunctionConfigurationResponse {
-        UpdateFunctionConfigurationResponse::builder()
+    ) -> UpdateFunctionConfigurationOutput {
+        UpdateFunctionConfigurationOutput::builder()
             .function_name(worker_name)
             .function_arn(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
@@ -5010,179 +5405,219 @@ mod tests {
         )
     }
 
-    fn setup_mock_client_for_creation_and_update(
+    fn lambda_resource_not_found_error(resource_name: &str) -> ResourceNotFoundException {
+        ResourceNotFoundException::builder()
+            .message(format!("Lambda function '{resource_name}' was not found"))
+            .meta(
+                LambdaErrorMetadata::builder()
+                    .code("ResourceNotFoundException")
+                    .message(format!("Lambda function '{resource_name}' was not found"))
+                    .build(),
+            )
+            .build()
+    }
+
+    fn create_lambda_mock_for_creation_and_update(
         worker_name: &str,
-        has_url: bool,
-    ) -> Arc<MockLambdaApi> {
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock successful worker creation
+        allow_add_permission: bool,
+    ) -> LambdaClient {
         let worker_name = worker_name.to_string();
-        let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_create_function_response(
-                &worker_name_for_create,
-            ))
-        });
 
-        // Mock worker status checks - first pending, then active
-        let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
+        let create_worker_name = worker_name.clone();
+        let create_rule = mock!(LambdaClient::create_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_create_function_response(&create_worker_name));
+
+        let get_worker_name = worker_name.clone();
+        let get_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_get_function_response(&get_worker_name));
+
+        let update_code_worker_name = worker_name.clone();
+        let update_code_rule = mock!(LambdaClient::update_function_code)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_update_code_response(&update_code_worker_name));
+
+        let update_config_worker_name = worker_name.clone();
+        let update_config_rule = mock!(LambdaClient::update_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || {
+                create_successful_update_config_response(&update_config_worker_name)
             });
 
-        // Mock API Gateway permission and self-binding env var update if public ingress
-        if has_url {
-            mock_lambda
-                .expect_add_permission()
-                .returning(|_| Ok(AddPermissionResponse::builder().build()));
-
-            let worker_name_for_self_binding = worker_name.clone();
-            mock_lambda
-                .expect_update_function_configuration()
-                .returning(move |_| {
-                    Ok(create_successful_update_config_response(
-                        &worker_name_for_self_binding,
-                    ))
-                });
-        }
-
-        // Mock concurrency operations (may or may not be called depending on worker config)
-        mock_lambda
-            .expect_put_function_concurrency()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_delete_function_concurrency()
-            .returning(|_| Ok(()));
-
-        // Mock successful updates
-        let worker_name_for_code_update = worker_name.clone();
-        mock_lambda
-            .expect_update_function_code()
-            .returning(move |_| {
-                Ok(create_successful_update_code_response(
-                    &worker_name_for_code_update,
-                ))
+        let put_concurrency_rule = mock!(LambdaClient::put_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| PutFunctionConcurrencyOutput::builder().build());
+        let delete_concurrency_rule = mock!(LambdaClient::delete_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| DeleteFunctionConcurrencyOutput::builder().build());
+        let list_mappings_rule = mock!(LambdaClient::list_event_source_mappings)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| ListEventSourceMappingsOutput::builder().build());
+        let create_mapping_rule = mock!(LambdaClient::create_event_source_mapping)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| {
+                CreateEventSourceMappingOutput::builder()
+                    .uuid("test-event-source-mapping")
+                    .build()
             });
+        let delete_mapping_rule = mock!(LambdaClient::delete_event_source_mapping)
+            .match_requests(|request| request.uuid().is_some())
+            .then_output(|| DeleteEventSourceMappingOutput::builder().build());
+        let delete_function_rule = mock!(LambdaClient::delete_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| DeleteFunctionOutput::builder().build());
 
-        if !has_url {
-            let worker_name_for_config_update = worker_name.clone();
-            mock_lambda
-                .expect_update_function_configuration()
-                .returning(move |_| {
-                    Ok(create_successful_update_config_response(
-                        &worker_name_for_config_update,
-                    ))
-                });
-        }
+        let add_permission_rule = mock!(LambdaClient::add_permission)
+            .match_requests(move |request| {
+                allow_add_permission && request.function_name().is_some()
+            })
+            .then_output(|| AddPermissionOutput::builder().build());
 
-        Arc::new(mock_lambda)
+        mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [
+                &create_rule,
+                &get_rule,
+                &add_permission_rule,
+                &update_code_rule,
+                &update_config_rule,
+                &put_concurrency_rule,
+                &delete_concurrency_rule,
+                &list_mappings_rule,
+                &create_mapping_rule,
+                &delete_mapping_rule,
+                &delete_function_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
+    }
+
+    fn setup_mock_client_for_creation_and_update(worker_name: &str, has_url: bool) -> LambdaClient {
+        create_lambda_mock_for_creation_and_update(worker_name, has_url)
     }
 
     fn setup_mock_client_for_creation_and_deletion(
         worker_name: &str,
         has_url: bool,
-    ) -> Arc<MockLambdaApi> {
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock successful worker creation
+    ) -> LambdaClient {
         let worker_name = worker_name.to_string();
-        let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_create_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        let function_arn = format!(
+            "arn:aws:lambda:us-east-1:123456789012:function:{}",
+            worker_name
+        );
 
-        // Mock worker status checks
-        let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            })
-            .times(1); // Only for creation flow
+        let create_worker_name = worker_name.clone();
+        let create_rule = mock!(LambdaClient::create_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_create_function_response(&create_worker_name));
 
-        // Mock API Gateway permission and self-binding env var update if public ingress
-        if has_url {
-            mock_lambda
-                .expect_add_permission()
-                .returning(|_| Ok(AddPermissionResponse::builder().build()));
+        let active_worker_name = worker_name.clone();
+        let get_active_worker_name = active_worker_name.clone();
+        let get_active_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(move |request| request.function_name() == Some(worker_name.as_str()))
+            .then_output(move || create_successful_get_function_response(&get_active_worker_name));
 
-            // Mock update_function_configuration for self-binding env var update
-            let worker_name_for_config_update = worker_name.clone();
-            mock_lambda
-                .expect_update_function_configuration()
-                .returning(move |_| {
-                    Ok(create_successful_update_config_response(
-                        &worker_name_for_config_update,
-                    ))
-                });
-        }
-
-        // Mock concurrency operations (may or may not be called depending on worker config)
-        mock_lambda
-            .expect_put_function_concurrency()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_delete_function_concurrency()
-            .returning(|_| Ok(()));
-
-        // Mock successful worker deletion
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-
-        // Mock worker not found during deletion check
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
+        let missing_arn = function_arn.clone();
+        let get_missing_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(move |request| request.function_name() == Some(missing_arn.as_str()))
+            .then_error(move || {
+                aws_sdk_lambda::operation::get_function_configuration::GetFunctionConfigurationError::ResourceNotFoundException(
+                    lambda_resource_not_found_error(&function_arn),
+                )
             });
 
-        Arc::new(mock_lambda)
+        let add_permission_rule = mock!(LambdaClient::add_permission)
+            .match_requests(move |request| has_url && request.function_name().is_some())
+            .then_output(|| AddPermissionOutput::builder().build());
+
+        let update_config_worker_name = active_worker_name.clone();
+        let update_config_rule = mock!(LambdaClient::update_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || {
+                create_successful_update_config_response(&update_config_worker_name)
+            });
+        let put_concurrency_rule = mock!(LambdaClient::put_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| PutFunctionConcurrencyOutput::builder().build());
+        let delete_concurrency_rule = mock!(LambdaClient::delete_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| DeleteFunctionConcurrencyOutput::builder().build());
+        let delete_function_rule = mock!(LambdaClient::delete_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| DeleteFunctionOutput::builder().build());
+        let list_mappings_rule = mock!(LambdaClient::list_event_source_mappings)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| ListEventSourceMappingsOutput::builder().build());
+        let create_mapping_rule = mock!(LambdaClient::create_event_source_mapping)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| {
+                CreateEventSourceMappingOutput::builder()
+                    .uuid("test-event-source-mapping")
+                    .build()
+            });
+        let delete_mapping_rule = mock!(LambdaClient::delete_event_source_mapping)
+            .match_requests(|request| request.uuid().is_some())
+            .then_output(|| DeleteEventSourceMappingOutput::builder().build());
+
+        mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [
+                &create_rule,
+                &get_active_rule,
+                &get_missing_rule,
+                &add_permission_rule,
+                &update_config_rule,
+                &put_concurrency_rule,
+                &delete_concurrency_rule,
+                &delete_function_rule,
+                &list_mappings_rule,
+                &create_mapping_rule,
+                &delete_mapping_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
     fn setup_mock_client_for_best_effort_deletion(
-        _worker_name: &str,
+        worker_name: &str,
         function_missing: bool,
-    ) -> Arc<MockLambdaApi> {
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock worker deletion (might fail if worker missing)
-        if function_missing {
-            mock_lambda.expect_delete_function().returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
-            });
-        } else {
-            mock_lambda
-                .expect_delete_function()
-                .returning(|_, _| Ok(()));
-        }
-
-        // Always return not found for final status check
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
+    ) -> LambdaClient {
+        let worker_name = worker_name.to_string();
+        let function_arn = format!(
+            "arn:aws:lambda:us-east-1:123456789012:function:{}",
+            worker_name
+        );
+        let delete_error_name = worker_name.clone();
+        let delete_rule = mock!(LambdaClient::delete_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_compute_response(move |_| {
+                if function_missing {
+                    MockResponse::Error(DeleteFunctionError::ResourceNotFoundException(
+                        lambda_resource_not_found_error(&delete_error_name),
+                    ))
+                } else {
+                    MockResponse::Output(DeleteFunctionOutput::builder().build())
+                }
             });
 
-        Arc::new(mock_lambda)
+        let missing_arn = function_arn.clone();
+        let get_missing_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(move |request| request.function_name() == Some(missing_arn.as_str()))
+            .then_error(move || {
+                aws_sdk_lambda::operation::get_function_configuration::GetFunctionConfigurationError::ResourceNotFoundException(
+                    lambda_resource_not_found_error(&function_arn),
+                )
+            });
+
+        mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [&delete_rule, &get_missing_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
     fn create_aws_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
@@ -5194,7 +5629,7 @@ mod tests {
     }
 
     fn setup_mock_service_provider(
-        mock_lambda: Arc<MockLambdaApi>,
+        mock_lambda: LambdaClient,
         mock_acm: Option<AcmClient>,
         mock_apigw: Option<ApiGatewayV2Client>,
     ) -> Arc<MockPlatformServiceProvider> {
@@ -5402,53 +5837,12 @@ mod tests {
             |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
         );
 
-        let mut mock_lambda = MockLambdaApi::new();
-        let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_create_function_response(
-                &worker_name_for_create,
-            ))
-        });
-        let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            });
-        mock_lambda
-            .expect_add_permission()
-            .times(1)
-            .returning(|_| Ok(AddPermissionResponse::builder().build()));
-        mock_lambda
-            .expect_put_function_concurrency()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_delete_function_concurrency()
-            .returning(|_| Ok(()));
-        let worker_name_for_code_update = worker_name.clone();
-        mock_lambda
-            .expect_update_function_code()
-            .returning(move |_| {
-                Ok(create_successful_update_code_response(
-                    &worker_name_for_code_update,
-                ))
-            });
-        let worker_name_for_config_update = worker_name.clone();
-        mock_lambda
-            .expect_update_function_configuration()
-            .returning(move |_| {
-                Ok(create_successful_update_config_response(
-                    &worker_name_for_config_update,
-                ))
-            });
+        let lambda_client = create_lambda_mock_for_creation_and_update(&worker_name, true);
 
         let mut mock_provider = MockPlatformServiceProvider::new();
-        let mock_lambda = Arc::new(mock_lambda);
         mock_provider
             .expect_get_aws_lambda_client()
-            .returning(move |_| Ok(mock_lambda.clone()));
+            .returning(move |_| Ok(lambda_client.clone()));
         let mock_iam = create_aws_iam_mock_for_resource_permissions();
         mock_provider
             .expect_get_aws_iam_client()
@@ -5607,57 +6001,48 @@ mod tests {
         let worker_name = format!("test-{}", worker.id);
         let domain_metadata = create_test_domain_metadata(&worker.id);
 
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock worker creation
         let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_create_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        let create_lambda_rule = mock!(LambdaClient::create_function)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || {
+                create_successful_create_function_response(&worker_name_for_create)
+            });
 
         let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            })
-            .times(1);
+        let get_lambda_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_get_function_response(&worker_name_for_get));
 
         // Validate API Gateway permission is added with the correct apigateway principal
-        mock_lambda
-            .expect_add_permission()
-            .withf(|request| {
-                request.statement_id.as_deref() == Some("ApiGatewayInvoke")
-                    && request.action.as_deref() == Some("lambda:InvokeFunction")
-                    && request.principal.as_deref() == Some("apigateway.amazonaws.com")
+        let add_permission_rule = mock!(LambdaClient::add_permission)
+            .match_requests(|request| {
+                request.statement_id() == Some("ApiGatewayInvoke")
+                    && request.action() == Some("lambda:InvokeFunction")
+                    && request.principal() == Some("apigateway.amazonaws.com")
             })
-            .returning(|_| Ok(AddPermissionResponse::builder().build()));
+            .then_output(|| AddPermissionOutput::builder().build());
 
-        // Mock self-binding env var update
         let worker_name_for_config_update = worker_name.clone();
-        mock_lambda
-            .expect_update_function_configuration()
-            .returning(move |_| {
-                Ok(create_successful_update_config_response(
-                    &worker_name_for_config_update,
-                ))
+        let update_config_rule = mock!(LambdaClient::update_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || {
+                create_successful_update_config_response(&worker_name_for_config_update)
             });
-
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
-            });
+        let put_concurrency_rule = mock!(LambdaClient::put_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| PutFunctionConcurrencyOutput::builder().build());
+        let lambda_client = mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [
+                &create_lambda_rule,
+                &get_lambda_rule,
+                &add_permission_rule,
+                &update_config_rule,
+                &put_concurrency_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
 
         // Validate ACM certificate import through the generated ACM client.
         let import_certificate_rule = mock!(AcmClient::import_certificate)
@@ -5714,11 +6099,8 @@ mod tests {
             |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
         );
 
-        let mock_provider = setup_mock_service_provider(
-            Arc::new(mock_lambda),
-            Some(acm_client),
-            Some(apigw_client),
-        );
+        let mock_provider =
+            setup_mock_service_provider(lambda_client, Some(acm_client), Some(apigw_client));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5748,42 +6130,8 @@ mod tests {
         let worker = function_private_ingress();
         let worker_name = format!("test-{}", worker.id);
 
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock worker creation
-        let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_create_function_response(
-                &worker_name_for_create,
-            ))
-        });
-
-        let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            })
-            .times(1);
-
-        // API Gateway and permission should NOT be called for private workers
-        mock_lambda.expect_add_permission().times(0);
-
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
+        let lambda_client = create_lambda_mock_for_creation_and_update(&worker_name, false);
+        let mock_provider = setup_mock_service_provider(lambda_client, None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5810,51 +6158,33 @@ mod tests {
         let worker = function_custom_config();
         let worker_name = format!("test-{}", worker.id);
 
-        let mut mock_lambda = MockLambdaApi::new();
-
         // Validate worker creation request has correct parameters
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .withf(|request| {
-                request.memory_size == Some(512)
-                    && request.timeout == Some(120)
-                    && request.package_type == Some(PackageType::Image)
-                    && request
-                        .architectures
-                        .as_ref()
-                        .map(|a| a.contains(&LambdaArchitecture::Arm64))
-                        .unwrap_or(false)
+        let create_rule = mock!(LambdaClient::create_function)
+            .match_requests(|request| {
+                request.memory_size() == Some(512)
+                    && request.timeout() == Some(120)
+                    && request.package_type() == Some(&PackageType::Image)
+                    && request.architectures().contains(&LambdaArchitecture::Arm64)
             })
-            .returning(move |_| {
-                Ok(create_successful_create_function_response(
-                    &worker_name_for_create,
-                ))
+            .then_output(move || {
+                create_successful_create_function_response(&worker_name_for_create)
             });
 
         let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            })
-            .times(1);
-
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
+        let get_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_get_function_response(&worker_name_for_get));
+        let put_concurrency_rule = mock!(LambdaClient::put_function_concurrency)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(|| PutFunctionConcurrencyOutput::builder().build());
+        let lambda_client = mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [&create_rule, &get_rule, &put_concurrency_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_service_provider(lambda_client, None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5876,54 +6206,35 @@ mod tests {
         let worker = function_with_env_vars();
         let worker_name = format!("test-{}", worker.id);
 
-        let mut mock_lambda = MockLambdaApi::new();
-
         // Validate worker creation request has environment variables
         let worker_name_for_create = worker_name.clone();
-        mock_lambda
-            .expect_create_function()
-            .withf(|request| {
-                if let Some(env) = &request.environment {
-                    if let Some(vars) = &env.variables {
-                        vars.get("APP_ENV") == Some(&"production".to_string())
-                            && vars.get("LOG_LEVEL") == Some(&"debug".to_string())
-                            && vars.get("DB_NAME") == Some(&"myapp".to_string())
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+        let create_rule = mock!(LambdaClient::create_function)
+            .match_requests(|request| {
+                let Some(env) = request.environment() else {
+                    return false;
+                };
+                let Some(vars) = env.variables() else {
+                    return false;
+                };
+                vars.get("APP_ENV") == Some(&"production".to_string())
+                    && vars.get("LOG_LEVEL") == Some(&"debug".to_string())
+                    && vars.get("DB_NAME") == Some(&"myapp".to_string())
             })
-            .returning(move |_| {
-                Ok(create_successful_create_function_response(
-                    &worker_name_for_create,
-                ))
+            .then_output(move || {
+                create_successful_create_function_response(&worker_name_for_create)
             });
 
         let worker_name_for_get = worker_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_get_function_response(
-                    &worker_name_for_get,
-                ))
-            })
-            .times(1);
-
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Worker".to_string(),
-                    resource_name: "test-worker".to_string(),
-                }))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
+        let get_rule = mock!(LambdaClient::get_function_configuration)
+            .match_requests(|request| request.function_name().is_some())
+            .then_output(move || create_successful_get_function_response(&worker_name_for_get));
+        let lambda_client = mock_client!(
+            aws_sdk_lambda,
+            RuleMode::MatchAny,
+            [&create_rule, &get_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_service_provider(lambda_client, None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
