@@ -50,6 +50,7 @@ pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
+use azure_mgmt_servicebus::package_2024_01;
 pub use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue, SbQueueProperties};
 use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 pub use azure_mgmt_storage::package_2023_05::models::{
@@ -4280,7 +4281,7 @@ pub trait AzureServiceBusManagementApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureServiceBusManagementClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<package_2024_01::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureServiceBusManagementClient {
@@ -4297,106 +4298,72 @@ impl OfficialAzureServiceBusManagementClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn namespace_url(&self, resource_group_name: &str, namespace_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}?api-version=2024-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            namespace_name
-        )
-    }
+    async fn client(&self) -> Result<package_2024_01::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn queue_url(
-        &self,
-        resource_group_name: &str,
-        namespace_name: &str,
-        queue_name: &str,
-    ) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}?api-version=2024-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            namespace_name,
-            queue_name
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                package_2024_01::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Service Bus client".to_string(),
+                        resource_id: None,
+                    })
             })
+            .await?;
+        Ok(client.clone())
     }
 
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
+    fn map_sdk_error<T>(
+        result: azure_core_021::Result<T>,
+        action: &str,
         resource_type: &str,
         resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
+    ) -> Result<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let not_found = matches!(
+                    error.kind(),
+                    azure_core_021::error::ErrorKind::HttpResponse {
+                        status: azure_core_021::StatusCode::NotFound,
+                        ..
+                    }
+                );
+                if not_found {
+                    Err(AlienError::new(
+                        crate::error::ErrorData::CloudResourceNotFound {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                        },
+                    ))
+                } else {
+                    Err(error.into_alien_error().context(
+                        crate::error::ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Azure Service Bus {action} failed for {resource_type} '{resource_name}'"
+                            ),
+                            resource_id: None,
+                        },
+                    ))
+                }
+            }
         }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
     }
 }
 
@@ -4408,30 +4375,22 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         namespace_name: String,
         parameters: SbNamespace,
     ) -> Result<SbNamespace> {
-        let body = serde_json::to_string(&parameters)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Service Bus namespace '{namespace_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.namespace_url(&resource_group_name, &namespace_name),
-                Some(body),
-                "Azure Service Bus namespace",
-                &namespace_name,
+        let result = self
+            .client()
+            .await?
+            .namespaces_client()
+            .create_or_update(
+                resource_group_name,
+                namespace_name.clone(),
+                parameters,
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Service Bus namespace '{namespace_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        Self::map_sdk_error(
+            result,
+            "namespace create or update",
+            "Azure Service Bus namespace",
+            &namespace_name,
         )
     }
 
@@ -4440,22 +4399,21 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         resource_group_name: String,
         namespace_name: String,
     ) -> Result<SbNamespace> {
-        let response = self
-            .request(
-                Method::GET,
-                self.namespace_url(&resource_group_name, &namespace_name),
-                None,
-                "Azure Service Bus namespace",
-                &namespace_name,
+        let result = self
+            .client()
+            .await?
+            .namespaces_client()
+            .get(
+                resource_group_name,
+                namespace_name.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure Service Bus namespace '{namespace_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        Self::map_sdk_error(
+            result,
+            "namespace get",
+            "Azure Service Bus namespace",
+            &namespace_name,
         )
     }
 
@@ -4464,15 +4422,24 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         resource_group_name: String,
         namespace_name: String,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.namespace_url(&resource_group_name, &namespace_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .namespaces_client()
+            .delete(
+                resource_group_name,
+                namespace_name.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        Self::map_sdk_error(
+            result,
+            "namespace delete",
             "Azure Service Bus namespace",
             &namespace_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn create_or_update_queue(
@@ -4482,28 +4449,23 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         queue_name: String,
         parameters: SbQueue,
     ) -> Result<SbQueue> {
-        let body = serde_json::to_string(&parameters)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure Service Bus queue '{queue_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.queue_url(&resource_group_name, &namespace_name, &queue_name),
-                Some(body),
-                "Azure Service Bus queue",
-                &queue_name,
+        let result = self
+            .client()
+            .await?
+            .queues_client()
+            .create_or_update(
+                resource_group_name,
+                namespace_name,
+                queue_name.clone(),
+                parameters,
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Service Bus queue '{queue_name}' response"),
-                resource_id: None,
-            },
+            .await;
+        Self::map_sdk_error(
+            result,
+            "queue create or update",
+            "Azure Service Bus queue",
+            &queue_name,
         )
     }
 
@@ -4513,21 +4475,18 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         namespace_name: String,
         queue_name: String,
     ) -> Result<SbQueue> {
-        let response = self
-            .request(
-                Method::GET,
-                self.queue_url(&resource_group_name, &namespace_name, &queue_name),
-                None,
-                "Azure Service Bus queue",
-                &queue_name,
+        let result = self
+            .client()
+            .await?
+            .queues_client()
+            .get(
+                resource_group_name,
+                namespace_name,
+                queue_name.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Service Bus queue '{queue_name}' response"),
-                resource_id: None,
-            },
-        )
+            .await;
+        Self::map_sdk_error(result, "queue get", "Azure Service Bus queue", &queue_name)
     }
 
     async fn delete_queue(
@@ -4536,15 +4495,25 @@ impl AzureServiceBusManagementApi for OfficialAzureServiceBusManagementClient {
         namespace_name: String,
         queue_name: String,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.queue_url(&resource_group_name, &namespace_name, &queue_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .queues_client()
+            .delete(
+                resource_group_name,
+                namespace_name,
+                queue_name.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        Self::map_sdk_error(
+            result,
+            "queue delete",
             "Azure Service Bus queue",
             &queue_name,
         )
-        .await?;
-        Ok(())
     }
 }
 
@@ -6447,6 +6416,42 @@ fn parse_gcp_duration(value: &str) -> Result<Duration> {
 #[derive(Debug)]
 struct StaticAzureAccessTokenCredential {
     token: String,
+}
+
+#[derive(Debug)]
+struct AzureCore021Credential {
+    inner: Arc<dyn TokenCredential>,
+}
+
+impl AzureCore021Credential {
+    fn new(inner: Arc<dyn TokenCredential>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl azure_core_021::auth::TokenCredential for AzureCore021Credential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+    ) -> azure_core_021::Result<azure_core_021::auth::AccessToken> {
+        let token = self.inner.get_token(scopes, None).await.map_err(|error| {
+            azure_core_021::Error::full(
+                azure_core_021::error::ErrorKind::Credential,
+                error,
+                "failed to get Azure token for generated management client",
+            )
+        })?;
+
+        Ok(azure_core_021::auth::AccessToken::new(
+            token.token.secret().to_string(),
+            token.expires_on,
+        ))
+    }
+
+    async fn clear_cache(&self) -> azure_core_021::Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
