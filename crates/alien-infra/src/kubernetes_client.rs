@@ -10,6 +10,7 @@ use k8s_openapi::{
         core::v1::{Event, Node, Pod, Secret, Service},
         networking::v1::Ingress,
     },
+    apimachinery::pkg::version::Info as KubernetesVersionInfo,
     List,
 };
 use kube::{
@@ -20,7 +21,7 @@ use kube::{
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 use secrecy::SecretString;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::fmt::{self, Debug};
 
@@ -224,19 +225,10 @@ pub trait RouteApi: Send + Sync + std::fmt::Debug {
     async fn delete_azure_health_check_policy(&self, namespace: &str, name: &str) -> Result<()>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KubernetesVersion {
-    pub major: Option<String>,
-    pub minor: Option<String>,
-    #[serde(rename = "gitVersion")]
-    pub git_version: Option<String>,
-}
-
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait]
 pub trait VersionApi: Send + Sync + std::fmt::Debug {
-    async fn get_version(&self) -> Result<KubernetesVersion>;
+    async fn get_version(&self) -> Result<KubernetesVersionInfo>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1351,18 +1343,9 @@ impl RouteApi for KubernetesClient {
 
 #[async_trait]
 impl VersionApi for KubernetesClient {
-    async fn get_version(&self) -> Result<KubernetesVersion> {
-        let request = http::Request::builder()
-            .method(http::Method::GET)
-            .uri("/version")
-            .body(Vec::new())
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Failed to build Kubernetes version request".to_string(),
-            })?;
-
+    async fn get_version(&self) -> Result<KubernetesVersionInfo> {
         self.client
-            .request(request)
+            .apiserver_version()
             .await
             .into_alien_error()
             .context(ErrorData::HttpRequestFailed {

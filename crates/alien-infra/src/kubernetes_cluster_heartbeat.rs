@@ -111,7 +111,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
     })?;
 
     let version = match version_client.get_version().await {
-        Ok(version) => version.git_version,
+        Ok(version) => Some(version.git_version),
         Err(error) => {
             tracing::debug!(
                 resource_id = %input.config.id,
