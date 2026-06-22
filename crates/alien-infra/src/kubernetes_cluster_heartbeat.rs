@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
+    cluster, dynamic_cluster, dynamic_namespaced, list, list_params, namespaced,
     optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
 };
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesCluster, KubernetesClusterHeartbeatData,
@@ -11,7 +13,7 @@ use alien_core::{
     KubernetesNodeUsage, MetricSample, MetricUnit, ObservedCounts, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, WorkloadHeartbeatStatus,
 };
-use alien_error::Context;
+use alien_error::{Context, IntoAlienError};
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
@@ -56,22 +58,29 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    let pods = pod_client
-        .list_pods(&input.config.namespace, None, None)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to list pods for Kubernetes cluster heartbeat in namespace '{}'",
-                input.config.namespace
-            ),
-            resource_id: Some(input.config.id.clone()),
-        })?;
+    let pods = list(
+        namespaced::<Pod>(&pod_client, &input.config.namespace),
+        None,
+        None,
+    )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: format!(
+            "Failed to list pods for Kubernetes cluster heartbeat in namespace '{}'",
+            input.config.namespace
+        ),
+        resource_id: Some(input.config.id.clone()),
+    })?;
 
     let events_read = optional_events_read(
         &input.config.id,
         &input.config.namespace,
         None,
-        event_client.list_events(&input.config.namespace, None),
+        list(
+            namespaced::<Event>(&event_client, &input.config.namespace),
+            None,
+            None,
+        ),
     )
     .await
     .context(ErrorData::CloudPlatformError {
@@ -83,7 +92,22 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         &input.config.id,
         Some(&input.config.namespace),
         None,
-        metrics_client.list_pod_metrics(&input.config.namespace, None),
+        async {
+            dynamic_namespaced(
+                &metrics_client,
+                &input.config.namespace,
+                "metrics.k8s.io",
+                "v1beta1",
+                "PodMetrics",
+                "pods",
+            )
+            .list(&list_params(None, None))
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes pod metrics list operation failed".to_string(),
+            })
+        },
     )
     .await
     .context(ErrorData::CloudPlatformError {
@@ -91,26 +115,38 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         resource_id: Some(input.config.id.clone()),
     })?;
 
-    let nodes = optional_nodes_read(&input.config.id, node_client.list_nodes(None, None))
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed optional Kubernetes node collection".to_string(),
-            resource_id: Some(input.config.id.clone()),
-        })?;
-
-    let node_metrics = optional_metrics_read(
+    let nodes = optional_nodes_read(
         &input.config.id,
-        None,
-        None,
-        metrics_client.list_node_metrics(None),
+        list(cluster::<Node>(&node_client), None, None),
     )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: "Failed optional Kubernetes node collection".to_string(),
+        resource_id: Some(input.config.id.clone()),
+    })?;
+
+    let node_metrics = optional_metrics_read(&input.config.id, None, None, async {
+        dynamic_cluster(
+            &metrics_client,
+            "metrics.k8s.io",
+            "v1beta1",
+            "NodeMetrics",
+            "nodes",
+        )
+        .list(&list_params(None, None))
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes node metrics list operation failed".to_string(),
+        })
+    })
     .await
     .context(ErrorData::CloudPlatformError {
         message: "Failed optional Kubernetes node metrics collection".to_string(),
         resource_id: Some(input.config.id.clone()),
     })?;
 
-    let version = match version_client.get_version().await {
+    let version = match version_client.apiserver_version().await {
         Ok(version) => Some(version.git_version),
         Err(error) => {
             tracing::debug!(

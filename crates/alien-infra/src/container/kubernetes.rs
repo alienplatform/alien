@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::{create, delete, get, namespaced, replace};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -44,7 +44,7 @@ use crate::core::applicable_secret_environment_variables;
 const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<KubernetesClient>,
+    secrets_client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,
@@ -166,24 +166,28 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match deployment_client
-                .create_statefulset(&namespace, &statefulset)
-                .await
+            match create(
+                namespaced::<StatefulSet>(&deployment_client, &namespace),
+                &statefulset,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
                 }
                 Err(err) if is_already_exists(&err) => {
-                    let existing = deployment_client
-                        .get_statefulset(&namespace, &container_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to read existing statefulset '{}' before adoption.",
-                                container_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?;
+                    let existing = get(
+                        namespaced::<StatefulSet>(&deployment_client, &namespace),
+                        &container_name,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read existing statefulset '{}' before adoption.",
+                            container_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
                     if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
                     {
                         return Err(err.context(ErrorData::CloudPlatformError {
@@ -221,24 +225,28 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match deployment_client
-                .create_deployment(&namespace, &deployment)
-                .await
+            match create(
+                namespaced::<Deployment>(&deployment_client, &namespace),
+                &deployment,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
                 }
                 Err(err) if is_already_exists(&err) => {
-                    let existing = deployment_client
-                        .get_deployment(&namespace, &container_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to read existing deployment '{}' before adoption.",
-                                container_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?;
+                    let existing = get(
+                        namespaced::<Deployment>(&deployment_client, &namespace),
+                        &container_name,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read existing deployment '{}' before adoption.",
+                            container_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
                     if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
                     {
                         return Err(err.context(ErrorData::CloudPlatformError {
@@ -299,9 +307,11 @@ impl KubernetesContainerController {
 
         // Check workload status (different API for Deployment vs StatefulSet)
         let (ready_replicas, replicas) = if self.is_stateful {
-            match deployment_client
-                .get_statefulset(namespace, workload_name)
-                .await
+            match get(
+                namespaced::<StatefulSet>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
             {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
@@ -327,9 +337,11 @@ impl KubernetesContainerController {
                 }
             }
         } else {
-            match deployment_client
-                .get_deployment(namespace, workload_name)
-                .await
+            match get(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
             {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
@@ -452,13 +464,15 @@ impl KubernetesContainerController {
                 .await?;
 
             let (ready_replicas, replicas, workload) = if self.is_stateful {
-                let statefulset = deployment_client
-                    .get_statefulset(namespace, workload_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to get statefulset '{}'", workload_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let statefulset = get(
+                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get statefulset '{}'", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 if let Some(status) = statefulset.status.clone() {
                     (
@@ -473,13 +487,15 @@ impl KubernetesContainerController {
                     (None, None, KubernetesWorkload::StatefulSet(statefulset))
                 }
             } else {
-                let deployment = deployment_client
-                    .get_deployment(namespace, workload_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to get deployment '{}'", workload_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let deployment = get(
+                    namespaced::<Deployment>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get deployment '{}'", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 if let Some(status) = deployment.status.clone() {
                     (
@@ -626,16 +642,18 @@ impl KubernetesContainerController {
 
         if self.is_stateful {
             // Get existing StatefulSet to carry over resourceVersion
-            let existing = deployment_client
-                .get_statefulset(namespace, workload_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get statefulset '{}' before update",
-                        workload_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let existing = get(
+                namespaced::<StatefulSet>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to get statefulset '{}' before update",
+                    workload_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_statefulset = self
@@ -651,22 +669,27 @@ impl KubernetesContainerController {
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
-            deployment_client
-                .update_statefulset(namespace, workload_name, &new_statefulset)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update statefulset '{}'.", workload_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            replace(
+                namespaced::<StatefulSet>(&deployment_client, namespace),
+                workload_name,
+                &new_statefulset,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update statefulset '{}'.", workload_name),
+                resource_id: Some(config.id.clone()),
+            })?;
         } else {
             // Get existing Deployment to carry over resourceVersion
-            let existing = deployment_client
-                .get_deployment(namespace, workload_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get deployment '{}' before update", workload_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let existing = get(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get deployment '{}' before update", workload_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_deployment = self
@@ -682,13 +705,16 @@ impl KubernetesContainerController {
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
-            deployment_client
-                .update_deployment(namespace, workload_name, &new_deployment)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update deployment '{}'.", workload_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            replace(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                workload_name,
+                &new_deployment,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update deployment '{}'.", workload_name),
+                resource_id: Some(config.id.clone()),
+            })?;
         }
 
         info!(workload_name=%workload_name, workload_type=%workload_type, "Workload update submitted, waiting for rollout");
@@ -731,9 +757,11 @@ impl KubernetesContainerController {
             .await?;
 
         let (ready_replicas, replicas) = if self.is_stateful {
-            match deployment_client
-                .get_statefulset(namespace, workload_name)
-                .await
+            match get(
+                namespaced::<StatefulSet>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
             {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
@@ -753,9 +781,11 @@ impl KubernetesContainerController {
                 }
             }
         } else {
-            match deployment_client
-                .get_deployment(namespace, workload_name)
-                .await
+            match get(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                workload_name,
+            )
+            .await
             {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
@@ -887,13 +917,17 @@ impl KubernetesContainerController {
                 .await?;
 
             let delete_result = if self.is_stateful {
-                deployment_client
-                    .delete_statefulset(namespace, workload_name)
-                    .await
+                delete::<StatefulSet>(
+                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
             } else {
-                deployment_client
-                    .delete_deployment(namespace, workload_name)
-                    .await
+                delete::<Deployment>(
+                    namespaced::<Deployment>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
             };
 
             match delete_result {
@@ -963,15 +997,19 @@ impl KubernetesContainerController {
                 .await?;
 
             let get_result = if self.is_stateful {
-                deployment_client
-                    .get_statefulset(namespace, workload_name)
-                    .await
-                    .map(|_| ())
+                get(
+                    namespaced::<StatefulSet>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
+                .map(|_| ())
             } else {
-                deployment_client
-                    .get_deployment(namespace, workload_name)
-                    .await
-                    .map(|_| ())
+                get(
+                    namespaced::<Deployment>(&deployment_client, namespace),
+                    workload_name,
+                )
+                .await
+                .map(|_| ())
             };
 
             match get_result {
@@ -1192,27 +1230,32 @@ impl KubernetesContainerController {
             return Ok(());
         };
 
-        match service_client.create_service(namespace, &service).await {
+        match create(namespaced::<Service>(&service_client, namespace), &service).await {
             Ok(_) => Ok(()),
             Err(e) if is_already_exists(&e) => {
-                let existing = service_client
-                    .get_service(namespace, service_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to get internal Service '{}' before update",
-                            service_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let existing = get(
+                    namespaced::<Service>(&service_client, namespace),
+                    service_name,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get internal Service '{}' before update",
+                        service_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
                 service.metadata.resource_version = existing.metadata.resource_version;
-                service_client
-                    .update_service(namespace, service_name, &service)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to update internal Service '{}'", service_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                replace(
+                    namespaced::<Service>(&service_client, namespace),
+                    service_name,
+                    &service,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update internal Service '{}'", service_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
                 Ok(())
             }
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1234,7 +1277,12 @@ impl KubernetesContainerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match service_client.delete_service(namespace, service_name).await {
+        match delete::<Service>(
+            namespaced::<Service>(&service_client, namespace),
+            service_name,
+        )
+        .await
+        {
             Ok(()) => Ok(()),
             Err(e)
                 if matches!(

@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::{create, delete, get, namespaced, replace};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -111,13 +111,15 @@ impl KubernetesWorkerController {
             )
             .await?;
 
-        let _created_deployment = deployment_client
-            .create_deployment(&namespace, &deployment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create deployment '{}'.", function_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let _created_deployment = create(
+            namespaced::<Deployment>(&deployment_client, &namespace),
+            &deployment,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create deployment '{}'.", function_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.deployment_name = Some(function_name.clone());
         self.namespace = Some(namespace.clone());
@@ -161,9 +163,11 @@ impl KubernetesWorkerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match deployment_client
-            .get_deployment(namespace, deployment_name)
-            .await
+        match get(
+            namespaced::<Deployment>(&deployment_client, namespace),
+            deployment_name,
+        )
+        .await
         {
             Ok(deployment) => {
                 if let Some(status) = &deployment.status {
@@ -274,13 +278,15 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            let deployment = deployment_client
-                .get_deployment(namespace, deployment_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get deployment '{}'", deployment_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let deployment = get(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                deployment_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get deployment '{}'", deployment_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             if let Some(status) = deployment.status.clone() {
                 if let (Some(ready_replicas), Some(replicas)) =
@@ -381,16 +387,18 @@ impl KubernetesWorkerController {
             .await?;
 
         // Get the existing deployment to carry over resourceVersion (required for PUT)
-        let existing = deployment_client
-            .get_deployment(namespace, deployment_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to get deployment '{}' before update",
-                    deployment_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let existing = get(
+            namespaced::<Deployment>(&deployment_client, namespace),
+            deployment_name,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to get deployment '{}' before update",
+                deployment_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let resource_version = existing.metadata.resource_version.clone();
 
@@ -432,13 +440,16 @@ impl KubernetesWorkerController {
             .await?;
         new_deployment.metadata.resource_version = resource_version;
 
-        deployment_client
-            .update_deployment(namespace, deployment_name, &new_deployment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update deployment '{}'.", deployment_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        replace(
+            namespaced::<Deployment>(&deployment_client, namespace),
+            deployment_name,
+            &new_deployment,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to update deployment '{}'.", deployment_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(deployment_name=%deployment_name, "Deployment update submitted, waiting for rollout");
 
@@ -479,9 +490,11 @@ impl KubernetesWorkerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match deployment_client
-            .get_deployment(namespace, deployment_name)
-            .await
+        match get(
+            namespaced::<Deployment>(&deployment_client, namespace),
+            deployment_name,
+        )
+        .await
         {
             Ok(deployment) => {
                 if let Some(status) = &deployment.status {
@@ -599,9 +612,11 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match deployment_client
-                .delete_deployment(namespace, deployment_name)
-                .await
+            match delete::<Deployment>(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                deployment_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(deployment_name=%deployment_name, "Deployment deletion initiated");
@@ -663,9 +678,11 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match deployment_client
-                .get_deployment(namespace, deployment_name)
-                .await
+            match get(
+                namespaced::<Deployment>(&deployment_client, namespace),
+                deployment_name,
+            )
+            .await
             {
                 Ok(_) => {
                     debug!(deployment_name=%deployment_name, "Deployment still exists, continuing to wait");
@@ -1133,7 +1150,7 @@ mod tests {
 /// Create a Kubernetes Docker config Secret for authenticating with the
 /// manager's registry.
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<KubernetesClient>,
+    secrets_client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

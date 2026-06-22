@@ -2,16 +2,7 @@ use alien_client_core::{ErrorData, Result};
 use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
-use k8s_openapi::{
-    api::{
-        apps::v1::{DaemonSet, Deployment, StatefulSet},
-        batch::v1::Job,
-        core::v1::{Event, Node, Pod, Secret, Service},
-        networking::v1::Ingress,
-    },
-    apimachinery::pkg::version,
-    List,
-};
+use k8s_openapi::List;
 use kube::{
     api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, ObjectList, PostParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
@@ -20,7 +11,7 @@ use kube::{
 use secrecy::SecretString;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use std::fmt::{self, Debug};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalKubernetesReadSource {
@@ -241,81 +232,15 @@ fn classify_optional_kubernetes_error(
     }
 }
 
-#[derive(Clone)]
-pub struct KubernetesClient {
-    client: Client,
-}
-
-impl Debug for KubernetesClient {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("KubernetesClient").finish()
-    }
-}
-
-impl KubernetesClient {
-    pub async fn new(config: KubernetesClientConfig) -> Result<Self> {
-        let client_config = kube_config_from_alien_config(config).await?;
-        let client = Client::try_from(client_config).into_alien_error().context(
-            ErrorData::HttpRequestFailed {
-                message: "Failed to create Kubernetes client".to_string(),
-            },
-        )?;
-
-        Ok(Self { client })
-    }
-
-    fn namespaced<K>(&self, namespace: &str) -> Api<K>
-    where
-        K: kube::Resource<Scope = kube::core::NamespaceResourceScope>,
-        <K as kube::Resource>::DynamicType: Default,
-    {
-        Api::namespaced(self.client.clone(), namespace)
-    }
-
-    fn cluster<K>(&self) -> Api<K>
-    where
-        K: kube::Resource<Scope = kube::core::ClusterResourceScope>,
-        <K as kube::Resource>::DynamicType: Default,
-    {
-        Api::all(self.client.clone())
-    }
-
-    fn dynamic_namespaced(
-        &self,
-        namespace: &str,
-        group: &str,
-        version: &str,
-        kind: &str,
-        plural: &str,
-    ) -> Api<DynamicObject> {
-        let resource = ApiResource {
-            group: group.to_string(),
-            version: version.to_string(),
-            api_version: format!("{group}/{version}"),
-            kind: kind.to_string(),
-            plural: plural.to_string(),
-        };
-
-        Api::namespaced_with(self.client.clone(), namespace, &resource)
-    }
-
-    fn dynamic_cluster(
-        &self,
-        group: &str,
-        version: &str,
-        kind: &str,
-        plural: &str,
-    ) -> Api<DynamicObject> {
-        let resource = ApiResource {
-            group: group.to_string(),
-            version: version.to_string(),
-            api_version: format!("{group}/{version}"),
-            kind: kind.to_string(),
-            plural: plural.to_string(),
-        };
-
-        Api::all_with(self.client.clone(), &resource)
-    }
+pub(crate) async fn kube_client_from_alien_config(
+    config: KubernetesClientConfig,
+) -> Result<Client> {
+    let client_config = kube_config_from_alien_config(config).await?;
+    Client::try_from(client_config)
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Failed to create Kubernetes client".to_string(),
+        })
 }
 
 pub(crate) async fn kube_config_from_alien_config(
@@ -484,7 +409,63 @@ fn apply_headers(
     Ok(())
 }
 
-fn list_params(label_selector: Option<String>, field_selector: Option<String>) -> ListParams {
+pub(crate) fn namespaced<K>(client: &Client, namespace: &str) -> Api<K>
+where
+    K: kube::Resource<Scope = kube::core::NamespaceResourceScope>,
+    <K as kube::Resource>::DynamicType: Default,
+{
+    Api::namespaced(client.clone(), namespace)
+}
+
+pub(crate) fn cluster<K>(client: &Client) -> Api<K>
+where
+    K: kube::Resource<Scope = kube::core::ClusterResourceScope>,
+    <K as kube::Resource>::DynamicType: Default,
+{
+    Api::all(client.clone())
+}
+
+pub(crate) fn dynamic_namespaced(
+    client: &Client,
+    namespace: &str,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+) -> Api<DynamicObject> {
+    let resource = ApiResource {
+        group: group.to_string(),
+        version: version.to_string(),
+        api_version: format!("{group}/{version}"),
+        kind: kind.to_string(),
+        plural: plural.to_string(),
+    };
+
+    Api::namespaced_with(client.clone(), namespace, &resource)
+}
+
+pub(crate) fn dynamic_cluster(
+    client: &Client,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+) -> Api<DynamicObject> {
+    let resource = ApiResource {
+        group: group.to_string(),
+        version: version.to_string(),
+        api_version: format!("{group}/{version}"),
+        kind: kind.to_string(),
+        plural: plural.to_string(),
+    };
+
+    Api::all_with(client.clone(), &resource)
+}
+
+pub(crate) fn list_params(
+    label_selector: Option<String>,
+    field_selector: Option<String>,
+) -> ListParams {
     let mut params = ListParams::default();
     if let Some(label_selector) = label_selector {
         params = params.labels(&label_selector);
@@ -495,7 +476,7 @@ fn list_params(label_selector: Option<String>, field_selector: Option<String>) -
     params
 }
 
-fn convert_list<K>(list: ObjectList<K>) -> Result<List<K>>
+pub(crate) fn convert_list<K>(list: ObjectList<K>) -> Result<List<K>>
 where
     K: Clone + DeserializeOwned + Serialize + k8s_openapi::ListableResource,
 {
@@ -510,7 +491,7 @@ where
     })
 }
 
-fn dynamic_value(value: Value) -> Result<DynamicObject> {
+pub(crate) fn dynamic_value(value: Value) -> Result<DynamicObject> {
     serde_json::from_value(value)
         .into_alien_error()
         .context(ErrorData::HttpRequestFailed {
@@ -518,7 +499,7 @@ fn dynamic_value(value: Value) -> Result<DynamicObject> {
         })
 }
 
-fn value_from_dynamic(object: DynamicObject) -> Result<Value> {
+pub(crate) fn value_from_dynamic(object: DynamicObject) -> Result<Value> {
     serde_json::to_value(object)
         .into_alien_error()
         .context(ErrorData::HttpRequestFailed {
@@ -526,7 +507,7 @@ fn value_from_dynamic(object: DynamicObject) -> Result<Value> {
         })
 }
 
-async fn create<K>(api: Api<K>, value: &K) -> Result<K>
+pub(crate) async fn create<K>(api: Api<K>, value: &K) -> Result<K>
 where
     K: Clone + Debug + DeserializeOwned + Serialize,
 {
@@ -538,7 +519,7 @@ where
         })
 }
 
-async fn get<K>(api: Api<K>, name: &str) -> Result<K>
+pub(crate) async fn get<K>(api: Api<K>, name: &str) -> Result<K>
 where
     K: Clone + Debug + DeserializeOwned,
 {
@@ -550,7 +531,7 @@ where
         })
 }
 
-async fn list<K>(
+pub(crate) async fn list<K>(
     api: Api<K>,
     label_selector: Option<String>,
     field_selector: Option<String>,
@@ -568,7 +549,7 @@ where
     convert_list(list)
 }
 
-async fn replace<K>(api: Api<K>, name: &str, value: &K) -> Result<K>
+pub(crate) async fn replace<K>(api: Api<K>, name: &str, value: &K) -> Result<K>
 where
     K: Clone + Debug + DeserializeOwned + Serialize,
 {
@@ -580,7 +561,7 @@ where
         })
 }
 
-async fn delete<K>(api: Api<K>, name: &str) -> Result<()>
+pub(crate) async fn delete<K>(api: Api<K>, name: &str) -> Result<()>
 where
     K: Clone + Debug + DeserializeOwned,
 {
@@ -593,540 +574,22 @@ where
         })
 }
 
-async fn create_dynamic(api: Api<DynamicObject>, value: &Value) -> Result<Value> {
+pub(crate) async fn create_dynamic(api: Api<DynamicObject>, value: &Value) -> Result<Value> {
     let object = dynamic_value(value.clone())?;
     let created = create(api, &object).await?;
     value_from_dynamic(created)
 }
 
-async fn get_dynamic(api: Api<DynamicObject>, name: &str) -> Result<Value> {
+pub(crate) async fn get_dynamic(api: Api<DynamicObject>, name: &str) -> Result<Value> {
     value_from_dynamic(get(api, name).await?)
 }
 
-async fn replace_dynamic(api: Api<DynamicObject>, name: &str, value: &Value) -> Result<Value> {
+pub(crate) async fn replace_dynamic(
+    api: Api<DynamicObject>,
+    name: &str,
+    value: &Value,
+) -> Result<Value> {
     let object = dynamic_value(value.clone())?;
     let replaced = replace(api, name, &object).await?;
     value_from_dynamic(replaced)
-}
-
-impl KubernetesClient {
-    pub(crate) async fn create_deployment(
-        &self,
-        namespace: &str,
-        deployment: &Deployment,
-    ) -> Result<Deployment> {
-        create(self.namespaced(namespace), deployment).await
-    }
-
-    pub(crate) async fn get_deployment(&self, namespace: &str, name: &str) -> Result<Deployment> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn list_deployments(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Deployment>> {
-        list(self.namespaced(namespace), label_selector, field_selector).await
-    }
-
-    pub(crate) async fn update_deployment(
-        &self,
-        namespace: &str,
-        name: &str,
-        deployment: &Deployment,
-    ) -> Result<Deployment> {
-        replace(self.namespaced(namespace), name, deployment).await
-    }
-
-    pub(crate) async fn delete_deployment(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Deployment>(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn create_statefulset(
-        &self,
-        namespace: &str,
-        statefulset: &StatefulSet,
-    ) -> Result<StatefulSet> {
-        create(self.namespaced(namespace), statefulset).await
-    }
-
-    pub(crate) async fn get_statefulset(&self, namespace: &str, name: &str) -> Result<StatefulSet> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn update_statefulset(
-        &self,
-        namespace: &str,
-        name: &str,
-        statefulset: &StatefulSet,
-    ) -> Result<StatefulSet> {
-        replace(self.namespaced(namespace), name, statefulset).await
-    }
-
-    pub(crate) async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<StatefulSet>(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn create_daemonset(
-        &self,
-        namespace: &str,
-        daemonset: &DaemonSet,
-    ) -> Result<DaemonSet> {
-        create(self.namespaced(namespace), daemonset).await
-    }
-
-    pub(crate) async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn update_daemonset(
-        &self,
-        namespace: &str,
-        name: &str,
-        daemonset: &DaemonSet,
-    ) -> Result<DaemonSet> {
-        replace(self.namespaced(namespace), name, daemonset).await
-    }
-
-    pub(crate) async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<DaemonSet>(self.namespaced(namespace), name).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job> {
-        create(self.namespaced(namespace), job).await
-    }
-
-    pub(crate) async fn get_job(&self, namespace: &str, name: &str) -> Result<Job> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn delete_job(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Job>(self.namespaced(namespace), name).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn list_pods(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Pod>> {
-        list(self.namespaced(namespace), label_selector, field_selector).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn list_events(
-        &self,
-        namespace: &str,
-        field_selector: Option<String>,
-    ) -> Result<List<Event>> {
-        list(self.namespaced(namespace), None, field_selector).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn list_nodes(
-        &self,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Node>> {
-        list(self.cluster(), label_selector, field_selector).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn list_pod_metrics(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-    ) -> Result<ObjectList<DynamicObject>> {
-        let api =
-            self.dynamic_namespaced(namespace, "metrics.k8s.io", "v1beta1", "PodMetrics", "pods");
-        api.list(&list_params(label_selector, None))
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Kubernetes pod metrics list operation failed".to_string(),
-            })
-    }
-
-    pub(crate) async fn list_node_metrics(
-        &self,
-        label_selector: Option<String>,
-    ) -> Result<ObjectList<DynamicObject>> {
-        let api = self.dynamic_cluster("metrics.k8s.io", "v1beta1", "NodeMetrics", "nodes");
-        api.list(&list_params(label_selector, None))
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Kubernetes node metrics list operation failed".to_string(),
-            })
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret> {
-        create(self.namespaced(namespace), secret).await
-    }
-
-    pub(crate) async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn update_secret(
-        &self,
-        namespace: &str,
-        name: &str,
-        secret: &Secret,
-    ) -> Result<Secret> {
-        replace(self.namespaced(namespace), name, secret).await
-    }
-
-    pub(crate) async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Secret>(self.namespaced(namespace), name).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn create_service(
-        &self,
-        namespace: &str,
-        service: &Service,
-    ) -> Result<Service> {
-        create(self.namespaced(namespace), service).await
-    }
-
-    pub(crate) async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn update_service(
-        &self,
-        namespace: &str,
-        name: &str,
-        service: &Service,
-    ) -> Result<Service> {
-        replace(self.namespaced(namespace), name, service).await
-    }
-
-    pub(crate) async fn delete_service(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Service>(self.namespaced(namespace), name).await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn create_ingress(
-        &self,
-        namespace: &str,
-        ingress: &Ingress,
-    ) -> Result<Ingress> {
-        create(self.namespaced(namespace), ingress).await
-    }
-
-    pub(crate) async fn get_ingress(&self, namespace: &str, name: &str) -> Result<Ingress> {
-        get(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn update_ingress(
-        &self,
-        namespace: &str,
-        name: &str,
-        ingress: &Ingress,
-    ) -> Result<Ingress> {
-        replace(self.namespaced(namespace), name, ingress).await
-    }
-
-    pub(crate) async fn delete_ingress(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<Ingress>(self.namespaced(namespace), name).await
-    }
-
-    pub(crate) async fn create_gateway(&self, namespace: &str, gateway: &Value) -> Result<Value> {
-        create_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "Gateway",
-                "gateways",
-            ),
-            gateway,
-        )
-        .await
-    }
-
-    pub(crate) async fn get_gateway(&self, namespace: &str, name: &str) -> Result<Value> {
-        get_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "Gateway",
-                "gateways",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn update_gateway(
-        &self,
-        namespace: &str,
-        name: &str,
-        gateway: &Value,
-    ) -> Result<Value> {
-        replace_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "Gateway",
-                "gateways",
-            ),
-            name,
-            gateway,
-        )
-        .await
-    }
-
-    pub(crate) async fn delete_gateway(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<DynamicObject>(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "Gateway",
-                "gateways",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn create_http_route(&self, namespace: &str, route: &Value) -> Result<Value> {
-        create_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "HTTPRoute",
-                "httproutes",
-            ),
-            route,
-        )
-        .await
-    }
-
-    pub(crate) async fn get_http_route(&self, namespace: &str, name: &str) -> Result<Value> {
-        get_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "HTTPRoute",
-                "httproutes",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn update_http_route(
-        &self,
-        namespace: &str,
-        name: &str,
-        route: &Value,
-    ) -> Result<Value> {
-        replace_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "HTTPRoute",
-                "httproutes",
-            ),
-            name,
-            route,
-        )
-        .await
-    }
-
-    pub(crate) async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()> {
-        delete::<DynamicObject>(
-            self.dynamic_namespaced(
-                namespace,
-                "gateway.networking.k8s.io",
-                "v1",
-                "HTTPRoute",
-                "httproutes",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn create_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        policy: &Value,
-    ) -> Result<Value> {
-        create_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "networking.gke.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicies",
-            ),
-            policy,
-        )
-        .await
-    }
-
-    pub(crate) async fn get_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Result<Value> {
-        get_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "networking.gke.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicies",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn update_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-        policy: &Value,
-    ) -> Result<Value> {
-        replace_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "networking.gke.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicies",
-            ),
-            name,
-            policy,
-        )
-        .await
-    }
-
-    pub(crate) async fn delete_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Result<()> {
-        delete::<DynamicObject>(
-            self.dynamic_namespaced(
-                namespace,
-                "networking.gke.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicies",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn create_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        policy: &Value,
-    ) -> Result<Value> {
-        create_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "alb.networking.azure.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicy",
-            ),
-            policy,
-        )
-        .await
-    }
-
-    pub(crate) async fn get_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Result<Value> {
-        get_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "alb.networking.azure.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicy",
-            ),
-            name,
-        )
-        .await
-    }
-
-    pub(crate) async fn update_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-        policy: &Value,
-    ) -> Result<Value> {
-        replace_dynamic(
-            self.dynamic_namespaced(
-                namespace,
-                "alb.networking.azure.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicy",
-            ),
-            name,
-            policy,
-        )
-        .await
-    }
-
-    pub(crate) async fn delete_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Result<()> {
-        delete::<DynamicObject>(
-            self.dynamic_namespaced(
-                namespace,
-                "alb.networking.azure.io",
-                "v1",
-                "HealthCheckPolicy",
-                "healthcheckpolicy",
-            ),
-            name,
-        )
-        .await
-    }
-}
-
-impl KubernetesClient {
-    pub(crate) async fn get_version(&self) -> Result<version::Info> {
-        self.client
-            .apiserver_version()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Kubernetes version request failed".to_string(),
-            })
-    }
 }

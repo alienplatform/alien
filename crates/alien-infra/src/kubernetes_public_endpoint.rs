@@ -35,9 +35,68 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::{
+    create, create_dynamic, delete, dynamic_namespaced, get, get_dynamic, namespaced, replace,
+    replace_dynamic,
+};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
+
+fn gateway_api(
+    client: &std::sync::Arc<kube::Client>,
+    namespace: &str,
+) -> kube::Api<kube::api::DynamicObject> {
+    dynamic_namespaced(
+        client,
+        namespace,
+        "gateway.networking.k8s.io",
+        "v1",
+        "Gateway",
+        "gateways",
+    )
+}
+
+fn http_route_api(
+    client: &std::sync::Arc<kube::Client>,
+    namespace: &str,
+) -> kube::Api<kube::api::DynamicObject> {
+    dynamic_namespaced(
+        client,
+        namespace,
+        "gateway.networking.k8s.io",
+        "v1",
+        "HTTPRoute",
+        "httproutes",
+    )
+}
+
+fn gke_health_check_policy_api(
+    client: &std::sync::Arc<kube::Client>,
+    namespace: &str,
+) -> kube::Api<kube::api::DynamicObject> {
+    dynamic_namespaced(
+        client,
+        namespace,
+        "networking.gke.io",
+        "v1",
+        "HealthCheckPolicy",
+        "healthcheckpolicies",
+    )
+}
+
+fn azure_health_check_policy_api(
+    client: &std::sync::Arc<kube::Client>,
+    namespace: &str,
+) -> kube::Api<kube::api::DynamicObject> {
+    dynamic_namespaced(
+        client,
+        namespace,
+        "alb.networking.azure.io",
+        "v1",
+        "HealthCheckPolicy",
+        "healthcheckpolicy",
+    )
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KubernetesPublicEndpointState {
@@ -223,16 +282,18 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 target.namespace,
                 target.resource_id,
             )?;
-            secrets_client
-                .get_secret(secret_namespace, &secret_ref.secret_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Kubernetes TLS Secret '{}' was not found",
-                        secret_ref.secret_name
-                    ),
-                    resource_id: Some(target.resource_id.to_string()),
-                })?;
+            get(
+                namespaced::<Secret>(&secrets_client, secret_namespace),
+                &secret_ref.secret_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Kubernetes TLS Secret '{}' was not found",
+                    secret_ref.secret_name
+                ),
+                resource_id: Some(target.resource_id.to_string()),
+            })?;
             Some(KubernetesTlsSecretRef {
                 secret_name: secret_ref.secret_name.clone(),
                 namespace: Some(secret_namespace.to_string()),
@@ -460,49 +521,71 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
 
     if let Some(route_name) = state.http_route_name.take() {
         delete_not_found_ok(
-            route_client.delete_http_route(namespace, &route_name).await,
+            delete::<kube::api::DynamicObject>(
+                http_route_api(&route_client, namespace),
+                &route_name,
+            )
+            .await,
             &route_name,
         )?;
     }
     if let Some(policy_name) = state.gke_health_check_policy_name.take() {
         delete_not_found_ok(
-            route_client
-                .delete_gke_health_check_policy(namespace, &policy_name)
-                .await,
+            delete::<kube::api::DynamicObject>(
+                gke_health_check_policy_api(&route_client, namespace),
+                &policy_name,
+            )
+            .await,
             &policy_name,
         )?;
     }
     if let Some(policy_name) = state.azure_health_check_policy_name.take() {
         delete_not_found_ok(
-            route_client
-                .delete_azure_health_check_policy(namespace, &policy_name)
-                .await,
+            delete::<kube::api::DynamicObject>(
+                azure_health_check_policy_api(&route_client, namespace),
+                &policy_name,
+            )
+            .await,
             &policy_name,
         )?;
     }
     if let Some(gateway_name) = state.gateway_name.take() {
         delete_not_found_ok(
-            route_client.delete_gateway(namespace, &gateway_name).await,
+            delete::<kube::api::DynamicObject>(
+                gateway_api(&route_client, namespace),
+                &gateway_name,
+            )
+            .await,
             &gateway_name,
         )?;
     }
     if let Some(ingress_name) = state.ingress_name.take() {
         delete_not_found_ok(
-            route_client.delete_ingress(namespace, &ingress_name).await,
+            delete::<K8sIngress>(
+                namespaced::<K8sIngress>(&route_client, namespace),
+                &ingress_name,
+            )
+            .await,
             &ingress_name,
         )?;
     }
     if let Some(service_name) = state.service_name.take() {
         delete_not_found_ok(
-            service_client
-                .delete_service(namespace, &service_name)
-                .await,
+            delete::<Service>(
+                namespaced::<Service>(&service_client, namespace),
+                &service_name,
+            )
+            .await,
             &service_name,
         )?;
     }
     if let Some(secret_name) = state.managed_tls_secret_name.take() {
         delete_not_found_ok(
-            secrets_client.delete_secret(namespace, &secret_name).await,
+            delete::<Secret>(
+                namespaced::<Secret>(&secrets_client, namespace),
+                &secret_name,
+            )
+            .await,
             &secret_name,
         )?;
     }
@@ -538,7 +621,7 @@ async fn cleanup_stale_endpoint_objects(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     resource_id: &str,
-    route_client: &std::sync::Arc<KubernetesClient>,
+    route_client: &std::sync::Arc<kube::Client>,
     previous: PreviousEndpointObjects,
     active: ActiveEndpointObjects,
     state: &mut KubernetesPublicEndpointState,
@@ -546,7 +629,11 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(route_name) = previous.http_route_name {
         if Some(route_name.as_str()) != active.http_route_name.as_deref() {
             delete_not_found_ok(
-                route_client.delete_http_route(namespace, &route_name).await,
+                delete::<kube::api::DynamicObject>(
+                    http_route_api(route_client, namespace),
+                    &route_name,
+                )
+                .await,
                 &route_name,
             )?;
         }
@@ -554,9 +641,11 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(policy_name) = previous.gke_health_check_policy_name {
         if Some(policy_name.as_str()) != active.gke_health_check_policy_name.as_deref() {
             delete_not_found_ok(
-                route_client
-                    .delete_gke_health_check_policy(namespace, &policy_name)
-                    .await,
+                delete::<kube::api::DynamicObject>(
+                    gke_health_check_policy_api(route_client, namespace),
+                    &policy_name,
+                )
+                .await,
                 &policy_name,
             )?;
         }
@@ -564,9 +653,11 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(policy_name) = previous.azure_health_check_policy_name {
         if Some(policy_name.as_str()) != active.azure_health_check_policy_name.as_deref() {
             delete_not_found_ok(
-                route_client
-                    .delete_azure_health_check_policy(namespace, &policy_name)
-                    .await,
+                delete::<kube::api::DynamicObject>(
+                    azure_health_check_policy_api(route_client, namespace),
+                    &policy_name,
+                )
+                .await,
                 &policy_name,
             )?;
         }
@@ -574,7 +665,11 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(gateway_name) = previous.gateway_name {
         if Some(gateway_name.as_str()) != active.gateway_name.as_deref() {
             delete_not_found_ok(
-                route_client.delete_gateway(namespace, &gateway_name).await,
+                delete::<kube::api::DynamicObject>(
+                    gateway_api(route_client, namespace),
+                    &gateway_name,
+                )
+                .await,
                 &gateway_name,
             )?;
         }
@@ -582,7 +677,11 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(ingress_name) = previous.ingress_name {
         if Some(ingress_name.as_str()) != active.ingress_name.as_deref() {
             delete_not_found_ok(
-                route_client.delete_ingress(namespace, &ingress_name).await,
+                delete::<K8sIngress>(
+                    namespaced::<K8sIngress>(route_client, namespace),
+                    &ingress_name,
+                )
+                .await,
                 &ingress_name,
             )?;
         }
@@ -596,7 +695,11 @@ async fn cleanup_stale_endpoint_objects(
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
             delete_not_found_ok(
-                secrets_client.delete_secret(namespace, &secret_name).await,
+                delete::<Secret>(
+                    namespaced::<Secret>(&secrets_client, namespace),
+                    &secret_name,
+                )
+                .await,
                 &secret_name,
             )?;
         }
@@ -1461,24 +1564,23 @@ fn build_azure_health_check_policy(
 }
 
 async fn upsert_service(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut service: Service,
     resource_id: &str,
 ) -> Result<()> {
-    match client.create_service(namespace, &service).await {
+    match create(namespaced::<Service>(client, namespace), &service).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client.get_service(namespace, name).await.context(
-                ErrorData::CloudPlatformError {
+            let existing = get(namespaced::<Service>(client, namespace), name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get Service '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
-                },
-            )?;
+                })?;
             service.metadata.resource_version = existing.metadata.resource_version;
-            client
-                .update_service(namespace, name, &service)
+            replace(namespaced::<Service>(client, namespace), name, &service)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update Service '{}'", name),
@@ -1494,7 +1596,7 @@ async fn upsert_service(
 }
 
 async fn upsert_tls_secret(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     certificate_chain: &str,
@@ -1530,18 +1632,17 @@ async fn upsert_tls_secret(
         ..Default::default()
     };
 
-    match client.create_secret(namespace, &secret).await {
+    match create(namespaced::<Secret>(client, namespace), &secret).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client.get_secret(namespace, name).await.context(
-                ErrorData::CloudPlatformError {
+            let existing = get(namespaced::<Secret>(client, namespace), name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get TLS Secret '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
-                },
-            )?;
+                })?;
             secret.metadata.resource_version = existing.metadata.resource_version;
-            client
-                .update_secret(namespace, name, &secret)
+            replace(namespaced::<Secret>(client, namespace), name, &secret)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update TLS Secret '{}'", name),
@@ -1557,24 +1658,23 @@ async fn upsert_tls_secret(
 }
 
 async fn upsert_ingress(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut ingress: K8sIngress,
     resource_id: &str,
 ) -> Result<()> {
-    match client.create_ingress(namespace, &ingress).await {
+    match create(namespaced::<K8sIngress>(client, namespace), &ingress).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client.get_ingress(namespace, name).await.context(
-                ErrorData::CloudPlatformError {
+            let existing = get(namespaced::<K8sIngress>(client, namespace), name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get Ingress '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
-                },
-            )?;
+                })?;
             ingress.metadata.resource_version = existing.metadata.resource_version;
-            client
-                .update_ingress(namespace, name, &ingress)
+            replace(namespaced::<K8sIngress>(client, namespace), name, &ingress)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update Ingress '{}'", name),
@@ -1590,24 +1690,23 @@ async fn upsert_ingress(
 }
 
 async fn upsert_gateway(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut gateway: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match client.create_gateway(namespace, &gateway).await {
+    match create_dynamic(gateway_api(client, namespace), &gateway).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client.get_gateway(namespace, name).await.context(
-                ErrorData::CloudPlatformError {
+            let existing = get_dynamic(gateway_api(client, namespace), name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get Gateway '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
-                },
-            )?;
+                })?;
             copy_resource_version(&mut gateway, &existing);
-            client
-                .update_gateway(namespace, name, &gateway)
+            replace_dynamic(gateway_api(client, namespace), name, &gateway)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update Gateway '{}'", name),
@@ -1623,24 +1722,23 @@ async fn upsert_gateway(
 }
 
 async fn upsert_http_route(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut route: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match client.create_http_route(namespace, &route).await {
+    match create_dynamic(http_route_api(client, namespace), &route).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client.get_http_route(namespace, name).await.context(
-                ErrorData::CloudPlatformError {
+            let existing = get_dynamic(http_route_api(client, namespace), name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get HTTPRoute '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
-                },
-            )?;
+                })?;
             copy_resource_version(&mut route, &existing);
-            client
-                .update_http_route(namespace, name, &route)
+            replace_dynamic(http_route_api(client, namespace), name, &route)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update HTTPRoute '{}'", name),
@@ -1656,20 +1754,16 @@ async fn upsert_http_route(
 }
 
 async fn upsert_gke_health_check_policy(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut policy: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match client
-        .create_gke_health_check_policy(namespace, &policy)
-        .await
-    {
+    match create_dynamic(gke_health_check_policy_api(client, namespace), &policy).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client
-                .get_gke_health_check_policy(namespace, name)
+            let existing = get_dynamic(gke_health_check_policy_api(client, namespace), name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -1679,13 +1773,16 @@ async fn upsert_gke_health_check_policy(
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut policy, &existing);
-            client
-                .update_gke_health_check_policy(namespace, name, &policy)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update GKE HealthCheckPolicy '{}'", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            replace_dynamic(
+                gke_health_check_policy_api(client, namespace),
+                name,
+                &policy,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update GKE HealthCheckPolicy '{}'", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1696,20 +1793,16 @@ async fn upsert_gke_health_check_policy(
 }
 
 async fn upsert_azure_health_check_policy(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     mut policy: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match client
-        .create_azure_health_check_policy(namespace, &policy)
-        .await
-    {
+    match create_dynamic(azure_health_check_policy_api(client, namespace), &policy).await {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = client
-                .get_azure_health_check_policy(namespace, name)
+            let existing = get_dynamic(azure_health_check_policy_api(client, namespace), name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -1719,13 +1812,16 @@ async fn upsert_azure_health_check_policy(
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut policy, &existing);
-            client
-                .update_azure_health_check_policy(namespace, name, &policy)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update Azure HealthCheckPolicy '{}'", name),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            replace_dynamic(
+                azure_health_check_policy_api(client, namespace),
+                name,
+                &policy,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to update Azure HealthCheckPolicy '{}'", name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1736,19 +1832,17 @@ async fn upsert_azure_health_check_policy(
 }
 
 async fn observe_ingress_endpoint(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
     profile: &KubernetesIngressRouteProfile,
 ) -> Result<Option<LoadBalancerEndpoint>> {
-    let ingress =
-        client
-            .get_ingress(namespace, name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get Ingress '{}'", name),
-                resource_id: None,
-            })?;
+    let ingress = get(namespaced::<K8sIngress>(client, namespace), name)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to get Ingress '{}'", name),
+            resource_id: None,
+        })?;
     let Some(status) = ingress.status else {
         return Ok(None);
     };
@@ -1775,18 +1869,16 @@ async fn observe_ingress_endpoint(
 }
 
 async fn observe_gateway_endpoint(
-    client: &std::sync::Arc<KubernetesClient>,
+    client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     name: &str,
 ) -> Result<Option<LoadBalancerEndpoint>> {
-    let gateway =
-        client
-            .get_gateway(namespace, name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get Gateway '{}'", name),
-                resource_id: None,
-            })?;
+    let gateway = get_dynamic(gateway_api(client, namespace), name)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to get Gateway '{}'", name),
+            resource_id: None,
+        })?;
     let addresses = gateway
         .pointer("/status/addresses")
         .and_then(Value::as_array)

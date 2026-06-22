@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::{create, namespaced, replace};
 use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 pub(crate) async fn ensure_registry_pull_secret(
-    secrets_client: &std::sync::Arc<KubernetesClient>,
+    secrets_client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     secret_name: &str,
     proxy_url: &str,
@@ -48,19 +48,22 @@ pub(crate) async fn ensure_registry_pull_secret(
         ..Default::default()
     };
 
-    match secrets_client.create_secret(namespace, &secret).await {
+    match create(namespaced::<Secret>(secrets_client, namespace), &secret).await {
         Ok(_) => Ok(()),
         Err(e) => {
             let err = format!("{e}");
             if err.contains("AlreadyExists") || err.contains("409") {
-                secrets_client
-                    .update_secret(namespace, secret_name, &secret)
-                    .await
-                    .map(|_| ())
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to update registry pull secret '{secret_name}'"),
-                        resource_id: None,
-                    })
+                replace(
+                    namespaced::<Secret>(secrets_client, namespace),
+                    secret_name,
+                    &secret,
+                )
+                .await
+                .map(|_| ())
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update registry pull secret '{secret_name}'"),
+                    resource_id: None,
+                })
             } else {
                 Err(e.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create registry pull secret '{secret_name}'"),

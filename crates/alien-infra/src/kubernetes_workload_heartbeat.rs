@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
+    dynamic_namespaced, list, list_params, namespaced, optional_events_read, optional_metrics_read,
+    OptionalKubernetesReadStatus,
 };
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesContainerHeartbeatData, KubernetesDaemonHeartbeatData,
@@ -12,7 +14,7 @@ use alien_core::{
     MetricUnit, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
 };
-use alien_error::Context;
+use alien_error::{Context, IntoAlienError};
 use k8s_openapi::api::apps::v1::{
     DaemonSet, DaemonSetStatus, Deployment, DeploymentStatus, StatefulSet, StatefulSetStatus,
 };
@@ -160,22 +162,29 @@ pub async fn emit_kubernetes_workload_heartbeat(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    let pods = pod_client
-        .list_pods(&input.namespace, Some(input.label_selector.clone()), None)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to list pods for Kubernetes workload '{}'",
-                input.workload_name
-            ),
-            resource_id: Some(input.resource_id.clone()),
-        })?;
+    let pods = list(
+        namespaced::<Pod>(&pod_client, &input.namespace),
+        Some(input.label_selector.clone()),
+        None,
+    )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: format!(
+            "Failed to list pods for Kubernetes workload '{}'",
+            input.workload_name
+        ),
+        resource_id: Some(input.resource_id.clone()),
+    })?;
 
     let events = optional_events_read(
         &input.resource_id,
         &input.namespace,
         Some(&input.workload_name),
-        event_client.list_events(&input.namespace, None),
+        list(
+            namespaced::<Event>(&event_client, &input.namespace),
+            None,
+            None,
+        ),
     )
     .await
     .context(ErrorData::CloudPlatformError {
@@ -190,7 +199,22 @@ pub async fn emit_kubernetes_workload_heartbeat(
         &input.resource_id,
         Some(&input.namespace),
         Some(&input.workload_name),
-        metrics_client.list_pod_metrics(&input.namespace, Some(input.label_selector.clone())),
+        async {
+            dynamic_namespaced(
+                &metrics_client,
+                &input.namespace,
+                "metrics.k8s.io",
+                "v1beta1",
+                "PodMetrics",
+                "pods",
+            )
+            .list(&list_params(Some(input.label_selector.clone()), None))
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes pod metrics list operation failed".to_string(),
+            })
+        },
     )
     .await
     .context(ErrorData::CloudPlatformError {

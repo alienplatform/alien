@@ -6,6 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::{create, delete, get, namespaced};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
@@ -69,12 +70,12 @@ impl KubernetesBuildController {
             .build_job(config, &job_name, &namespace, &service_account_name, ctx)
             .await?;
 
-        let _created_job = job_client.create_job(&namespace, &job).await.context(
-            ErrorData::CloudPlatformError {
+        let _created_job = create(namespaced::<Job>(&job_client, &namespace), &job)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create build job '{}'.", job_name),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         self.job_name = Some(job_name.clone());
         self.namespace = Some(namespace.clone());
@@ -118,7 +119,7 @@ impl KubernetesBuildController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match job_client.get_job(namespace, job_name).await {
+        match get(namespaced::<Job>(&job_client, namespace), job_name).await {
             Ok(job) => {
                 if let Some(status) = &job.status {
                     // Check if job completed successfully
@@ -191,12 +192,12 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            let job = job_client.get_job(namespace, job_name).await.context(
-                ErrorData::CloudPlatformError {
+            let job = get(namespaced::<Job>(&job_client, namespace), job_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get job '{}'", job_name),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             if let Some(status) = &job.status {
                 if let Some(succeeded) = status.succeeded {
@@ -251,7 +252,7 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match job_client.delete_job(namespace, job_name).await {
+            match delete::<Job>(namespaced::<Job>(&job_client, namespace), job_name).await {
                 Ok(_) => {
                     info!(job_name=%job_name, "Old Job deletion initiated");
                 }
@@ -309,7 +310,7 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match job_client.get_job(namespace, job_name).await {
+            match get(namespaced::<Job>(&job_client, namespace), job_name).await {
                 Ok(_) => {
                     debug!(job_name=%job_name, "Old Job still exists, waiting for deletion");
                 }
@@ -383,8 +384,7 @@ impl KubernetesBuildController {
             .build_job(config, &job_name, namespace, &service_account_name, ctx)
             .await?;
 
-        job_client
-            .create_job(namespace, &job)
+        create(namespaced::<Job>(&job_client, namespace), &job)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create updated build job '{}'.", job_name),
@@ -432,7 +432,7 @@ impl KubernetesBuildController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match job_client.get_job(namespace, job_name).await {
+        match get(namespaced::<Job>(&job_client, namespace), job_name).await {
             Ok(job) => {
                 if let Some(status) = &job.status {
                     if let Some(succeeded) = status.succeeded {
@@ -510,7 +510,7 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match job_client.delete_job(namespace, job_name).await {
+            match delete::<Job>(namespaced::<Job>(&job_client, namespace), job_name).await {
                 Ok(_) => {
                     info!(job_name=%job_name, "Job deletion initiated");
                 }
@@ -572,7 +572,7 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match job_client.get_job(namespace, job_name).await {
+            match get(namespaced::<Job>(&job_client, namespace), job_name).await {
                 Ok(_) => {
                     debug!(job_name=%job_name, "Job still exists, continuing to wait");
                 }

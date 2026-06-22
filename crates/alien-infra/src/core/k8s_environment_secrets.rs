@@ -8,6 +8,7 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_client::{create, get, namespaced, replace};
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -110,13 +111,12 @@ pub async fn reconcile_environment_secret(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    match secrets_client.create_secret(namespace, &secret).await {
+    match create(namespaced::<Secret>(&secrets_client, namespace), &secret).await {
         Ok(_) => {}
         Err(e) => {
             let err = format!("{e}");
             if err.contains("AlreadyExists") || err.contains("409") {
-                let existing = secrets_client
-                    .get_secret(namespace, &secret_name)
+                let existing = get(namespaced::<Secret>(&secrets_client, namespace), &secret_name)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -125,15 +125,18 @@ pub async fn reconcile_environment_secret(
                         resource_id: Some(resource_id.to_string()),
                     })?;
                 secret.metadata.resource_version = existing.metadata.resource_version;
-                secrets_client
-                    .update_secret(namespace, &secret_name, &secret)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to update environment Secret for {resource_kind} '{resource_id}'",
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })?;
+                replace(
+                    namespaced::<Secret>(&secrets_client, namespace),
+                    &secret_name,
+                    &secret,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to update environment Secret for {resource_kind} '{resource_id}'",
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             } else {
                 return Err(e.context(ErrorData::CloudPlatformError {
                     message: format!(

@@ -4,6 +4,8 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 #[cfg(feature = "kubernetes")]
+use crate::kubernetes_client::{list, namespaced};
+#[cfg(feature = "kubernetes")]
 use crate::kubernetes_cluster_heartbeat::{
     emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,
 };
@@ -14,6 +16,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
+#[cfg(feature = "kubernetes")]
+use k8s_openapi::api::apps::v1::Deployment;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,16 +360,19 @@ async fn verify_agent_runtime(
         .service_provider
         .get_kubernetes_client(kubernetes_config)
         .await?;
-    deployment_client
-        .list_deployments(&config.namespace, None, None)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to verify alien-agent Kubernetes API access in namespace '{}'",
-                config.namespace
-            ),
-            resource_id: Some(config.id.clone()),
-        })?;
+    list(
+        namespaced::<Deployment>(&deployment_client, &config.namespace),
+        None,
+        None,
+    )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: format!(
+            "Failed to verify alien-agent Kubernetes API access in namespace '{}'",
+            config.namespace
+        ),
+        resource_id: Some(config.id.clone()),
+    })?;
 
     Ok(KubernetesClusterRuntimeStatus {
         kubernetes_api_reachable: true,

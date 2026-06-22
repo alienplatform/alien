@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::{create, delete, get, namespaced, replace};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -83,13 +83,15 @@ impl KubernetesDaemonController {
             )
             .await?;
 
-        workload_client
-            .create_daemonset(&namespace, &daemonset)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create daemonset '{}'.", daemon_set_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        create(
+            namespaced::<DaemonSet>(&workload_client, &namespace),
+            &daemonset,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create daemonset '{}'.", daemon_set_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.daemon_set_name = Some(daemon_set_name.clone());
         self.namespace = Some(namespace.clone());
@@ -145,13 +147,15 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            let daemonset = workload_client
-                .get_daemonset(namespace, daemon_set_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get daemonset '{}'", daemon_set_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let daemonset = get(
+                namespaced::<DaemonSet>(&workload_client, namespace),
+                daemon_set_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get daemonset '{}'", daemon_set_name),
+                resource_id: Some(config.id.clone()),
+            })?;
             let labels = self.build_labels(daemon_set_name);
             emit_kubernetes_workload_heartbeat(
                 ctx,
@@ -203,16 +207,18 @@ impl KubernetesDaemonController {
             .service_provider
             .get_kubernetes_client(kubernetes_config)
             .await?;
-        let existing = workload_client
-            .get_daemonset(namespace, daemon_set_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to get daemonset '{}' before update",
-                    daemon_set_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let existing = get(
+            namespaced::<DaemonSet>(&workload_client, namespace),
+            daemon_set_name,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to get daemonset '{}' before update",
+                daemon_set_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
         let resource_version = existing.metadata.resource_version.clone();
 
         let service_account_name =
@@ -248,13 +254,16 @@ impl KubernetesDaemonController {
             .await?;
         new_daemonset.metadata.resource_version = resource_version;
 
-        workload_client
-            .update_daemonset(namespace, daemon_set_name, &new_daemonset)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update daemonset '{}'.", daemon_set_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        replace(
+            namespaced::<DaemonSet>(&workload_client, namespace),
+            daemon_set_name,
+            &new_daemonset,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to update daemonset '{}'.", daemon_set_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         Ok(HandlerAction::Continue {
             state: WaitingForUpdate,
@@ -305,9 +314,11 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            match workload_client
-                .delete_daemonset(namespace, daemon_set_name)
-                .await
+            match delete::<DaemonSet>(
+                namespaced::<DaemonSet>(&workload_client, namespace),
+                daemon_set_name,
+            )
+            .await
             {
                 Ok(_) => {}
                 Err(e)
@@ -361,9 +372,11 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            match workload_client
-                .get_daemonset(namespace, daemon_set_name)
-                .await
+            match get(
+                namespaced::<DaemonSet>(&workload_client, namespace),
+                daemon_set_name,
+            )
+            .await
             {
                 Ok(_) => {
                     debug!(daemon_set_name=%daemon_set_name, "Daemon daemonset still exists");
@@ -439,9 +452,11 @@ impl KubernetesDaemonController {
             .service_provider
             .get_kubernetes_client(kubernetes_config)
             .await?;
-        match workload_client
-            .get_daemonset(namespace, daemon_set_name)
-            .await
+        match get(
+            namespaced::<DaemonSet>(&workload_client, namespace),
+            daemon_set_name,
+        )
+        .await
         {
             Ok(daemonset) => {
                 if let Some(status) = &daemonset.status {
@@ -613,7 +628,7 @@ impl KubernetesDaemonController {
 }
 
 async fn create_registry_pull_secret(
-    secrets_client: &std::sync::Arc<KubernetesClient>,
+    secrets_client: &std::sync::Arc<kube::Client>,
     namespace: &str,
     secret_name: &str,
     proxy_host: &str,

@@ -10,7 +10,7 @@ use crate::aws_sdk::{
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 #[cfg(feature = "kubernetes")]
-use crate::kubernetes_client::KubernetesClient;
+use crate::kubernetes_client::kube_client_from_alien_config;
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesClientConfig;
 use alien_core::{
@@ -395,7 +395,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_kubernetes_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<KubernetesClient>>;
+    ) -> Result<Arc<kube::Client>>;
 
     // Local platform service managers (return None for non-local platforms)
     #[cfg(feature = "local")]
@@ -803,13 +803,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     async fn get_kubernetes_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
-    ) -> Result<Arc<KubernetesClient>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
-            crate::error::ErrorData::CloudPlatformError {
+    ) -> Result<Arc<kube::Client>> {
+        let client = kube_client_from_alien_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes client".to_string(),
                 resource_id: None,
-            },
-        )?;
+            })?;
         Ok(Arc::new(client))
     }
 
