@@ -99,21 +99,22 @@ impl AzureStorageController {
             .get_azure_blob_container_client(azure_config)?;
 
         // Fail fast on any error - executor handles retries
-        client
-            .create_blob_container(
-                &resource_group_name,
-                &storage_account_name,
-                &container_name,
-                &container_body,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Azure Storage Container '{}'",
-                    container_name
-                ),
-                resource_id: Some(config.id().to_string()),
-            })?;
+        azure_storage::create_blob_container(
+            &client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            &storage_account_name,
+            &container_name,
+            &container_body,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Azure Storage Container '{}'",
+                container_name
+            ),
+            resource_id: Some(config.id().to_string()),
+        })?;
 
         info!(
             "Successfully created Azure Storage Container '{}'",
@@ -201,13 +202,18 @@ impl AzureStorageController {
                 .get_azure_storage_accounts_client(azure_config)?;
 
             // Check if container still exists
-            let container = client
-                .get_blob_container(&resource_group_name, &storage_account_name, container_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to check Azure Storage Container during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let container = azure_storage::get_blob_container(
+                &client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &storage_account_name,
+                container_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to check Azure Storage Container during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
             let storage_account = azure_storage::get_storage_account_properties(
                 &storage_accounts_client,
                 &azure_config.subscription_id,
@@ -219,13 +225,17 @@ impl AzureStorageController {
                 message: "Failed to get Azure Storage account during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-            let blob_service = client
-                .get_blob_service_properties(&resource_group_name, &storage_account_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get Azure Blob service during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let blob_service = azure_storage::get_blob_service_properties(
+                &client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &storage_account_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get Azure Blob service during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_storage_heartbeat(
                 ctx,
@@ -296,21 +306,22 @@ impl AzureStorageController {
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
 
-            client
-                .update_blob_container(
-                    &resource_group_name,
-                    &storage_account_name,
-                    container_name,
-                    &container_body,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update Azure Storage Container '{}': public_read change",
-                        container_name
-                    ),
-                    resource_id: Some(config.id().to_string()),
-                })?;
+            azure_storage::update_blob_container(
+                &client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &storage_account_name,
+                container_name,
+                &container_body,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to update Azure Storage Container '{}': public_read change",
+                    container_name
+                ),
+                resource_id: Some(config.id().to_string()),
+            })?;
             info!(
                 resource_id = %config.id(),
                 container_name,
@@ -356,9 +367,14 @@ impl AzureStorageController {
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
 
-            match client
-                .delete_blob_container(&resource_group_name, &storage_account_name, container_name)
-                .await
+            match azure_storage::delete_blob_container(
+                &client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &storage_account_name,
+                container_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(
@@ -608,110 +624,197 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_core::{LifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs};
-    use alien_error::AlienError;
-    use rstest::{fixture, rstest};
+    use alien_core::{
+        AzureClientConfig, AzureCredentials, Platform, ResourceStatus, Storage, StorageOutputs,
+    };
+    use rstest::rstest;
 
     use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockBlobContainerApi, MockPlatformServiceProvider, PlatformServiceProvider,
+        azure_credential_from_config, controller_test::SingleControllerExecutor,
+        AzureCore021Credential, MockAuthorizationApi, MockPlatformServiceProvider,
     };
-    use crate::error::ErrorData;
     use crate::storage::{fixtures::*, AzureStorageController};
-    use azure_mgmt_storage::package_2023_05::models::{
-        container_properties::PublicAccess, BlobContainer, ContainerProperties, Resource,
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
+        Response, StatusCode, TransportOptions,
     };
+    use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
+    use azure_mgmt_storage::package_2023_05::models::container_properties::PublicAccess;
+    use serde_json::json;
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
-    fn create_successful_container_response(container_name: &str) -> BlobContainer {
-        BlobContainer {
-            azure_entity_resource:
-                azure_mgmt_storage::package_2023_05::models::AzureEntityResource {
-                    resource: Resource {
-                        id: None,
-                        name: Some(container_name.to_string()),
-                        type_: None,
-                    },
-                    etag: None,
-                },
-            properties: Some(ContainerProperties {
-                public_access: Some(PublicAccess::None),
-                ..Default::default()
-            }),
+    #[derive(Debug)]
+    struct BlobControllerTransport {
+        container_name: String,
+        expected_create_public_access: Option<PublicAccess>,
+        expected_update_public_access: Option<PublicAccess>,
+        delete_status: StatusCode,
+    }
+
+    impl BlobControllerTransport {
+        fn create_delete(container_name: &str, public_access: PublicAccess) -> Self {
+            Self {
+                container_name: container_name.to_string(),
+                expected_create_public_access: Some(public_access),
+                expected_update_public_access: None,
+                delete_status: StatusCode::Ok,
+            }
+        }
+
+        fn update(container_name: &str, public_access: PublicAccess) -> Self {
+            Self {
+                container_name: container_name.to_string(),
+                expected_create_public_access: None,
+                expected_update_public_access: Some(public_access),
+                delete_status: StatusCode::Ok,
+            }
+        }
+
+        fn delete_missing(container_name: &str) -> Self {
+            Self {
+                container_name: container_name.to_string(),
+                expected_create_public_access: None,
+                expected_update_public_access: None,
+                delete_status: StatusCode::NotFound,
+            }
         }
     }
 
-    fn setup_mock_client_for_creation_and_deletion(
-        container_name: &str,
-    ) -> Arc<MockBlobContainerApi> {
-        let mut mock_blob = MockBlobContainerApi::new();
+    #[async_trait::async_trait]
+    impl Policy for BlobControllerTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_blob_container_request(request, &self.container_name);
 
-        // Mock successful container creation
-        let container_name = container_name.to_string();
-        let container_name_clone1 = container_name.clone();
-
-        mock_blob
-            .expect_create_blob_container()
-            .returning(move |_, _, _, _| Ok(create_successful_container_response(&container_name)));
-
-        // Mock successful container deletion
-        mock_blob
-            .expect_delete_blob_container()
-            .returning(|_, _, _| Ok(()));
-
-        Arc::new(mock_blob)
+            match request.method() {
+                &Method::Put => {
+                    let expected = self
+                        .expected_create_public_access
+                        .as_ref()
+                        .expect("blob container create was not expected");
+                    assert_public_access_body(request, expected);
+                    Ok(blob_container_response(
+                        StatusCode::Ok,
+                        &self.container_name,
+                        expected,
+                    ))
+                }
+                &Method::Patch => {
+                    let expected = self
+                        .expected_update_public_access
+                        .as_ref()
+                        .expect("blob container update was not expected");
+                    assert_public_access_body(request, expected);
+                    Ok(blob_container_response(
+                        StatusCode::Ok,
+                        &self.container_name,
+                        expected,
+                    ))
+                }
+                &Method::Delete => Ok(Response::new(
+                    self.delete_status,
+                    Headers::new(),
+                    Box::pin(BytesStream::new("{}")),
+                )),
+                method => panic!("unexpected Azure Blob container method: {method:?}"),
+            }
+        }
     }
 
-    fn setup_mock_client_for_creation_and_update(
-        container_name: &str,
-    ) -> Arc<MockBlobContainerApi> {
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Mock container updates for public read changes
-        let container_name = container_name.to_string();
-
-        mock_blob
-            .expect_update_blob_container()
-            .returning(move |_, _, _, _| Ok(create_successful_container_response(&container_name)));
-
-        Arc::new(mock_blob)
+    fn assert_blob_container_request(request: &Request, container_name: &str) {
+        assert_eq!(
+            request.url().path(),
+            format!(
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/default-resource-group/providers/Microsoft.Storage/storageAccounts/default-storage-account/blobServices/default/containers/{container_name}"
+            )
+        );
+        assert_eq!(request.url().query(), Some("api-version=2023-05-01"));
     }
 
-    fn setup_mock_client_for_best_effort_deletion(
-        _container_name: &str,
-    ) -> Arc<MockBlobContainerApi> {
-        let mut mock_blob = MockBlobContainerApi::new();
+    fn assert_public_access_body(request: &Request, expected: &PublicAccess) {
+        match request.body() {
+            Body::Bytes(bytes) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(bytes).expect("blob container body should be JSON");
+                let expected = match expected {
+                    PublicAccess::Blob => "Blob",
+                    PublicAccess::Container => "Container",
+                    PublicAccess::None => "None",
+                };
+                assert_eq!(body["properties"]["publicAccess"], expected);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Body::SeekableStream(_) => panic!("blob container request should use JSON bytes"),
+        }
+    }
 
-        // Mock container deletion failure (container doesn't exist)
-        mock_blob
-            .expect_delete_blob_container()
-            .returning(|_, _, _| {
-                Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                    resource_type: "Azure Blob Container".to_string(),
-                    resource_name: "test-container".to_string(),
-                }))
-            });
+    fn blob_container_response(
+        status: StatusCode,
+        container_name: &str,
+        public_access: &PublicAccess,
+    ) -> Response {
+        let public_access = match public_access {
+            PublicAccess::Blob => "Blob",
+            PublicAccess::Container => "Container",
+            PublicAccess::None => "None",
+        };
+        let response = json!({
+            "id": format!("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/default-resource-group/providers/Microsoft.Storage/storageAccounts/default-storage-account/blobServices/default/containers/{container_name}"),
+            "name": container_name,
+            "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+            "properties": {
+                "publicAccess": public_access
+            }
+        });
+        Response::new(
+            status,
+            Headers::new(),
+            Box::pin(BytesStream::new(response.to_string())),
+        )
+    }
 
-        Arc::new(mock_blob)
+    fn storage_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_storage_2023_05::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_storage_2023_05::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Storage client should build")
     }
 
     fn setup_mock_service_provider(
-        mock_blob: Arc<MockBlobContainerApi>,
+        storage_client: azure_storage_2023_05::Client,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_azure_blob_container_client()
-            .returning(move |_| Ok(mock_blob.clone()));
+            .returning(move |_| Ok(storage_client.clone()));
 
         // Mock Azure authorization client for resource-scoped permissions
         mock_provider
             .expect_get_azure_authorization_client()
-            .returning(|_| {
-                use crate::core::MockAuthorizationApi;
-                Ok(Arc::new(MockAuthorizationApi::new()))
-            });
+            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
 
         Arc::new(mock_provider)
     }
@@ -730,8 +833,16 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] storage: Storage) {
         let container_name = format!("test-{}", storage.id);
-        let mock_blob = setup_mock_client_for_creation_and_deletion(&container_name);
-        let mock_provider = setup_mock_service_provider(mock_blob);
+        let public_access = if storage.public_read {
+            PublicAccess::Blob
+        } else {
+            PublicAccess::None
+        };
+        let storage_client = storage_client_with_transport(BlobControllerTransport::create_delete(
+            &container_name,
+            public_access,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -782,9 +893,17 @@ mod tests {
         let mut to_storage = to_storage;
         to_storage.id = storage_id.clone();
 
-        let container_name = format!("test-{}", storage_id);
-        let mock_blob = setup_mock_client_for_creation_and_update(&container_name);
-        let mock_provider = setup_mock_service_provider(mock_blob);
+        let container_name = super::get_azure_container_name("test-stack", &storage_id);
+        let public_access = if to_storage.public_read {
+            PublicAccess::Blob
+        } else {
+            PublicAccess::None
+        };
+        let storage_client = storage_client_with_transport(BlobControllerTransport::update(
+            &container_name,
+            public_access,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         // Start with the "from" storage in Ready state
         let ready_controller = AzureStorageController::mock_ready(&storage_id);
@@ -822,9 +941,10 @@ mod tests {
     #[case::public_only(storage_public_only())]
     #[tokio::test]
     async fn test_best_effort_deletion_when_container_missing(#[case] storage: Storage) {
-        let container_name = format!("test-{}", storage.id);
-        let mock_blob = setup_mock_client_for_best_effort_deletion(&container_name);
-        let mock_provider = setup_mock_service_provider(mock_blob);
+        let container_name = super::get_azure_container_name("test-stack", &storage.id);
+        let storage_client =
+            storage_client_with_transport(BlobControllerTransport::delete_missing(&container_name));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         // Start with a ready controller
         let ready_controller = AzureStorageController::mock_ready(&storage.id);
@@ -865,8 +985,7 @@ mod tests {
             _internal_stay_count: None,
         };
 
-        let mock_blob = MockBlobContainerApi::new();
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let mock_provider = Arc::new(MockPlatformServiceProvider::new());
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -900,17 +1019,11 @@ mod tests {
         let mut storage = basic_storage();
         storage.id = "My_Awesome_Storage".to_string(); // Use special naming case for this test
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Validate that container names are converted to lowercase and underscores replaced with dashes
-        mock_blob
-            .expect_create_blob_container()
-            .withf(|_, _, container_name, _| container_name == "test-my-awesome-storage")
-            .returning(|_, _, container_name, _| {
-                Ok(create_successful_container_response(container_name))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::create_delete(
+            "test-my-awesome-storage",
+            PublicAccess::None,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -931,31 +1044,11 @@ mod tests {
     async fn test_public_read_configuration() {
         let storage = storage_with_public_read();
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Validate that public read configuration is set correctly during creation
-        mock_blob
-            .expect_create_blob_container()
-            .withf(|_, _, _, blob_container| {
-                if let Some(properties) = &blob_container.properties {
-                    if let Some(public_access) = &properties.public_access {
-                        public_access == &PublicAccess::Blob
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            })
-            .returning(|_, _, container_name, _| {
-                let mut response = create_successful_container_response(container_name);
-                if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(PublicAccess::Blob);
-                }
-                Ok(response)
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::create_delete(
+            "test-public-storage",
+            PublicAccess::Blob,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -976,27 +1069,11 @@ mod tests {
     async fn test_private_access_configuration() {
         let storage = basic_storage(); // By default, public_read is false
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Validate that private access configuration is set correctly during creation
-        mock_blob
-            .expect_create_blob_container()
-            .withf(|_, _, _, blob_container| {
-                if let Some(properties) = &blob_container.properties {
-                    if let Some(public_access) = &properties.public_access {
-                        public_access == &PublicAccess::None
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            })
-            .returning(|_, _, container_name, _| {
-                Ok(create_successful_container_response(container_name))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::create_delete(
+            "test-basic-storage",
+            PublicAccess::None,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1019,31 +1096,11 @@ mod tests {
         let mut updated_storage = storage_with_public_read(); // Has public_read = true
         updated_storage.id = initial_storage.id.clone(); // Ensure same ID for valid update
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Validate that the update call has the correct public access configuration
-        mock_blob
-            .expect_update_blob_container()
-            .withf(|_, _, _, blob_container| {
-                if let Some(properties) = &blob_container.properties {
-                    if let Some(public_access) = &properties.public_access {
-                        public_access == &PublicAccess::Blob
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            })
-            .returning(|_, _, container_name, _| {
-                let mut response = create_successful_container_response(container_name);
-                if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(PublicAccess::Blob);
-                }
-                Ok(response)
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::update(
+            "test-stack-update-test",
+            PublicAccess::Blob,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         // Start with a ready controller
         let ready_controller = AzureStorageController::mock_ready(&initial_storage.id);
@@ -1074,16 +1131,11 @@ mod tests {
     async fn test_unsupported_features_are_ignored() {
         let storage = storage_complete_config(); // Has versioning + lifecycle rules that should be ignored
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // The container should be created normally, ignoring unsupported features
-        mock_blob
-            .expect_create_blob_container()
-            .returning(|_, _, container_name, _| {
-                Ok(create_successful_container_response(container_name))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::create_delete(
+            "test-complete-storage",
+            PublicAccess::Blob,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1115,32 +1167,11 @@ mod tests {
         initial_storage.id = storage_id.clone();
         updated_storage.id = storage_id.clone();
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // Only the public_read change should trigger an actual API call
-        mock_blob
-            .expect_update_blob_container()
-            .times(1) // Should be called exactly once for public_read change
-            .withf(|_, _, _, blob_container| {
-                if let Some(properties) = &blob_container.properties {
-                    if let Some(public_access) = &properties.public_access {
-                        public_access == &PublicAccess::Blob
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            })
-            .returning(|_, _, container_name, _| {
-                let mut response = create_successful_container_response(container_name);
-                if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(PublicAccess::Blob);
-                }
-                Ok(response)
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let storage_client = storage_client_with_transport(BlobControllerTransport::update(
+            "test-stack-unsupported-update-test",
+            PublicAccess::Blob,
+        ));
+        let mock_provider = setup_mock_service_provider(storage_client);
 
         // Start with a ready controller
         let ready_controller = AzureStorageController::mock_ready("unsupported-update-test");
@@ -1176,12 +1207,7 @@ mod tests {
         updated_storage.id = initial_storage.id.clone();
         updated_storage.public_read = false; // Keep same as initial to ensure no supported feature changes
 
-        let mut mock_blob = MockBlobContainerApi::new();
-
-        // No API calls should be made since only unsupported features changed
-        mock_blob.expect_update_blob_container().times(0); // Should not be called
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_blob));
+        let mock_provider = Arc::new(MockPlatformServiceProvider::new());
 
         // Start with a ready controller
         let ready_controller = AzureStorageController::mock_ready(&initial_storage.id);

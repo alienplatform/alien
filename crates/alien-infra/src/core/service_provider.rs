@@ -50,7 +50,6 @@ use azure_mgmt_network::package_2024_03::models::{
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
 use azure_mgmt_servicebus::package_2024_01;
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
-use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::client::ServiceUsage;
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry;
@@ -1432,236 +1431,6 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
     }
 }
 
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
-    async fn create_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-        blob_container: &BlobContainer,
-    ) -> Result<BlobContainer>;
-
-    async fn get_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-    ) -> Result<BlobContainer>;
-
-    async fn get_blob_service_properties(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-    ) -> Result<BlobServiceProperties>;
-
-    async fn delete_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-    ) -> Result<()>;
-
-    async fn update_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-        blob_container: &BlobContainer,
-    ) -> Result<BlobContainer>;
-}
-
-struct OfficialAzureBlobContainerClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_storage_2023_05::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureBlobContainerClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureBlobContainerClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureBlobContainerClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_storage_2023_05::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_storage_2023_05::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Storage client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl BlobContainerApi for OfficialAzureBlobContainerClient {
-    async fn create_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-        blob_container: &BlobContainer,
-    ) -> Result<BlobContainer> {
-        let result = self
-            .client()
-            .await?
-            .blob_containers_client()
-            .create(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                container_name.to_string(),
-                blob_container.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "blob container create",
-            "Azure Blob container",
-            container_name,
-        )
-    }
-
-    async fn get_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-    ) -> Result<BlobContainer> {
-        let result = self
-            .client()
-            .await?
-            .blob_containers_client()
-            .get(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                container_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "blob container get",
-            "Azure Blob container",
-            container_name,
-        )
-    }
-
-    async fn get_blob_service_properties(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-    ) -> Result<BlobServiceProperties> {
-        let result = self
-            .client()
-            .await?
-            .blob_services_client()
-            .get_service_properties(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                self.config.subscription_id.clone(),
-                "default".to_string(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "blob service get properties",
-            "Azure Blob service",
-            storage_account_name,
-        )
-    }
-
-    async fn delete_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .blob_containers_client()
-            .delete(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                container_name.to_string(),
-                self.config.subscription_id.clone(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "blob container delete",
-            "Azure Blob container",
-            container_name,
-        )
-    }
-
-    async fn update_blob_container(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        container_name: &str,
-        blob_container: &BlobContainer,
-    ) -> Result<BlobContainer> {
-        let result = self
-            .client()
-            .await?
-            .blob_containers_client()
-            .update(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                container_name.to_string(),
-                blob_container.clone(),
-                self.config.subscription_id.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "blob container update",
-            "Azure Blob container",
-            container_name,
-        )
-    }
-}
-
 /// Trait that provides methods to get platform service clients.
 /// This enables dependency injection for testing by allowing mock clients to be provided.
 ///
@@ -1776,7 +1545,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_blob_container_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn BlobContainerApi>>;
+    ) -> Result<azure_storage_2023_05::Client>;
     fn get_azure_container_apps_client(
         &self,
         config: &AzureClientConfig,
@@ -2204,11 +1973,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_blob_container_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn BlobContainerApi>> {
-        Ok(Arc::new(OfficialAzureBlobContainerClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_storage_2023_05::Client> {
+        azure_storage_client_from_alien_config(config)
     }
 
     fn get_azure_container_apps_client(

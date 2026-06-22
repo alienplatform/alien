@@ -1,7 +1,9 @@
 use crate::core::map_azure_core_021_sdk_error;
 use crate::error::Result;
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
-use azure_mgmt_storage::package_2023_05::models::{StorageAccount, StorageAccountCreateParameters};
+use azure_mgmt_storage::package_2023_05::models::{
+    BlobContainer, BlobServiceProperties, StorageAccount, StorageAccountCreateParameters,
+};
 
 pub(crate) async fn create_storage_account(
     client: &azure_storage_2023_05::Client,
@@ -75,6 +77,136 @@ pub(crate) async fn get_storage_account_properties(
         "account get properties",
         "Azure Storage account",
         account_name,
+    )
+}
+
+pub(crate) async fn create_blob_container(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+    container_name: &str,
+    blob_container: &BlobContainer,
+) -> Result<BlobContainer> {
+    let result = client
+        .blob_containers_client()
+        .create(
+            resource_group_name.to_string(),
+            storage_account_name.to_string(),
+            container_name.to_string(),
+            blob_container.clone(),
+            subscription_id.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "blob container create",
+        "Azure Blob container",
+        container_name,
+    )
+}
+
+pub(crate) async fn get_blob_container(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+    container_name: &str,
+) -> Result<BlobContainer> {
+    let result = client
+        .blob_containers_client()
+        .get(
+            resource_group_name.to_string(),
+            storage_account_name.to_string(),
+            container_name.to_string(),
+            subscription_id.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "blob container get",
+        "Azure Blob container",
+        container_name,
+    )
+}
+
+pub(crate) async fn get_blob_service_properties(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+) -> Result<BlobServiceProperties> {
+    let result = client
+        .blob_services_client()
+        .get_service_properties(
+            resource_group_name.to_string(),
+            storage_account_name.to_string(),
+            subscription_id.to_string(),
+            "default".to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "blob service get properties",
+        "Azure Blob service",
+        storage_account_name,
+    )
+}
+
+pub(crate) async fn delete_blob_container(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+    container_name: &str,
+) -> Result<()> {
+    let result = client
+        .blob_containers_client()
+        .delete(
+            resource_group_name.to_string(),
+            storage_account_name.to_string(),
+            container_name.to_string(),
+            subscription_id.to_string(),
+        )
+        .send()
+        .await
+        .map(|_| ());
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "blob container delete",
+        "Azure Blob container",
+        container_name,
+    )
+}
+
+pub(crate) async fn update_blob_container(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+    container_name: &str,
+    blob_container: &BlobContainer,
+) -> Result<BlobContainer> {
+    let result = client
+        .blob_containers_client()
+        .update(
+            resource_group_name.to_string(),
+            storage_account_name.to_string(),
+            container_name.to_string(),
+            blob_container.clone(),
+            subscription_id.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "blob container update",
+        "Azure Blob container",
+        container_name,
     )
 }
 
