@@ -73,9 +73,7 @@ use google_cloud_auth::credentials::{
     self, CacheableResource, Credentials, CredentialsProvider, EntityTag,
 };
 use google_cloud_auth::errors::CredentialsError;
-use google_cloud_firestore_admin_v1::{
-    client::FirestoreAdmin, model::Database as FirestoreDatabase,
-};
+use google_cloud_firestore_admin_v1::client::FirestoreAdmin;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_admin_v1::client::Iam;
 pub use google_cloud_iam_admin_v1::model::{
@@ -1464,114 +1462,6 @@ impl CloudSchedulerApi for OfficialGcpCloudSchedulerClient {
                     }))
             }
         }
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait GcpFirestoreAdminApi: Send + Sync {
-    async fn create_database(
-        &self,
-        database_id: String,
-        database: FirestoreDatabase,
-    ) -> Result<Operation>;
-    async fn get_database(&self, database_id: String) -> Result<FirestoreDatabase>;
-    async fn get_operation(&self, operation_name: String) -> Result<Operation>;
-}
-
-struct OfficialGcpFirestoreAdminClient {
-    config: GcpClientConfig,
-    client: OnceCell<FirestoreAdmin>,
-}
-
-impl OfficialGcpFirestoreAdminClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<FirestoreAdmin> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                firestore_admin_client_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-
-    fn database_resource_name(&self, database_id: &str) -> String {
-        format!(
-            "projects/{}/databases/{}",
-            self.config.project_id, database_id
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl GcpFirestoreAdminApi for OfficialGcpFirestoreAdminClient {
-    async fn create_database(
-        &self,
-        database_id: String,
-        database: FirestoreDatabase,
-    ) -> Result<Operation> {
-        self.client()
-            .await?
-            .create_database()
-            .set_parent(format!("projects/{}", self.config.project_id))
-            .set_database_id(database_id)
-            .set_database(database)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "FirestoreAdmin create_database request failed".to_string(),
-                resource_id: None,
-            })
-    }
-
-    async fn get_database(&self, database_id: String) -> Result<FirestoreDatabase> {
-        let resource_name = self.database_resource_name(&database_id);
-        match self
-            .client()
-            .await?
-            .get_database()
-            .set_name(resource_name.clone())
-            .send()
-            .await
-        {
-            Ok(database) => Ok(database),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Firestore database".to_string(),
-                    resource_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "FirestoreAdmin get_database request failed".to_string(),
-                        resource_id: None,
-                    }))
-            }
-        }
-    }
-
-    async fn get_operation(&self, operation_name: String) -> Result<Operation> {
-        self.client()
-            .await?
-            .get_operation()
-            .set_name(operation_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "FirestoreAdmin get_operation request failed".to_string(),
-                resource_id: None,
-            })
     }
 }
 
@@ -4572,10 +4462,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ArtifactRegistryApi>>;
-    fn get_gcp_firestore_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn GcpFirestoreAdminApi>>;
+    async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin>;
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
     fn get_gcp_cloud_scheduler_client(
@@ -4886,13 +4773,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
-    fn get_gcp_firestore_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn GcpFirestoreAdminApi>> {
-        Ok(Arc::new(OfficialGcpFirestoreAdminClient::new(
-            config.clone(),
-        )))
+    async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin> {
+        firestore_admin_client_from_alien_config(config).await
     }
 
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>> {

@@ -8,10 +8,15 @@ use alien_core::{
     KvOutputs, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError as _, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
 use chrono::Utc;
-use google_cloud_firestore_admin_v1::model::{database, Database};
+use google_cloud_firestore_admin_v1::{
+    client::FirestoreAdmin,
+    model::{database, Database},
+};
+use google_cloud_gax::error::rpc::Code as GaxRpcCode;
+use google_cloud_longrunning::model::Operation;
 
 /// Generates the Firestore database name for the KV store.
 ///
@@ -20,6 +25,10 @@ use google_cloud_firestore_admin_v1::model::{database, Database};
 /// in the future if needed.
 fn get_firestore_database_name(_prefix: &str, _name: &str) -> String {
     "(default)".to_string()
+}
+
+fn firestore_database_resource_name(project_id: &str, database_id: &str) -> String {
+    format!("projects/{project_id}/databases/{database_id}")
 }
 
 /// Generates the collection name for KV storage.
@@ -54,7 +63,10 @@ impl GcpKvController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_firestore_client(gcp_config)
+            .await?;
 
         let database_name = get_firestore_database_name(&ctx.resource_prefix, &config.id);
         let collection_name = get_collection_name(&ctx.resource_prefix, &config.id);
@@ -72,7 +84,7 @@ impl GcpKvController {
         self.project_id = Some(gcp_config.project_id.clone());
 
         // Check if Firestore database exists; create it if not
-        match client.get_database(database_name.clone()).await {
+        match get_firestore_database(&client, &gcp_config.project_id, &database_name).await {
             Ok(_) => {
                 info!(database=%database_name, "Firestore database already exists");
                 self.operation_name = None;
@@ -90,13 +102,17 @@ impl GcpKvController {
                     .set_location_id(gcp_config.region.clone())
                     .set_type(database::DatabaseType::FirestoreNative);
 
-                let operation = client
-                    .create_database(database_name.clone(), database)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to create Firestore database '{}'", database_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let operation = create_firestore_database(
+                    &client,
+                    &gcp_config.project_id,
+                    &database_name,
+                    database,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create Firestore database '{}'", database_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 info!(
                     database=%database_name,
@@ -131,7 +147,10 @@ impl GcpKvController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_firestore_client(gcp_config)
+            .await?;
 
         let database_name = self.database_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -152,7 +171,7 @@ impl GcpKvController {
         // Poll the long-running database creation operation
         debug!(database=%database_name, operation=%op_name, "Checking database creation status");
 
-        let operation = client.get_operation(op_name.to_string()).await.context(
+        let operation = get_firestore_operation(&client, op_name).await.context(
             ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to check Firestore database creation operation '{}'",
@@ -182,15 +201,15 @@ impl GcpKvController {
         }
 
         // Verify the database is now accessible
-        client.get_database(database_name.clone()).await.context(
-            ErrorData::CloudPlatformError {
+        get_firestore_database(&client, &gcp_config.project_id, database_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Firestore database '{}' not accessible after creation completed",
                     database_name
                 ),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         let collection_name = self.collection_name.as_deref().unwrap_or("unknown");
         info!(
@@ -215,7 +234,10 @@ impl GcpKvController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_firestore_client(gcp_config)
+            .await?;
 
         let database_name = self.database_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -225,7 +247,7 @@ impl GcpKvController {
         })?;
 
         // Heartbeat: verify Firestore database is still accessible
-        match client.get_database(database_name.clone()).await {
+        match get_firestore_database(&client, &gcp_config.project_id, database_name).await {
             Ok(database) => {
                 emit_gcp_firestore_kv_heartbeat(
                     ctx,
@@ -352,6 +374,236 @@ impl GcpKvController {
             )?,
         ))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+    use alien_core::Platform;
+    use google_cloud_firestore_admin_v1::{
+        client::FirestoreAdmin,
+        model::{CreateDatabaseRequest, GetDatabaseRequest},
+        stub::FirestoreAdmin as FirestoreAdminStub,
+    };
+    use google_cloud_gax::{
+        error::{
+            rpc::{Code, Status},
+            Error as GaxError,
+        },
+        options::RequestOptions,
+        response::Response,
+    };
+    use google_cloud_longrunning::model::GetOperationRequest;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    mockall::mock! {
+        #[derive(Debug)]
+        FirestoreAdmin {}
+
+        impl FirestoreAdminStub for FirestoreAdmin {
+            async fn create_database(
+                &self,
+                request: CreateDatabaseRequest,
+                options: RequestOptions,
+            ) -> google_cloud_firestore_admin_v1::Result<Response<Operation>>;
+
+            async fn get_database(
+                &self,
+                request: GetDatabaseRequest,
+                options: RequestOptions,
+            ) -> google_cloud_firestore_admin_v1::Result<Response<Database>>;
+
+            async fn get_operation(
+                &self,
+                request: GetOperationRequest,
+                options: RequestOptions,
+            ) -> google_cloud_firestore_admin_v1::Result<Response<Operation>>;
+        }
+    }
+
+    fn kv_resource() -> Kv {
+        Kv::new("settings".to_string()).build()
+    }
+
+    fn firestore_database() -> Database {
+        Database::new()
+            .set_name("projects/test-project/databases/(default)")
+            .set_location_id("us-central1")
+            .set_type(database::DatabaseType::FirestoreNative)
+    }
+
+    fn not_found_error() -> GaxError {
+        GaxError::service(
+            Status::default()
+                .set_code(Code::NotFound)
+                .set_message("database not found"),
+        )
+    }
+
+    fn setup_mock_provider(firestore: FirestoreAdmin) -> Arc<MockPlatformServiceProvider> {
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_gcp_firestore_client()
+            .returning(move |_| Ok(firestore.clone()));
+        Arc::new(mock_provider)
+    }
+
+    #[tokio::test]
+    async fn create_flow_uses_sdk_native_firestore_admin_stub() {
+        let database_name = "projects/test-project/databases/(default)".to_string();
+        let operation_name = "operations/firestore-create".to_string();
+        let get_database_calls = Arc::new(AtomicUsize::new(0));
+
+        let mut stub = MockFirestoreAdmin::new();
+        stub.expect_get_database()
+            .withf({
+                let database_name = database_name.clone();
+                move |request, _| request.name == database_name
+            })
+            .times(2)
+            .returning({
+                let get_database_calls = Arc::clone(&get_database_calls);
+                move |_, _| {
+                    let previous = get_database_calls.fetch_add(1, Ordering::SeqCst);
+                    if previous == 0 {
+                        Err(not_found_error())
+                    } else {
+                        Ok(Response::from(firestore_database()))
+                    }
+                }
+            });
+        stub.expect_create_database()
+            .withf(|request, _| {
+                request.parent == "projects/test-project"
+                    && request.database_id == "(default)"
+                    && request
+                        .database
+                        .as_ref()
+                        .is_some_and(|database| database.location_id == "us-central1")
+            })
+            .once()
+            .returning({
+                let operation_name = operation_name.clone();
+                move |_, _| {
+                    Ok(Response::from(
+                        Operation::new().set_name(operation_name.clone()),
+                    ))
+                }
+            });
+        stub.expect_get_operation()
+            .withf({
+                let operation_name = operation_name.clone();
+                move |request, _| request.name == operation_name
+            })
+            .once()
+            .returning(|_, _| Ok(Response::from(Operation::new().set_done(true))));
+
+        let firestore = FirestoreAdmin::from_stub(stub);
+        let mock_provider = setup_mock_provider(firestore);
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(kv_resource())
+            .controller(GcpKvController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("Firestore KV create flow should reach ready");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let outputs = executor.outputs().expect("outputs should be present");
+        let outputs = outputs
+            .downcast_ref::<KvOutputs>()
+            .expect("outputs should be KV outputs");
+        assert_eq!(outputs.store_name, "kv-test-settings");
+        assert_eq!(
+            outputs.identifier.as_deref(),
+            Some("projects/test-project/databases/(default)/documents/kv-test-settings")
+        );
+    }
+}
+
+async fn create_firestore_database(
+    client: &FirestoreAdmin,
+    project_id: &str,
+    database_id: &str,
+    database: Database,
+) -> Result<Operation> {
+    client
+        .create_database()
+        .set_parent(format!("projects/{project_id}"))
+        .set_database_id(database_id.to_string())
+        .set_database(database)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "FirestoreAdmin create_database request failed".to_string(),
+            resource_id: None,
+        })
+}
+
+async fn get_firestore_database(
+    client: &FirestoreAdmin,
+    project_id: &str,
+    database_id: &str,
+) -> Result<Database> {
+    let resource_name = firestore_database_resource_name(project_id, database_id);
+    match client
+        .get_database()
+        .set_name(resource_name.clone())
+        .send()
+        .await
+    {
+        Ok(database) => Ok(database),
+        Err(error) if gax_error_is_not_found(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "Firestore database".to_string(),
+                resource_name,
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "FirestoreAdmin get_database request failed".to_string(),
+                resource_id: None,
+            })),
+    }
+}
+
+async fn get_firestore_operation(
+    client: &FirestoreAdmin,
+    operation_name: &str,
+) -> Result<Operation> {
+    client
+        .get_operation()
+        .set_name(operation_name.to_string())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "FirestoreAdmin get_operation request failed".to_string(),
+            resource_id: None,
+        })
+}
+
+fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::NotFound)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::NOT_FOUND.as_u16())
 }
 
 fn emit_gcp_firestore_kv_heartbeat(
