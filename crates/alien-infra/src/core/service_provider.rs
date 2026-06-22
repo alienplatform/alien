@@ -740,9 +740,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     ) -> Result<Arc<OfficialAzureContainerAppsClient>> {
         Ok(Arc::new(OfficialAzureContainerAppsClient::new(
             config.clone(),
-            Arc::new(AzureCore021Credential::new(azure_credential_from_config(
-                config,
-            )?)),
+            azure_core_021_credential(config)?,
             azure_core_021::ClientOptions::default(),
         )))
     }
@@ -1601,76 +1599,80 @@ pub(crate) fn azure_management_endpoint(config: &AzureClientConfig) -> &str {
         .unwrap_or("https://management.azure.com")
 }
 
-pub(crate) fn azure_containerregistry_client_from_alien_config(
-    config: &AzureClientConfig,
-) -> Result<azure_containerregistry_2023_11::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+fn azure_management_endpoint_url(config: &AzureClientConfig) -> Result<azure_core_021::Url> {
+    azure_core_021::Url::parse(azure_management_endpoint(config))
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_containerregistry_2023_11::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Container Registry client".to_string(),
             resource_id: None,
         })
 }
 
-pub(crate) fn azure_container_apps_management_client_from_alien_config(
+fn azure_core_021_credential(
     config: &AzureClientConfig,
-) -> Result<azure_app_2024_08::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_app_2024_08::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Container Apps client".to_string(),
-            resource_id: None,
-        })
+) -> Result<Arc<dyn azure_core_021::auth::TokenCredential>> {
+    Ok(Arc::new(AzureCore021Credential::new(
+        azure_credential_from_config(config)?,
+    )))
 }
 
-pub(crate) fn azure_long_running_operation_client_from_alien_config(
-    config: &AzureClientConfig,
-) -> Result<AzureLongRunningOperationClient> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let scopes = vec![endpoint
+fn azure_management_scope(config: &AzureClientConfig) -> Result<Vec<String>> {
+    let endpoint = azure_management_endpoint_url(config)?;
+    Ok(vec![endpoint
         .join(azure_core_021::auth::DEFAULT_SCOPE_SUFFIX)
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build Azure management OAuth scope".to_string(),
             resource_id: None,
         })?
-        .to_string()];
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
+        .to_string()])
+}
 
+fn build_azure_management_client<T>(
+    config: &AzureClientConfig,
+    service_name: &str,
+    build: impl FnOnce(
+        azure_core_021::Url,
+        Arc<dyn azure_core_021::auth::TokenCredential>,
+    ) -> azure_core_021::Result<T>,
+) -> Result<T> {
+    build(
+        azure_management_endpoint_url(config)?,
+        azure_core_021_credential(config)?,
+    )
+    .into_alien_error()
+    .context(crate::error::ErrorData::CloudPlatformError {
+        message: format!("Failed to build official Azure {service_name} client"),
+        resource_id: None,
+    })
+}
+
+pub(crate) fn azure_containerregistry_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_containerregistry_2023_11::Client> {
+    build_azure_management_client(config, "Container Registry", |endpoint, credential| {
+        azure_containerregistry_2023_11::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
+}
+
+pub(crate) fn azure_container_apps_management_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_app_2024_08::Client> {
+    build_azure_management_client(config, "Container Apps", |endpoint, credential| {
+        azure_app_2024_08::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
+}
+
+pub(crate) fn azure_long_running_operation_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<AzureLongRunningOperationClient> {
     Ok(AzureLongRunningOperationClient::new(
-        credential,
-        scopes,
+        azure_core_021_credential(config)?,
+        azure_management_scope(config)?,
         azure_core_021::ClientOptions::default(),
     ))
 }
@@ -1678,162 +1680,71 @@ pub(crate) fn azure_long_running_operation_client_from_alien_config(
 pub(crate) fn azure_authorization_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_authorization_2022_04::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_authorization_2022_04::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Authorization client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Authorization", |endpoint, credential| {
+        azure_authorization_2022_04::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_resources_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_resources_2021_04::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_resources_2021_04::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Resources client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Resources", |endpoint, credential| {
+        azure_resources_2021_04::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_keyvault_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_keyvault_2022_02::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_keyvault_2022_02::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Key Vault client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Key Vault", |endpoint, credential| {
+        azure_keyvault_2022_02::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_servicebus_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<package_2024_01::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    package_2024_01::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Service Bus client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Service Bus", |endpoint, credential| {
+        package_2024_01::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_msi_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_msi_2023_01_31::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_msi_2023_01_31::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Managed Identity client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Managed Identity", |endpoint, credential| {
+        azure_msi_2023_01_31::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_network_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_network_2024_03::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_network_2024_03::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Network client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Network", |endpoint, credential| {
+        azure_network_2024_03::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 pub(crate) fn azure_storage_client_from_alien_config(
     config: &AzureClientConfig,
 ) -> Result<azure_storage_2023_05::Client> {
-    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to parse Azure management endpoint".to_string(),
-            resource_id: None,
-        })?;
-    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
-        AzureCore021Credential::new(azure_credential_from_config(config)?),
-    );
-
-    azure_storage_2023_05::Client::builder(credential)
-        .endpoint(endpoint)
-        .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official Azure Storage client".to_string(),
-            resource_id: None,
-        })
+    build_azure_management_client(config, "Storage", |endpoint, credential| {
+        azure_storage_2023_05::Client::builder(credential)
+            .endpoint(endpoint)
+            .build()
+    })
 }
 
 fn extract_oid_from_token(token: &str) -> Result<String> {
