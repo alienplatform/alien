@@ -1,6 +1,82 @@
 use crate::core::map_azure_core_021_sdk_error;
 use crate::error::Result;
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
+use azure_mgmt_storage::package_2023_05::models::{StorageAccount, StorageAccountCreateParameters};
+
+pub(crate) async fn create_storage_account(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    account_name: &str,
+    parameters: &StorageAccountCreateParameters,
+) -> Result<()> {
+    let result = client
+        .storage_accounts_client()
+        .create(
+            resource_group_name.to_string(),
+            account_name.to_string(),
+            parameters.clone(),
+            subscription_id.to_string(),
+        )
+        .send()
+        .await
+        .map(|_| ());
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "account create",
+        "Azure Storage account",
+        account_name,
+    )
+}
+
+pub(crate) async fn delete_storage_account(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    account_name: &str,
+) -> Result<()> {
+    let result = client
+        .storage_accounts_client()
+        .delete(
+            resource_group_name.to_string(),
+            account_name.to_string(),
+            subscription_id.to_string(),
+        )
+        .send()
+        .await
+        .map(|_| ());
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "account delete",
+        "Azure Storage account",
+        account_name,
+    )
+}
+
+pub(crate) async fn get_storage_account_properties(
+    client: &azure_storage_2023_05::Client,
+    subscription_id: &str,
+    resource_group_name: &str,
+    account_name: &str,
+) -> Result<StorageAccount> {
+    let result = client
+        .storage_accounts_client()
+        .get_properties(
+            resource_group_name.to_string(),
+            account_name.to_string(),
+            subscription_id.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Storage",
+        result,
+        "account get properties",
+        "Azure Storage account",
+        account_name,
+    )
+}
 
 pub(crate) async fn create_table(
     client: &azure_storage_2023_05::Client,

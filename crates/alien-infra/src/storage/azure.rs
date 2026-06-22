@@ -1,6 +1,7 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
+    azure_storage,
     core::ResourceControllerContext,
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
@@ -207,13 +208,17 @@ impl AzureStorageController {
                     message: "Failed to check Azure Storage Container during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
-            let storage_account = storage_accounts_client
-                .get_storage_account_properties(&resource_group_name, &storage_account_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get Azure Storage account during heartbeat".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let storage_account = azure_storage::get_storage_account_properties(
+                &storage_accounts_client,
+                &azure_config.subscription_id,
+                &resource_group_name,
+                &storage_account_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get Azure Storage account during heartbeat".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
             let blob_service = client
                 .get_blob_service_properties(&resource_group_name, &storage_account_name)
                 .await

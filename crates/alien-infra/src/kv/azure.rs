@@ -216,27 +216,29 @@ impl AzureKvController {
                 let storage_client = ctx
                     .service_provider
                     .get_azure_storage_accounts_client(azure_config)?;
-                let (storage_account, storage_account_issue) = match storage_client
-                    .get_storage_account_properties(
+                let (storage_account, storage_account_issue) =
+                    match azure_storage::get_storage_account_properties(
+                        &storage_client,
+                        &azure_config.subscription_id,
                         &resource_group_name,
                         &storage_outputs.account_name,
                     )
                     .await
-                {
-                    Ok(account) => (Some(account), None),
-                    Err(e) => (
-                        None,
-                        Some(HeartbeatCollectionIssue {
-                            source: "storage-account".to_string(),
-                            reason: HeartbeatCollectionIssueReason::CollectionFailed,
-                            severity: HeartbeatIssueSeverity::Warning,
-                            message: format!(
-                                "Failed to read Azure Storage account metadata for '{}': {}",
-                                storage_outputs.account_name, e
-                            ),
-                        }),
-                    ),
-                };
+                    {
+                        Ok(account) => (Some(account), None),
+                        Err(e) => (
+                            None,
+                            Some(HeartbeatCollectionIssue {
+                                source: "storage-account".to_string(),
+                                reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                                severity: HeartbeatIssueSeverity::Warning,
+                                message: format!(
+                                    "Failed to read Azure Storage account metadata for '{}': {}",
+                                    storage_outputs.account_name, e
+                                ),
+                            }),
+                        ),
+                    };
 
                 emit_azure_table_kv_heartbeat(
                     ctx,
