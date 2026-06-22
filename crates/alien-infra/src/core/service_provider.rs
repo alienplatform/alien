@@ -624,93 +624,85 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     async fn get_gcp_compute_networks_client(&self, config: &GcpClientConfig) -> Result<Networks> {
-        crate::gcp_compute::compute_client_from_alien_config(config, Networks::builder).await
+        crate::gcp_compute::networks_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_subnetworks_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Subnetworks> {
-        crate::gcp_compute::compute_client_from_alien_config(config, Subnetworks::builder).await
+        crate::gcp_compute::subnetworks_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_routers_client(&self, config: &GcpClientConfig) -> Result<Routers> {
-        crate::gcp_compute::compute_client_from_alien_config(config, Routers::builder).await
+        crate::gcp_compute::routers_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_firewalls_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Firewalls> {
-        crate::gcp_compute::compute_client_from_alien_config(config, Firewalls::builder).await
+        crate::gcp_compute::firewalls_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_global_operations_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<GlobalOperations> {
-        crate::gcp_compute::compute_client_from_alien_config(config, GlobalOperations::builder)
-            .await
+        crate::gcp_compute::global_operations_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_region_operations_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<RegionOperations> {
-        crate::gcp_compute::compute_client_from_alien_config(config, RegionOperations::builder)
-            .await
+        crate::gcp_compute::region_operations_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_backend_services_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<BackendServices> {
-        crate::gcp_compute::compute_client_from_alien_config(config, BackendServices::builder).await
+        crate::gcp_compute::backend_services_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_url_maps_client(&self, config: &GcpClientConfig) -> Result<UrlMaps> {
-        crate::gcp_compute::compute_client_from_alien_config(config, UrlMaps::builder).await
+        crate::gcp_compute::url_maps_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_target_https_proxies_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<TargetHttpsProxies> {
-        crate::gcp_compute::compute_client_from_alien_config(config, TargetHttpsProxies::builder)
-            .await
+        crate::gcp_compute::target_https_proxies_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_ssl_certificates_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<SslCertificates> {
-        crate::gcp_compute::compute_client_from_alien_config(config, SslCertificates::builder).await
+        crate::gcp_compute::ssl_certificates_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_global_addresses_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<GlobalAddresses> {
-        crate::gcp_compute::compute_client_from_alien_config(config, GlobalAddresses::builder).await
+        crate::gcp_compute::global_addresses_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_global_forwarding_rules_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<GlobalForwardingRules> {
-        crate::gcp_compute::compute_client_from_alien_config(config, GlobalForwardingRules::builder)
-            .await
+        crate::gcp_compute::global_forwarding_rules_client_from_alien_config(config).await
     }
 
     async fn get_gcp_compute_region_network_endpoint_groups_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<RegionNetworkEndpointGroups> {
-        crate::gcp_compute::compute_client_from_alien_config(
-            config,
-            RegionNetworkEndpointGroups::builder,
-        )
-        .await
+        crate::gcp_compute::region_network_endpoint_groups_client_from_alien_config(config).await
     }
 
     async fn get_gcp_cloud_scheduler_client(

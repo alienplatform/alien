@@ -29,23 +29,6 @@ pub fn operation_has_error(operation: &Operation) -> bool {
         .is_some_and(|error| !error.errors.is_empty())
 }
 
-pub(crate) async fn compute_client_from_alien_config<T, B>(
-    config: &GcpClientConfig,
-    builder: impl FnOnce() -> B,
-) -> crate::error::Result<T>
-where
-    B: ComputeClientBuilder<T>,
-{
-    build_compute_client(config, builder)
-        .await
-        .map_err(|error| {
-            AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                message: error.to_string(),
-                resource_id: None,
-            })
-        })
-}
-
 pub(crate) async fn get_network(
     client: &Networks,
     project_id: &str,
@@ -509,115 +492,116 @@ pub(crate) async fn delete_region_network_endpoint_group(
         })
 }
 
-async fn build_compute_client<T, B>(
-    config: &GcpClientConfig,
-    builder: impl FnOnce() -> B,
-) -> CloudClientResult<T>
-where
-    B: ComputeClientBuilder<T>,
-{
-    let credentials = crate::core::gcp_credentials_from_alien_config(config).map_err(|error| {
-        AlienError::new(CloudClientErrorData::AuthenticationError {
-            message: error.to_string(),
-        })
-    })?;
-    let mut builder = builder().with_credentials(credentials);
+macro_rules! official_compute_client_constructor {
+    ($fn_name:ident, $client:path, $builder:expr, $display_name:literal) => {
+        pub(crate) async fn $fn_name(config: &GcpClientConfig) -> crate::error::Result<$client> {
+            let credentials =
+                crate::core::gcp_credentials_from_alien_config(config).map_err(|error| {
+                    AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                        message: error.to_string(),
+                        resource_id: None,
+                    })
+                })?;
+            let mut builder = $builder().with_credentials(credentials);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("compute"))
-    {
-        builder = builder.with_endpoint(compute_endpoint(endpoint));
-    }
-
-    builder.build().await.map_err(|error| {
-        AlienError::new(CloudClientErrorData::GenericError {
-            message: format!("Failed to build official GCP Compute client: {error}"),
-        })
-    })
-}
-
-#[async_trait::async_trait]
-pub(crate) trait ComputeClientBuilder<T>: Sized {
-    fn with_credentials(self, credentials: google_cloud_auth::credentials::Credentials) -> Self;
-    fn with_endpoint(self, endpoint: String) -> Self;
-    async fn build(self) -> Result<T, google_cloud_gax::client_builder::Error>;
-}
-
-macro_rules! impl_compute_client_builder {
-    ($builder:ty, $client:ty) => {
-        #[async_trait::async_trait]
-        impl ComputeClientBuilder<$client> for $builder {
-            fn with_credentials(
-                self,
-                credentials: google_cloud_auth::credentials::Credentials,
-            ) -> Self {
-                self.with_credentials(credentials)
+            if let Some(endpoint) = config
+                .service_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.endpoints.get("compute"))
+            {
+                builder = builder.with_endpoint(compute_endpoint(endpoint));
             }
 
-            fn with_endpoint(self, endpoint: String) -> Self {
-                self.with_endpoint(endpoint)
-            }
-
-            async fn build(self) -> Result<$client, google_cloud_gax::client_builder::Error> {
-                self.build().await
-            }
+            builder.build().await.map_err(|error| {
+                AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to build official GCP Compute {} client: {error}",
+                        $display_name
+                    ),
+                    resource_id: None,
+                })
+            })
         }
     };
 }
 
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::networks::ClientBuilder,
-    Networks
+official_compute_client_constructor!(
+    networks_client_from_alien_config,
+    Networks,
+    Networks::builder,
+    "Networks"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::subnetworks::ClientBuilder,
-    Subnetworks
+official_compute_client_constructor!(
+    subnetworks_client_from_alien_config,
+    Subnetworks,
+    Subnetworks::builder,
+    "Subnetworks"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::routers::ClientBuilder,
-    Routers
+official_compute_client_constructor!(
+    routers_client_from_alien_config,
+    Routers,
+    Routers::builder,
+    "Routers"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::firewalls::ClientBuilder,
-    Firewalls
+official_compute_client_constructor!(
+    firewalls_client_from_alien_config,
+    Firewalls,
+    Firewalls::builder,
+    "Firewalls"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::global_operations::ClientBuilder,
-    GlobalOperations
+official_compute_client_constructor!(
+    global_operations_client_from_alien_config,
+    GlobalOperations,
+    GlobalOperations::builder,
+    "GlobalOperations"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::region_operations::ClientBuilder,
-    RegionOperations
+official_compute_client_constructor!(
+    region_operations_client_from_alien_config,
+    RegionOperations,
+    RegionOperations::builder,
+    "RegionOperations"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::backend_services::ClientBuilder,
-    BackendServices
+official_compute_client_constructor!(
+    backend_services_client_from_alien_config,
+    BackendServices,
+    BackendServices::builder,
+    "BackendServices"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::url_maps::ClientBuilder,
-    UrlMaps
+official_compute_client_constructor!(
+    url_maps_client_from_alien_config,
+    UrlMaps,
+    UrlMaps::builder,
+    "UrlMaps"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::target_https_proxies::ClientBuilder,
-    TargetHttpsProxies
+official_compute_client_constructor!(
+    target_https_proxies_client_from_alien_config,
+    TargetHttpsProxies,
+    TargetHttpsProxies::builder,
+    "TargetHttpsProxies"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::ssl_certificates::ClientBuilder,
-    SslCertificates
+official_compute_client_constructor!(
+    ssl_certificates_client_from_alien_config,
+    SslCertificates,
+    SslCertificates::builder,
+    "SslCertificates"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::global_addresses::ClientBuilder,
-    GlobalAddresses
+official_compute_client_constructor!(
+    global_addresses_client_from_alien_config,
+    GlobalAddresses,
+    GlobalAddresses::builder,
+    "GlobalAddresses"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::global_forwarding_rules::ClientBuilder,
-    GlobalForwardingRules
+official_compute_client_constructor!(
+    global_forwarding_rules_client_from_alien_config,
+    GlobalForwardingRules,
+    GlobalForwardingRules::builder,
+    "GlobalForwardingRules"
 );
-impl_compute_client_builder!(
-    google_cloud_compute_v1::builder::region_network_endpoint_groups::ClientBuilder,
-    RegionNetworkEndpointGroups
+official_compute_client_constructor!(
+    region_network_endpoint_groups_client_from_alien_config,
+    RegionNetworkEndpointGroups,
+    RegionNetworkEndpointGroups::builder,
+    "RegionNetworkEndpointGroups"
 );
 
 fn compute_error(
