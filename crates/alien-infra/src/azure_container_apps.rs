@@ -120,7 +120,7 @@ pub struct ContainerApp {
     pub id: Option<String>,
     /// Managed identity assigned to the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<ManagedServiceIdentity>,
+    pub identity: Option<serde_json::Value>,
     /// Azure region.
     pub location: String,
     /// Optional resource name.
@@ -235,50 +235,6 @@ pub struct ContainerAppProperties {
         skip_serializing_if = "Option::is_none"
     )]
     pub workload_profile_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManagedServiceIdentity {
-    #[serde(
-        rename = "principalId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub principal_id: Option<uuid::Uuid>,
-    #[serde(rename = "tenantId", default, skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<uuid::Uuid>,
-    #[serde(rename = "type")]
-    pub type_: ManagedServiceIdentityType,
-    #[serde(
-        rename = "userAssignedIdentities",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub user_assigned_identities: Option<UserAssignedIdentities>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ManagedServiceIdentityType {
-    None,
-    SystemAssigned,
-    UserAssigned,
-    #[serde(rename = "SystemAssigned,UserAssigned")]
-    SystemAssignedUserAssigned,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UserAssignedIdentities(pub HashMap<String, UserAssignedIdentity>);
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UserAssignedIdentity {
-    #[serde(rename = "clientId", default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<uuid::Uuid>,
-    #[serde(
-        rename = "principalId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub principal_id: Option<uuid::Uuid>,
 }
 
 pub struct OfficialAzureContainerAppsClient {

@@ -2,9 +2,8 @@ use crate::azure_container_apps::{
     certificate, configuration, container_app, custom_domain, dapr, identity_settings, ingress,
     BaseContainer, Certificate, CertificateKeyVaultProperties, Configuration, Container,
     ContainerApp, ContainerAppProperties, ContainerResources, CustomDomain, Dapr, EnvironmentVar,
-    IdentitySettings, Ingress as AzureContainerAppsIngress, ManagedServiceIdentity,
-    ManagedServiceIdentityType, RegistryCredentials, Scale, Secret, Template, TrackedResource,
-    TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
+    IdentitySettings, Ingress as AzureContainerAppsIngress, RegistryCredentials, Scale, Secret,
+    Template, TrackedResource, TrafficWeight,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -3885,7 +3884,7 @@ impl AzureWorkerController {
         // Collect all ServiceAccounts:
         // 1. Permission-based ServiceAccount (from permission profile)
         // 2. Linked ServiceAccounts (from worker.links)
-        let mut identity_map = HashMap::new();
+        let mut identity_map = serde_json::Map::new();
 
         // Add permission-based ServiceAccount
         let service_account_id = format!("{}-sa", func.get_permissions());
@@ -3900,13 +3899,7 @@ impl AzureWorkerController {
             )
         {
             if let Some(identity_id) = &service_account_state.identity_resource_id {
-                identity_map.insert(
-                    identity_id.clone(),
-                    UserAssignedIdentity {
-                        client_id: None,
-                        principal_id: None,
-                    },
-                );
+                identity_map.insert(identity_id.clone(), serde_json::json!({}));
             }
         }
 
@@ -3918,13 +3911,7 @@ impl AzureWorkerController {
                     link,
                 ) {
                     if let Some(identity_id) = &linked_sa_state.identity_resource_id {
-                        identity_map.insert(
-                            identity_id.clone(),
-                            UserAssignedIdentity {
-                                client_id: None,
-                                principal_id: None,
-                            },
-                        );
+                        identity_map.insert(identity_id.clone(), serde_json::json!({}));
                     }
                 }
             }
@@ -3958,12 +3945,10 @@ impl AzureWorkerController {
         let identity_resource_ids: Vec<String> = identity_map.keys().cloned().collect();
 
         let managed_identity = if !identity_map.is_empty() {
-            Some(ManagedServiceIdentity {
-                principal_id: None,
-                tenant_id: None,
-                type_: ManagedServiceIdentityType::UserAssigned,
-                user_assigned_identities: Some(UserAssignedIdentities(identity_map)),
-            })
+            Some(serde_json::json!({
+                "type": "UserAssigned",
+                "userAssignedIdentities": identity_map,
+            }))
         } else {
             None
         };
