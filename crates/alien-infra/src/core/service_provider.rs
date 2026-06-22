@@ -8,7 +8,6 @@ use crate::aws_sdk::{
     ssm_client_from_alien_config,
 };
 use crate::error::Result;
-use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::kube_client_from_alien_config;
 #[cfg(feature = "kubernetes")]
@@ -976,6 +975,15 @@ official_gcp_client_constructor!(
 );
 
 official_gcp_client_constructor!(
+    cloud_run_services_from_alien_config,
+    Services,
+    Services::builder,
+    "cloudrun",
+    trimmed_gcp_endpoint,
+    "Cloud Run"
+);
+
+official_gcp_client_constructor!(
     resource_manager_projects_client_from_alien_config,
     Projects,
     Projects::builder,
@@ -994,6 +1002,10 @@ fn gcp_service_endpoint<'a>(config: &'a GcpClientConfig, service_name: &str) -> 
 
 fn gcp_endpoint(endpoint: &str) -> String {
     endpoint.to_string()
+}
+
+fn trimmed_gcp_endpoint(endpoint: &str) -> String {
+    endpoint.trim_end_matches('/').to_string()
 }
 
 fn pubsub_admin_endpoint(endpoint: &str) -> String {
