@@ -1,12 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
-use crate::aws_sdk::{
-    attach_iam_role_policy, create_iam_policy, create_iam_policy_version, create_iam_role,
-    delete_iam_policy, delete_iam_policy_version, delete_iam_role, delete_iam_role_policy,
-    detach_iam_role_policy, get_iam_role, list_iam_attached_role_policies,
-    list_iam_policy_versions, list_iam_role_policies,
-};
+use crate::aws_sdk::iam_result;
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -22,7 +17,7 @@ use alien_permissions::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     get_permission_set, BindingTarget, PermissionContext,
 };
-use aws_sdk_iam::{operation::create_role::CreateRoleInput, types::Tag, Client as IamClient};
+use aws_sdk_iam::{types::Tag, Client as IamClient};
 use chrono::Utc;
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
@@ -96,36 +91,37 @@ impl AwsRemoteStackManagementController {
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-        let role_request = CreateRoleInput::builder()
-            .role_name(role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .description(match ctx.deployment_name_for_metadata() {
-                Some(deployment_name) => format!(
-                    "Cross-account management IAM role for {deployment_name}. Resource prefix: {}.",
-                    ctx.resource_prefix
-                ),
-                None => format!(
-                    "Cross-account management IAM role. Resource prefix: {}.",
-                    ctx.resource_prefix
-                ),
-            })
-            .set_tags(Some(tags))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to build CreateRole request for '{}'", role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let description = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!(
+                "Cross-account management IAM role for {deployment_name}. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+            None => format!(
+                "Cross-account management IAM role. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+        };
 
-        let created_role = create_iam_role(&client, role_request).await.context(
-            ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create cross-account management IAM role '{}'",
-                    role_name
-                ),
-                resource_id: Some(config.id.clone()),
-            },
-        )?;
+        let created_role = iam_result(
+            client
+                .create_role()
+                .role_name(&role_name)
+                .assume_role_policy_document(assume_role_policy)
+                .description(description)
+                .set_tags(Some(tags))
+                .send()
+                .await,
+            "CreateRole",
+            "IAM Role",
+            &role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create cross-account management IAM role '{}'",
+                role_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let role_arn = created_role
             .role()
@@ -203,19 +199,21 @@ impl AwsRemoteStackManagementController {
         let role_name = self.role_name.as_ref().unwrap();
 
         // Heartbeat check: verify role still exists
-        let role =
-            get_iam_role(&client, role_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message:
-                        "Failed to get cross-account management IAM role during heartbeat check"
-                            .to_string(),
-                    resource_id: Some(
-                        ctx.desired_resource_config::<RemoteStackManagement>()?
-                            .id
-                            .clone(),
-                    ),
-                })?;
+        let role = iam_result(
+            client.get_role().role_name(role_name).send().await,
+            "GetRole",
+            "IAM Role",
+            role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to get cross-account management IAM role during heartbeat check"
+                .to_string(),
+            resource_id: Some(
+                ctx.desired_resource_config::<RemoteStackManagement>()?
+                    .id
+                    .clone(),
+            ),
+        })?;
 
         // Check if role ARN matches what we expect
         let resource_id = ctx
@@ -321,7 +319,16 @@ impl AwsRemoteStackManagementController {
         );
 
         // Step 1: List and detach all managed (attached) policies
-        match list_iam_attached_role_policies(&client, role_name).await {
+        match iam_result(
+            client
+                .list_attached_role_policies()
+                .role_name(role_name)
+                .send()
+                .await,
+            "ListAttachedRolePolicies",
+            "IAM Role",
+            role_name,
+        ) {
             Ok(response) => {
                 for policy in response.attached_policies() {
                     let policy_name = policy.policy_name().ok_or_else(|| {
@@ -350,8 +357,18 @@ impl AwsRemoteStackManagementController {
                         policy_arn = %policy_arn,
                         "Detaching managed policy from management role"
                     );
-                    let detach_result =
-                        detach_iam_role_policy(&client, role_name, &policy_arn).await;
+                    let resource_name = format!("{role_name}/{policy_arn}");
+                    let detach_result = iam_result(
+                        client
+                            .detach_role_policy()
+                            .role_name(role_name)
+                            .policy_arn(&policy_arn)
+                            .send()
+                            .await,
+                        "DetachRolePolicy",
+                        "IAM RolePolicyAttachment",
+                        &resource_name,
+                    );
                     match detach_result {
                         Ok(_) => {}
                         Err(e) => {
@@ -392,7 +409,16 @@ impl AwsRemoteStackManagementController {
         }
 
         // Step 2: List and delete all inline policies
-        match list_iam_role_policies(&client, role_name).await {
+        match iam_result(
+            client
+                .list_role_policies()
+                .role_name(role_name)
+                .send()
+                .await,
+            "ListRolePolicies",
+            "IAM Role",
+            role_name,
+        ) {
             Ok(response) => {
                 for policy_name in response.policy_names() {
                     info!(
@@ -400,7 +426,18 @@ impl AwsRemoteStackManagementController {
                         policy_name = %policy_name,
                         "Deleting inline policy from management role"
                     );
-                    match delete_iam_role_policy(&client, role_name, policy_name).await {
+                    let resource_name = format!("{role_name}/{policy_name}");
+                    match iam_result(
+                        client
+                            .delete_role_policy()
+                            .role_name(role_name)
+                            .policy_name(policy_name)
+                            .send()
+                            .await,
+                        "DeleteRolePolicy",
+                        "IAM RolePolicy",
+                        &resource_name,
+                    ) {
                         Ok(_) => {}
                         Err(e) => {
                             if let Some(ErrorData::CloudResourceNotFound { .. }) = &e.error {
@@ -464,7 +501,12 @@ impl AwsRemoteStackManagementController {
             "Deleting cross-account management IAM role"
         );
 
-        match delete_iam_role(&client, role_name).await {
+        match iam_result(
+            client.delete_role().role_name(role_name).send().await,
+            "DeleteRole",
+            "IAM Role",
+            role_name,
+        ) {
             Ok(_) => {
                 info!(
                     role_name = %role_name,
@@ -847,15 +889,25 @@ impl AwsRemoteStackManagementController {
             .ensure_desired_management_policies(ctx, client, policy_documents)
             .await?;
         for policy_arn in &desired_policy_arns {
-            attach_iam_role_policy(client, role_name, policy_arn)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to attach management policy '{}' to IAM role '{}'",
-                        policy_arn, role_name
-                    ),
-                    resource_id: Some("remote-stack-management".to_string()),
-                })?;
+            let resource_name = format!("{role_name}/{policy_arn}");
+            iam_result(
+                client
+                    .attach_role_policy()
+                    .role_name(role_name)
+                    .policy_arn(policy_arn)
+                    .send()
+                    .await,
+                "AttachRolePolicy",
+                "IAM RolePolicyAttachment",
+                &resource_name,
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to attach management policy '{}' to IAM role '{}'",
+                    policy_arn, role_name
+                ),
+                resource_id: Some("remote-stack-management".to_string()),
+            })?;
         }
 
         self.reconcile_owned_management_policies(ctx, client, role_name, &desired_policy_arns)
@@ -878,7 +930,17 @@ impl AwsRemoteStackManagementController {
             let policy_name = self.management_policy_name(ctx.resource_prefix, idx);
             let policy_arn = self.management_policy_arn(&aws_config.account_id, &policy_name);
 
-            match create_iam_policy(client, &policy_name, policy_document, None).await {
+            match iam_result(
+                client
+                    .create_policy()
+                    .policy_name(&policy_name)
+                    .policy_document(policy_document)
+                    .send()
+                    .await,
+                "CreatePolicy",
+                "IAM Policy",
+                &policy_name,
+            ) {
                 Ok(response) => {
                     let policy_arn = response
                         .policy()
@@ -925,12 +987,31 @@ impl AwsRemoteStackManagementController {
     ) -> Result<()> {
         self.prune_policy_versions_for_new_default(client, policy_arn)
             .await?;
-        create_iam_policy_version(client, policy_arn, policy_document, true)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create new default version for '{}'", policy_arn),
+        let response = iam_result(
+            client
+                .create_policy_version()
+                .policy_arn(policy_arn)
+                .policy_document(policy_document)
+                .set_as_default(true)
+                .send()
+                .await,
+            "CreatePolicyVersion",
+            "IAM Policy",
+            policy_arn,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create new default version for '{}'", policy_arn),
+            resource_id: Some("remote-stack-management".to_string()),
+        })?;
+        response.policy_version().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "CreatePolicyVersion response for '{}' did not include a version",
+                    policy_arn
+                ),
                 resource_id: Some("remote-stack-management".to_string()),
-            })?;
+            })
+        })?;
         Ok(())
     }
 
@@ -939,12 +1020,20 @@ impl AwsRemoteStackManagementController {
         client: &IamClient,
         policy_arn: &str,
     ) -> Result<()> {
-        let versions = list_iam_policy_versions(client, policy_arn).await.context(
-            ErrorData::CloudPlatformError {
-                message: format!("Failed to list policy versions for '{}'", policy_arn),
-                resource_id: Some("remote-stack-management".to_string()),
-            },
-        )?;
+        let versions = iam_result(
+            client
+                .list_policy_versions()
+                .policy_arn(policy_arn)
+                .send()
+                .await,
+            "ListPolicyVersions",
+            "IAM Policy",
+            policy_arn,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to list policy versions for '{}'", policy_arn),
+            resource_id: Some("remote-stack-management".to_string()),
+        })?;
         let versions = versions.versions();
 
         if versions.len() < 5 {
@@ -968,15 +1057,25 @@ impl AwsRemoteStackManagementController {
             })
         })?;
 
-        delete_iam_policy_version(client, policy_arn, version_id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to delete old policy version '{}' for '{}'",
-                    version_id, policy_arn
-                ),
-                resource_id: Some("remote-stack-management".to_string()),
-            })?;
+        let resource_name = format!("{policy_arn}/{version_id}");
+        iam_result(
+            client
+                .delete_policy_version()
+                .policy_arn(policy_arn)
+                .version_id(version_id)
+                .send()
+                .await,
+            "DeletePolicyVersion",
+            "IAM PolicyVersion",
+            &resource_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to delete old policy version '{}' for '{}'",
+                version_id, policy_arn
+            ),
+            resource_id: Some("remote-stack-management".to_string()),
+        })?;
         Ok(())
     }
 
@@ -988,15 +1087,23 @@ impl AwsRemoteStackManagementController {
         desired_policy_arns: &[String],
     ) -> Result<()> {
         let desired: HashSet<&str> = desired_policy_arns.iter().map(String::as_str).collect();
-        let response = list_iam_attached_role_policies(client, role_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to list attached policies for management role '{}'",
-                    role_name
-                ),
-                resource_id: Some("remote-stack-management".to_string()),
-            })?;
+        let response = iam_result(
+            client
+                .list_attached_role_policies()
+                .role_name(role_name)
+                .send()
+                .await,
+            "ListAttachedRolePolicies",
+            "IAM Role",
+            role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to list attached policies for management role '{}'",
+                role_name
+            ),
+            resource_id: Some("remote-stack-management".to_string()),
+        })?;
         for policy in response.attached_policies() {
             let policy_name = policy.policy_name().ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
@@ -1019,15 +1126,25 @@ impl AwsRemoteStackManagementController {
                 continue;
             }
 
-            detach_iam_role_policy(client, role_name, &policy_arn)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to detach stale management policy '{}' from role '{}'",
-                        policy_arn, role_name
-                    ),
-                    resource_id: Some("remote-stack-management".to_string()),
-                })?;
+            let resource_name = format!("{role_name}/{policy_arn}");
+            iam_result(
+                client
+                    .detach_role_policy()
+                    .role_name(role_name)
+                    .policy_arn(&policy_arn)
+                    .send()
+                    .await,
+                "DetachRolePolicy",
+                "IAM RolePolicyAttachment",
+                &resource_name,
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to detach stale management policy '{}' from role '{}'",
+                    policy_arn, role_name
+                ),
+                resource_id: Some("remote-stack-management".to_string()),
+            })?;
             self.delete_owned_policy(client, &policy_arn).await?;
         }
 
@@ -1035,7 +1152,18 @@ impl AwsRemoteStackManagementController {
     }
 
     async fn delete_legacy_inline_policy(&self, client: &IamClient, role_name: &str) -> Result<()> {
-        match delete_iam_role_policy(client, role_name, LEGACY_INLINE_POLICY_NAME).await {
+        let resource_name = format!("{role_name}/{LEGACY_INLINE_POLICY_NAME}");
+        match iam_result(
+            client
+                .delete_role_policy()
+                .role_name(role_name)
+                .policy_name(LEGACY_INLINE_POLICY_NAME)
+                .send()
+                .await,
+            "DeleteRolePolicy",
+            "IAM RolePolicy",
+            &resource_name,
+        ) {
             Ok(_) => Ok(()),
             Err(e) if is_remote_not_found(&e) => Ok(()),
             Err(e) => Err(e
@@ -1051,7 +1179,16 @@ impl AwsRemoteStackManagementController {
     }
 
     async fn delete_owned_policy(&self, client: &IamClient, policy_arn: &str) -> Result<()> {
-        let versions = match list_iam_policy_versions(client, policy_arn).await {
+        let versions = match iam_result(
+            client
+                .list_policy_versions()
+                .policy_arn(policy_arn)
+                .send()
+                .await,
+            "ListPolicyVersions",
+            "IAM Policy",
+            policy_arn,
+        ) {
             Ok(response) => response.versions().to_vec(),
             Err(e) if is_remote_not_found(&e) => return Ok(()),
             Err(e) => {
@@ -1077,7 +1214,18 @@ impl AwsRemoteStackManagementController {
                     resource_id: Some("remote-stack-management".to_string()),
                 })
             })?;
-            match delete_iam_policy_version(client, policy_arn, version_id).await {
+            let resource_name = format!("{policy_arn}/{version_id}");
+            match iam_result(
+                client
+                    .delete_policy_version()
+                    .policy_arn(policy_arn)
+                    .version_id(version_id)
+                    .send()
+                    .await,
+                "DeletePolicyVersion",
+                "IAM PolicyVersion",
+                &resource_name,
+            ) {
                 Ok(_) => {}
                 Err(e) if is_remote_not_found(&e) => {}
                 Err(e) => {
@@ -1094,7 +1242,12 @@ impl AwsRemoteStackManagementController {
             }
         }
 
-        match delete_iam_policy(client, policy_arn).await {
+        match iam_result(
+            client.delete_policy().policy_arn(policy_arn).send().await,
+            "DeletePolicy",
+            "IAM Policy",
+            policy_arn,
+        ) {
             Ok(_) => Ok(()),
             Err(e) if is_remote_not_found(&e) => Ok(()),
             Err(e) => Err(e

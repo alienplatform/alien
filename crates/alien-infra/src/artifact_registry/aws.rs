@@ -4,11 +4,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::aws_sdk::{
-    create_iam_role, delete_iam_role, delete_iam_role_policy, detach_iam_role_policy,
-    list_iam_attached_role_policies, list_iam_role_policies, put_iam_role_policy,
-    update_iam_assume_role_policy,
-};
+use crate::aws_sdk::iam_result;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -23,7 +19,7 @@ use aws_sdk_ecr::{
     types::{ReplicationConfiguration, ReplicationDestination, ReplicationRule, Repository},
     Client as EcrClient,
 };
-use aws_sdk_iam::{operation::create_role::CreateRoleInput, types::Tag, Client as IamClient};
+use aws_sdk_iam::{types::Tag, Client as IamClient};
 
 use chrono::Utc;
 
@@ -137,28 +133,23 @@ impl AwsArtifactRegistryController {
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-        let request = CreateRoleInput::builder()
-            .role_name(pull_role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .description(format!("Runtime ECR pull role for registry {}", config.id))
-            .set_tags(Some(tags))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to build CreateRole request for '{}'",
-                    pull_role_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        let response =
-            create_iam_role(&iam_client, request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create pull role '{}'", pull_role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let response = iam_result(
+            iam_client
+                .create_role()
+                .role_name(&pull_role_name)
+                .assume_role_policy_document(assume_role_policy)
+                .description(format!("Runtime ECR pull role for registry {}", config.id))
+                .set_tags(Some(tags))
+                .send()
+                .await,
+            "CreateRole",
+            "IAM Role",
+            &pull_role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create pull role '{}'", pull_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let pull_role_arn = response
             .role()
@@ -202,12 +193,23 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR pull permissions
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        put_iam_role_policy(&iam_client, &pull_role_name, policy_name, &policy_document)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to attach pull policy to role '{}'", pull_role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let role_policy_name = format!("{pull_role_name}/{policy_name}");
+        iam_result(
+            iam_client
+                .put_role_policy()
+                .role_name(&pull_role_name)
+                .policy_name(policy_name)
+                .policy_document(&policy_document)
+                .send()
+                .await,
+            "PutRolePolicy",
+            "IAM RolePolicy",
+            &role_policy_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to attach pull policy to role '{}'", pull_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %pull_role_name,
@@ -260,28 +262,23 @@ impl AwsArtifactRegistryController {
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-        let request = CreateRoleInput::builder()
-            .role_name(push_role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .description(format!("Runtime ECR push role for registry {}", config.id))
-            .set_tags(Some(tags))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to build CreateRole request for '{}'",
-                    push_role_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        let response =
-            create_iam_role(&iam_client, request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create push role '{}'", push_role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let response = iam_result(
+            iam_client
+                .create_role()
+                .role_name(&push_role_name)
+                .assume_role_policy_document(assume_role_policy)
+                .description(format!("Runtime ECR push role for registry {}", config.id))
+                .set_tags(Some(tags))
+                .send()
+                .await,
+            "CreateRole",
+            "IAM Role",
+            &push_role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create push role '{}'", push_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let push_role_arn = response
             .role()
@@ -325,12 +322,23 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR push+pull permissions
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        put_iam_role_policy(&iam_client, &push_role_name, policy_name, &policy_document)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to attach push policy to role '{}'", push_role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let role_policy_name = format!("{push_role_name}/{policy_name}");
+        iam_result(
+            iam_client
+                .put_role_policy()
+                .role_name(&push_role_name)
+                .policy_name(policy_name)
+                .policy_document(&policy_document)
+                .send()
+                .await,
+            "PutRolePolicy",
+            "IAM RolePolicy",
+            &role_policy_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to attach push policy to role '{}'", push_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %push_role_name,
@@ -460,15 +468,24 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        update_iam_assume_role_policy(&iam_client, &pull_role_name, &assume_role_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to update pull role trust policy for '{}'",
-                    pull_role_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        iam_result(
+            iam_client
+                .update_assume_role_policy()
+                .role_name(&pull_role_name)
+                .policy_document(assume_role_policy)
+                .send()
+                .await,
+            "UpdateAssumeRolePolicy",
+            "IAM Role",
+            &pull_role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to update pull role trust policy for '{}'",
+                pull_role_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %pull_role_name,
@@ -500,12 +517,23 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        put_iam_role_policy(&iam_client, &pull_role_name, policy_name, &policy_document)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update pull role policy for '{}'", pull_role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let role_policy_name = format!("{pull_role_name}/{policy_name}");
+        iam_result(
+            iam_client
+                .put_role_policy()
+                .role_name(&pull_role_name)
+                .policy_name(policy_name)
+                .policy_document(&policy_document)
+                .send()
+                .await,
+            "PutRolePolicy",
+            "IAM RolePolicy",
+            &role_policy_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to update pull role policy for '{}'", pull_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %pull_role_name,
@@ -536,15 +564,24 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        update_iam_assume_role_policy(&iam_client, &push_role_name, &assume_role_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to update push role trust policy for '{}'",
-                    push_role_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        iam_result(
+            iam_client
+                .update_assume_role_policy()
+                .role_name(&push_role_name)
+                .policy_document(assume_role_policy)
+                .send()
+                .await,
+            "UpdateAssumeRolePolicy",
+            "IAM Role",
+            &push_role_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to update push role trust policy for '{}'",
+                push_role_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %push_role_name,
@@ -576,12 +613,23 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        put_iam_role_policy(&iam_client, &push_role_name, policy_name, &policy_document)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update push role policy for '{}'", push_role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let role_policy_name = format!("{push_role_name}/{policy_name}");
+        iam_result(
+            iam_client
+                .put_role_policy()
+                .role_name(&push_role_name)
+                .policy_name(policy_name)
+                .policy_document(&policy_document)
+                .send()
+                .await,
+            "PutRolePolicy",
+            "IAM RolePolicy",
+            &role_policy_name,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to update push role policy for '{}'", push_role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             role_name = %push_role_name,
@@ -707,7 +755,16 @@ impl AwsArtifactRegistryController {
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
 
         // Delete pull role - treat NotFound as success for idempotent deletion
-        match delete_iam_role(&iam_client, &pull_role_name).await {
+        match iam_result(
+            iam_client
+                .delete_role()
+                .role_name(&pull_role_name)
+                .send()
+                .await,
+            "DeleteRole",
+            "IAM Role",
+            &pull_role_name,
+        ) {
             Ok(_) => {
                 info!(role_name = %pull_role_name, "Pull role deleted successfully");
             }
@@ -790,7 +847,16 @@ impl AwsArtifactRegistryController {
             .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
 
         // Delete push role - treat NotFound as success for idempotent deletion
-        match delete_iam_role(&iam_client, &push_role_name).await {
+        match iam_result(
+            iam_client
+                .delete_role()
+                .role_name(&push_role_name)
+                .send()
+                .await,
+            "DeleteRole",
+            "IAM Role",
+            &push_role_name,
+        ) {
             Ok(_) => {
                 info!(role_name = %push_role_name, "Push role deleted successfully");
             }
@@ -971,7 +1037,16 @@ impl AwsArtifactRegistryController {
         role_label: &str,
         resource_id: &str,
     ) -> Result<()> {
-        match list_iam_attached_role_policies(iam_client, role_name).await {
+        match iam_result(
+            iam_client
+                .list_attached_role_policies()
+                .role_name(role_name)
+                .send()
+                .await,
+            "ListAttachedRolePolicies",
+            "IAM Role",
+            role_name,
+        ) {
             Ok(response) => {
                 for policy in response.attached_policies() {
                     let policy_arn = policy.policy_arn().ok_or_else(|| {
@@ -984,7 +1059,18 @@ impl AwsArtifactRegistryController {
                         })
                     })?;
                     let policy_arn = policy_arn.to_string();
-                    match detach_iam_role_policy(iam_client, role_name, &policy_arn).await {
+                    let resource_name = format!("{role_name}/{policy_arn}");
+                    match iam_result(
+                        iam_client
+                            .detach_role_policy()
+                            .role_name(role_name)
+                            .policy_arn(&policy_arn)
+                            .send()
+                            .await,
+                        "DetachRolePolicy",
+                        "IAM RolePolicyAttachment",
+                        &resource_name,
+                    ) {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,
@@ -1029,10 +1115,30 @@ impl AwsArtifactRegistryController {
             }
         }
 
-        match list_iam_role_policies(iam_client, role_name).await {
+        match iam_result(
+            iam_client
+                .list_role_policies()
+                .role_name(role_name)
+                .send()
+                .await,
+            "ListRolePolicies",
+            "IAM Role",
+            role_name,
+        ) {
             Ok(response) => {
                 for policy_name in response.policy_names() {
-                    match delete_iam_role_policy(iam_client, role_name, policy_name).await {
+                    let resource_name = format!("{role_name}/{policy_name}");
+                    match iam_result(
+                        iam_client
+                            .delete_role_policy()
+                            .role_name(role_name)
+                            .policy_name(policy_name)
+                            .send()
+                            .await,
+                        "DeleteRolePolicy",
+                        "IAM RolePolicy",
+                        &resource_name,
+                    ) {
                         Ok(_) => {
                             info!(
                                 role_name = %role_name,

@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use crate::aws_sdk::{get_iam_role_policy, put_iam_role_policy};
+use crate::aws_sdk::iam_result;
 use crate::core::{
     azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext, Scope,
 };
@@ -1275,13 +1275,19 @@ impl ResourcePermissionsHelper {
             );
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-            put_iam_role_policy(
-                &iam_client,
-                &service_account_role_name,
-                &policy_name,
-                &policy_json,
+            let role_policy_name = format!("{service_account_role_name}/{policy_name}");
+            iam_result(
+                iam_client
+                    .put_role_policy()
+                    .role_name(&service_account_role_name)
+                    .policy_name(&policy_name)
+                    .policy_document(&policy_json)
+                    .send()
+                    .await,
+                "PutRolePolicy",
+                "IAM RolePolicy",
+                &role_policy_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to apply permission '{}' to role '{}'",
@@ -1393,13 +1399,19 @@ impl ResourcePermissionsHelper {
             );
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-            put_iam_role_policy(
-                &iam_client,
-                &management_role_name,
-                &policy_name,
-                &policy_json,
+            let role_policy_name = format!("{management_role_name}/{policy_name}");
+            iam_result(
+                iam_client
+                    .put_role_policy()
+                    .role_name(&management_role_name)
+                    .policy_name(&policy_name)
+                    .policy_document(&policy_json)
+                    .send()
+                    .await,
+                "PutRolePolicy",
+                "IAM RolePolicy",
+                &role_policy_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to apply management permission '{}' to role '{}'",
@@ -1418,7 +1430,17 @@ impl ResourcePermissionsHelper {
             );
 
             // Verify the policy was actually stored by reading it back
-            match get_iam_role_policy(&iam_client, &management_role_name, &policy_name).await {
+            match iam_result(
+                iam_client
+                    .get_role_policy()
+                    .role_name(&management_role_name)
+                    .policy_name(&policy_name)
+                    .send()
+                    .await,
+                "GetRolePolicy",
+                "IAM RolePolicy",
+                &role_policy_name,
+            ) {
                 Ok(resp) => {
                     info!(
                         management_role = %management_role_name,
