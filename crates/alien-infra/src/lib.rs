@@ -119,9 +119,11 @@ pub use alien_client_config::ClientConfigExt;
 pub use alien_core::{ClientConfig, ImpersonationConfig};
 
 #[cfg(feature = "kubernetes")]
-mod kubeconfig;
-#[cfg(feature = "kubernetes")]
-pub use kubeconfig::*;
+pub use kube::config::{
+    AuthInfo, Cluster, Context as KubeContext, ExecAuthCluster, ExecConfig, ExecInteractiveMode,
+    KubeConfigOptions, Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext, NamedExtension,
+    Preferences,
+};
 
 // Test utilities
 #[cfg(any(feature = "test-utils", doc, test))]

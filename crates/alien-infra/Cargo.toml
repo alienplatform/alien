@@ -64,7 +64,7 @@ azure = [
     "dep:azure_mgmt_storage",
     "dep:base64",
 ]
-kubernetes = ["dep:kube", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
+kubernetes = ["dep:kube", "dep:base64", "alien-client-config/kubernetes"]
 local = ["dep:alien-local"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
@@ -157,9 +157,7 @@ mockall = { workspace = true, optional = true }
 pem = { workspace = true }
 p12 = "0.6"
 
-# Kubeconfig dependencies
 base64 = { workspace = true, optional = true }
-dirs = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

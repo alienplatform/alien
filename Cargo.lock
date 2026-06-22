@@ -573,7 +573,6 @@ dependencies = [
  "bon",
  "chrono",
  "console_error_panic_hook",
- "dirs 6.0.0",
  "dotenvy",
  "futures",
  "futures-util",
