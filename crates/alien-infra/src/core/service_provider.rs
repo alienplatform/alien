@@ -76,7 +76,7 @@ pub use google_cloud_iam_admin_v1::model::{
     role::RoleLaunchStage, CreateRoleRequest, CreateServiceAccountRequest, ListRolesResponse, Role,
     ServiceAccount,
 };
-pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy as IamPolicy};
+pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{
     SubscriptionAdmin as OfficialSubscriptionAdmin, TopicAdmin as OfficialTopicAdmin,
@@ -170,16 +170,13 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
         update_mask: Option<String>,
     ) -> Result<ServiceAccount>;
 
-    async fn get_service_account_iam_policy(
-        &self,
-        service_account_name: String,
-    ) -> Result<IamPolicy>;
+    async fn get_service_account_iam_policy(&self, service_account_name: String) -> Result<Policy>;
 
     async fn set_service_account_iam_policy(
         &self,
         service_account_name: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy>;
+        iam_policy: Policy,
+    ) -> Result<Policy>;
 
     async fn create_role(&self, request: CreateRoleRequest) -> Result<Role>;
 
@@ -367,10 +364,7 @@ impl GcpIamApi for OfficialGcpIamClient {
             })
     }
 
-    async fn get_service_account_iam_policy(
-        &self,
-        service_account_name: String,
-    ) -> Result<IamPolicy> {
+    async fn get_service_account_iam_policy(&self, service_account_name: String) -> Result<Policy> {
         self.client()
             .await?
             .get_iam_policy()
@@ -390,8 +384,8 @@ impl GcpIamApi for OfficialGcpIamClient {
     async fn set_service_account_iam_policy(
         &self,
         service_account_name: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy> {
+        iam_policy: Policy,
+    ) -> Result<Policy> {
         self.client()
             .await?
             .set_iam_policy()
@@ -557,11 +551,7 @@ pub trait PubSubApi: Send + Sync + std::fmt::Debug {
     async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic>;
     async fn get_topic(&self, topic_id: String) -> Result<Topic>;
     async fn delete_topic(&self, topic_id: String) -> Result<()>;
-    async fn set_topic_iam_policy(
-        &self,
-        topic_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy>;
+    async fn set_topic_iam_policy(&self, topic_id: String, iam_policy: Policy) -> Result<Policy>;
 
     async fn create_subscription(
         &self,
@@ -573,8 +563,8 @@ pub trait PubSubApi: Send + Sync + std::fmt::Debug {
     async fn set_subscription_iam_policy(
         &self,
         subscription_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy>;
+        iam_policy: Policy,
+    ) -> Result<Policy>;
 }
 
 struct OfficialGcpPubSubClient {
@@ -643,7 +633,7 @@ impl OfficialGcpPubSubClient {
         }
     }
 
-    async fn set_iam_policy(&self, resource: String, policy: IamPolicy) -> Result<IamPolicy> {
+    async fn set_iam_policy(&self, resource: String, policy: Policy) -> Result<Policy> {
         let url = format!(
             "{}/{}:setIamPolicy",
             pubsub_rest_endpoint(&self.config),
@@ -697,14 +687,12 @@ impl OfficialGcpPubSubClient {
             ));
         }
 
-        response
-            .json::<IamPolicy>()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
+        response.json::<Policy>().await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to parse Pub/Sub setIamPolicy response".to_string(),
                 resource_id: None,
-            })
+            },
+        )
     }
 }
 
@@ -797,11 +785,7 @@ impl PubSubApi for OfficialGcpPubSubClient {
         }
     }
 
-    async fn set_topic_iam_policy(
-        &self,
-        topic_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy> {
+    async fn set_topic_iam_policy(&self, topic_id: String, iam_policy: Policy) -> Result<Policy> {
         self.set_iam_policy(self.topic_name(&topic_id), iam_policy)
             .await
     }
@@ -901,8 +885,8 @@ impl PubSubApi for OfficialGcpPubSubClient {
     async fn set_subscription_iam_policy(
         &self,
         subscription_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy> {
+        iam_policy: Policy,
+    ) -> Result<Policy> {
         self.set_iam_policy(self.subscription_name(&subscription_id), iam_policy)
             .await
     }
@@ -915,12 +899,12 @@ pub trait GcsApi: Send + Sync + std::fmt::Debug {
     async fn get_bucket(&self, bucket_name: String) -> Result<Bucket>;
     async fn update_bucket(&self, bucket_name: String, bucket_patch: Bucket) -> Result<Bucket>;
     async fn delete_bucket(&self, bucket_name: String) -> Result<()>;
-    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<IamPolicy>;
+    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<Policy>;
     async fn set_bucket_iam_policy(
         &self,
         bucket_name: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy>;
+        iam_policy: Policy,
+    ) -> Result<Policy>;
     async fn empty_bucket(&self, bucket_name: String) -> Result<()>;
     async fn insert_notification(
         &self,
@@ -1217,7 +1201,7 @@ impl GcsApi for OfficialGcpGcsClient {
         }
     }
 
-    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<IamPolicy> {
+    async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<Policy> {
         let policy = self
             .storage_control()
             .await?
@@ -1246,8 +1230,8 @@ impl GcsApi for OfficialGcpGcsClient {
     async fn set_bucket_iam_policy(
         &self,
         bucket_name: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy> {
+        iam_policy: Policy,
+    ) -> Result<Policy> {
         let policy = iam_policy;
         self.storage_control()
             .await?
@@ -1763,15 +1747,15 @@ pub trait ArtifactRegistryApi: Send + Sync + std::fmt::Debug {
         project_id: String,
         location: String,
         repository_id: String,
-    ) -> Result<IamPolicy>;
+    ) -> Result<Policy>;
 
     async fn set_repository_iam_policy(
         &self,
         project_id: String,
         location: String,
         repository_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy>;
+        iam_policy: Policy,
+    ) -> Result<Policy>;
 
     async fn get_operation(
         &self,
@@ -1911,7 +1895,7 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
         project_id: String,
         location: String,
         repository_id: String,
-    ) -> Result<IamPolicy> {
+    ) -> Result<Policy> {
         self.client()
             .await?
             .get_iam_policy()
@@ -1934,8 +1918,8 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
         project_id: String,
         location: String,
         repository_id: String,
-        iam_policy: IamPolicy,
-    ) -> Result<IamPolicy> {
+        iam_policy: Policy,
+    ) -> Result<Policy> {
         self.client()
             .await?
             .set_iam_policy()
@@ -1981,14 +1965,14 @@ pub trait ResourceManagerApi: Send + Sync + std::fmt::Debug {
         &self,
         project_id: String,
         options: Option<GetPolicyOptions>,
-    ) -> Result<IamPolicy>;
+    ) -> Result<Policy>;
 
     async fn set_project_iam_policy(
         &self,
         project_id: String,
-        policy: IamPolicy,
+        policy: Policy,
         update_mask: Option<String>,
-    ) -> Result<IamPolicy>;
+    ) -> Result<Policy>;
 
     async fn get_project_metadata(&self, project_id: String) -> Result<Project>;
 }
@@ -2032,7 +2016,7 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
         &self,
         project_id: String,
         options: Option<GetPolicyOptions>,
-    ) -> Result<IamPolicy> {
+    ) -> Result<Policy> {
         let mut request = self
             .client()
             .await?
@@ -2053,9 +2037,9 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
     async fn set_project_iam_policy(
         &self,
         project_id: String,
-        policy: IamPolicy,
+        policy: Policy,
         update_mask: Option<String>,
-    ) -> Result<IamPolicy> {
+    ) -> Result<Policy> {
         if let Some(update_mask) = update_mask {
             return Err(AlienError::new(
                 crate::error::ErrorData::CloudPlatformError {

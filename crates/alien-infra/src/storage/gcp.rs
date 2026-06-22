@@ -23,7 +23,7 @@ use google_cloud_storage::model::{
     Bucket,
 };
 
-use crate::core::{Binding, GcsApi, IamPolicy, ResourceControllerContext};
+use crate::core::{Binding, GcsApi, Policy, ResourceControllerContext};
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -488,7 +488,7 @@ impl GcpStorageController {
                     })?;
 
                 // Then set IAM policy
-                let iam_policy = IamPolicy::new().set_version(1).set_bindings([Binding::new()
+                let iam_policy = Policy::new().set_version(1).set_bindings([Binding::new()
                     .set_role("roles/storage.objectViewer")
                     .set_members(["allUsers"])]);
 
@@ -926,8 +926,8 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use crate::core::{
-        controller_test::SingleControllerExecutor, Binding, IamPolicy, MockGcpIamApi, MockGcsApi,
-        MockPlatformServiceProvider,
+        controller_test::SingleControllerExecutor, Binding, MockGcpIamApi, MockGcsApi,
+        MockPlatformServiceProvider, Policy,
     };
     use crate::error::ErrorData;
     use crate::storage::GcpStorageController;
@@ -1015,11 +1015,11 @@ mod tests {
         // Mock IAM policy operations
         mock_gcs
             .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(IamPolicy::new().set_version(1)));
+            .returning(|_| Ok(Policy::new().set_version(1)));
 
         mock_gcs
             .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::new().set_version(1)));
+            .returning(|_, _| Ok(Policy::new().set_version(1)));
 
         // Mock deletion operations
         mock_gcs.expect_empty_bucket().returning(|_| Ok(()));
@@ -1047,11 +1047,11 @@ mod tests {
         // Mock IAM policy operations for public read changes
         mock_gcs
             .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::new().set_version(1)));
+            .returning(|_, _| Ok(Policy::new().set_version(1)));
 
         mock_gcs
             .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(IamPolicy::new().set_version(1)));
+            .returning(|_| Ok(Policy::new().set_version(1)));
 
         Arc::new(mock_gcs)
     }
@@ -1293,7 +1293,7 @@ mod tests {
             .returning(|_, _| Ok(create_successful_bucket_response("test-my-awesome-storage")));
         mock_gcs
             .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::default()));
+            .returning(|_, _| Ok(Policy::default()));
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
 
@@ -1402,7 +1402,7 @@ mod tests {
             .returning(|_, _| Ok(create_successful_bucket_response("test-lifecycle-test")));
         mock_gcs
             .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::default()));
+            .returning(|_, _| Ok(Policy::default()));
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
 
@@ -1454,7 +1454,7 @@ mod tests {
             .returning(|_, _| Ok(create_successful_bucket_response("test-versioning-test")));
         mock_gcs
             .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::default()));
+            .returning(|_, _| Ok(Policy::default()));
 
         let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
 
@@ -1523,7 +1523,7 @@ mod tests {
         // Return empty policy for the read-modify-write pattern
         mock_gcs
             .expect_get_bucket_iam_policy()
-            .returning(|_| Ok(IamPolicy::default()));
+            .returning(|_| Ok(Policy::default()));
 
         // Validate IAM policy for public read access
         mock_gcs
@@ -1552,7 +1552,7 @@ mod tests {
                 true
             })
             .returning(|_, _| {
-                Ok(IamPolicy::new().set_version(1).set_bindings([Binding::new()
+                Ok(Policy::new().set_version(1).set_bindings([Binding::new()
                     .set_role("roles/storage.objectViewer")
                     .set_members(["allUsers"])]))
             });

@@ -3,9 +3,7 @@ use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{
-    GetPolicyOptions, IamPolicy, ResourceControllerContext, ResourcePermissionsHelper,
-};
+use crate::core::{GetPolicyOptions, Policy, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpSecretManagerVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -370,7 +368,7 @@ impl GcpVaultController {
             return Ok(());
         }
 
-        let new_policy = IamPolicy::new()
+        let new_policy = Policy::new()
             .set_version(3)
             .set_bindings(all_bindings)
             .set_audit_configs(current_policy.audit_configs)

@@ -1,6 +1,6 @@
 // Stub module for future GCP Queue controller implementation.
 
-use crate::core::{IamPolicy, ResourceControllerContext, Subscription, Topic};
+use crate::core::{Policy, ResourceControllerContext, Subscription, Topic};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpPubSubQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -350,8 +350,8 @@ impl GcpQueueController {
 fn gcp_iam_policy_for_kind(
     bindings: &[alien_permissions::generators::GcpIamBinding],
     kind: GcpBindingResourceKind,
-) -> IamPolicy {
-    IamPolicy::new().set_version(3).set_bindings(
+) -> Policy {
+    Policy::new().set_version(3).set_bindings(
         bindings
             .iter()
             .filter(|binding| binding.resource_kind == Some(kind))

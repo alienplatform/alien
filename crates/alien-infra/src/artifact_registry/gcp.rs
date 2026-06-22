@@ -4,7 +4,7 @@ use tracing::{debug, info};
 
 use crate::core::{
     ArtifactRegistryRepository as Repository, ArtifactRegistryRepositoryFormat as RepositoryFormat,
-    CreateServiceAccountRequest, IamPolicy, ResourceControllerContext, ResourcePermissionsHelper,
+    CreateServiceAccountRequest, Policy, ResourceControllerContext, ResourcePermissionsHelper,
     ServiceAccount,
 };
 use crate::error::{ErrorData, Result};
@@ -806,7 +806,7 @@ impl GcpArtifactRegistryController {
         let location_owned = location.clone();
         let repository_id_owned = repository_name.clone();
         let config_id_owned = config.id.clone();
-        let iam_policy = IamPolicy::new().set_version(3).set_bindings(bindings);
+        let iam_policy = Policy::new().set_version(3).set_bindings(bindings);
 
         let client = ctx
             .service_provider
@@ -863,7 +863,7 @@ fn emit_gcp_artifact_registry_heartbeat(
     location: &str,
     repository_id: &str,
     repository: Repository,
-    iam_policy: IamPolicy,
+    iam_policy: Policy,
     pull_service_account_email: Option<String>,
     push_service_account_email: Option<String>,
 ) {

@@ -2,7 +2,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::core::{
-    Binding, CreateServiceAccountRequest, Expr, GetPolicyOptions, IamPolicy,
+    Binding, CreateServiceAccountRequest, Expr, GetPolicyOptions, Policy,
     ResourceControllerContext, ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
 };
 use crate::error::{ErrorData, Result};
@@ -285,7 +285,7 @@ impl GcpRemoteStackManagementController {
         );
 
         if changed {
-            let new_policy = IamPolicy::new()
+            let new_policy = Policy::new()
                 .set_version(3)
                 .set_bindings(all_bindings)
                 .set_audit_configs(current_policy.audit_configs)
@@ -395,7 +395,7 @@ impl GcpRemoteStackManagementController {
             });
         }
 
-        let new_policy = IamPolicy::new()
+        let new_policy = Policy::new()
             .set_version(3)
             .set_bindings(all_bindings)
             .set_audit_configs(current_policy.audit_configs)

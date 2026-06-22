@@ -4,7 +4,7 @@ use tracing::{debug, info, warn};
 
 use crate::core::{
     Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, GcsNotification,
-    HttpTarget, IamPolicy, OidcToken, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod,
+    HttpTarget, OidcToken, Policy, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod,
     SchedulerJob, SchedulerOidcToken, Subscription, Topic,
 };
 
@@ -4130,7 +4130,7 @@ impl GcpWorkerController {
         )
         .await?;
 
-        let iam_policy = IamPolicy::new().set_version(3).set_bindings(all_bindings);
+        let iam_policy = Policy::new().set_version(3).set_bindings(all_bindings);
         let bindings_count = iam_policy.bindings.len();
 
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
@@ -5085,11 +5085,9 @@ impl GcpWorkerController {
             )
         };
 
-        let iam_policy = IamPolicy::new()
-            .set_version(1)
-            .set_bindings([GcpBinding::new()
-                .set_role("roles/pubsub.publisher")
-                .set_members([gcs_service_agent])]);
+        let iam_policy = Policy::new().set_version(1).set_bindings([GcpBinding::new()
+            .set_role("roles/pubsub.publisher")
+            .set_members([gcs_service_agent])]);
 
         pubsub_client
             .set_topic_iam_policy(topic_short_name.clone(), iam_policy)
@@ -5419,7 +5417,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::core::{IamPolicy, MockGcpIamApi};
+    use crate::core::{MockGcpIamApi, Policy};
     use crate::gcp_cloudrun::{
         Condition, ConditionState, MockCloudRunApi, Operation as LongRunningOperation, Service,
     };
@@ -5611,8 +5609,8 @@ mod tests {
             .set_done(true)
     }
 
-    fn create_empty_iam_policy() -> IamPolicy {
-        IamPolicy::new().set_version(1)
+    fn create_empty_iam_policy() -> Policy {
+        Policy::new().set_version(1)
     }
 
     fn setup_mock_client_for_creation_and_update(

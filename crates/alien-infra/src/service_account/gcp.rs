@@ -2,7 +2,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::core::{
-    Binding, CreateServiceAccountRequest, GetPolicyOptions, IamPolicy, ResourceControllerContext,
+    Binding, CreateServiceAccountRequest, GetPolicyOptions, Policy, ResourceControllerContext,
     ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
 };
 use crate::error::{ErrorData, Result};
@@ -524,7 +524,7 @@ impl GcpServiceAccountController {
             return Ok(());
         }
 
-        let new_policy = IamPolicy::new()
+        let new_policy = Policy::new()
             .set_version(3)
             .set_bindings(all_bindings)
             .set_audit_configs(current_policy.audit_configs)
@@ -748,8 +748,8 @@ fn emit_gcp_service_account_heartbeat(
     resource_id: &str,
     service_account_email: &str,
     service_account: GcpServiceAccount,
-    service_account_policy: IamPolicy,
-    project_policy: IamPolicy,
+    service_account_policy: Policy,
+    project_policy: Policy,
 ) {
     let project_member = format!("serviceAccount:{service_account_email}");
     let project_roles = project_policy

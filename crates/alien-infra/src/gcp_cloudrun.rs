@@ -1,4 +1,4 @@
-use crate::core::IamPolicy;
+use crate::core::Policy;
 use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 use alien_core::GcpClientConfig;
 use alien_error::AlienError;
@@ -58,14 +58,14 @@ pub trait CloudRunApi: Send + Sync + std::fmt::Debug {
         &self,
         location: String,
         service_name: String,
-    ) -> CloudClientResult<IamPolicy>;
+    ) -> CloudClientResult<Policy>;
 
     async fn set_service_iam_policy(
         &self,
         location: String,
         service_name: String,
-        iam_policy: IamPolicy,
-    ) -> CloudClientResult<IamPolicy>;
+        iam_policy: Policy,
+    ) -> CloudClientResult<Policy>;
 
     async fn get_operation(
         &self,
@@ -217,7 +217,7 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
         &self,
         location: String,
         service_name: String,
-    ) -> CloudClientResult<IamPolicy> {
+    ) -> CloudClientResult<Policy> {
         self.services()
             .await?
             .get_iam_policy()
@@ -231,8 +231,8 @@ impl CloudRunApi for OfficialGcpCloudRunClient {
         &self,
         location: String,
         service_name: String,
-        iam_policy: IamPolicy,
-    ) -> CloudClientResult<IamPolicy> {
+        iam_policy: Policy,
+    ) -> CloudClientResult<Policy> {
         let request = google_cloud_iam_v1::model::SetIamPolicyRequest::new()
             .set_resource(self.service_resource_name(&location, &service_name))
             .set_policy(iam_policy);

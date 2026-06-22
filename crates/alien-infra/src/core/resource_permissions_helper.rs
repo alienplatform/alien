@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use crate::core::{
-    azure_permissions_helper::AzurePermissionsHelper, Binding, CreateRoleRequest, Expr, IamPolicy,
+    azure_permissions_helper::AzurePermissionsHelper, Binding, CreateRoleRequest, Expr, Policy,
     ResourceControllerContext, Role, RoleLaunchStage, Scope,
 };
 use crate::error::{ErrorData, Result};
@@ -211,7 +211,7 @@ impl ResourcePermissionsHelper {
         apply_policy: F,
     ) -> Result<()>
     where
-        F: FnOnce(T, IamPolicy) -> Fut,
+        F: FnOnce(T, Policy) -> Fut,
         Fut: std::future::Future<Output = Result<()>>,
     {
         let mut all_bindings = Vec::new();
@@ -224,7 +224,7 @@ impl ResourcePermissionsHelper {
         )
         .await?;
 
-        let iam_policy = IamPolicy::new().set_version(3).set_bindings(all_bindings);
+        let iam_policy = Policy::new().set_version(3).set_bindings(all_bindings);
 
         info!(
             resource_name = %resource_name,
