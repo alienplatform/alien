@@ -4,74 +4,11 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
-    container_app, Certificate, DaprComponent, ExtendedLocation, ManagedEnvironment,
-    TrackedResource,
+    Certificate, ContainerApp, DaprComponent, ManagedEnvironment, TrackedResource,
 };
 use futures_util::StreamExt;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{fmt::Debug, ops, sync::Arc, time::Duration};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerApp {
-    #[serde(flatten)]
-    pub tracked_resource: TrackedResource,
-    /// Managed identity assigned to the app.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<serde_json::Value>,
-    /// Container App properties.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<ContainerAppProperties>,
-    #[serde(
-        rename = "extendedLocation",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub extended_location: Option<ExtendedLocation>,
-    #[serde(rename = "managedBy", default, skip_serializing_if = "Option::is_none")]
-    pub managed_by: Option<String>,
-}
-
-impl ops::Deref for ContainerApp {
-    type Target = TrackedResource;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tracked_resource
-    }
-}
-
-impl ops::DerefMut for ContainerApp {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tracked_resource
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerAppProperties {
-    #[serde(flatten)]
-    pub sdk: container_app::Properties,
-    #[serde(
-        rename = "runningStatus",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub running_status: Option<String>,
-}
-
-impl ops::Deref for ContainerAppProperties {
-    type Target = container_app::Properties;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sdk
-    }
-}
-
-impl ops::DerefMut for ContainerAppProperties {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.sdk
-    }
-}
+use serde::de::DeserializeOwned;
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 pub(crate) async fn create_or_update_managed_environment(
     client: &azure_app_2024_08::Client,
@@ -420,14 +357,25 @@ impl OfficialAzureContainerAppsClient {
         resource_group_name: &str,
         container_app_name: &str,
         container_app: &ContainerApp,
+        identity: Option<&serde_json::Value>,
     ) -> CloudClientResult<OperationResult<ContainerApp>> {
-        self.put_lro(
-            self.container_app_url(resource_group_name, container_app_name),
-            container_app,
+        let body = serialize_container_app_request(container_app, identity, container_app_name)?;
+        let response = self
+            .request(
+                azure_core_021::Method::Put,
+                self.container_app_url(resource_group_name, container_app_name),
+                Some(body),
+                "Azure Container App",
+                container_app_name,
+            )
+            .await?;
+        operation_result_from_response(
+            response.status,
+            &response.headers,
+            &response.body,
             "Azure Container App",
             container_app_name,
         )
-        .await
     }
 
     pub async fn get_container_app(
@@ -452,71 +400,24 @@ impl OfficialAzureContainerAppsClient {
         resource_group_name: &str,
         container_app_name: &str,
         container_app: &ContainerApp,
+        identity: Option<&serde_json::Value>,
     ) -> CloudClientResult<OperationResult<ContainerApp>> {
-        self.patch_lro(
-            self.container_app_url(resource_group_name, container_app_name),
-            container_app,
-            "Azure Container App",
-            container_app_name,
-        )
-        .await
-    }
-
-    async fn put_lro<T>(
-        &self,
-        url: String,
-        resource: &T,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<OperationResult<T>>
-    where
-        T: Serialize + DeserializeOwned,
-    {
-        let body = serialize_request(resource_type, resource_name, resource)?;
-        let response = self
-            .request(
-                azure_core_021::Method::Put,
-                url,
-                Some(body),
-                resource_type,
-                resource_name,
-            )
-            .await?;
-        operation_result_from_response(
-            response.status,
-            &response.headers,
-            &response.body,
-            resource_type,
-            resource_name,
-        )
-    }
-
-    async fn patch_lro<T>(
-        &self,
-        url: String,
-        resource: &T,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<OperationResult<T>>
-    where
-        T: Serialize + DeserializeOwned,
-    {
-        let body = serialize_request(resource_type, resource_name, resource)?;
+        let body = serialize_container_app_request(container_app, identity, container_app_name)?;
         let response = self
             .request(
                 azure_core_021::Method::Patch,
-                url,
+                self.container_app_url(resource_group_name, container_app_name),
                 Some(body),
-                resource_type,
-                resource_name,
+                "Azure Container App",
+                container_app_name,
             )
             .await?;
         operation_result_from_response(
             response.status,
             &response.headers,
             &response.body,
-            resource_type,
-            resource_name,
+            "Azure Container App",
+            container_app_name,
         )
     }
 }
@@ -868,14 +769,26 @@ where
     parse_response(resource_type, resource_name, body).map(OperationResult::Completed)
 }
 
-fn serialize_request<T: Serialize>(
-    resource_type: &str,
-    resource_name: &str,
-    request: &T,
+fn serialize_container_app_request(
+    container_app: &ContainerApp,
+    identity: Option<&serde_json::Value>,
+    container_app_name: &str,
 ) -> CloudClientResult<String> {
-    serde_json::to_string(request).into_alien_error().context(
+    let mut request = serde_json::to_value(container_app)
+        .into_alien_error()
+        .context(CloudClientErrorData::SerializationError {
+            message: format!(
+                "Failed to serialize Azure Container App '{container_app_name}' request"
+            ),
+        })?;
+    if let Some(identity) = identity {
+        request["identity"] = identity.clone();
+    }
+    serde_json::to_string(&request).into_alien_error().context(
         CloudClientErrorData::SerializationError {
-            message: format!("Failed to serialize {resource_type} '{resource_name}' request"),
+            message: format!(
+                "Failed to serialize Azure Container App '{container_app_name}' request"
+            ),
         },
     )
 }

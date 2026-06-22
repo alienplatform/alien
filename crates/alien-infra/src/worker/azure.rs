@@ -1,5 +1,5 @@
 use crate::azure_authorization;
-use crate::azure_container_apps::{self, ContainerApp, ContainerAppProperties};
+use crate::azure_container_apps;
 use crate::azure_servicebus;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -30,9 +30,9 @@ use alien_macros::controller;
 use azure_mgmt_app::package_preview_2024_08::models::{
     certificate, configuration, container_app, custom_domain, dapr, dapr_component,
     identity_settings, ingress, BaseContainer, Certificate, CertificateKeyVaultProperties,
-    Configuration, Container, ContainerResources, CustomDomain, Dapr, DaprComponent, DaprMetadata,
-    EnvironmentVar, IdentitySettings, Ingress as AzureContainerAppsIngress, RegistryCredentials,
-    Scale, Secret, Template, TrackedResource, TrafficWeight,
+    Configuration, Container, ContainerApp, ContainerResources, CustomDomain, Dapr, DaprComponent,
+    DaprMetadata, EnvironmentVar, IdentitySettings, Ingress as AzureContainerAppsIngress,
+    RegistryCredentials, Scale, Secret, Template, TrackedResource, TrafficWeight,
 };
 use azure_mgmt_servicebus::package_2024_01::models::{SbQueue, SbQueueProperties};
 
@@ -241,9 +241,7 @@ fn emit_azure_container_apps_worker_heartbeat(
                 provisioning_state: properties
                     .and_then(|properties| properties.provisioning_state.as_ref())
                     .map(|state| format!("{state:?}")),
-                running_status: properties
-                    .and_then(|properties| properties.running_status.as_ref())
-                    .map(|status| format!("{status:?}")),
+                running_status: None,
                 ingress_fqdn: ingress.and_then(|ingress| ingress.fqdn.clone()),
                 min_replicas: scale.and_then(|scale| scale.min_replicas),
                 max_replicas: scale.and_then(|scale| scale.max_replicas),
@@ -661,7 +659,7 @@ impl AzureWorkerController {
         let client = ctx
             .service_provider
             .get_azure_container_apps_client(azure_cfg)?;
-        let container_app = self
+        let (container_app, identity) = self
             .build_container_app(
                 func_cfg,
                 &environment_name,
@@ -677,6 +675,7 @@ impl AzureWorkerController {
                 &resource_group_name,
                 &container_app_name,
                 &container_app,
+                identity.as_ref(),
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1092,7 +1091,7 @@ impl AzureWorkerController {
                 })
             })?;
 
-        let mut app = self
+        let (mut app, identity) = self
             .build_container_app(
                 worker_config,
                 &environment_name,
@@ -1109,7 +1108,12 @@ impl AzureWorkerController {
 
         // Update the container app with custom domain
         let _operation = client
-            .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+            .create_or_update_container_app(
+                &resource_group_name,
+                container_app_name,
+                &app,
+                identity.as_ref(),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure custom domain for container app".to_string(),
@@ -2003,7 +2007,7 @@ impl AzureWorkerController {
             })?;
             let fqdn = self.fqdn.clone().unwrap();
             let environment_name = get_container_apps_environment_name(ctx.state)?;
-            let mut app = self
+            let (mut app, identity) = self
                 .build_container_app(
                     func_cfg,
                     &environment_name,
@@ -2018,7 +2022,12 @@ impl AzureWorkerController {
                 .service_provider
                 .get_azure_container_apps_client(azure_cfg)?;
             container_apps_client
-                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                .create_or_update_container_app(
+                    &resource_group_name,
+                    container_app_name,
+                    &app,
+                    identity.as_ref(),
+                )
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to bind renewed certificate to custom domain".to_string(),
@@ -2069,7 +2078,7 @@ impl AzureWorkerController {
         self.update_rbac_wait_required = true;
 
         // Build desired spec
-        let desired_app = self
+        let (desired_app, identity) = self
             .build_container_app(
                 func_cfg,
                 &environment_name,
@@ -2085,7 +2094,12 @@ impl AzureWorkerController {
 
         // Issue UPDATE
         let op_result = client
-            .update_container_app(&resource_group_name, container_app_name, &desired_app)
+            .update_container_app(
+                &resource_group_name,
+                container_app_name,
+                &desired_app,
+                identity.as_ref(),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to initiate container app update".to_string(),
@@ -3620,7 +3634,7 @@ impl AzureWorkerController {
         container_app_name: &str,
         azure_cfg: &AzureClientConfig,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<ContainerApp> {
+    ) -> Result<(ContainerApp, Option<serde_json::Value>)> {
         let location = azure_cfg.region.as_deref().unwrap_or("East US");
 
         let image = match &func.code {
@@ -3835,25 +3849,26 @@ impl AzureWorkerController {
             volumes: vec![],
         };
 
-        Ok(ContainerApp {
-            tracked_resource: {
-                let mut tracked_resource = TrackedResource::new(location.to_string());
-                tracked_resource.tags = Some(serde_json::json!(tags));
-                tracked_resource
-            },
-            extended_location: None,
-            identity: managed_identity,
-            managed_by: None,
-            properties: Some(ContainerAppProperties {
-                sdk: container_app::Properties {
+        Ok((
+            ContainerApp {
+                tracked_resource: {
+                    let mut tracked_resource = TrackedResource::new(location.to_string());
+                    tracked_resource.tags = Some(serde_json::json!(tags));
+                    tracked_resource
+                },
+                extended_location: None,
+                identity: None,
+                managed_by: None,
+                kind: None,
+                properties: Some(container_app::Properties {
                     configuration: Some(configuration),
                     managed_environment_id: Some(environment_id),
                     template: Some(template),
                     ..Default::default()
-                },
-                running_status: None,
-            }),
-        })
+                }),
+            },
+            managed_identity,
+        ))
     }
 
     /// Creates a Dapr Service Bus component for a queue trigger
@@ -4327,9 +4342,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use crate::azure_container_apps::{
-        ContainerApp, ContainerAppProperties, OfficialAzureContainerAppsClient,
-    };
+    use crate::azure_container_apps::OfficialAzureContainerAppsClient;
     use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
@@ -4343,8 +4356,8 @@ mod tests {
     };
     use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
     use azure_mgmt_app::package_preview_2024_08::models::{
-        configuration, container_app, ingress, Configuration, Ingress as AzureContainerAppsIngress,
-        TrackedResource, TrafficWeight,
+        configuration, container_app, ingress, Configuration, ContainerApp,
+        Ingress as AzureContainerAppsIngress, TrackedResource, TrafficWeight,
     };
     use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
     use httpmock::MockServer;
@@ -4470,28 +4483,24 @@ mod tests {
                 tracked_resource.resource.name = Some(app_name.to_string());
                 tracked_resource
             },
-            properties: Some(ContainerAppProperties {
-                sdk: container_app::Properties {
-                    provisioning_state: Some(
-                        container_app::properties::ProvisioningState::Succeeded,
-                    ),
-                    configuration: Some(Configuration {
-                        ingress,
-                        active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
-                        identity_settings: vec![],
-                        registries: vec![],
-                        secrets: Vec::new(),
-                        dapr: None,
-                        max_inactive_revisions: None,
-                        runtime: None,
-                        service: None,
-                    }),
-                    ..Default::default()
-                },
-                running_status: None,
+            properties: Some(container_app::Properties {
+                provisioning_state: Some(container_app::properties::ProvisioningState::Succeeded),
+                configuration: Some(Configuration {
+                    ingress,
+                    active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
+                    identity_settings: vec![],
+                    registries: vec![],
+                    secrets: Vec::new(),
+                    dapr: None,
+                    max_inactive_revisions: None,
+                    runtime: None,
+                    service: None,
+                }),
+                ..Default::default()
             }),
             extended_location: None,
             identity: None,
+            kind: None,
             managed_by: None,
         }
     }
@@ -4507,17 +4516,13 @@ mod tests {
                 tracked_resource.resource.name = Some(app_name.to_string());
                 tracked_resource
             },
-            properties: Some(ContainerAppProperties {
-                sdk: container_app::Properties {
-                    provisioning_state: Some(
-                        container_app::properties::ProvisioningState::InProgress,
-                    ),
-                    ..Default::default()
-                },
-                running_status: None,
+            properties: Some(container_app::Properties {
+                provisioning_state: Some(container_app::properties::ProvisioningState::InProgress),
+                ..Default::default()
             }),
             extended_location: None,
             identity: None,
+            kind: None,
             managed_by: None,
         }
     }
@@ -5117,28 +5122,24 @@ mod tests {
                 tracked_resource.resource.name = Some(app_name.to_string());
                 tracked_resource
             },
-            properties: Some(ContainerAppProperties {
-                sdk: container_app::Properties {
-                    provisioning_state: Some(
-                        container_app::properties::ProvisioningState::Succeeded,
-                    ),
-                    configuration: Some(Configuration {
-                        ingress,
-                        active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
-                        identity_settings: vec![],
-                        registries: vec![],
-                        secrets: Vec::new(),
-                        dapr: None,
-                        max_inactive_revisions: None,
-                        runtime: None,
-                        service: None,
-                    }),
-                    ..Default::default()
-                },
-                running_status: None,
+            properties: Some(container_app::Properties {
+                provisioning_state: Some(container_app::properties::ProvisioningState::Succeeded),
+                configuration: Some(Configuration {
+                    ingress,
+                    active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
+                    identity_settings: vec![],
+                    registries: vec![],
+                    secrets: Vec::new(),
+                    dapr: None,
+                    max_inactive_revisions: None,
+                    runtime: None,
+                    service: None,
+                }),
+                ..Default::default()
             }),
             extended_location: None,
             identity: None,
+            kind: None,
             managed_by: None,
         }
     }
