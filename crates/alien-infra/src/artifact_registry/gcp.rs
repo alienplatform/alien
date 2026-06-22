@@ -12,7 +12,9 @@ use tracing::{debug, info};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use crate::gcp_iam_admin::{create_service_account, delete_service_account, get_service_account};
+use crate::gcp_iam_admin::{
+    iam_error_is_conflict, iam_error_is_not_found, service_account_resource_name,
+};
 use alien_core::{
     bindings::ArtifactRegistryBinding, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, GcpArtifactRegistryHeartbeatData,
@@ -294,15 +296,35 @@ impl GcpArtifactRegistryController {
             .set_account_id(pull_account_id.clone())
             .set_service_account(service_account);
 
-        let response = create_service_account(&iam_client, &gcp_cfg.project_id, request)
+        let response = match iam_client
+            .create_service_account()
+            .with_request(request)
+            .send()
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create pull service account '{}'",
-                    pull_account_id
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(service_account) => Ok(service_account),
+            Err(error) if iam_error_is_conflict(&error) => {
+                Err(AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: "GCP service account".to_string(),
+                    resource_name: pull_account_id.clone(),
+                    message: "create_service_account reported the account already exists"
+                        .to_string(),
+                }))
+            }
+            Err(error) => Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "IAM create_service_account request failed".to_string(),
+                    resource_id: Some(pull_account_id.clone()),
+                })),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create pull service account '{}'",
+                pull_account_id
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pull_service_account_email = if response.email.is_empty() {
             None
@@ -361,15 +383,35 @@ impl GcpArtifactRegistryController {
             .set_account_id(push_account_id.clone())
             .set_service_account(service_account);
 
-        let response = create_service_account(&iam_client, &gcp_cfg.project_id, request)
+        let response = match iam_client
+            .create_service_account()
+            .with_request(request)
+            .send()
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create push service account '{}'",
-                    push_account_id
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(service_account) => Ok(service_account),
+            Err(error) if iam_error_is_conflict(&error) => {
+                Err(AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: "GCP service account".to_string(),
+                    resource_name: push_account_id.clone(),
+                    message: "create_service_account reported the account already exists"
+                        .to_string(),
+                }))
+            }
+            Err(error) => Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "IAM create_service_account request failed".to_string(),
+                    resource_id: Some(push_account_id.clone()),
+                })),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create push service account '{}'",
+                push_account_id
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.push_service_account_email = if response.email.is_empty() {
             None
@@ -480,7 +522,26 @@ impl GcpArtifactRegistryController {
 
         if let Some(ref email) = self.pull_service_account_email {
             // Delete pull service account - treat NotFound as success for idempotent deletion
-            match delete_service_account(&iam_client, &gcp_cfg.project_id, email).await {
+            match iam_client
+                .delete_service_account()
+                .set_name(service_account_resource_name(&gcp_cfg.project_id, email))
+                .send()
+                .await
+                .map_err(|error| {
+                    if iam_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCP service account".to_string(),
+                            resource_name: email.to_string(),
+                        })
+                    } else {
+                        error
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "IAM delete_service_account request failed".to_string(),
+                                resource_id: Some(email.to_string()),
+                            })
+                    }
+                }) {
                 Ok(_) => {
                     info!(email = %email, "Pull service account deleted successfully");
                 }
@@ -522,7 +583,26 @@ impl GcpArtifactRegistryController {
 
         if let Some(ref email) = self.push_service_account_email {
             // Delete push service account - treat NotFound as success for idempotent deletion
-            match delete_service_account(&iam_client, &gcp_cfg.project_id, email).await {
+            match iam_client
+                .delete_service_account()
+                .set_name(service_account_resource_name(&gcp_cfg.project_id, email))
+                .send()
+                .await
+                .map_err(|error| {
+                    if iam_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCP service account".to_string(),
+                            resource_name: email.to_string(),
+                        })
+                    } else {
+                        error
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "IAM delete_service_account request failed".to_string(),
+                                resource_id: Some(email.to_string()),
+                            })
+                    }
+                }) {
                 Ok(_) => {
                     info!(email = %email, "Push service account deleted successfully");
                 }
@@ -644,7 +724,26 @@ impl GcpArtifactRegistryController {
 
             // Check pull service account
             if let Some(ref email) = self.pull_service_account_email {
-                match get_service_account(&iam_client, &gcp_cfg.project_id, email).await {
+                match iam_client
+                    .get_service_account()
+                    .set_name(service_account_resource_name(&gcp_cfg.project_id, email))
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        if iam_error_is_not_found(&error) {
+                            AlienError::new(ErrorData::CloudResourceNotFound {
+                                resource_type: "GCP service account".to_string(),
+                                resource_name: email.to_string(),
+                            })
+                        } else {
+                            error
+                                .into_alien_error()
+                                .context(ErrorData::CloudPlatformError {
+                                    message: "IAM get_service_account request failed".to_string(),
+                                    resource_id: Some(email.to_string()),
+                                })
+                        }
+                    }) {
                     Ok(_) => {
                         debug!(email = %email, "Pull service account verified successfully");
                     }
@@ -662,7 +761,26 @@ impl GcpArtifactRegistryController {
 
             // Check push service account
             if let Some(ref email) = self.push_service_account_email {
-                match get_service_account(&iam_client, &gcp_cfg.project_id, email).await {
+                match iam_client
+                    .get_service_account()
+                    .set_name(service_account_resource_name(&gcp_cfg.project_id, email))
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        if iam_error_is_not_found(&error) {
+                            AlienError::new(ErrorData::CloudResourceNotFound {
+                                resource_type: "GCP service account".to_string(),
+                                resource_name: email.to_string(),
+                            })
+                        } else {
+                            error
+                                .into_alien_error()
+                                .context(ErrorData::CloudPlatformError {
+                                    message: "IAM get_service_account request failed".to_string(),
+                                    resource_id: Some(email.to_string()),
+                                })
+                        }
+                    }) {
                     Ok(_) => {
                         debug!(email = %email, "Push service account verified successfully");
                     }

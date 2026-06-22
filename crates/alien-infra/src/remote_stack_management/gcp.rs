@@ -4,8 +4,7 @@ use tracing::info;
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::gcp_iam_admin::{
-    create_service_account, delete_service_account, get_service_account,
-    get_service_account_iam_policy, set_service_account_iam_policy,
+    iam_error_is_conflict, iam_error_is_not_found, service_account_resource_name,
 };
 use alien_core::permissions::PermissionSet;
 use alien_core::{
@@ -14,7 +13,7 @@ use alien_core::{
     RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
@@ -120,15 +119,35 @@ impl GcpRemoteStackManagementController {
             .set_account_id(service_account_id.clone())
             .set_service_account(service_account);
 
-        let created_sa = create_service_account(&client, &gcp_config.project_id, request)
+        let created_sa = match client
+            .create_service_account()
+            .with_request(request)
+            .send()
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create GCP management service account '{}'",
-                    service_account_id
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(service_account) => Ok(service_account),
+            Err(error) if iam_error_is_conflict(&error) => {
+                Err(AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: "GCP service account".to_string(),
+                    resource_name: service_account_id.clone(),
+                    message: "create_service_account reported the account already exists"
+                        .to_string(),
+                }))
+            }
+            Err(error) => Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "IAM create_service_account request failed".to_string(),
+                    resource_id: Some(service_account_id.clone()),
+                })),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create GCP management service account '{}'",
+                service_account_id
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let email = if created_sa.email.is_empty() {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
@@ -371,13 +390,15 @@ impl GcpRemoteStackManagementController {
             .await?;
 
         // Get current service account IAM policy
-        let current_policy = get_service_account_iam_policy(
-            &iam_client,
-            &gcp_config.project_id,
-            service_account_email,
-            None,
-        )
+        let current_policy = iam_client
+            .get_iam_policy()
+            .set_resource(service_account_resource_name(
+                &gcp_config.project_id,
+                service_account_email,
+            ))
+            .send()
             .await
+            .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get IAM policy for service account '{}' before granting impersonation. Refusing to proceed to avoid overwriting existing bindings.", service_account_email),
                 resource_id: Some(config.id.clone()),
@@ -423,20 +444,23 @@ impl GcpRemoteStackManagementController {
             .set_audit_configs(current_policy.audit_configs)
             .set_etag(current_policy.etag);
 
-        set_service_account_iam_policy(
-            &iam_client,
-            &gcp_config.project_id,
-            service_account_email,
-            new_policy,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to grant impersonation permissions on service account '{}'",
-                service_account_email
-            ),
-            resource_id: Some(config.id.clone()),
-        })?;
+        iam_client
+            .set_iam_policy()
+            .set_resource(service_account_resource_name(
+                &gcp_config.project_id,
+                service_account_email,
+            ))
+            .set_policy(new_policy)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to grant impersonation permissions on service account '{}'",
+                    service_account_email
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         info!(
             target_service_account = %service_account_email,
@@ -465,13 +489,36 @@ impl GcpRemoteStackManagementController {
 
         // Heartbeat check: verify service account still exists
         if let Some(service_account_email) = &self.service_account_email {
-            let sa = get_service_account(&client, &gcp_config.project_id, service_account_email)
+            let sa = match client
+                .get_service_account()
+                .set_name(service_account_resource_name(
+                    &gcp_config.project_id,
+                    service_account_email,
+                ))
+                .send()
                 .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get management service account during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            {
+                Ok(service_account) => Ok(service_account),
+                Err(error) if iam_error_is_not_found(&error) => {
+                    Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCP service account".to_string(),
+                        resource_name: service_account_email.to_string(),
+                    }))
+                }
+                Err(error) => {
+                    Err(error
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "IAM get_service_account request failed".to_string(),
+                            resource_id: Some(service_account_email.to_string()),
+                        }))
+                }
+            }
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get management service account during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             // Check if service account email matches what we expect
             if !sa.email.is_empty() && &sa.email != service_account_email {
@@ -627,9 +674,29 @@ impl GcpRemoteStackManagementController {
                 .get_gcp_iam_admin_client(gcp_config)
                 .await?;
 
-            match delete_service_account(&client, &gcp_config.project_id, service_account_email)
+            match client
+                .delete_service_account()
+                .set_name(service_account_resource_name(
+                    &gcp_config.project_id,
+                    service_account_email,
+                ))
+                .send()
                 .await
-            {
+                .map_err(|error| {
+                    if iam_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCP service account".to_string(),
+                            resource_name: service_account_email.to_string(),
+                        })
+                    } else {
+                        error
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "IAM delete_service_account request failed".to_string(),
+                                resource_id: Some(service_account_email.to_string()),
+                            })
+                    }
+                }) {
                 Ok(_) => {
                     info!(config_id = %config.id, email = %service_account_email, "Management service account deleted successfully");
                 }

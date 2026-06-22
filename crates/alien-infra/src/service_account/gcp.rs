@@ -4,8 +4,7 @@ use tracing::info;
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::gcp_iam_admin::{
-    create_service_account, delete_service_account, get_service_account,
-    get_service_account_iam_policy, set_service_account_iam_policy,
+    iam_error_is_conflict, iam_error_is_not_found, service_account_resource_name,
 };
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
@@ -13,7 +12,7 @@ use alien_core::{
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
     ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -108,15 +107,35 @@ impl GcpServiceAccountController {
             .set_account_id(service_account_id.clone())
             .set_service_account(service_account);
 
-        let created_sa = create_service_account(&client, &gcp_config.project_id, request)
+        let created_sa = match client
+            .create_service_account()
+            .with_request(request)
+            .send()
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create GCP service account '{}'",
-                    service_account_id
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(service_account) => Ok(service_account),
+            Err(error) if iam_error_is_conflict(&error) => {
+                Err(AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: "GCP service account".to_string(),
+                    resource_name: service_account_id.clone(),
+                    message: "create_service_account reported the account already exists"
+                        .to_string(),
+                }))
+            }
+            Err(error) => Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "IAM create_service_account request failed".to_string(),
+                    resource_id: Some(service_account_id.clone()),
+                })),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create GCP service account '{}'",
+                service_account_id
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let email = if created_sa.email.is_empty() {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
@@ -204,12 +223,35 @@ impl GcpServiceAccountController {
 
         // Heartbeat check: verify service account still exists
         if let Some(service_account_email) = &self.service_account_email {
-            let sa = get_service_account(&client, &gcp_config.project_id, service_account_email)
+            let sa = match client
+                .get_service_account()
+                .set_name(service_account_resource_name(
+                    &gcp_config.project_id,
+                    service_account_email,
+                ))
+                .send()
                 .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get service account during heartbeat check".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            {
+                Ok(service_account) => Ok(service_account),
+                Err(error) if iam_error_is_not_found(&error) => {
+                    Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: "GCP service account".to_string(),
+                        resource_name: service_account_email.to_string(),
+                    }))
+                }
+                Err(error) => {
+                    Err(error
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "IAM get_service_account request failed".to_string(),
+                            resource_id: Some(service_account_email.to_string()),
+                        }))
+                }
+            }
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get service account during heartbeat check".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             // Check if service account email matches what we expect
             if !sa.email.is_empty() && &sa.email != service_account_email {
@@ -222,18 +264,20 @@ impl GcpServiceAccountController {
                 }));
             }
 
-            let service_account_policy = get_service_account_iam_policy(
-                &iam_admin_client,
-                &gcp_config.project_id,
-                service_account_email,
-                None,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get service account IAM policy during heartbeat check"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let service_account_policy = iam_admin_client
+                .get_iam_policy()
+                .set_resource(service_account_resource_name(
+                    &gcp_config.project_id,
+                    service_account_email,
+                ))
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get service account IAM policy during heartbeat check"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
             let rm_client = ctx
                 .service_provider
@@ -339,9 +383,29 @@ impl GcpServiceAccountController {
                 .get_gcp_iam_admin_client(gcp_config)
                 .await?;
 
-            match delete_service_account(&client, &gcp_config.project_id, service_account_email)
+            match client
+                .delete_service_account()
+                .set_name(service_account_resource_name(
+                    &gcp_config.project_id,
+                    service_account_email,
+                ))
+                .send()
                 .await
-            {
+                .map_err(|error| {
+                    if iam_error_is_not_found(&error) {
+                        AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: "GCP service account".to_string(),
+                            resource_name: service_account_email.to_string(),
+                        })
+                    } else {
+                        error
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "IAM delete_service_account request failed".to_string(),
+                                resource_id: Some(service_account_email.to_string()),
+                            })
+                    }
+                }) {
                 Ok(_) => {
                     info!(config_id = %config.id, email = %service_account_email, "Service account deleted successfully");
                 }
@@ -674,20 +738,23 @@ impl GcpServiceAccountController {
                 "service-account",
                 client,
                 |client, iam_policy| async move {
-                    set_service_account_iam_policy(
-                        &client,
-                        &project_id_owned,
-                        &sa_email_owned,
-                        iam_policy,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to apply IAM policy to service account '{}'",
-                            sa_email_owned
-                        ),
-                        resource_id: Some(config_id_owned),
-                    })?;
+                    client
+                        .set_iam_policy()
+                        .set_resource(service_account_resource_name(
+                            &project_id_owned,
+                            &sa_email_owned,
+                        ))
+                        .set_policy(iam_policy)
+                        .send()
+                        .await
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to apply IAM policy to service account '{}'",
+                                sa_email_owned
+                            ),
+                            resource_id: Some(config_id_owned),
+                        })?;
                     info!(
                         service_account = %sa_email_owned,
                         "Applied resource-level IAM policy to service account"
