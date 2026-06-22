@@ -4,10 +4,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::aws_sdk::{
-    CreateRoleInput, DescribeEcrRepositoriesRequest, EcrApi, EcrReplicationConfiguration,
-    EcrReplicationDestination, EcrReplicationRule, EcrRepository, IamApi, IamTag,
-};
+use crate::aws_sdk::{CreateRoleInput, IamApi, IamTag};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -16,6 +13,11 @@ use alien_core::{
     AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
+};
+use aws_sdk_ecr::{
+    operation::describe_repositories::{DescribeRepositoriesInput, DescribeRepositoriesOutput},
+    types::{ReplicationConfiguration, ReplicationDestination, ReplicationRule, Repository},
+    Client as EcrClient,
 };
 
 use chrono::Utc;
@@ -402,7 +404,7 @@ impl AwsArtifactRegistryController {
             .to_string();
 
         self.apply_replication_config(
-            &*ecr_client,
+            &ecr_client,
             &account_id,
             &aws_cfg.region,
             &config.replication_regions,
@@ -623,7 +625,7 @@ impl AwsArtifactRegistryController {
             .to_string();
 
         self.apply_replication_config(
-            &*ecr_client,
+            &ecr_client,
             &account_id,
             &aws_cfg.region,
             &config.replication_regions,
@@ -864,7 +866,7 @@ impl AwsArtifactRegistryController {
                 .repository_prefix
                 .clone()
                 .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
-            let repositories_request = DescribeEcrRepositoriesRequest::builder()
+            let repositories_request = DescribeRepositoriesInput::builder()
                 .registry_id(stored_account_id)
                 .max_results(100)
                 .build()
@@ -873,14 +875,14 @@ impl AwsArtifactRegistryController {
                     message: "Failed to build ECR DescribeRepositories request".to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
-            let repositories_response = ecr_client
-                .describe_repositories(repositories_request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to describe ECR repositories during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let repositories_response =
+                describe_ecr_repositories(&ecr_client, repositories_request)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to describe ECR repositories during heartbeat check"
+                            .to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
             let mut repositories = Vec::new();
             for repository in repositories_response.repositories() {
                 let repository_name = ecr_repository_required_string(
@@ -1087,18 +1089,18 @@ impl AwsArtifactRegistryController {
     /// regions, and writes back the updated configuration.
     async fn apply_replication_config(
         &self,
-        ecr_client: &dyn EcrApi,
+        ecr_client: &EcrClient,
         account_id: &str,
         home_region: &str,
         replication_regions: &[String],
         registry_id: &str,
     ) -> Result<()> {
         // Build the set of desired destinations (same account, different regions)
-        let desired_destinations: Vec<EcrReplicationDestination> = replication_regions
+        let desired_destinations: Vec<ReplicationDestination> = replication_regions
             .iter()
             .filter(|r| r.as_str() != home_region)
             .map(|region| {
-                EcrReplicationDestination::builder()
+                ReplicationDestination::builder()
                     .region(region)
                     .registry_id(account_id)
                     .build()
@@ -1120,8 +1122,7 @@ impl AwsArtifactRegistryController {
 
         // Read the current replication configuration so we don't clobber existing rules
         let current =
-            ecr_client
-                .describe_registry()
+            describe_ecr_registry(ecr_client)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to describe ECR registry for replication config".to_string(),
@@ -1132,7 +1133,7 @@ impl AwsArtifactRegistryController {
         let mut rules = current.rules;
         if rules.is_empty() {
             rules.push(
-                EcrReplicationRule::builder()
+                ReplicationRule::builder()
                     .set_destinations(Some(desired_destinations.clone()))
                     .build()
                     .into_alien_error()
@@ -1151,7 +1152,7 @@ impl AwsArtifactRegistryController {
             }
         }
 
-        let replication_configuration = EcrReplicationConfiguration::builder()
+        let replication_configuration = ReplicationConfiguration::builder()
             .set_rules(Some(rules))
             .build()
             .into_alien_error()
@@ -1160,8 +1161,7 @@ impl AwsArtifactRegistryController {
                 resource_id: Some(registry_id.to_string()),
             })?;
 
-        ecr_client
-            .put_replication_configuration(replication_configuration)
+        put_ecr_replication_configuration(ecr_client, replication_configuration)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure ECR replication".to_string(),
@@ -1333,6 +1333,74 @@ impl AwsArtifactRegistryController {
     }
 }
 
+async fn describe_ecr_repositories(
+    client: &EcrClient,
+    request: DescribeRepositoriesInput,
+) -> Result<DescribeRepositoriesOutput> {
+    client
+        .describe_repositories()
+        .set_registry_id(request.registry_id)
+        .set_repository_names(request.repository_names)
+        .set_next_token(request.next_token)
+        .set_max_results(request.max_results)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ECR DescribeRepositories API failed".to_string(),
+            resource_id: None,
+        })
+}
+
+async fn describe_ecr_registry(client: &EcrClient) -> Result<ReplicationConfiguration> {
+    let response = client
+        .describe_registry()
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ECR DescribeRegistry API failed".to_string(),
+            resource_id: None,
+        })?;
+
+    match response.replication_configuration {
+        Some(replication_configuration) => Ok(replication_configuration),
+        None => ReplicationConfiguration::builder()
+            .set_rules(Some(vec![]))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build empty ECR replication configuration".to_string(),
+                resource_id: None,
+            }),
+    }
+}
+
+async fn put_ecr_replication_configuration(
+    client: &EcrClient,
+    replication_configuration: ReplicationConfiguration,
+) -> Result<ReplicationConfiguration> {
+    let response = client
+        .put_replication_configuration()
+        .replication_configuration(replication_configuration)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ECR PutReplicationConfiguration API failed".to_string(),
+            resource_id: None,
+        })?;
+
+    response.replication_configuration.ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message:
+                "ECR PutReplicationConfiguration response did not include replication configuration"
+                    .to_string(),
+            resource_id: None,
+        })
+    })
+}
+
 fn emit_aws_artifact_registry_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -1342,7 +1410,7 @@ fn emit_aws_artifact_registry_heartbeat(
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
     repositories_truncated: bool,
-    repositories: Vec<EcrRepository>,
+    repositories: Vec<Repository>,
 ) -> Result<()> {
     let repository_data = repositories
         .iter()
@@ -1387,9 +1455,7 @@ fn emit_aws_artifact_registry_heartbeat(
     Ok(())
 }
 
-fn ecr_repository_heartbeat_data(
-    repository: &EcrRepository,
-) -> Result<AwsEcrRepositoryHeartbeatData> {
+fn ecr_repository_heartbeat_data(repository: &Repository) -> Result<AwsEcrRepositoryHeartbeatData> {
     let repository_name = ecr_repository_required_string(
         repository,
         "repository name",
@@ -1441,7 +1507,7 @@ fn ecr_repository_heartbeat_data(
 }
 
 fn ecr_repository_required_string(
-    repository: &EcrRepository,
+    repository: &Repository,
     field_name: &str,
     value: Option<&str>,
 ) -> Result<String> {
@@ -1464,6 +1530,12 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
+    use aws_sdk_ecr::{
+        operation::describe_repositories::DescribeRepositoriesOutput, primitives::DateTime,
+        types::ImageTagMutability, Client as EcrClient,
+    };
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
@@ -1573,6 +1645,18 @@ mod tests {
         Arc::new(mock_provider)
     }
 
+    fn setup_mock_service_provider_with_ecr(
+        ecr_client: EcrClient,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mut mock_provider = MockPlatformServiceProvider::new();
+
+        mock_provider
+            .expect_get_aws_ecr_client()
+            .returning(move |_| Ok(ecr_client.clone()));
+
+        Arc::new(mock_provider)
+    }
+
     fn empty_attached_role_policies_response() -> ListAttachedRolePoliciesResponse {
         ListAttachedRolePoliciesResponse::builder()
             .is_truncated(false)
@@ -1585,6 +1669,23 @@ mod tests {
             .is_truncated(false)
             .build()
             .expect("test list role policies response should build")
+    }
+
+    fn ecr_repository(repository_name: &str) -> Repository {
+        Repository::builder()
+            .repository_arn(format!(
+                "arn:aws:ecr:us-east-1:123456789012:repository/{}",
+                repository_name
+            ))
+            .registry_id("123456789012")
+            .repository_name(repository_name)
+            .repository_uri(format!(
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/{}",
+                repository_name
+            ))
+            .created_at(DateTime::from_secs(0))
+            .image_tag_mutability(ImageTagMutability::Mutable)
+            .build()
     }
 
     #[tokio::test]
@@ -1719,5 +1820,46 @@ mod tests {
         executor.update(registry).unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn ready_uses_sdk_native_ecr_mock_for_repository_heartbeat() {
+        let registry = basic_artifact_registry();
+        let account_id = "123456789012";
+        let region = "us-east-1";
+        let repository_prefix = "test-artifact-registry";
+        let expected_registry_id = account_id.to_string();
+        let describe_rule = mock!(EcrClient::describe_repositories)
+            .match_requests(move |request| {
+                request.registry_id() == Some(expected_registry_id.as_str())
+                    && request.max_results() == Some(100)
+            })
+            .then_output(move || {
+                DescribeRepositoriesOutput::builder()
+                    .repositories(ecr_repository(&format!("{repository_prefix}/app")))
+                    .build()
+            });
+        let ecr_client = mock_client!(
+            aws_sdk_ecr,
+            RuleMode::Sequential,
+            [&describe_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_service_provider_with_ecr(ecr_client);
+        let controller = AwsArtifactRegistryController::mock_ready(account_id, region);
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(describe_rule.num_calls(), 1);
     }
 }

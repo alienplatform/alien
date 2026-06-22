@@ -163,15 +163,6 @@ pub use aws_sdk_eventbridge::{
     types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
 };
 
-pub use aws_sdk_ecr::operation::describe_repositories::{
-    DescribeRepositoriesInput as DescribeEcrRepositoriesRequest,
-    DescribeRepositoriesOutput as DescribeEcrRepositoriesResponse,
-};
-pub use aws_sdk_ecr::types::{
-    ReplicationConfiguration as EcrReplicationConfiguration,
-    ReplicationDestination as EcrReplicationDestination, ReplicationRule as EcrReplicationRule,
-    Repository as EcrRepository,
-};
 pub use aws_sdk_iam::{
     operation::{
         create_policy::CreatePolicyOutput as CreatePolicyResponse,
@@ -435,26 +426,6 @@ pub trait EventBridgeApi: Send + Sync {
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
     /// Delete a rule.
     async fn delete_rule(&self, rule_name: &str) -> Result<()>;
-}
-
-/// Minimal ECR operations required by infra artifact registry controllers.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-#[async_trait]
-pub trait EcrApi: Send + Sync {
-    /// Describe ECR repositories.
-    async fn describe_repositories(
-        &self,
-        request: DescribeEcrRepositoriesRequest,
-    ) -> Result<DescribeEcrRepositoriesResponse>;
-
-    /// Describe registry-level replication settings.
-    async fn describe_registry(&self) -> Result<EcrReplicationConfiguration>;
-
-    /// Put registry-level replication settings.
-    async fn put_replication_configuration(
-        &self,
-        replication_configuration: EcrReplicationConfiguration,
-    ) -> Result<EcrReplicationConfiguration>;
 }
 
 /// Minimal EC2 operations required by infra network and worker controllers.
@@ -1693,76 +1664,6 @@ impl EventBridgeApi for EventBridgeClient {
             rule_name,
         )?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl EcrApi for EcrClient {
-    async fn describe_repositories(
-        &self,
-        request: DescribeEcrRepositoriesRequest,
-    ) -> Result<DescribeEcrRepositoriesResponse> {
-        self.describe_repositories()
-            .set_registry_id(request.registry_id)
-            .set_repository_names(request.repository_names)
-            .set_next_token(request.next_token)
-            .set_max_results(request.max_results)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "ECR DescribeRepositories API failed".to_string(),
-                resource_id: None,
-            })
-    }
-
-    async fn describe_registry(&self) -> Result<EcrReplicationConfiguration> {
-        let response = self
-            .describe_registry()
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "ECR DescribeRegistry API failed".to_string(),
-                resource_id: None,
-            })?;
-
-        match response.replication_configuration {
-            Some(replication_configuration) => Ok(replication_configuration),
-            None => EcrReplicationConfiguration::builder()
-                .set_rules(Some(vec![]))
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build empty ECR replication configuration".to_string(),
-                    resource_id: None,
-                }),
-        }
-    }
-
-    async fn put_replication_configuration(
-        &self,
-        replication_configuration: EcrReplicationConfiguration,
-    ) -> Result<EcrReplicationConfiguration> {
-        let response = self
-            .put_replication_configuration()
-            .replication_configuration(replication_configuration)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "ECR PutReplicationConfiguration API failed".to_string(),
-                resource_id: None,
-            })?;
-
-        response
-            .replication_configuration
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "ECR PutReplicationConfiguration response did not include replication configuration".to_string(),
-                    resource_id: None,
-                })
-            })
     }
 }
 
