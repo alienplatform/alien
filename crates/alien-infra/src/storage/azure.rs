@@ -631,7 +631,7 @@ mod tests {
 
     use crate::core::{
         azure_credential_from_config, controller_test::SingleControllerExecutor,
-        AzureCore021Credential, MockAuthorizationApi, MockPlatformServiceProvider,
+        AzureCore021Credential, MockPlatformServiceProvider,
     };
     use crate::storage::{fixtures::*, AzureStorageController};
     use azure_core_021::{
@@ -811,10 +811,10 @@ mod tests {
             .expect_get_azure_blob_container_client()
             .returning(move |_| Ok(storage_client.clone()));
 
-        // Mock Azure authorization client for resource-scoped permissions
+        // Generated Azure authorization client for resource-scoped permissions.
         mock_provider
             .expect_get_azure_authorization_client()
-            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+            .returning(crate::core::azure_authorization_client_from_alien_config);
 
         Arc::new(mock_provider)
     }

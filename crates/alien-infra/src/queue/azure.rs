@@ -390,8 +390,7 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{
-        azure_credential_from_config, AzureCore021Credential, MockAuthorizationApi,
-        MockPlatformServiceProvider,
+        azure_credential_from_config, AzureCore021Credential, MockPlatformServiceProvider,
     };
     use alien_core::{Platform, Queue, ResourceStatus};
     use azure_core_021::{
@@ -489,10 +488,10 @@ mod tests {
             .expect_get_azure_service_bus_management_client()
             .returning(move |_| Ok(client.clone()));
 
-        // Mock authorization client for resource-scoped permissions
+        // Generated authorization client for resource-scoped permissions.
         provider
             .expect_get_azure_authorization_client()
-            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+            .returning(crate::core::azure_authorization_client_from_alien_config);
 
         Arc::new(provider)
     }

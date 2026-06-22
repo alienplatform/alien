@@ -3,9 +3,8 @@
 //! This module provides shared functionality for Azure resource controllers to apply
 //! resource-scoped permissions using the Azure Authorization API.
 
-use std::sync::Arc;
-
-use crate::core::{AuthorizationApi, ResourceControllerContext, Scope};
+use crate::azure_authorization;
+use crate::core::{ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
 use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context};
@@ -16,6 +15,7 @@ use alien_permissions::{
     },
     BindingTarget, PermissionContext,
 };
+use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
 use azure_mgmt_authorization::package_2022_04_01::models::{
     role_assignment_properties::PrincipalType as RoleAssignmentPropertiesPrincipalType, Permission,
     RoleAssignmentCreateParameters, RoleAssignmentProperties, RoleDefinition,
@@ -133,7 +133,7 @@ impl AzurePermissionsHelper {
     /// Process permissions for a specific profile
     async fn process_profile_permissions(
         ctx: &ResourceControllerContext<'_>,
-        authorization_client: &Arc<dyn AuthorizationApi>,
+        authorization_client: &azure_authorization_2022_04::Client,
         resource_id: &str,
         profile_name: &str,
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
@@ -295,7 +295,7 @@ impl AzurePermissionsHelper {
 
     async fn ensure_profile_custom_role_definitions(
         ctx: &ResourceControllerContext<'_>,
-        authorization_client: &Arc<dyn AuthorizationApi>,
+        authorization_client: &azure_authorization_2022_04::Client,
         profile_name: &str,
         custom_roles: Vec<(String, AzureCustomRole)>,
         role_definition_scope: &Scope,
@@ -330,7 +330,7 @@ impl AzurePermissionsHelper {
 
     async fn ensure_management_custom_role_definitions(
         ctx: &ResourceControllerContext<'_>,
-        authorization_client: &Arc<dyn AuthorizationApi>,
+        authorization_client: &azure_authorization_2022_04::Client,
         custom_roles: Vec<(String, AzureCustomRole)>,
         role_definition_scope: &Scope,
         azure_config: &AzureClientConfig,
@@ -362,7 +362,7 @@ impl AzurePermissionsHelper {
     }
 
     async fn create_or_update_custom_role_definition(
-        authorization_client: &Arc<dyn AuthorizationApi>,
+        authorization_client: &azure_authorization_2022_04::Client,
         azure_config: &AzureClientConfig,
         role_definition_scope: &Scope,
         role_definition_id: &str,
@@ -389,17 +389,18 @@ impl AzurePermissionsHelper {
             ..Default::default()
         };
 
-        authorization_client
-            .create_or_update_role_definition(
-                role_definition_scope,
-                role_definition_id.to_string(),
-                &role_definition,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Azure custom role definition '{role_name}'"),
-                resource_id: Some(permission_set_id.to_string()),
-            })?;
+        azure_authorization::create_or_update_role_definition(
+            authorization_client,
+            azure_config,
+            role_definition_scope,
+            role_definition_id,
+            &role_definition,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create Azure custom role definition '{role_name}'"),
+            resource_id: Some(permission_set_id.to_string()),
+        })?;
 
         info!(
             role_name = %role_name,
@@ -448,7 +449,7 @@ impl AzurePermissionsHelper {
 
     /// Create an Azure role assignment
     pub async fn create_role_assignment(
-        authorization_client: &Arc<dyn AuthorizationApi>,
+        authorization_client: &azure_authorization_2022_04::Client,
         azure_config: &AzureClientConfig,
         scope: &Scope,
         role_assignment_id: &str,
@@ -456,7 +457,7 @@ impl AzurePermissionsHelper {
         role_definition_id: &str,
     ) -> Result<()> {
         let full_assignment_id =
-            authorization_client.build_role_assignment_id(scope, role_assignment_id.to_string());
+            azure_authorization::role_assignment_id(azure_config, scope, role_assignment_id);
 
         let role_assignment = RoleAssignmentCreateParameters::new(RoleAssignmentProperties {
             principal_id: principal_id.to_string(),
@@ -475,13 +476,16 @@ impl AzurePermissionsHelper {
             updated_on: None,
         });
 
-        authorization_client
-            .create_or_update_role_assignment_by_id(full_assignment_id, &role_assignment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create Azure role assignment".to_string(),
-                resource_id: Some(role_assignment_id.to_string()),
-            })?;
+        azure_authorization::create_or_update_role_assignment_by_id(
+            authorization_client,
+            &full_assignment_id,
+            &role_assignment,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create Azure role assignment".to_string(),
+            resource_id: Some(role_assignment_id.to_string()),
+        })?;
 
         Ok(())
     }

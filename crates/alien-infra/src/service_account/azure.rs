@@ -2,9 +2,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::azure_msi;
 use crate::core::{ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
+use crate::{azure_authorization, azure_msi};
 use alien_core::{
     AzureManagedIdentityServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -357,17 +357,18 @@ impl AzureServiceAccountController {
                     ..Default::default()
                 };
 
-                let created_role = client
-                    .create_or_update_role_definition(
-                        &scope,
-                        role_definition_id.clone(),
-                        &role_definition,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to create custom role definition '{}'", role_name),
-                        resource_id: Some(config_id.clone()),
-                    })?;
+                let created_role = azure_authorization::create_or_update_role_definition(
+                    &client,
+                    &azure_cfg,
+                    &scope,
+                    &role_definition_id,
+                    &role_definition,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create custom role definition '{}'", role_name),
+                    resource_id: Some(config_id.clone()),
+                })?;
 
                 let role_id = created_role.id.ok_or_else(|| {
                     AlienError::new(ErrorData::InfrastructureError {
@@ -509,19 +510,19 @@ impl AzureServiceAccountController {
                         binding.scope, assignment_id
                     );
 
-                    client
-                        .create_or_update_role_assignment_by_id(
-                            full_assignment_id.clone(),
-                            &role_assignment,
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to assign role to managed identity '{}'",
-                                principal_id
-                            ),
-                            resource_id: Some(config_id.clone()),
-                        })?;
+                    azure_authorization::create_or_update_role_assignment_by_id(
+                        &client,
+                        &full_assignment_id,
+                        &role_assignment,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to assign role to managed identity '{}'",
+                            principal_id
+                        ),
+                        resource_id: Some(config_id.clone()),
+                    })?;
 
                     info!(
                         assignment_id = %full_assignment_id,
@@ -672,10 +673,7 @@ impl AzureServiceAccountController {
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
-            match client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
+            match azure_authorization::delete_role_assignment_by_id(&client, assignment_id).await {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted for update");
                 }
@@ -702,9 +700,13 @@ impl AzureServiceAccountController {
                 .unwrap_or(role_definition_id);
             let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
-            match client
-                .delete_role_definition(&scope, role_def_uuid.to_string())
-                .await
+            match azure_authorization::delete_role_definition(
+                &client,
+                azure_cfg,
+                &scope,
+                role_def_uuid,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted for update");
@@ -791,10 +793,7 @@ impl AzureServiceAccountController {
 
         // Delete all role assignments
         for assignment_id in &self.role_assignment_ids {
-            match client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
+            match azure_authorization::delete_role_assignment_by_id(&client, assignment_id).await {
                 Ok(_) => {
                     info!(assignment_id = %assignment_id, "Role assignment deleted successfully");
                 }
@@ -850,9 +849,13 @@ impl AzureServiceAccountController {
                 .unwrap_or(role_definition_id);
             let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
-            match client
-                .delete_role_definition(&scope, role_def_uuid.to_string())
-                .await
+            match azure_authorization::delete_role_definition(
+                &client,
+                azure_cfg,
+                &scope,
+                role_def_uuid,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(role_definition_id = %role_definition_id, "Role definition deleted successfully");

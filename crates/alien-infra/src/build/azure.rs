@@ -476,13 +476,10 @@ mod tests {
     async fn test_create_and_delete_flow_succeeds(#[case] build: Build) {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
-        // Mock Azure authorization client for resource-scoped permissions
+        // Generated Azure authorization client for resource-scoped permissions.
         mock_provider
             .expect_get_azure_authorization_client()
-            .returning(|_| {
-                use crate::core::MockAuthorizationApi;
-                Ok(Arc::new(MockAuthorizationApi::new()))
-            });
+            .returning(crate::core::azure_authorization_client_from_alien_config);
 
         let mock_provider = Arc::new(mock_provider);
 

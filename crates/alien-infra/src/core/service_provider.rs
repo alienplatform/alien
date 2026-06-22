@@ -36,9 +36,6 @@ use azure_identity::{
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
 use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
-use azure_mgmt_authorization::package_2022_04_01::models::{
-    RoleAssignment, RoleAssignmentCreateParameters, RoleDefinition,
-};
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
@@ -49,7 +46,6 @@ use azure_mgmt_network::package_2024_03::models::{
 use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
 use azure_mgmt_servicebus::package_2024_01;
 use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
-use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::client::ServiceUsage;
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry;
 use google_cloud_auth::credentials::{
@@ -176,359 +172,6 @@ impl Scope {
         format!(
             "/{}",
             self.to_scope_string(client_config).trim_start_matches('/')
-        )
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait AuthorizationApi: Send + Sync + std::fmt::Debug {
-    async fn create_or_update_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-        role_definition: &RoleDefinition,
-    ) -> Result<RoleDefinition>;
-
-    async fn delete_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-    ) -> Result<Option<RoleDefinition>>;
-
-    async fn get_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-    ) -> Result<RoleDefinition>;
-
-    async fn create_or_update_role_assignment_by_id(
-        &self,
-        role_assignment_id: String,
-        role_assignment: &RoleAssignmentCreateParameters,
-    ) -> Result<RoleAssignment>;
-
-    async fn delete_role_assignment_by_id(
-        &self,
-        role_assignment_id: String,
-    ) -> Result<Option<RoleAssignment>>;
-
-    async fn get_role_assignment_by_id(&self, role_assignment_id: String)
-        -> Result<RoleAssignment>;
-
-    async fn list_role_assignments(
-        &self,
-        scope: &Scope,
-        role_definition_id: Option<String>,
-    ) -> Result<Vec<RoleAssignment>>;
-
-    fn build_role_assignment_id(&self, scope: &Scope, role_assignment_name: String) -> String;
-
-    fn build_resource_group_role_assignment_id(
-        &self,
-        resource_group_name: String,
-        role_assignment_name: String,
-    ) -> String;
-
-    fn build_resource_role_assignment_id(
-        &self,
-        resource_group_name: String,
-        resource_provider: String,
-        parent_resource_path: Option<String>,
-        resource_type: String,
-        resource_name: String,
-        role_assignment_name: String,
-    ) -> String;
-}
-
-struct OfficialAzureAuthorizationClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_authorization_2022_04::Client>,
-}
-
-impl std::fmt::Debug for OfficialAzureAuthorizationClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialAzureAuthorizationClient")
-            .field("subscription_id", &self.config.subscription_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialAzureAuthorizationClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_authorization_2022_04::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_authorization_2022_04::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Authorization client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AuthorizationApi for OfficialAzureAuthorizationClient {
-    async fn create_or_update_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-        role_definition: &RoleDefinition,
-    ) -> Result<RoleDefinition> {
-        let scope_string = scope.to_scope_string(&self.config);
-        let result = self
-            .client()
-            .await?
-            .role_definitions_client()
-            .create_or_update(
-                scope_string,
-                role_definition_id.clone(),
-                role_definition.clone(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            result,
-            "role definition create or update",
-            "Azure role definition",
-            &role_definition_id,
-        )
-    }
-
-    async fn delete_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-    ) -> Result<Option<RoleDefinition>> {
-        let scope_string = scope.to_scope_string(&self.config);
-        let response = self
-            .client()
-            .await?
-            .role_definitions_client()
-            .delete(scope_string, role_definition_id.clone())
-            .send()
-            .await;
-        let response = map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            response,
-            "role definition delete",
-            "Azure role definition",
-            &role_definition_id,
-        )?;
-        if response.as_raw_response().status() == azure_core_021::StatusCode::NoContent {
-            Ok(None)
-        } else {
-            response
-                .into_body()
-                .await
-                .map(Some)
-                .into_alien_error()
-                .context(crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                    "Failed to parse Azure role definition '{role_definition_id}' delete response"
-                ),
-                    resource_id: None,
-                })
-        }
-    }
-
-    async fn get_role_definition(
-        &self,
-        scope: &Scope,
-        role_definition_id: String,
-    ) -> Result<RoleDefinition> {
-        let scope_string = scope.to_scope_string(&self.config);
-        let result = self
-            .client()
-            .await?
-            .role_definitions_client()
-            .get(scope_string, role_definition_id.clone())
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            result,
-            "role definition get",
-            "Azure role definition",
-            &role_definition_id,
-        )
-    }
-
-    async fn create_or_update_role_assignment_by_id(
-        &self,
-        role_assignment_id: String,
-        role_assignment: &RoleAssignmentCreateParameters,
-    ) -> Result<RoleAssignment> {
-        let result = self
-            .client()
-            .await?
-            .role_assignments_client()
-            .create_by_id(role_assignment_id.clone(), role_assignment.clone())
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            result,
-            "role assignment create or update",
-            "Azure role assignment",
-            &role_assignment_id,
-        )
-    }
-
-    async fn delete_role_assignment_by_id(
-        &self,
-        role_assignment_id: String,
-    ) -> Result<Option<RoleAssignment>> {
-        let response = self
-            .client()
-            .await?
-            .role_assignments_client()
-            .delete_by_id(role_assignment_id.clone())
-            .send()
-            .await;
-        let response = map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            response,
-            "role assignment delete",
-            "Azure role assignment",
-            &role_assignment_id,
-        )?;
-        if response.as_raw_response().status() == azure_core_021::StatusCode::NoContent {
-            Ok(None)
-        } else {
-            response
-                .into_body()
-                .await
-                .map(Some)
-                .into_alien_error()
-                .context(crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                    "Failed to parse Azure role assignment '{role_assignment_id}' delete response"
-                ),
-                    resource_id: None,
-                })
-        }
-    }
-
-    async fn get_role_assignment_by_id(
-        &self,
-        role_assignment_id: String,
-    ) -> Result<RoleAssignment> {
-        let result = self
-            .client()
-            .await?
-            .role_assignments_client()
-            .get_by_id(role_assignment_id.clone())
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Authorization",
-            result,
-            "role assignment get",
-            "Azure role assignment",
-            &role_assignment_id,
-        )
-    }
-
-    async fn list_role_assignments(
-        &self,
-        scope: &Scope,
-        role_definition_id: Option<String>,
-    ) -> Result<Vec<RoleAssignment>> {
-        let scope_string = scope.to_scope_string(&self.config);
-        let mut stream = self
-            .client()
-            .await?
-            .role_assignments_client()
-            .list_for_scope(scope_string.clone())
-            .filter("atScope()")
-            .into_stream();
-
-        let mut assignments = Vec::new();
-        while let Some(page) = stream.next().await {
-            let page = map_azure_core_021_sdk_error(
-                "Azure Authorization",
-                page,
-                "role assignments list",
-                "Azure role assignments",
-                &scope_string,
-            )?;
-            assignments.extend(page.value);
-        }
-
-        if let Some(role_definition_id) = role_definition_id {
-            assignments.retain(|assignment| {
-                assignment
-                    .properties
-                    .as_ref()
-                    .is_some_and(|properties| properties.role_definition_id == role_definition_id)
-            });
-        }
-        Ok(assignments)
-    }
-
-    fn build_role_assignment_id(&self, scope: &Scope, role_assignment_name: String) -> String {
-        format!(
-            "/{}/providers/Microsoft.Authorization/roleAssignments/{}",
-            scope.to_scope_string(&self.config),
-            role_assignment_name
-        )
-    }
-
-    fn build_resource_group_role_assignment_id(
-        &self,
-        resource_group_name: String,
-        role_assignment_name: String,
-    ) -> String {
-        self.build_role_assignment_id(
-            &Scope::ResourceGroup {
-                resource_group_name,
-            },
-            role_assignment_name,
-        )
-    }
-
-    fn build_resource_role_assignment_id(
-        &self,
-        resource_group_name: String,
-        resource_provider: String,
-        parent_resource_path: Option<String>,
-        resource_type: String,
-        resource_name: String,
-        role_assignment_name: String,
-    ) -> String {
-        self.build_role_assignment_id(
-            &Scope::Resource {
-                resource_group_name,
-                resource_provider,
-                parent_resource_path,
-                resource_type,
-                resource_name,
-            },
-            role_assignment_name,
         )
     }
 }
@@ -1264,7 +907,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_authorization_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AuthorizationApi>>;
+    ) -> Result<azure_authorization_2022_04::Client>;
     fn get_azure_blob_container_client(
         &self,
         config: &AzureClientConfig,
@@ -1686,11 +1329,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_authorization_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AuthorizationApi>> {
-        Ok(Arc::new(OfficialAzureAuthorizationClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_authorization_2022_04::Client> {
+        azure_authorization_client_from_alien_config(config)
     }
 
     fn get_azure_blob_container_client(
@@ -2708,6 +2348,29 @@ pub(crate) fn azure_containerregistry_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Container Registry client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_authorization_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_authorization_2022_04::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_authorization_2022_04::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Authorization client".to_string(),
             resource_id: None,
         })
 }

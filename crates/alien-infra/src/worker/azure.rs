@@ -1,3 +1,4 @@
+use crate::azure_authorization;
 use crate::azure_container_apps::{ContainerApp, ContainerAppProperties};
 use crate::azure_servicebus;
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -2793,9 +2794,11 @@ impl AzureWorkerController {
             .get_azure_authorization_client(azure_config)?;
 
         if let Some(assignment_id) = self.commands_sender_role_assignment_id.take() {
-            match authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
+            match azure_authorization::delete_role_assignment_by_id(
+                &authorization_client,
+                &assignment_id,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(assignment_id=%assignment_id, "Commands sender role assignment deleted");
@@ -2812,9 +2815,11 @@ impl AzureWorkerController {
 
         // Delete commands receiver role assignment (best-effort)
         if let Some(assignment_id) = self.commands_receiver_role_assignment_id.take() {
-            match authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
+            match azure_authorization::delete_role_assignment_by_id(
+                &authorization_client,
+                &assignment_id,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(assignment_id=%assignment_id, "Commands receiver role assignment deleted");
@@ -3530,8 +3535,11 @@ impl AzureWorkerController {
                 .as_bytes(),
             )
             .to_string();
-            let full_assignment_id = authorization_client
-                .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
+            let full_assignment_id = azure_authorization::role_assignment_id(
+                azure_config,
+                &queue_scope,
+                &role_assignment_id,
+            );
             let role_definition_id = format!(
                 "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
                 azure_config.subscription_id
@@ -4507,16 +4515,25 @@ mod tests {
     use crate::azure_container_apps::{
         ContainerApp, ContainerAppProperties, MockContainerAppsApi, MockLongRunningOperationApi,
     };
+    use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
-    use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
+    use alien_core::{
+        AzureClientConfig, AzureCredentials, Ingress, Platform, ResourceStatus, Worker,
+        WorkerOutputs,
+    };
     use alien_error::{AlienError, ContextError};
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
+        Response, StatusCode, TransportOptions,
+    };
     use azure_mgmt_app::package_preview_2024_08::models::{
         configuration, container_app, ingress, Configuration, Ingress as AzureContainerAppsIngress,
         TrafficWeight,
     };
-    use azure_mgmt_authorization::package_2022_04_01::models::RoleAssignment;
+    use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
     use httpmock::MockServer;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
@@ -4888,6 +4905,108 @@ mod tests {
         Arc::new(mock_container_apps)
     }
 
+    #[derive(Debug)]
+    struct AuthorizationTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for AuthorizationTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            let path = request.url().path();
+
+            if path.contains("/providers/Microsoft.Authorization/roleDefinitions/") {
+                assert_eq!(request.method(), &Method::Put);
+                assert_eq!(request.url().query(), Some("api-version=2022-04-01"));
+                assert_json_body(request);
+                return Ok(json_response(json!({
+                    "id": path,
+                    "name": "test-role-definition",
+                    "type": "Microsoft.Authorization/roleDefinitions",
+                    "properties": {
+                        "roleName": "test role",
+                        "type": "CustomRole",
+                        "permissions": [],
+                        "assignableScopes": []
+                    }
+                })));
+            }
+
+            if path.contains("/providers/Microsoft.Authorization/roleAssignments/") {
+                match request.method() {
+                    &Method::Put => {
+                        assert_eq!(request.url().query(), Some("api-version=2022-04-01"));
+                        let body = assert_json_body(request);
+                        return Ok(json_response(json!({
+                            "id": path,
+                            "name": "test-role-assignment",
+                            "type": "Microsoft.Authorization/roleAssignments",
+                            "properties": body["properties"].clone()
+                        })));
+                    }
+                    &Method::Delete => {
+                        assert_eq!(request.url().query(), Some("api-version=2022-04-01"));
+                        return Ok(Response::new(
+                            StatusCode::NoContent,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    method => {
+                        panic!("unexpected Azure Authorization role assignment method: {method:?}")
+                    }
+                }
+            }
+
+            panic!("unexpected Azure Authorization path: {path}");
+        }
+    }
+
+    fn assert_json_body(request: &Request) -> serde_json::Value {
+        match request.body() {
+            Body::Bytes(bytes) => {
+                serde_json::from_slice(bytes).expect("authorization request body should be JSON")
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Body::SeekableStream(_) => panic!("authorization request should use JSON bytes"),
+        }
+    }
+
+    fn json_response(value: serde_json::Value) -> Response {
+        Response::new(
+            StatusCode::Ok,
+            Headers::new(),
+            Box::pin(BytesStream::new(value.to_string())),
+        )
+    }
+
+    fn authorization_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_authorization_2022_04::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_authorization_2022_04::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Authorization client should build")
+    }
+
     fn setup_mock_service_provider(
         mock_container_apps: Arc<MockContainerAppsApi>,
         mock_lro: Option<Arc<MockLongRunningOperationApi>>,
@@ -4904,38 +5023,10 @@ mod tests {
                 .returning(move |_| Ok(lro_client.clone()));
         }
 
-        // Mock Azure authorization client for resource-scoped permissions
+        let authorization_client = authorization_client_with_transport(AuthorizationTransport);
         mock_provider
             .expect_get_azure_authorization_client()
-            .returning(|_| {
-                use crate::core::MockAuthorizationApi;
-                let mut mock_auth = MockAuthorizationApi::new();
-                mock_auth
-                    .expect_create_or_update_role_definition()
-                    .returning(|_, _, role_def| Ok(role_def.clone()));
-                mock_auth
-                    .expect_build_role_assignment_id()
-                    .returning(|_, name| {
-                        format!(
-                            "/test/providers/Microsoft.Authorization/roleAssignments/{}",
-                            name
-                        )
-                    });
-                mock_auth
-                    .expect_create_or_update_role_assignment_by_id()
-                    .returning(|_, role_assignment| {
-                        Ok(RoleAssignment {
-                            id: None,
-                            name: None,
-                            properties: Some(role_assignment.properties.clone()),
-                            type_: None,
-                        })
-                    });
-                mock_auth
-                    .expect_delete_role_assignment_by_id()
-                    .returning(|_| Ok(None));
-                Ok(Arc::new(mock_auth))
-            });
+            .returning(move |_| Ok(authorization_client.clone()));
 
         Arc::new(mock_provider)
     }
