@@ -31,7 +31,7 @@ use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
 
-pub async fn create_iam_role(
+pub(crate) async fn create_iam_role(
     client: &IamClient,
     request: CreateRoleInput,
 ) -> Result<CreateRoleOutput> {
@@ -80,7 +80,7 @@ pub async fn create_iam_role(
     Ok(response)
 }
 
-pub async fn get_iam_role(client: &IamClient, role_name: &str) -> Result<GetRoleOutput> {
+pub(crate) async fn get_iam_role(client: &IamClient, role_name: &str) -> Result<GetRoleOutput> {
     let response = iam_result(
         client.get_role().role_name(role_name).send().await,
         "GetRole",
@@ -98,7 +98,7 @@ pub async fn get_iam_role(client: &IamClient, role_name: &str) -> Result<GetRole
     Ok(response)
 }
 
-pub async fn delete_iam_role(client: &IamClient, role_name: &str) -> Result<()> {
+pub(crate) async fn delete_iam_role(client: &IamClient, role_name: &str) -> Result<()> {
     iam_result(
         client.delete_role().role_name(role_name).send().await,
         "DeleteRole",
@@ -108,7 +108,7 @@ pub async fn delete_iam_role(client: &IamClient, role_name: &str) -> Result<()> 
     Ok(())
 }
 
-pub async fn put_iam_role_policy(
+pub(crate) async fn put_iam_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_name: &str,
@@ -130,7 +130,7 @@ pub async fn put_iam_role_policy(
     Ok(())
 }
 
-pub async fn get_iam_role_policy(
+pub(crate) async fn get_iam_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_name: &str,
@@ -149,7 +149,7 @@ pub async fn get_iam_role_policy(
     )
 }
 
-pub async fn delete_iam_role_policy(
+pub(crate) async fn delete_iam_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_name: &str,
@@ -169,7 +169,7 @@ pub async fn delete_iam_role_policy(
     Ok(())
 }
 
-pub async fn update_iam_assume_role_policy(
+pub(crate) async fn update_iam_assume_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_document: &str,
@@ -188,7 +188,7 @@ pub async fn update_iam_assume_role_policy(
     Ok(())
 }
 
-pub async fn list_iam_attached_role_policies(
+pub(crate) async fn list_iam_attached_role_policies(
     client: &IamClient,
     role_name: &str,
 ) -> Result<ListAttachedRolePoliciesOutput> {
@@ -217,7 +217,7 @@ pub async fn list_iam_attached_role_policies(
     Ok(response)
 }
 
-pub async fn create_iam_policy(
+pub(crate) async fn create_iam_policy(
     client: &IamClient,
     policy_name: &str,
     policy_document: &str,
@@ -248,7 +248,7 @@ pub async fn create_iam_policy(
     Ok(response)
 }
 
-pub async fn delete_iam_policy(client: &IamClient, policy_arn: &str) -> Result<()> {
+pub(crate) async fn delete_iam_policy(client: &IamClient, policy_arn: &str) -> Result<()> {
     iam_result(
         client.delete_policy().policy_arn(policy_arn).send().await,
         "DeletePolicy",
@@ -258,7 +258,7 @@ pub async fn delete_iam_policy(client: &IamClient, policy_arn: &str) -> Result<(
     Ok(())
 }
 
-pub async fn create_iam_policy_version(
+pub(crate) async fn create_iam_policy_version(
     client: &IamClient,
     policy_arn: &str,
     policy_document: &str,
@@ -289,7 +289,7 @@ pub async fn create_iam_policy_version(
     Ok(response)
 }
 
-pub async fn delete_iam_policy_version(
+pub(crate) async fn delete_iam_policy_version(
     client: &IamClient,
     policy_arn: &str,
     version_id: &str,
@@ -309,7 +309,7 @@ pub async fn delete_iam_policy_version(
     Ok(())
 }
 
-pub async fn list_iam_policy_versions(
+pub(crate) async fn list_iam_policy_versions(
     client: &IamClient,
     policy_arn: &str,
 ) -> Result<ListPolicyVersionsOutput> {
@@ -325,7 +325,7 @@ pub async fn list_iam_policy_versions(
     )
 }
 
-pub async fn attach_iam_role_policy(
+pub(crate) async fn attach_iam_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_arn: &str,
@@ -345,7 +345,7 @@ pub async fn attach_iam_role_policy(
     Ok(())
 }
 
-pub async fn detach_iam_role_policy(
+pub(crate) async fn detach_iam_role_policy(
     client: &IamClient,
     role_name: &str,
     policy_arn: &str,
@@ -365,7 +365,7 @@ pub async fn detach_iam_role_policy(
     Ok(())
 }
 
-pub async fn list_iam_role_policies(
+pub(crate) async fn list_iam_role_policies(
     client: &IamClient,
     role_name: &str,
 ) -> Result<ListRolePoliciesOutput> {
@@ -425,7 +425,7 @@ where
 }
 
 /// Build an official AWS SDK config from Alien's public AWS client config.
-pub async fn sdk_config_from_alien_config(config: &AwsClientConfig) -> Result<SdkConfig> {
+pub(crate) async fn sdk_config_from_alien_config(config: &AwsClientConfig) -> Result<SdkConfig> {
     let region = Region::new(config.region.clone());
     let loader = aws_config::defaults(BehaviorVersion::latest()).region(region.clone());
 

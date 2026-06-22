@@ -19,7 +19,7 @@ mod azure_storage;
 
 mod gcp_compute;
 
-pub mod gcp_cloudrun;
+mod gcp_cloudrun;
 
 mod gcp_iam_admin;
 mod gcp_resource_manager;
@@ -103,7 +103,7 @@ pub mod import_helpers;
 #[cfg(feature = "aws")]
 mod aws_importers;
 #[cfg(feature = "aws")]
-pub mod aws_sdk;
+mod aws_sdk;
 #[cfg(feature = "azure")]
 mod azure_importers;
 #[cfg(feature = "gcp")]
