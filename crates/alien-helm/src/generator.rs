@@ -4025,7 +4025,17 @@ logCollector:
 
         assert!(values.contains("runtime:\n  encryption:\n"));
         assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
-        assert!(values.contains("logCollector:\n  scope:\n    deploymentLabelValue: e2e123"));
+
+        let values_yaml: YamlValue =
+            serde_yaml::from_str(&values).expect("registered setup values should parse");
+        assert_eq!(
+            yaml_path(
+                &values_yaml,
+                &["logCollector", "scope", "deploymentLabelValue"]
+            )
+            .and_then(YamlValue::as_str),
+            Some("e2e123")
+        );
     }
 
     #[test]
