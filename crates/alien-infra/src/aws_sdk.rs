@@ -43,7 +43,7 @@ use aws_sdk_s3::{
     },
     Client as S3Client,
 };
-use aws_sdk_sqs::{types::QueueAttributeName, Client as SqsClient};
+use aws_sdk_sqs::Client as SqsClient;
 use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
@@ -457,31 +457,6 @@ pub trait EventBridgeApi: Send + Sync {
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
     /// Delete a rule.
     async fn delete_rule(&self, rule_name: &str) -> Result<()>;
-}
-
-/// Minimal SQS operations required by infra controllers.
-#[async_trait]
-pub trait SqsApi: Send + Sync {
-    /// Create a queue and return its queue URL.
-    async fn create_queue(&self, queue_name: &str, tags: HashMap<String, String>)
-        -> Result<String>;
-
-    /// Return selected queue attributes keyed by AWS SQS attribute name.
-    async fn get_queue_attributes(
-        &self,
-        queue_url: &str,
-        attribute_names: Vec<String>,
-    ) -> Result<HashMap<String, String>>;
-
-    /// Set queue attributes keyed by AWS SQS attribute name.
-    async fn set_queue_attributes(
-        &self,
-        queue_url: &str,
-        attributes: HashMap<String, String>,
-    ) -> Result<()>;
-
-    /// Delete a queue by URL.
-    async fn delete_queue(&self, queue_url: &str) -> Result<()>;
 }
 
 /// Minimal DynamoDB operations required by infra controllers.
@@ -3169,115 +3144,6 @@ impl S3Api for S3Client {
                 message: format!(
                     "S3 PutBucketNotificationConfiguration API failed for bucket '{bucket_name}'"
                 ),
-                resource_id: None,
-            })?;
-
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl SqsApi for SqsClient {
-    async fn create_queue(
-        &self,
-        queue_name: &str,
-        tags: HashMap<String, String>,
-    ) -> Result<String> {
-        let response = self
-            .create_queue()
-            .queue_name(queue_name)
-            .set_tags(Some(tags))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("SQS CreateQueue API failed for queue '{}'", queue_name),
-                resource_id: None,
-            })?;
-
-        response
-            .queue_url()
-            .map(ToString::to_string)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "SQS CreateQueue response for '{}' did not include a queue URL",
-                        queue_name
-                    ),
-                    resource_id: None,
-                })
-            })
-    }
-
-    async fn get_queue_attributes(
-        &self,
-        queue_url: &str,
-        attribute_names: Vec<String>,
-    ) -> Result<HashMap<String, String>> {
-        let mut request = self.get_queue_attributes().queue_url(queue_url);
-        for attribute_name in attribute_names {
-            request = request.attribute_names(QueueAttributeName::from(attribute_name.as_str()));
-        }
-
-        let response =
-            request
-                .send()
-                .await
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "SQS GetQueueAttributes API failed for queue '{}'",
-                        queue_url
-                    ),
-                    resource_id: None,
-                })?;
-
-        Ok(response
-            .attributes()
-            .map(|attributes| {
-                attributes
-                    .iter()
-                    .map(|(name, value)| (name.as_str().to_string(), value.clone()))
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    async fn set_queue_attributes(
-        &self,
-        queue_url: &str,
-        attributes: HashMap<String, String>,
-    ) -> Result<()> {
-        let attributes = attributes
-            .into_iter()
-            .map(|(name, value)| (QueueAttributeName::from(name.as_str()), value))
-            .collect::<HashMap<_, _>>();
-
-        self.set_queue_attributes()
-            .queue_url(queue_url)
-            .set_attributes(Some(attributes))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "SQS SetQueueAttributes API failed for queue '{}'",
-                    queue_url
-                ),
-                resource_id: None,
-            })?;
-
-        Ok(())
-    }
-
-    async fn delete_queue(&self, queue_url: &str) -> Result<()> {
-        self.delete_queue()
-            .queue_url(queue_url)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("SQS DeleteQueue API failed for queue '{}'", queue_url),
                 resource_id: None,
             })?;
 

@@ -10,6 +10,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use aws_sdk_sqs::{types::QueueAttributeName, Client};
 use chrono::Utc;
 
 /// Generates the full, prefixed AWS queue name.
@@ -42,16 +43,16 @@ impl AwsQueueController {
         let queue_name = get_aws_queue_name(ctx.resource_prefix, &config.id);
         info!(id=%config.id, name=%queue_name, "Creating SQS queue");
 
-        let queue_url = client
-            .create_queue(
-                &queue_name,
-                standard_resource_tags(ctx.resource_prefix, &config.id),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create SQS queue '{}'", queue_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let queue_url = create_sqs_queue(
+            &client,
+            &queue_name,
+            standard_resource_tags(ctx.resource_prefix, &config.id),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create SQS queue '{}'", queue_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.queue_url = Some(queue_url.clone());
         self.queue_name = Some(queue_name.clone());
@@ -120,9 +121,12 @@ impl AwsQueueController {
             self.calculate_visibility_timeout_for_queue(ctx, &config)?;
 
         // Read current visibility timeout to avoid decreasing it unintentionally
-        let current_visibility_timeout = match client
-            .get_queue_attributes(queue_url, vec!["VisibilityTimeout".to_string()])
-            .await
+        let current_visibility_timeout = match get_sqs_queue_attributes(
+            &client,
+            queue_url,
+            vec!["VisibilityTimeout".to_string()],
+        )
+        .await
         {
             Ok(attributes) => attributes
                 .get("VisibilityTimeout")
@@ -148,8 +152,7 @@ impl AwsQueueController {
             visibility_timeout.to_string(),
         );
 
-        client
-            .set_queue_attributes(queue_url, attrs)
+        set_sqs_queue_attributes(&client, queue_url, attrs)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -187,8 +190,7 @@ impl AwsQueueController {
             }
         };
 
-        let attributes = client
-            .get_queue_attributes(queue_url, vec!["All".to_string()])
+        let attributes = get_sqs_queue_attributes(&client, queue_url, vec!["All".to_string()])
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -243,7 +245,7 @@ impl AwsQueueController {
 
         if let Some(queue_url) = &self.queue_url {
             info!(url=%queue_url, "Deleting SQS queue");
-            match client.delete_queue(queue_url).await {
+            match delete_sqs_queue(&client, queue_url).await {
                 Ok(_) => {
                     self.queue_url = None;
                     self.queue_name = None;
@@ -372,6 +374,107 @@ impl AwsQueueController {
     }
 }
 
+async fn create_sqs_queue(
+    client: &Client,
+    queue_name: &str,
+    tags: HashMap<String, String>,
+) -> Result<String> {
+    let response = client
+        .create_queue()
+        .queue_name(queue_name)
+        .set_tags(Some(tags))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("SQS CreateQueue API failed for queue '{queue_name}'"),
+            resource_id: None,
+        })?;
+
+    response
+        .queue_url()
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "SQS CreateQueue response for '{queue_name}' did not include a queue URL"
+                ),
+                resource_id: None,
+            })
+        })
+}
+
+async fn get_sqs_queue_attributes(
+    client: &Client,
+    queue_url: &str,
+    attribute_names: Vec<String>,
+) -> Result<HashMap<String, String>> {
+    let mut request = client.get_queue_attributes().queue_url(queue_url);
+    for attribute_name in attribute_names {
+        request = request.attribute_names(QueueAttributeName::from(attribute_name.as_str()));
+    }
+
+    let response =
+        request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("SQS GetQueueAttributes API failed for queue '{queue_url}'"),
+                resource_id: None,
+            })?;
+
+    Ok(response
+        .attributes()
+        .map(|attributes| {
+            attributes
+                .iter()
+                .map(|(name, value)| (name.as_str().to_string(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+async fn set_sqs_queue_attributes(
+    client: &Client,
+    queue_url: &str,
+    attributes: HashMap<String, String>,
+) -> Result<()> {
+    let attributes = attributes
+        .into_iter()
+        .map(|(name, value)| (QueueAttributeName::from(name.as_str()), value))
+        .collect::<HashMap<_, _>>();
+
+    client
+        .set_queue_attributes()
+        .queue_url(queue_url)
+        .set_attributes(Some(attributes))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("SQS SetQueueAttributes API failed for queue '{queue_url}'"),
+            resource_id: None,
+        })?;
+
+    Ok(())
+}
+
+async fn delete_sqs_queue(client: &Client, queue_url: &str) -> Result<()> {
+    client
+        .delete_queue()
+        .queue_url(queue_url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("SQS DeleteQueue API failed for queue '{queue_url}'"),
+            resource_id: None,
+        })?;
+
+    Ok(())
+}
+
 fn emit_aws_sqs_queue_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -471,66 +574,75 @@ fn region_from_queue_arn(queue_arn: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aws_sdk::SqsApi;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use alien_core::{Platform, Queue, ResourceStatus};
+    use aws_sdk_sqs::{
+        operation::{
+            create_queue::CreateQueueOutput, delete_queue::DeleteQueueOutput,
+            get_queue_attributes::GetQueueAttributesOutput,
+            set_queue_attributes::SetQueueAttributesOutput,
+        },
+        Client,
+    };
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use std::sync::Arc;
 
-    struct TestSqsClient {
-        queue_url: String,
-    }
-
-    #[async_trait::async_trait]
-    impl SqsApi for TestSqsClient {
-        async fn create_queue(
-            &self,
-            _queue_name: &str,
-            _tags: HashMap<String, String>,
-        ) -> Result<String> {
-            Ok(self.queue_url.clone())
-        }
-
-        async fn get_queue_attributes(
-            &self,
-            _queue_url: &str,
-            _attribute_names: Vec<String>,
-        ) -> Result<HashMap<String, String>> {
-            Ok(HashMap::new())
-        }
-
-        async fn set_queue_attributes(
-            &self,
-            _queue_url: &str,
-            _attributes: HashMap<String, String>,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn delete_queue(&self, _queue_url: &str) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    fn setup_mock_sqs_for_create_and_delete(queue_url: &str) -> Arc<dyn SqsApi> {
-        Arc::new(TestSqsClient {
-            queue_url: queue_url.to_string(),
-        })
-    }
-
-    fn setup_mock_provider(mock_sqs: Arc<dyn SqsApi>) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_provider(sqs_client: Client) -> Arc<MockPlatformServiceProvider> {
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_sqs_client()
-            .returning(move |_| Ok(mock_sqs.clone()));
+            .returning(move |_| Ok(sqs_client.clone()));
         Arc::new(provider)
     }
 
     #[tokio::test]
     async fn test_create_and_delete_queue_succeeds() {
         let queue = Queue::new("my-queue".to_string()).build();
-        let mock_sqs =
-            setup_mock_sqs_for_create_and_delete("https://sqs.us-east-1.amazonaws.com/123/test-q");
-        let mock_provider = setup_mock_provider(mock_sqs);
+        let queue_url = "https://sqs.us-east-1.amazonaws.com/123/test-q";
+        let create_rule = mock!(Client::create_queue)
+            .match_requests(|request| request.queue_name() == Some("test-my-queue"))
+            .then_output(move || CreateQueueOutput::builder().queue_url(queue_url).build());
+        let get_visibility_rule = mock!(Client::get_queue_attributes)
+            .match_requests(move |request| {
+                request.queue_url() == Some(queue_url)
+                    && request
+                        .attribute_names()
+                        .iter()
+                        .any(|attribute| attribute.as_str() == "VisibilityTimeout")
+            })
+            .then_output(|| {
+                GetQueueAttributesOutput::builder()
+                    .attributes(QueueAttributeName::VisibilityTimeout, "30")
+                    .build()
+            });
+        let set_visibility_rule = mock!(Client::set_queue_attributes)
+            .match_requests(move |request| {
+                request.queue_url() == Some(queue_url)
+                    && request
+                        .attributes()
+                        .and_then(|attributes| {
+                            attributes.get(&QueueAttributeName::VisibilityTimeout)
+                        })
+                        .map(String::as_str)
+                        == Some("30")
+            })
+            .then_output(|| SetQueueAttributesOutput::builder().build());
+        let delete_rule = mock!(Client::delete_queue)
+            .match_requests(move |request| request.queue_url() == Some(queue_url))
+            .then_output(|| DeleteQueueOutput::builder().build());
+        let sqs_client = mock_client!(
+            aws_sdk_sqs,
+            RuleMode::Sequential,
+            [
+                &create_rule,
+                &get_visibility_rule,
+                &set_visibility_rule,
+                &delete_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_provider(sqs_client);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(queue)
@@ -548,5 +660,10 @@ mod tests {
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+
+        assert_eq!(create_rule.num_calls(), 1);
+        assert_eq!(get_visibility_rule.num_calls(), 1);
+        assert_eq!(set_visibility_rule.num_calls(), 1);
+        assert_eq!(delete_rule.num_calls(), 1);
     }
 }
