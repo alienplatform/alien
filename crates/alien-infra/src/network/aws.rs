@@ -21,25 +21,46 @@
 //! - Validates the infrastructure exists (via preflights)
 //! - Transitions directly to Ready state
 
-use crate::aws_sdk::{
-    AllocateAddressRequest, AssociateRouteTableRequest, AttachInternetGatewayRequest,
-    AttributeBooleanValue, AuthorizeSecurityGroupEgressRequest,
-    AuthorizeSecurityGroupIngressRequest, ConnectivityType, CreateInternetGatewayRequest,
-    CreateNatGatewayRequest, CreateRouteRequest, CreateRouteTableRequest,
-    CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest, DeleteNatGatewayRequest,
-    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, DomainType,
-    Ec2ResourceType, Ec2Tag as Tag, Filter, IpPermission, IpRange, ModifyVpcAttributeRequest,
-    SecurityGroup, TagSpecification,
-};
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
     NetworkHeartbeatData, NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth,
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
+use aws_sdk_ec2::{
+    error::{ProvideErrorMetadata, SdkError},
+    operation::{
+        allocate_address::{AllocateAddressInput, AllocateAddressOutput},
+        associate_route_table::{AssociateRouteTableInput, AssociateRouteTableOutput},
+        attach_internet_gateway::AttachInternetGatewayInput,
+        authorize_security_group_egress::AuthorizeSecurityGroupEgressInput,
+        authorize_security_group_ingress::AuthorizeSecurityGroupIngressInput,
+        create_internet_gateway::{CreateInternetGatewayInput, CreateInternetGatewayOutput},
+        create_nat_gateway::{CreateNatGatewayInput, CreateNatGatewayOutput},
+        create_route::CreateRouteInput,
+        create_route_table::{CreateRouteTableInput, CreateRouteTableOutput},
+        create_security_group::{CreateSecurityGroupInput, CreateSecurityGroupOutput},
+        create_subnet::{CreateSubnetInput, CreateSubnetOutput},
+        create_vpc::{CreateVpcInput, CreateVpcOutput},
+        delete_nat_gateway::{DeleteNatGatewayInput, DeleteNatGatewayOutput},
+        describe_availability_zones::{
+            DescribeAvailabilityZonesInput, DescribeAvailabilityZonesOutput,
+        },
+        describe_nat_gateways::{DescribeNatGatewaysInput, DescribeNatGatewaysOutput},
+        describe_security_groups::{DescribeSecurityGroupsInput, DescribeSecurityGroupsOutput},
+        describe_subnets::{DescribeSubnetsInput, DescribeSubnetsOutput},
+        describe_vpcs::{DescribeVpcsInput, DescribeVpcsOutput},
+        detach_internet_gateway::DetachInternetGatewayInput,
+        modify_vpc_attribute::ModifyVpcAttributeInput,
+    },
+    types::{
+        AttributeBooleanValue, ConnectivityType, DomainType, Filter, IpPermission, IpRange,
+        ResourceType, SecurityGroup, Tag, TagSpecification,
+    },
+    Client as Ec2Client,
+};
 use chrono::Utc;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -176,6 +197,644 @@ mod tests {
     }
 }
 
+async fn describe_ec2_vpcs(
+    client: &Ec2Client,
+    request: DescribeVpcsInput,
+) -> Result<DescribeVpcsOutput> {
+    ec2_result(
+        client
+            .describe_vpcs()
+            .set_vpc_ids(request.vpc_ids)
+            .set_filters(request.filters)
+            .set_max_results(request.max_results)
+            .set_next_token(request.next_token)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "DescribeVpcs",
+        "VPC",
+        "*",
+    )
+}
+
+async fn create_ec2_vpc(client: &Ec2Client, request: CreateVpcInput) -> Result<CreateVpcOutput> {
+    let cidr_block = request.cidr_block().unwrap_or("<unknown>").to_string();
+    ec2_result(
+        client
+            .create_vpc()
+            .set_cidr_block(request.cidr_block)
+            .set_ipv6_pool(request.ipv6_pool)
+            .set_ipv6_cidr_block(request.ipv6_cidr_block)
+            .set_ipv4_ipam_pool_id(request.ipv4_ipam_pool_id)
+            .set_ipv4_netmask_length(request.ipv4_netmask_length)
+            .set_ipv6_ipam_pool_id(request.ipv6_ipam_pool_id)
+            .set_ipv6_netmask_length(request.ipv6_netmask_length)
+            .set_ipv6_cidr_block_network_border_group(request.ipv6_cidr_block_network_border_group)
+            .set_vpc_encryption_control(request.vpc_encryption_control)
+            .set_tag_specifications(request.tag_specifications)
+            .set_dry_run(request.dry_run)
+            .set_instance_tenancy(request.instance_tenancy)
+            .set_amazon_provided_ipv6_cidr_block(request.amazon_provided_ipv6_cidr_block)
+            .send()
+            .await,
+        "CreateVpc",
+        "VPC",
+        &cidr_block,
+    )
+}
+
+async fn delete_ec2_vpc(client: &Ec2Client, vpc_id: &str) -> Result<()> {
+    ec2_result(
+        client.delete_vpc().vpc_id(vpc_id).send().await,
+        "DeleteVpc",
+        "VPC",
+        vpc_id,
+    )?;
+    Ok(())
+}
+
+async fn modify_ec2_vpc_attribute(
+    client: &Ec2Client,
+    request: ModifyVpcAttributeInput,
+) -> Result<()> {
+    let vpc_id = request.vpc_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .modify_vpc_attribute()
+            .set_enable_dns_hostnames(request.enable_dns_hostnames)
+            .set_enable_dns_support(request.enable_dns_support)
+            .set_vpc_id(request.vpc_id)
+            .set_enable_network_address_usage_metrics(request.enable_network_address_usage_metrics)
+            .send()
+            .await,
+        "ModifyVpcAttribute",
+        "VPC",
+        &vpc_id,
+    )?;
+    Ok(())
+}
+
+async fn describe_ec2_subnets(
+    client: &Ec2Client,
+    request: DescribeSubnetsInput,
+) -> Result<DescribeSubnetsOutput> {
+    ec2_result(
+        client
+            .describe_subnets()
+            .set_subnet_ids(request.subnet_ids)
+            .set_filters(request.filters)
+            .set_max_results(request.max_results)
+            .set_next_token(request.next_token)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "DescribeSubnets",
+        "Subnet",
+        "*",
+    )
+}
+
+async fn create_ec2_subnet(
+    client: &Ec2Client,
+    request: CreateSubnetInput,
+) -> Result<CreateSubnetOutput> {
+    let cidr_block = request.cidr_block().unwrap_or("<unknown>").to_string();
+    ec2_result(
+        client
+            .create_subnet()
+            .set_tag_specifications(request.tag_specifications)
+            .set_availability_zone(request.availability_zone)
+            .set_availability_zone_id(request.availability_zone_id)
+            .set_cidr_block(request.cidr_block)
+            .set_ipv6_cidr_block(request.ipv6_cidr_block)
+            .set_outpost_arn(request.outpost_arn)
+            .set_vpc_id(request.vpc_id)
+            .set_ipv6_native(request.ipv6_native)
+            .set_ipv4_ipam_pool_id(request.ipv4_ipam_pool_id)
+            .set_ipv4_netmask_length(request.ipv4_netmask_length)
+            .set_ipv6_ipam_pool_id(request.ipv6_ipam_pool_id)
+            .set_ipv6_netmask_length(request.ipv6_netmask_length)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "CreateSubnet",
+        "Subnet",
+        &cidr_block,
+    )
+}
+
+async fn delete_ec2_subnet(client: &Ec2Client, subnet_id: &str) -> Result<()> {
+    ec2_result(
+        client.delete_subnet().subnet_id(subnet_id).send().await,
+        "DeleteSubnet",
+        "Subnet",
+        subnet_id,
+    )?;
+    Ok(())
+}
+
+async fn create_ec2_internet_gateway(
+    client: &Ec2Client,
+    request: CreateInternetGatewayInput,
+) -> Result<CreateInternetGatewayOutput> {
+    ec2_result(
+        client
+            .create_internet_gateway()
+            .set_tag_specifications(request.tag_specifications)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "CreateInternetGateway",
+        "InternetGateway",
+        "*",
+    )
+}
+
+async fn delete_ec2_internet_gateway(client: &Ec2Client, internet_gateway_id: &str) -> Result<()> {
+    ec2_result(
+        client
+            .delete_internet_gateway()
+            .internet_gateway_id(internet_gateway_id)
+            .send()
+            .await,
+        "DeleteInternetGateway",
+        "InternetGateway",
+        internet_gateway_id,
+    )?;
+    Ok(())
+}
+
+async fn attach_ec2_internet_gateway(
+    client: &Ec2Client,
+    request: AttachInternetGatewayInput,
+) -> Result<()> {
+    let internet_gateway_id = request
+        .internet_gateway_id()
+        .unwrap_or("<unknown>")
+        .to_string();
+    ec2_result(
+        client
+            .attach_internet_gateway()
+            .set_dry_run(request.dry_run)
+            .set_internet_gateway_id(request.internet_gateway_id)
+            .set_vpc_id(request.vpc_id)
+            .send()
+            .await,
+        "AttachInternetGateway",
+        "InternetGateway",
+        &internet_gateway_id,
+    )?;
+    Ok(())
+}
+
+async fn detach_ec2_internet_gateway(
+    client: &Ec2Client,
+    request: DetachInternetGatewayInput,
+) -> Result<()> {
+    let internet_gateway_id = request
+        .internet_gateway_id()
+        .unwrap_or("<unknown>")
+        .to_string();
+    ec2_result(
+        client
+            .detach_internet_gateway()
+            .set_dry_run(request.dry_run)
+            .set_internet_gateway_id(request.internet_gateway_id)
+            .set_vpc_id(request.vpc_id)
+            .send()
+            .await,
+        "DetachInternetGateway",
+        "InternetGateway",
+        &internet_gateway_id,
+    )?;
+    Ok(())
+}
+
+async fn create_ec2_nat_gateway(
+    client: &Ec2Client,
+    request: CreateNatGatewayInput,
+) -> Result<CreateNatGatewayOutput> {
+    let subnet_id = request.subnet_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .create_nat_gateway()
+            .set_availability_mode(request.availability_mode)
+            .set_allocation_id(request.allocation_id)
+            .set_client_token(request.client_token)
+            .set_dry_run(request.dry_run)
+            .set_subnet_id(request.subnet_id)
+            .set_vpc_id(request.vpc_id)
+            .set_availability_zone_addresses(request.availability_zone_addresses)
+            .set_tag_specifications(request.tag_specifications)
+            .set_connectivity_type(request.connectivity_type)
+            .set_private_ip_address(request.private_ip_address)
+            .set_secondary_allocation_ids(request.secondary_allocation_ids)
+            .set_secondary_private_ip_addresses(request.secondary_private_ip_addresses)
+            .set_secondary_private_ip_address_count(request.secondary_private_ip_address_count)
+            .send()
+            .await,
+        "CreateNatGateway",
+        "NatGateway",
+        &subnet_id,
+    )
+}
+
+async fn delete_ec2_nat_gateway(
+    client: &Ec2Client,
+    request: DeleteNatGatewayInput,
+) -> Result<DeleteNatGatewayOutput> {
+    let nat_gateway_id = request.nat_gateway_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .delete_nat_gateway()
+            .set_dry_run(request.dry_run)
+            .set_nat_gateway_id(request.nat_gateway_id)
+            .send()
+            .await,
+        "DeleteNatGateway",
+        "NatGateway",
+        &nat_gateway_id,
+    )
+}
+
+async fn describe_ec2_nat_gateways(
+    client: &Ec2Client,
+    request: DescribeNatGatewaysInput,
+) -> Result<DescribeNatGatewaysOutput> {
+    ec2_result(
+        client
+            .describe_nat_gateways()
+            .set_dry_run(request.dry_run)
+            .set_nat_gateway_ids(request.nat_gateway_ids)
+            .set_filter(request.filter)
+            .set_max_results(request.max_results)
+            .set_next_token(request.next_token)
+            .send()
+            .await,
+        "DescribeNatGateways",
+        "NatGateway",
+        "*",
+    )
+}
+
+async fn allocate_ec2_address(
+    client: &Ec2Client,
+    request: AllocateAddressInput,
+) -> Result<AllocateAddressOutput> {
+    ec2_result(
+        client
+            .allocate_address()
+            .set_domain(request.domain)
+            .set_address(request.address)
+            .set_public_ipv4_pool(request.public_ipv4_pool)
+            .set_network_border_group(request.network_border_group)
+            .set_customer_owned_ipv4_pool(request.customer_owned_ipv4_pool)
+            .set_tag_specifications(request.tag_specifications)
+            .set_ipam_pool_id(request.ipam_pool_id)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "AllocateAddress",
+        "ElasticIP",
+        "*",
+    )
+}
+
+async fn release_ec2_address(client: &Ec2Client, allocation_id: &str) -> Result<()> {
+    ec2_result(
+        client
+            .release_address()
+            .allocation_id(allocation_id)
+            .send()
+            .await,
+        "ReleaseAddress",
+        "ElasticIP",
+        allocation_id,
+    )?;
+    Ok(())
+}
+
+async fn create_ec2_route_table(
+    client: &Ec2Client,
+    request: CreateRouteTableInput,
+) -> Result<CreateRouteTableOutput> {
+    let vpc_id = request.vpc_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .create_route_table()
+            .set_client_token(request.client_token)
+            .set_dry_run(request.dry_run)
+            .set_vpc_id(request.vpc_id)
+            .set_tag_specifications(request.tag_specifications)
+            .send()
+            .await,
+        "CreateRouteTable",
+        "RouteTable",
+        &vpc_id,
+    )
+}
+
+async fn delete_ec2_route_table(client: &Ec2Client, route_table_id: &str) -> Result<()> {
+    ec2_result(
+        client
+            .delete_route_table()
+            .route_table_id(route_table_id)
+            .send()
+            .await,
+        "DeleteRouteTable",
+        "RouteTable",
+        route_table_id,
+    )?;
+    Ok(())
+}
+
+async fn create_ec2_route(client: &Ec2Client, request: CreateRouteInput) -> Result<()> {
+    let route_table_id = request.route_table_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .create_route()
+            .set_destination_prefix_list_id(request.destination_prefix_list_id)
+            .set_vpc_endpoint_id(request.vpc_endpoint_id)
+            .set_transit_gateway_id(request.transit_gateway_id)
+            .set_local_gateway_id(request.local_gateway_id)
+            .set_carrier_gateway_id(request.carrier_gateway_id)
+            .set_core_network_arn(request.core_network_arn)
+            .set_odb_network_arn(request.odb_network_arn)
+            .set_dry_run(request.dry_run)
+            .set_route_table_id(request.route_table_id)
+            .set_destination_cidr_block(request.destination_cidr_block)
+            .set_gateway_id(request.gateway_id)
+            .set_destination_ipv6_cidr_block(request.destination_ipv6_cidr_block)
+            .set_egress_only_internet_gateway_id(request.egress_only_internet_gateway_id)
+            .set_instance_id(request.instance_id)
+            .set_network_interface_id(request.network_interface_id)
+            .set_vpc_peering_connection_id(request.vpc_peering_connection_id)
+            .set_nat_gateway_id(request.nat_gateway_id)
+            .send()
+            .await,
+        "CreateRoute",
+        "Route",
+        &route_table_id,
+    )?;
+    Ok(())
+}
+
+async fn associate_ec2_route_table(
+    client: &Ec2Client,
+    request: AssociateRouteTableInput,
+) -> Result<AssociateRouteTableOutput> {
+    let route_table_id = request.route_table_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .associate_route_table()
+            .set_gateway_id(request.gateway_id)
+            .set_public_ipv4_pool(request.public_ipv4_pool)
+            .set_dry_run(request.dry_run)
+            .set_subnet_id(request.subnet_id)
+            .set_route_table_id(request.route_table_id)
+            .send()
+            .await,
+        "AssociateRouteTable",
+        "RouteTableAssociation",
+        &route_table_id,
+    )
+}
+
+async fn disassociate_ec2_route_table(client: &Ec2Client, association_id: &str) -> Result<()> {
+    ec2_result(
+        client
+            .disassociate_route_table()
+            .association_id(association_id)
+            .send()
+            .await,
+        "DisassociateRouteTable",
+        "RouteTableAssociation",
+        association_id,
+    )?;
+    Ok(())
+}
+
+async fn describe_ec2_security_groups(
+    client: &Ec2Client,
+    request: DescribeSecurityGroupsInput,
+) -> Result<DescribeSecurityGroupsOutput> {
+    ec2_result(
+        client
+            .describe_security_groups()
+            .set_group_ids(request.group_ids)
+            .set_group_names(request.group_names)
+            .set_next_token(request.next_token)
+            .set_max_results(request.max_results)
+            .set_dry_run(request.dry_run)
+            .set_filters(request.filters)
+            .send()
+            .await,
+        "DescribeSecurityGroups",
+        "SecurityGroup",
+        "*",
+    )
+}
+
+async fn create_ec2_security_group(
+    client: &Ec2Client,
+    request: CreateSecurityGroupInput,
+) -> Result<CreateSecurityGroupOutput> {
+    let group_name = request.group_name().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .create_security_group()
+            .set_description(request.description)
+            .set_group_name(request.group_name)
+            .set_vpc_id(request.vpc_id)
+            .set_tag_specifications(request.tag_specifications)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "CreateSecurityGroup",
+        "SecurityGroup",
+        &group_name,
+    )
+}
+
+async fn delete_ec2_security_group(client: &Ec2Client, group_id: &str) -> Result<()> {
+    ec2_result(
+        client
+            .delete_security_group()
+            .group_id(group_id)
+            .send()
+            .await,
+        "DeleteSecurityGroup",
+        "SecurityGroup",
+        group_id,
+    )?;
+    Ok(())
+}
+
+async fn authorize_ec2_security_group_ingress(
+    client: &Ec2Client,
+    request: AuthorizeSecurityGroupIngressInput,
+) -> Result<()> {
+    let group_id = request.group_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .authorize_security_group_ingress()
+            .set_cidr_ip(request.cidr_ip)
+            .set_from_port(request.from_port)
+            .set_group_id(request.group_id)
+            .set_group_name(request.group_name)
+            .set_ip_permissions(request.ip_permissions)
+            .set_ip_protocol(request.ip_protocol)
+            .set_source_security_group_name(request.source_security_group_name)
+            .set_source_security_group_owner_id(request.source_security_group_owner_id)
+            .set_to_port(request.to_port)
+            .set_tag_specifications(request.tag_specifications)
+            .set_dry_run(request.dry_run)
+            .send()
+            .await,
+        "AuthorizeSecurityGroupIngress",
+        "SecurityGroupRule",
+        &group_id,
+    )?;
+    Ok(())
+}
+
+async fn authorize_ec2_security_group_egress(
+    client: &Ec2Client,
+    request: AuthorizeSecurityGroupEgressInput,
+) -> Result<()> {
+    let group_id = request.group_id().unwrap_or("<unknown>").to_string();
+
+    ec2_result(
+        client
+            .authorize_security_group_egress()
+            .set_tag_specifications(request.tag_specifications)
+            .set_dry_run(request.dry_run)
+            .set_group_id(request.group_id)
+            .set_source_security_group_name(request.source_security_group_name)
+            .set_source_security_group_owner_id(request.source_security_group_owner_id)
+            .set_ip_protocol(request.ip_protocol)
+            .set_from_port(request.from_port)
+            .set_to_port(request.to_port)
+            .set_cidr_ip(request.cidr_ip)
+            .set_ip_permissions(request.ip_permissions)
+            .send()
+            .await,
+        "AuthorizeSecurityGroupEgress",
+        "SecurityGroupRule",
+        &group_id,
+    )?;
+    Ok(())
+}
+
+async fn describe_ec2_availability_zones(
+    client: &Ec2Client,
+    request: DescribeAvailabilityZonesInput,
+) -> Result<DescribeAvailabilityZonesOutput> {
+    ec2_result(
+        client
+            .describe_availability_zones()
+            .set_zone_names(request.zone_names)
+            .set_zone_ids(request.zone_ids)
+            .set_all_availability_zones(request.all_availability_zones)
+            .set_dry_run(request.dry_run)
+            .set_filters(request.filters)
+            .send()
+            .await,
+        "DescribeAvailabilityZones",
+        "AvailabilityZone",
+        "*",
+    )
+}
+
+fn ec2_result<T, E>(
+    result: std::result::Result<T, SdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                if let Some(error_data) = ec2_error_data(
+                    service_error.code(),
+                    service_error.message(),
+                    operation,
+                    resource_type,
+                    resource_name,
+                ) {
+                    return Err(AlienError::new(error_data));
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "EC2 {operation} API failed for {resource_type} '{resource_name}'"
+                    ),
+                    resource_id: None,
+                }))
+        }
+    }
+}
+
+fn ec2_error_data(
+    code: Option<&str>,
+    message: Option<&str>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Option<ErrorData> {
+    let code = code?;
+    let message = message.unwrap_or(code);
+
+    let not_found_resource_type = match code {
+        "InvalidVpcID.NotFound" | "InvalidVpc.NotFound" => Some("VPC"),
+        "InvalidSubnetID.NotFound" | "InvalidSubnet.NotFound" => Some("Subnet"),
+        "InvalidInternetGatewayID.NotFound" | "InvalidInternetGateway.NotFound" => {
+            Some("InternetGateway")
+        }
+        "InvalidNatGatewayID.NotFound" | "NatGatewayNotFound" => Some("NatGateway"),
+        "InvalidRouteTableID.NotFound" | "InvalidRouteTableId.NotFound" => Some("RouteTable"),
+        "InvalidGroup.NotFound" | "InvalidSecurityGroupID.NotFound" => Some("SecurityGroup"),
+        "InvalidAllocationID.NotFound" | "InvalidAddress.NotFound" => Some("ElasticIP"),
+        "InvalidAssociationID.NotFound" => Some("RouteTableAssociation"),
+        _ => None,
+    };
+    if let Some(resource_type) = not_found_resource_type {
+        return Some(ErrorData::CloudResourceNotFound {
+            resource_type: resource_type.to_string(),
+            resource_name: resource_name.to_string(),
+        });
+    }
+
+    match code {
+        "InvalidGroup.Duplicate"
+        | "InvalidPermission.Duplicate"
+        | "DependencyViolation"
+        | "ResourceInUse"
+        | "Gateway.NotAttached"
+        | "RouteAlreadyExists" => Some(ErrorData::CloudResourceConflict {
+            resource_type: resource_type.to_string(),
+            resource_name: resource_name.to_string(),
+            message: format!("{operation} reported {code}: {message}"),
+        }),
+        _ => None,
+    }
+}
+
 /// AWS Network Controller state machine.
 ///
 /// This controller manages the lifecycle of AWS VPC networking infrastructure.
@@ -220,28 +879,28 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-        let response = client
-            .describe_security_groups(
-                DescribeSecurityGroupsRequest::builder()
-                    .set_filters(Some(vec![
-                        Filter::builder().name("vpc-id").values(vpc_id).build(),
-                        Filter::builder()
-                            .name("group-name")
-                            .values(group_name)
-                            .build(),
-                    ]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build security group lookup request".to_string(),
-                        resource_id: Some(resource_id.to_string()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe existing security group".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+        let response = describe_ec2_security_groups(
+            &client,
+            DescribeSecurityGroupsInput::builder()
+                .set_filters(Some(vec![
+                    Filter::builder().name("vpc-id").values(vpc_id).build(),
+                    Filter::builder()
+                        .name("group-name")
+                        .values(group_name)
+                        .build(),
+                ]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build security group lookup request".to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to describe existing security group".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        })?;
 
         Ok(response
             .security_groups()
@@ -258,22 +917,22 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-        let response = client
-            .describe_security_groups(
-                DescribeSecurityGroupsRequest::builder()
-                    .group_ids(group_id.to_string())
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build security group describe request".to_string(),
-                        resource_id: Some(resource_id.to_string()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe security group".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+        let response = describe_ec2_security_groups(
+            &client,
+            DescribeSecurityGroupsInput::builder()
+                .group_ids(group_id.to_string())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build security group describe request".to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to describe security group".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        })?;
 
         response.security_groups().first().cloned().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -299,7 +958,7 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Get all existing VPC CIDRs in the account
-        let describe_vpcs_request = DescribeVpcsRequest::builder()
+        let describe_vpcs_request = DescribeVpcsInput::builder()
             .build()
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
@@ -307,12 +966,12 @@ impl AwsNetworkController {
                 resource_id: Some(stack_id.to_string()),
             })?;
 
-        let existing_vpcs = client.describe_vpcs(describe_vpcs_request).await.context(
-            ErrorData::CloudPlatformError {
+        let existing_vpcs = describe_ec2_vpcs(&client, describe_vpcs_request)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to describe existing VPCs for CIDR allocation".to_string(),
                 resource_id: Some(stack_id.to_string()),
-            },
-        )?;
+            })?;
 
         let used_cidrs: HashSet<String> = existing_vpcs
             .vpcs()
@@ -438,7 +1097,7 @@ impl AwsNetworkController {
         );
 
         TagSpecification::builder()
-            .resource_type(Ec2ResourceType::from(resource_type))
+            .resource_type(ResourceType::from(resource_type))
             .set_tags(Some(tags))
             .build()
     }
@@ -483,7 +1142,7 @@ impl AwsNetworkController {
 
                 info!("Discovering AWS default VPC");
 
-                let describe_vpcs_request = DescribeVpcsRequest::builder()
+                let describe_vpcs_request = DescribeVpcsInput::builder()
                     .filters(Filter::builder().name("is-default").values("true").build())
                     .build()
                     .into_alien_error()
@@ -493,8 +1152,7 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                let vpcs_response = ec2_client
-                    .describe_vpcs(describe_vpcs_request)
+                let vpcs_response = describe_ec2_vpcs(&ec2_client, describe_vpcs_request)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: "Failed to discover default VPC".to_string(),
@@ -525,7 +1183,7 @@ impl AwsNetworkController {
                     })?;
 
                 // List subnets in the default VPC
-                let describe_subnets_request = DescribeSubnetsRequest::builder()
+                let describe_subnets_request = DescribeSubnetsInput::builder()
                     .filters(
                         Filter::builder()
                             .name("vpc-id")
@@ -540,8 +1198,7 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                let subnets_response = ec2_client
-                    .describe_subnets(describe_subnets_request)
+                let subnets_response = describe_ec2_subnets(&ec2_client, describe_subnets_request)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: "Failed to list subnets in default VPC".to_string(),
@@ -652,7 +1309,7 @@ impl AwsNetworkController {
         info!(cidr = %vpc_cidr, "Creating VPC");
 
         // Create the VPC
-        let create_vpc_request = CreateVpcRequest::builder()
+        let create_vpc_request = CreateVpcInput::builder()
             .cidr_block(vpc_cidr.clone())
             .set_tag_specifications(Some(self.create_tags(
                 ctx.resource_prefix,
@@ -666,14 +1323,12 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let create_response =
-            client
-                .create_vpc(create_vpc_request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to create VPC".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let create_response = create_ec2_vpc(&client, create_vpc_request).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Failed to create VPC".to_string(),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
 
         let vpc_id = create_response
             .vpc()
@@ -689,62 +1344,62 @@ impl AwsNetworkController {
         info!(vpc_id = %vpc_id, "VPC created, enabling DNS support");
 
         // Enable DNS support
-        client
-            .modify_vpc_attribute(
-                ModifyVpcAttributeRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .enable_dns_support(AttributeBooleanValue::builder().value(true).build())
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build DNS support modify request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to enable DNS support on VPC".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        modify_ec2_vpc_attribute(
+            &client,
+            ModifyVpcAttributeInput::builder()
+                .vpc_id(vpc_id.clone())
+                .enable_dns_support(AttributeBooleanValue::builder().value(true).build())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build DNS support modify request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to enable DNS support on VPC".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         // Enable DNS hostnames
-        client
-            .modify_vpc_attribute(
-                ModifyVpcAttributeRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .enable_dns_hostnames(AttributeBooleanValue::builder().value(true).build())
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build DNS hostnames modify request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to enable DNS hostnames on VPC".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        modify_ec2_vpc_attribute(
+            &client,
+            ModifyVpcAttributeInput::builder()
+                .vpc_id(vpc_id.clone())
+                .enable_dns_hostnames(AttributeBooleanValue::builder().value(true).build())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build DNS hostnames modify request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to enable DNS hostnames on VPC".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.vpc_id = Some(vpc_id);
         self.cidr_block = Some(vpc_cidr);
 
         // Get availability zones
-        let az_response = client
-            .describe_availability_zones(
-                DescribeAvailabilityZonesRequest::builder()
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build availability zone describe request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe availability zones".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let az_response = describe_ec2_availability_zones(
+            &client,
+            DescribeAvailabilityZonesInput::builder()
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build availability zone describe request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to describe availability zones".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         // Take the requested number of AZs
         self.availability_zones = az_response
@@ -792,7 +1447,7 @@ impl AwsNetworkController {
         info!("Creating Internet Gateway");
 
         // Create Internet Gateway
-        let create_gateway_request = CreateInternetGatewayRequest::builder()
+        let create_gateway_request = CreateInternetGatewayInput::builder()
             .set_tag_specifications(Some(self.create_tags(
                 ctx.resource_prefix,
                 &config.id,
@@ -805,8 +1460,7 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let igw_response = client
-            .create_internet_gateway(create_gateway_request)
+        let igw_response = create_ec2_internet_gateway(&client, create_gateway_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to create Internet Gateway".to_string(),
@@ -827,7 +1481,7 @@ impl AwsNetworkController {
         info!(igw_id = %igw_id, "Internet Gateway created, attaching to VPC");
 
         // Attach Internet Gateway to VPC
-        let attach_gateway_request = AttachInternetGatewayRequest::builder()
+        let attach_gateway_request = AttachInternetGatewayInput::builder()
             .internet_gateway_id(igw_id.clone())
             .vpc_id(vpc_id.clone())
             .build()
@@ -837,8 +1491,7 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        client
-            .attach_internet_gateway(attach_gateway_request)
+        attach_ec2_internet_gateway(&client, attach_gateway_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to attach Internet Gateway to VPC".to_string(),
@@ -903,7 +1556,7 @@ impl AwsNetworkController {
         {
             let subnet_name = format!("{}-public-{}", ctx.resource_prefix, i + 1);
 
-            let create_subnet_request = CreateSubnetRequest::builder()
+            let create_subnet_request = CreateSubnetInput::builder()
                 .vpc_id(vpc_id.clone())
                 .cidr_block(cidr.clone())
                 .availability_zone(az.clone())
@@ -921,12 +1574,12 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let subnet_response = client.create_subnet(create_subnet_request).await.context(
-                ErrorData::CloudPlatformError {
+            let subnet_response = create_ec2_subnet(&client, create_subnet_request)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create public subnet in {}", az),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             if let Some(subnet_id) = subnet_response
                 .subnet()
@@ -945,7 +1598,7 @@ impl AwsNetworkController {
         {
             let subnet_name = format!("{}-private-{}", ctx.resource_prefix, i + 1);
 
-            let create_subnet_request = CreateSubnetRequest::builder()
+            let create_subnet_request = CreateSubnetInput::builder()
                 .vpc_id(vpc_id.clone())
                 .cidr_block(cidr.clone())
                 .availability_zone(az.clone())
@@ -963,12 +1616,12 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let subnet_response = client.create_subnet(create_subnet_request).await.context(
-                ErrorData::CloudPlatformError {
+            let subnet_response = create_ec2_subnet(&client, create_subnet_request)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to create private subnet in {}", az),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             if let Some(subnet_id) = subnet_response
                 .subnet()
@@ -1021,29 +1674,29 @@ impl AwsNetworkController {
         info!("Creating public route table");
 
         // Create public route table
-        let public_rt_response = client
-            .create_route_table(
-                CreateRouteTableRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .set_tag_specifications(Some(vec![self.create_tag_specification(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "route-table",
-                        format!("{}-public-rt", ctx.resource_prefix),
-                        [],
-                    )]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build public route table creation request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create public route table".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let public_rt_response = create_ec2_route_table(
+            &client,
+            CreateRouteTableInput::builder()
+                .vpc_id(vpc_id.clone())
+                .set_tag_specifications(Some(vec![self.create_tag_specification(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "route-table",
+                    format!("{}-public-rt", ctx.resource_prefix),
+                    [],
+                )]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build public route table creation request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create public route table".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let public_rt_id = public_rt_response
             .route_table()
@@ -1057,50 +1710,50 @@ impl AwsNetworkController {
             })?;
 
         // Add route to Internet Gateway
-        client
-            .create_route(
-                CreateRouteRequest::builder()
+        create_ec2_route(
+            &client,
+            CreateRouteInput::builder()
+                .route_table_id(public_rt_id.clone())
+                .destination_cidr_block("0.0.0.0/0".to_string())
+                .gateway_id(igw_id.clone())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build Internet Gateway route request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create route to Internet Gateway".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
+
+        // Associate public subnets with public route table
+        for subnet_id in &self.public_subnet_ids {
+            let assoc_response = associate_ec2_route_table(
+                &client,
+                AssociateRouteTableInput::builder()
                     .route_table_id(public_rt_id.clone())
-                    .destination_cidr_block("0.0.0.0/0".to_string())
-                    .gateway_id(igw_id.clone())
+                    .subnet_id(subnet_id.clone())
                     .build()
                     .into_alien_error()
                     .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build Internet Gateway route request".to_string(),
+                        message: format!(
+                            "Failed to build public route table association request for subnet {}",
+                            subnet_id
+                        ),
                         resource_id: Some(config.id.clone()),
                     })?,
             )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to create route to Internet Gateway".to_string(),
+                message: format!(
+                    "Failed to associate subnet {} with public route table",
+                    subnet_id
+                ),
                 resource_id: Some(config.id.clone()),
             })?;
-
-        // Associate public subnets with public route table
-        for subnet_id in &self.public_subnet_ids {
-            let assoc_response = client
-                .associate_route_table(
-                    AssociateRouteTableRequest::builder()
-                        .route_table_id(public_rt_id.clone())
-                        .subnet_id(subnet_id.clone())
-                        .build()
-                        .into_alien_error()
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to build public route table association request for subnet {}",
-                                subnet_id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to associate subnet {} with public route table",
-                        subnet_id
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
 
             if let Some(assoc_id) = assoc_response.association_id() {
                 self.route_table_association_ids.push(assoc_id.to_string());
@@ -1112,29 +1765,29 @@ impl AwsNetworkController {
         info!("Creating private route table");
 
         // Create private route table
-        let private_rt_response = client
-            .create_route_table(
-                CreateRouteTableRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .set_tag_specifications(Some(vec![self.create_tag_specification(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "route-table",
-                        format!("{}-private-rt", ctx.resource_prefix),
-                        [],
-                    )]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build private route table creation request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create private route table".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let private_rt_response = create_ec2_route_table(
+            &client,
+            CreateRouteTableInput::builder()
+                .vpc_id(vpc_id.clone())
+                .set_tag_specifications(Some(vec![self.create_tag_specification(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "route-table",
+                    format!("{}-private-rt", ctx.resource_prefix),
+                    [],
+                )]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build private route table creation request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create private route table".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let private_rt_id = private_rt_response
             .route_table()
@@ -1149,29 +1802,29 @@ impl AwsNetworkController {
 
         // Associate private subnets with private route table
         for subnet_id in &self.private_subnet_ids {
-            let assoc_response = client
-                .associate_route_table(
-                    AssociateRouteTableRequest::builder()
-                        .route_table_id(private_rt_id.clone())
-                        .subnet_id(subnet_id.clone())
-                        .build()
-                        .into_alien_error()
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to build private route table association request for subnet {}",
-                                subnet_id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to associate subnet {} with private route table",
-                        subnet_id
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let assoc_response = associate_ec2_route_table(
+                &client,
+                AssociateRouteTableInput::builder()
+                    .route_table_id(private_rt_id.clone())
+                    .subnet_id(subnet_id.clone())
+                    .build()
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to build private route table association request for subnet {}",
+                            subnet_id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to associate subnet {} with private route table",
+                    subnet_id
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             if let Some(assoc_id) = assoc_response.association_id() {
                 self.route_table_association_ids.push(assoc_id.to_string());
@@ -1212,27 +1865,27 @@ impl AwsNetworkController {
         info!("Allocating Elastic IP for NAT Gateway");
 
         // Allocate Elastic IP
-        let eip_response = client
-            .allocate_address(
-                AllocateAddressRequest::builder()
-                    .domain(DomainType::Vpc)
-                    .set_tag_specifications(Some(self.create_tags(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "elastic-ip",
-                    )))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build Elastic IP allocation request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to allocate Elastic IP".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let eip_response = allocate_ec2_address(
+            &client,
+            AllocateAddressInput::builder()
+                .domain(DomainType::Vpc)
+                .set_tag_specifications(Some(self.create_tags(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "elastic-ip",
+                )))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build Elastic IP allocation request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to allocate Elastic IP".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let allocation_id = eip_response
             .allocation_id()
@@ -1249,29 +1902,29 @@ impl AwsNetworkController {
         info!(allocation_id = %allocation_id, "Creating NAT Gateway");
 
         // Create NAT Gateway
-        let nat_response = client
-            .create_nat_gateway(
-                CreateNatGatewayRequest::builder()
-                    .subnet_id(public_subnet_id.clone())
-                    .allocation_id(allocation_id)
-                    .connectivity_type(ConnectivityType::Public)
-                    .set_tag_specifications(Some(self.create_tags(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "natgateway",
-                    )))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build NAT Gateway creation request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create NAT Gateway".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let nat_response = create_ec2_nat_gateway(
+            &client,
+            CreateNatGatewayInput::builder()
+                .subnet_id(public_subnet_id.clone())
+                .allocation_id(allocation_id)
+                .connectivity_type(ConnectivityType::Public)
+                .set_tag_specifications(Some(self.create_tags(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "natgateway",
+                )))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build NAT Gateway creation request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create NAT Gateway".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let nat_gateway_id = nat_response
             .nat_gateway()
@@ -1315,22 +1968,22 @@ impl AwsNetworkController {
         })?;
 
         // Check NAT Gateway status
-        let nat_response = client
-            .describe_nat_gateways(
-                DescribeNatGatewaysRequest::builder()
-                    .nat_gateway_ids(nat_gateway_id.clone())
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build NAT Gateway describe request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe NAT Gateway".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let nat_response = describe_ec2_nat_gateways(
+            &client,
+            DescribeNatGatewaysInput::builder()
+                .nat_gateway_ids(nat_gateway_id.clone())
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build NAT Gateway describe request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to describe NAT Gateway".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let nat_gateway = nat_response.nat_gateways().first().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -1351,24 +2004,24 @@ impl AwsNetworkController {
                     })
                 })?;
 
-                client
-                    .create_route(
-                        CreateRouteRequest::builder()
-                            .route_table_id(private_rt_id.clone())
-                            .destination_cidr_block("0.0.0.0/0".to_string())
-                            .nat_gateway_id(nat_gateway_id.clone())
-                            .build()
-                            .into_alien_error()
-                            .context(ErrorData::CloudPlatformError {
-                                message: "Failed to build NAT Gateway route request".to_string(),
-                                resource_id: Some(config.id.clone()),
-                            })?,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to create route to NAT Gateway".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                create_ec2_route(
+                    &client,
+                    CreateRouteInput::builder()
+                        .route_table_id(private_rt_id.clone())
+                        .destination_cidr_block("0.0.0.0/0".to_string())
+                        .nat_gateway_id(nat_gateway_id.clone())
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to build NAT Gateway route request".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to create route to NAT Gateway".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 Ok(HandlerAction::Continue {
                     state: CreatingSecurityGroup,
@@ -1449,27 +2102,27 @@ impl AwsNetworkController {
         }
 
         // Create security group
-        let sg_result = client
-            .create_security_group(
-                CreateSecurityGroupRequest::builder()
-                    .group_name(group_name.clone())
-                    .description(
-                        "Alien managed security group for VPC internal communication".to_string(),
-                    )
-                    .vpc_id(vpc_id.clone())
-                    .set_tag_specifications(Some(self.create_tags(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "security-group",
-                    )))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build security group creation request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await;
+        let sg_result = create_ec2_security_group(
+            &client,
+            CreateSecurityGroupInput::builder()
+                .group_name(group_name.clone())
+                .description(
+                    "Alien managed security group for VPC internal communication".to_string(),
+                )
+                .vpc_id(vpc_id.clone())
+                .set_tag_specifications(Some(self.create_tags(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "security-group",
+                )))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build security group creation request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await;
 
         let sg_id = match sg_result {
             Ok(sg_response) => {
@@ -1560,27 +2213,27 @@ impl AwsNetworkController {
             });
         }
 
-        if let Err(e) = client
-            .authorize_security_group_ingress(
-                AuthorizeSecurityGroupIngressRequest::builder()
-                    .group_id(sg_id.clone())
-                    .set_ip_permissions(Some(vec![IpPermission::builder()
-                        .ip_protocol("-1") // All protocols
-                        .ip_ranges(
-                            IpRange::builder()
-                                .cidr_ip(cidr_block.clone())
-                                .description("Allow all traffic from VPC")
-                                .build(),
-                        )
-                        .build()]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build security group ingress request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
+        if let Err(e) = authorize_ec2_security_group_ingress(
+            &client,
+            AuthorizeSecurityGroupIngressInput::builder()
+                .group_id(sg_id.clone())
+                .set_ip_permissions(Some(vec![IpPermission::builder()
+                    .ip_protocol("-1") // All protocols
+                    .ip_ranges(
+                        IpRange::builder()
+                            .cidr_ip(cidr_block.clone())
+                            .description("Allow all traffic from VPC")
+                            .build(),
+                    )
+                    .build()]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build security group ingress request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
         {
             if is_security_group_rule_duplicate(&e) {
                 debug!("Ingress rule already exists (duplicate), skipping");
@@ -1631,27 +2284,27 @@ impl AwsNetworkController {
             });
         }
 
-        if let Err(e) = client
-            .authorize_security_group_egress(
-                AuthorizeSecurityGroupEgressRequest::builder()
-                    .group_id(sg_id.clone())
-                    .set_ip_permissions(Some(vec![IpPermission::builder()
-                        .ip_protocol("-1")
-                        .ip_ranges(
-                            IpRange::builder()
-                                .cidr_ip("0.0.0.0/0")
-                                .description("Allow all outbound traffic")
-                                .build(),
-                        )
-                        .build()]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build security group egress request".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?,
-            )
-            .await
+        if let Err(e) = authorize_ec2_security_group_egress(
+            &client,
+            AuthorizeSecurityGroupEgressInput::builder()
+                .group_id(sg_id.clone())
+                .set_ip_permissions(Some(vec![IpPermission::builder()
+                    .ip_protocol("-1")
+                    .ip_ranges(
+                        IpRange::builder()
+                            .cidr_ip("0.0.0.0/0")
+                            .description("Allow all outbound traffic")
+                            .build(),
+                    )
+                    .build()]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build security group egress request".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?,
+        )
+        .await
         {
             if is_security_group_rule_duplicate(&e) {
                 debug!("Egress rule already exists (duplicate), skipping");
@@ -1696,7 +2349,7 @@ impl AwsNetworkController {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-            let describe_vpcs_request = DescribeVpcsRequest::builder()
+            let describe_vpcs_request = DescribeVpcsInput::builder()
                 .vpc_ids(vpc_id.clone())
                 .build()
                 .into_alien_error()
@@ -1705,12 +2358,12 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let vpc_response = client.describe_vpcs(describe_vpcs_request).await.context(
-                ErrorData::CloudPlatformError {
+            let vpc_response = describe_ec2_vpcs(&client, describe_vpcs_request)
+                .await
+                .context(ErrorData::CloudPlatformError {
                     message: "Failed to verify VPC during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             if vpc_response.vpcs().is_empty() {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
@@ -1842,7 +2495,7 @@ impl AwsNetworkController {
         if let Some(nat_gateway_id) = &self.nat_gateway_id {
             info!(nat_gateway_id = %nat_gateway_id, "Deleting NAT Gateway");
 
-            let delete_request = DeleteNatGatewayRequest::builder()
+            let delete_request = DeleteNatGatewayInput::builder()
                 .nat_gateway_id(nat_gateway_id.clone())
                 .build()
                 .into_alien_error()
@@ -1851,7 +2504,7 @@ impl AwsNetworkController {
                     resource_id: None,
                 })?;
 
-            match client.delete_nat_gateway(delete_request).await {
+            match delete_ec2_nat_gateway(&client, delete_request).await {
                 Ok(_) => {
                     info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deletion initiated");
                 }
@@ -1870,7 +2523,7 @@ impl AwsNetworkController {
         if let Some(allocation_id) = &self.eip_allocation_id {
             info!(allocation_id = %allocation_id, "Releasing Elastic IP");
 
-            match client.release_address(allocation_id).await {
+            match release_ec2_address(&client, allocation_id).await {
                 Ok(_) => {
                     info!(allocation_id = %allocation_id, "Elastic IP released");
                 }
@@ -1907,7 +2560,7 @@ impl AwsNetworkController {
         if let Some(sg_id) = &self.security_group_id {
             info!(sg_id = %sg_id, "Deleting security group");
 
-            match client.delete_security_group(sg_id).await {
+            match delete_ec2_security_group(&client, sg_id).await {
                 Ok(_) => {
                     info!(sg_id = %sg_id, "Security group deleted");
                 }
@@ -1948,7 +2601,7 @@ impl AwsNetworkController {
         {
             info!(subnet_id = %subnet_id, "Deleting subnet");
 
-            match client.delete_subnet(&subnet_id).await {
+            match delete_ec2_subnet(&client, &subnet_id).await {
                 Ok(_) => {
                     info!(subnet_id = %subnet_id, "Subnet deleted");
                 }
@@ -1983,7 +2636,7 @@ impl AwsNetworkController {
         for assoc_id in self.route_table_association_ids.drain(..) {
             info!(assoc_id = %assoc_id, "Disassociating route table");
 
-            match client.disassociate_route_table(&assoc_id).await {
+            match disassociate_ec2_route_table(&client, &assoc_id).await {
                 Ok(_) => {
                     info!(assoc_id = %assoc_id, "Route table disassociated");
                 }
@@ -1997,7 +2650,7 @@ impl AwsNetworkController {
         if let Some(rt_id) = self.public_route_table_id.take() {
             info!(rt_id = %rt_id, "Deleting public route table");
 
-            match client.delete_route_table(&rt_id).await {
+            match delete_ec2_route_table(&client, &rt_id).await {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Public route table deleted");
                 }
@@ -2014,7 +2667,7 @@ impl AwsNetworkController {
         if let Some(rt_id) = self.private_route_table_id.take() {
             info!(rt_id = %rt_id, "Deleting private route table");
 
-            match client.delete_route_table(&rt_id).await {
+            match delete_ec2_route_table(&client, &rt_id).await {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Private route table deleted");
                 }
@@ -2051,7 +2704,7 @@ impl AwsNetworkController {
             if let Some(vpc_id) = &self.vpc_id {
                 info!(igw_id = %igw_id, vpc_id = %vpc_id, "Detaching Internet Gateway");
 
-                let detach_gateway_request = DetachInternetGatewayRequest::builder()
+                let detach_gateway_request = DetachInternetGatewayInput::builder()
                     .internet_gateway_id(igw_id.clone())
                     .vpc_id(vpc_id.clone())
                     .build()
@@ -2061,7 +2714,7 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                match client.detach_internet_gateway(detach_gateway_request).await {
+                match detach_ec2_internet_gateway(&client, detach_gateway_request).await {
                     Ok(_) => {
                         info!(igw_id = %igw_id, "Internet Gateway detached");
                     }
@@ -2073,7 +2726,7 @@ impl AwsNetworkController {
 
             info!(igw_id = %igw_id, "Deleting Internet Gateway");
 
-            match client.delete_internet_gateway(igw_id).await {
+            match delete_ec2_internet_gateway(&client, igw_id).await {
                 Ok(_) => {
                     info!(igw_id = %igw_id, "Internet Gateway deleted");
                 }
@@ -2107,7 +2760,7 @@ impl AwsNetworkController {
         if let Some(vpc_id) = &self.vpc_id {
             info!(vpc_id = %vpc_id, "Deleting VPC");
 
-            match client.delete_vpc(vpc_id).await {
+            match delete_ec2_vpc(&client, vpc_id).await {
                 Ok(_) => {
                     info!(vpc_id = %vpc_id, "VPC deleted");
                 }

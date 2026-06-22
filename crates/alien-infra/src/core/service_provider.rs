@@ -5,7 +5,7 @@ use crate::aws_sdk::{
     ec2_client_from_alien_config, ecr_client_from_alien_config,
     eventbridge_client_from_alien_config, iam_client_from_alien_config,
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
-    Ec2Api, IamApi,
+    IamApi,
 };
 use crate::azure_container_apps::{
     ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
@@ -4626,7 +4626,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<aws_sdk_dynamodb::Client>;
     async fn get_aws_sqs_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_sqs::Client>;
-    async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>>;
+    async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_ec2::Client>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_acm::Client>;
     async fn get_aws_apigatewayv2_client(
         &self,
@@ -4910,8 +4910,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         sqs_client_from_alien_config(config).await
     }
 
-    async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>> {
-        Ok(Arc::new(ec2_client_from_alien_config(config).await?))
+    async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_ec2::Client> {
+        ec2_client_from_alien_config(config).await
     }
 
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<aws_sdk_acm::Client> {

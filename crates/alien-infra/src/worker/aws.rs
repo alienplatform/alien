@@ -4,7 +4,6 @@ use tracing::{debug, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 
-use crate::aws_sdk::{DescribeNetworkInterfacesRequest, Filter};
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
@@ -42,6 +41,14 @@ use aws_sdk_apigatewayv2::{
     },
     types::{DomainNameConfiguration, EndpointType, IntegrationType, ProtocolType, SecurityPolicy},
     Client as ApiGatewayV2Client,
+};
+use aws_sdk_ec2::{
+    error::{ProvideErrorMetadata as Ec2ProvideErrorMetadata, SdkError as Ec2SdkError},
+    operation::describe_network_interfaces::{
+        DescribeNetworkInterfacesInput, DescribeNetworkInterfacesOutput,
+    },
+    types::Filter,
+    Client as Ec2Client,
 };
 use aws_sdk_eventbridge::{
     error::{
@@ -113,6 +120,69 @@ fn readiness_probe_dns_override(
         target_dns_name: endpoint.dns_name.clone(),
         port: parsed.port_or_known_default().unwrap_or(443),
     })
+}
+
+async fn describe_ec2_network_interfaces(
+    client: &Ec2Client,
+    request: DescribeNetworkInterfacesInput,
+) -> Result<DescribeNetworkInterfacesOutput> {
+    match client
+        .describe_network_interfaces()
+        .set_next_token(request.next_token)
+        .set_max_results(request.max_results)
+        .set_dry_run(request.dry_run)
+        .set_network_interface_ids(request.network_interface_ids)
+        .set_filters(request.filters)
+        .send()
+        .await
+    {
+        Ok(output) => Ok(output),
+        Err(error) => Err(map_ec2_error(
+            error,
+            "DescribeNetworkInterfaces",
+            "NetworkInterface",
+            "*",
+        )),
+    }
+}
+
+fn map_ec2_error<E>(
+    error: Ec2SdkError<E>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> AlienError<ErrorData>
+where
+    E: Ec2ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    if let Some(service_error) = error.as_service_error() {
+        match service_error.code() {
+            Some("InvalidNetworkInterfaceID.NotFound") => {
+                return AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: resource_type.to_string(),
+                    resource_name: resource_name.to_string(),
+                });
+            }
+            Some(code @ ("DependencyViolation" | "ResourceInUse")) => {
+                return AlienError::new(ErrorData::CloudResourceConflict {
+                    resource_type: resource_type.to_string(),
+                    resource_name: resource_name.to_string(),
+                    message: format!(
+                        "{operation} reported {code}: {}",
+                        service_error.message().unwrap_or(code)
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    error
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("EC2 {operation} API failed for {resource_type} '{resource_name}'"),
+            resource_id: None,
+        })
 }
 
 fn eventbridge_tags(prefix: &str, resource_id: &str) -> Result<Vec<EventBridgeTag>> {
@@ -4704,26 +4774,26 @@ impl AwsWorkerController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-        let result = client
-            .describe_network_interfaces(
-                DescribeNetworkInterfacesRequest::builder()
-                    .set_filters(Some(vec![Filter::builder()
-                        .name("description")
-                        .values(format!("AWS Lambda VPC ENI-{}*", aws_worker_name))
-                        .build()]))
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to build Lambda VPC network interface lookup request"
-                            .to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to check Lambda VPC network interface cleanup".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let result = describe_ec2_network_interfaces(
+            &client,
+            DescribeNetworkInterfacesInput::builder()
+                .set_filters(Some(vec![Filter::builder()
+                    .name("description")
+                    .values(format!("AWS Lambda VPC ENI-{}*", aws_worker_name))
+                    .build()]))
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to build Lambda VPC network interface lookup request"
+                        .to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to check Lambda VPC network interface cleanup".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         let network_interfaces = result.network_interfaces();
 
