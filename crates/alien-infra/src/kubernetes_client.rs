@@ -10,7 +10,7 @@ use k8s_openapi::{
         core::v1::{Event, Node, Pod, Secret, Service},
         networking::v1::Ingress,
     },
-    apimachinery::pkg::version::Info as KubernetesVersionInfo,
+    apimachinery::pkg::version,
     List,
 };
 use kube::{
@@ -228,7 +228,7 @@ pub trait RouteApi: Send + Sync + std::fmt::Debug {
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait]
 pub trait VersionApi: Send + Sync + std::fmt::Debug {
-    async fn get_version(&self) -> Result<KubernetesVersionInfo>;
+    async fn get_version(&self) -> Result<version::Info>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1343,7 +1343,7 @@ impl RouteApi for KubernetesClient {
 
 #[async_trait]
 impl VersionApi for KubernetesClient {
-    async fn get_version(&self) -> Result<KubernetesVersionInfo> {
+    async fn get_version(&self) -> Result<version::Info> {
         self.client
             .apiserver_version()
             .await
