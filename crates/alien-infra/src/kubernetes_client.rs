@@ -2,7 +2,6 @@ use alien_client_core::{ErrorData, Result};
 use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
-use async_trait::async_trait;
 use k8s_openapi::{
     api::{
         apps::v1::{DaemonSet, Deployment, StatefulSet},
@@ -18,195 +17,10 @@ use kube::{
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
-#[cfg(any(test, feature = "test-utils"))]
-use mockall::automock;
 use secrecy::SecretString;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::fmt::{self, Debug};
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
-    async fn create_deployment(
-        &self,
-        namespace: &str,
-        deployment: &Deployment,
-    ) -> Result<Deployment>;
-    async fn get_deployment(&self, namespace: &str, name: &str) -> Result<Deployment>;
-    async fn list_deployments(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Deployment>>;
-    async fn update_deployment(
-        &self,
-        namespace: &str,
-        name: &str,
-        deployment: &Deployment,
-    ) -> Result<Deployment>;
-    async fn delete_deployment(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_statefulset(
-        &self,
-        namespace: &str,
-        statefulset: &StatefulSet,
-    ) -> Result<StatefulSet>;
-    async fn get_statefulset(&self, namespace: &str, name: &str) -> Result<StatefulSet>;
-    async fn update_statefulset(
-        &self,
-        namespace: &str,
-        name: &str,
-        statefulset: &StatefulSet,
-    ) -> Result<StatefulSet>;
-    async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_daemonset(&self, namespace: &str, daemonset: &DaemonSet) -> Result<DaemonSet>;
-    async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet>;
-    async fn update_daemonset(
-        &self,
-        namespace: &str,
-        name: &str,
-        daemonset: &DaemonSet,
-    ) -> Result<DaemonSet>;
-    async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait JobApi: Send + Sync + std::fmt::Debug {
-    async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job>;
-    async fn get_job(&self, namespace: &str, name: &str) -> Result<Job>;
-    async fn delete_job(&self, namespace: &str, name: &str) -> Result<()>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait PodApi: Send + Sync + std::fmt::Debug {
-    async fn list_pods(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Pod>>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait EventApi: Send + Sync + std::fmt::Debug {
-    async fn list_events(
-        &self,
-        namespace: &str,
-        field_selector: Option<String>,
-    ) -> Result<List<Event>>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait NodeApi: Send + Sync + std::fmt::Debug {
-    async fn list_nodes(
-        &self,
-        label_selector: Option<String>,
-        field_selector: Option<String>,
-    ) -> Result<List<Node>>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait MetricsApi: Send + Sync + std::fmt::Debug {
-    async fn list_pod_metrics(
-        &self,
-        namespace: &str,
-        label_selector: Option<String>,
-    ) -> Result<ObjectList<DynamicObject>>;
-
-    async fn list_node_metrics(
-        &self,
-        label_selector: Option<String>,
-    ) -> Result<ObjectList<DynamicObject>>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait SecretsApi: Send + Sync + std::fmt::Debug {
-    async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret>;
-    async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret>;
-    async fn update_secret(&self, namespace: &str, name: &str, secret: &Secret) -> Result<Secret>;
-    async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait ServiceApi: Send + Sync + std::fmt::Debug {
-    async fn create_service(&self, namespace: &str, service: &Service) -> Result<Service>;
-    async fn get_service(&self, namespace: &str, name: &str) -> Result<Service>;
-    async fn update_service(
-        &self,
-        namespace: &str,
-        name: &str,
-        service: &Service,
-    ) -> Result<Service>;
-    async fn delete_service(&self, namespace: &str, name: &str) -> Result<()>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait RouteApi: Send + Sync + std::fmt::Debug {
-    async fn create_ingress(&self, namespace: &str, ingress: &Ingress) -> Result<Ingress>;
-    async fn get_ingress(&self, namespace: &str, name: &str) -> Result<Ingress>;
-    async fn update_ingress(
-        &self,
-        namespace: &str,
-        name: &str,
-        ingress: &Ingress,
-    ) -> Result<Ingress>;
-    async fn delete_ingress(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_gateway(&self, namespace: &str, gateway: &Value) -> Result<Value>;
-    async fn get_gateway(&self, namespace: &str, name: &str) -> Result<Value>;
-    async fn update_gateway(&self, namespace: &str, name: &str, gateway: &Value) -> Result<Value>;
-    async fn delete_gateway(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_http_route(&self, namespace: &str, route: &Value) -> Result<Value>;
-    async fn get_http_route(&self, namespace: &str, name: &str) -> Result<Value>;
-    async fn update_http_route(&self, namespace: &str, name: &str, route: &Value) -> Result<Value>;
-    async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        policy: &Value,
-    ) -> Result<Value>;
-    async fn get_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value>;
-    async fn update_gke_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-        policy: &Value,
-    ) -> Result<Value>;
-    async fn delete_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<()>;
-
-    async fn create_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        policy: &Value,
-    ) -> Result<Value>;
-    async fn get_azure_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value>;
-    async fn update_azure_health_check_policy(
-        &self,
-        namespace: &str,
-        name: &str,
-        policy: &Value,
-    ) -> Result<Value>;
-    async fn delete_azure_health_check_policy(&self, namespace: &str, name: &str) -> Result<()>;
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait]
-pub trait VersionApi: Send + Sync + std::fmt::Debug {
-    async fn get_version(&self) -> Result<version::Info>;
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalKubernetesReadSource {
@@ -795,9 +609,8 @@ async fn replace_dynamic(api: Api<DynamicObject>, name: &str, value: &Value) -> 
     value_from_dynamic(replaced)
 }
 
-#[async_trait]
-impl DeploymentApi for KubernetesClient {
-    async fn create_deployment(
+impl KubernetesClient {
+    pub(crate) async fn create_deployment(
         &self,
         namespace: &str,
         deployment: &Deployment,
@@ -805,11 +618,11 @@ impl DeploymentApi for KubernetesClient {
         create(self.namespaced(namespace), deployment).await
     }
 
-    async fn get_deployment(&self, namespace: &str, name: &str) -> Result<Deployment> {
+    pub(crate) async fn get_deployment(&self, namespace: &str, name: &str) -> Result<Deployment> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn list_deployments(
+    pub(crate) async fn list_deployments(
         &self,
         namespace: &str,
         label_selector: Option<String>,
@@ -818,7 +631,7 @@ impl DeploymentApi for KubernetesClient {
         list(self.namespaced(namespace), label_selector, field_selector).await
     }
 
-    async fn update_deployment(
+    pub(crate) async fn update_deployment(
         &self,
         namespace: &str,
         name: &str,
@@ -827,11 +640,11 @@ impl DeploymentApi for KubernetesClient {
         replace(self.namespaced(namespace), name, deployment).await
     }
 
-    async fn delete_deployment(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_deployment(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Deployment>(self.namespaced(namespace), name).await
     }
 
-    async fn create_statefulset(
+    pub(crate) async fn create_statefulset(
         &self,
         namespace: &str,
         statefulset: &StatefulSet,
@@ -839,11 +652,11 @@ impl DeploymentApi for KubernetesClient {
         create(self.namespaced(namespace), statefulset).await
     }
 
-    async fn get_statefulset(&self, namespace: &str, name: &str) -> Result<StatefulSet> {
+    pub(crate) async fn get_statefulset(&self, namespace: &str, name: &str) -> Result<StatefulSet> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn update_statefulset(
+    pub(crate) async fn update_statefulset(
         &self,
         namespace: &str,
         name: &str,
@@ -852,19 +665,23 @@ impl DeploymentApi for KubernetesClient {
         replace(self.namespaced(namespace), name, statefulset).await
     }
 
-    async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<StatefulSet>(self.namespaced(namespace), name).await
     }
 
-    async fn create_daemonset(&self, namespace: &str, daemonset: &DaemonSet) -> Result<DaemonSet> {
+    pub(crate) async fn create_daemonset(
+        &self,
+        namespace: &str,
+        daemonset: &DaemonSet,
+    ) -> Result<DaemonSet> {
         create(self.namespaced(namespace), daemonset).await
     }
 
-    async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
+    pub(crate) async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn update_daemonset(
+    pub(crate) async fn update_daemonset(
         &self,
         namespace: &str,
         name: &str,
@@ -873,29 +690,27 @@ impl DeploymentApi for KubernetesClient {
         replace(self.namespaced(namespace), name, daemonset).await
     }
 
-    async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<DaemonSet>(self.namespaced(namespace), name).await
     }
 }
 
-#[async_trait]
-impl JobApi for KubernetesClient {
-    async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job> {
+impl KubernetesClient {
+    pub(crate) async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job> {
         create(self.namespaced(namespace), job).await
     }
 
-    async fn get_job(&self, namespace: &str, name: &str) -> Result<Job> {
+    pub(crate) async fn get_job(&self, namespace: &str, name: &str) -> Result<Job> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn delete_job(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_job(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Job>(self.namespaced(namespace), name).await
     }
 }
 
-#[async_trait]
-impl PodApi for KubernetesClient {
-    async fn list_pods(
+impl KubernetesClient {
+    pub(crate) async fn list_pods(
         &self,
         namespace: &str,
         label_selector: Option<String>,
@@ -905,9 +720,8 @@ impl PodApi for KubernetesClient {
     }
 }
 
-#[async_trait]
-impl EventApi for KubernetesClient {
-    async fn list_events(
+impl KubernetesClient {
+    pub(crate) async fn list_events(
         &self,
         namespace: &str,
         field_selector: Option<String>,
@@ -916,9 +730,8 @@ impl EventApi for KubernetesClient {
     }
 }
 
-#[async_trait]
-impl NodeApi for KubernetesClient {
-    async fn list_nodes(
+impl KubernetesClient {
+    pub(crate) async fn list_nodes(
         &self,
         label_selector: Option<String>,
         field_selector: Option<String>,
@@ -927,9 +740,8 @@ impl NodeApi for KubernetesClient {
     }
 }
 
-#[async_trait]
-impl MetricsApi for KubernetesClient {
-    async fn list_pod_metrics(
+impl KubernetesClient {
+    pub(crate) async fn list_pod_metrics(
         &self,
         namespace: &str,
         label_selector: Option<String>,
@@ -944,7 +756,7 @@ impl MetricsApi for KubernetesClient {
             })
     }
 
-    async fn list_node_metrics(
+    pub(crate) async fn list_node_metrics(
         &self,
         label_selector: Option<String>,
     ) -> Result<ObjectList<DynamicObject>> {
@@ -958,36 +770,43 @@ impl MetricsApi for KubernetesClient {
     }
 }
 
-#[async_trait]
-impl SecretsApi for KubernetesClient {
-    async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret> {
+impl KubernetesClient {
+    pub(crate) async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret> {
         create(self.namespaced(namespace), secret).await
     }
 
-    async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret> {
+    pub(crate) async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn update_secret(&self, namespace: &str, name: &str, secret: &Secret) -> Result<Secret> {
+    pub(crate) async fn update_secret(
+        &self,
+        namespace: &str,
+        name: &str,
+        secret: &Secret,
+    ) -> Result<Secret> {
         replace(self.namespaced(namespace), name, secret).await
     }
 
-    async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Secret>(self.namespaced(namespace), name).await
     }
 }
 
-#[async_trait]
-impl ServiceApi for KubernetesClient {
-    async fn create_service(&self, namespace: &str, service: &Service) -> Result<Service> {
+impl KubernetesClient {
+    pub(crate) async fn create_service(
+        &self,
+        namespace: &str,
+        service: &Service,
+    ) -> Result<Service> {
         create(self.namespaced(namespace), service).await
     }
 
-    async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
+    pub(crate) async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn update_service(
+    pub(crate) async fn update_service(
         &self,
         namespace: &str,
         name: &str,
@@ -996,22 +815,25 @@ impl ServiceApi for KubernetesClient {
         replace(self.namespaced(namespace), name, service).await
     }
 
-    async fn delete_service(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_service(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Service>(self.namespaced(namespace), name).await
     }
 }
 
-#[async_trait]
-impl RouteApi for KubernetesClient {
-    async fn create_ingress(&self, namespace: &str, ingress: &Ingress) -> Result<Ingress> {
+impl KubernetesClient {
+    pub(crate) async fn create_ingress(
+        &self,
+        namespace: &str,
+        ingress: &Ingress,
+    ) -> Result<Ingress> {
         create(self.namespaced(namespace), ingress).await
     }
 
-    async fn get_ingress(&self, namespace: &str, name: &str) -> Result<Ingress> {
+    pub(crate) async fn get_ingress(&self, namespace: &str, name: &str) -> Result<Ingress> {
         get(self.namespaced(namespace), name).await
     }
 
-    async fn update_ingress(
+    pub(crate) async fn update_ingress(
         &self,
         namespace: &str,
         name: &str,
@@ -1020,11 +842,11 @@ impl RouteApi for KubernetesClient {
         replace(self.namespaced(namespace), name, ingress).await
     }
 
-    async fn delete_ingress(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_ingress(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<Ingress>(self.namespaced(namespace), name).await
     }
 
-    async fn create_gateway(&self, namespace: &str, gateway: &Value) -> Result<Value> {
+    pub(crate) async fn create_gateway(&self, namespace: &str, gateway: &Value) -> Result<Value> {
         create_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1038,7 +860,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn get_gateway(&self, namespace: &str, name: &str) -> Result<Value> {
+    pub(crate) async fn get_gateway(&self, namespace: &str, name: &str) -> Result<Value> {
         get_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1052,7 +874,12 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn update_gateway(&self, namespace: &str, name: &str, gateway: &Value) -> Result<Value> {
+    pub(crate) async fn update_gateway(
+        &self,
+        namespace: &str,
+        name: &str,
+        gateway: &Value,
+    ) -> Result<Value> {
         replace_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1067,7 +894,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn delete_gateway(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_gateway(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<DynamicObject>(
             self.dynamic_namespaced(
                 namespace,
@@ -1081,7 +908,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn create_http_route(&self, namespace: &str, route: &Value) -> Result<Value> {
+    pub(crate) async fn create_http_route(&self, namespace: &str, route: &Value) -> Result<Value> {
         create_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1095,7 +922,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn get_http_route(&self, namespace: &str, name: &str) -> Result<Value> {
+    pub(crate) async fn get_http_route(&self, namespace: &str, name: &str) -> Result<Value> {
         get_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1109,7 +936,12 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn update_http_route(&self, namespace: &str, name: &str, route: &Value) -> Result<Value> {
+    pub(crate) async fn update_http_route(
+        &self,
+        namespace: &str,
+        name: &str,
+        route: &Value,
+    ) -> Result<Value> {
         replace_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1124,7 +956,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()> {
         delete::<DynamicObject>(
             self.dynamic_namespaced(
                 namespace,
@@ -1138,7 +970,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn create_gke_health_check_policy(
+    pub(crate) async fn create_gke_health_check_policy(
         &self,
         namespace: &str,
         policy: &Value,
@@ -1156,7 +988,11 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn get_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value> {
+    pub(crate) async fn get_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Value> {
         get_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1170,7 +1006,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn update_gke_health_check_policy(
+    pub(crate) async fn update_gke_health_check_policy(
         &self,
         namespace: &str,
         name: &str,
@@ -1190,7 +1026,11 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn delete_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<()> {
         delete::<DynamicObject>(
             self.dynamic_namespaced(
                 namespace,
@@ -1204,7 +1044,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn create_azure_health_check_policy(
+    pub(crate) async fn create_azure_health_check_policy(
         &self,
         namespace: &str,
         policy: &Value,
@@ -1222,7 +1062,11 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn get_azure_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value> {
+    pub(crate) async fn get_azure_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Value> {
         get_dynamic(
             self.dynamic_namespaced(
                 namespace,
@@ -1236,7 +1080,7 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn update_azure_health_check_policy(
+    pub(crate) async fn update_azure_health_check_policy(
         &self,
         namespace: &str,
         name: &str,
@@ -1256,7 +1100,11 @@ impl RouteApi for KubernetesClient {
         .await
     }
 
-    async fn delete_azure_health_check_policy(&self, namespace: &str, name: &str) -> Result<()> {
+    pub(crate) async fn delete_azure_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<()> {
         delete::<DynamicObject>(
             self.dynamic_namespaced(
                 namespace,
@@ -1271,9 +1119,8 @@ impl RouteApi for KubernetesClient {
     }
 }
 
-#[async_trait]
-impl VersionApi for KubernetesClient {
-    async fn get_version(&self) -> Result<version::Info> {
+impl KubernetesClient {
+    pub(crate) async fn get_version(&self) -> Result<version::Info> {
         self.client
             .apiserver_version()
             .await

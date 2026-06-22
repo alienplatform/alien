@@ -3,7 +3,6 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::DeploymentApi;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_cluster_heartbeat::{
     emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,

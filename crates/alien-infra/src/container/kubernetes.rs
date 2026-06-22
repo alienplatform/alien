@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{DeploymentApi, KubernetesClient, ServiceApi};
+use crate::kubernetes_client::KubernetesClient;
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,

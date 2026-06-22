@@ -35,7 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{KubernetesClient, RouteApi, SecretsApi, ServiceApi};
+use crate::kubernetes_client::KubernetesClient;
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

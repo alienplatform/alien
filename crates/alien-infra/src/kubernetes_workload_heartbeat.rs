@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    optional_events_read, optional_metrics_read, EventApi, MetricsApi,
-    OptionalKubernetesReadStatus, PodApi,
+    optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus,
 };
 use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,

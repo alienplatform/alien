@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{KubernetesClient, SecretsApi};
+use crate::kubernetes_client::KubernetesClient;
 use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;

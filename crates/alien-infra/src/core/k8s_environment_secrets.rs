@@ -8,7 +8,6 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::SecretsApi;
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {

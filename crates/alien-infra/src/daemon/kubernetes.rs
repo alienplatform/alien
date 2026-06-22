@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{DeploymentApi, KubernetesClient};
+use crate::kubernetes_client::KubernetesClient;
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,

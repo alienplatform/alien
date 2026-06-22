@@ -6,7 +6,6 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::JobApi;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
