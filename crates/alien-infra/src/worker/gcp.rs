@@ -3,9 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, GcsNotification,
-    HttpTarget, OidcToken, Policy, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod,
-    SchedulerJob, SchedulerOidcToken, Subscription, Topic,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget, OidcToken,
+    Policy, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod, SchedulerJob,
+    SchedulerOidcToken, Subscription, Topic,
 };
 
 use crate::core::ResourceControllerContext;
@@ -66,14 +66,43 @@ fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
 }
 
 fn gcs_notification_matches_existing(
-    existing: &GcsNotification,
-    desired: &GcsNotification,
+    existing: &serde_json::Value,
+    desired: &serde_json::Value,
 ) -> bool {
-    existing.topic == desired.topic
-        && same_unordered_strings(&existing.event_types, &desired.event_types)
-        && existing.payload_format == desired.payload_format
-        && existing.object_name_prefix == desired.object_name_prefix
-        && existing.custom_attributes == desired.custom_attributes
+    json_string(existing, "topic") == json_string(desired, "topic")
+        && same_unordered_strings(
+            &json_string_array(existing, "eventTypes"),
+            &json_string_array(desired, "eventTypes"),
+        )
+        && json_string(existing, "payloadFormat") == json_string(desired, "payloadFormat")
+        && json_string(existing, "objectNamePrefix") == json_string(desired, "objectNamePrefix")
+        && json_string_map(existing, "customAttributes")
+            == json_string_map(desired, "customAttributes")
+}
+
+fn json_string<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(|value| value.as_str())
+}
+
+fn json_string_array(value: &serde_json::Value, field: &str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn json_string_map(value: &serde_json::Value, field: &str) -> HashMap<String, String> {
+    value
+        .get(field)
+        .and_then(|value| value.as_object())
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
+        .collect()
 }
 
 /// Generates the Cloud Run service name from stack prefix and worker ID
@@ -5101,7 +5130,7 @@ impl GcpWorkerController {
             })?;
 
         // 3. Create GCS notification on the bucket pointing to the topic
-        let gcs_event_types: Vec<String> = events
+        let gcs_event_type_names: Vec<String> = events
             .iter()
             .map(|event| {
                 match event.as_str() {
@@ -5114,14 +5143,11 @@ impl GcpWorkerController {
             })
             .collect();
 
-        let notification = GcsNotification {
-            id: None,
-            topic: Some(topic_full_name.clone()),
-            event_types: gcs_event_types,
-            payload_format: Some("JSON_API_V1".to_string()),
-            object_name_prefix: None,
-            custom_attributes: std::collections::HashMap::new(),
-        };
+        let notification = serde_json::json!({
+            "topic": topic_full_name.clone(),
+            "eventTypes": gcs_event_type_names,
+            "payloadFormat": "JSON_API_V1",
+        });
 
         let existing_notification = gcs_client
             .list_notifications(bucket_name.clone())
@@ -5133,7 +5159,6 @@ impl GcpWorkerController {
                 ),
                 resource_id: Some(worker_config.id.clone()),
             })?
-            .items
             .into_iter()
             .find(|existing| gcs_notification_matches_existing(existing, &notification));
 
@@ -5142,7 +5167,7 @@ impl GcpWorkerController {
                 worker=%worker_config.id,
                 storage=%storage_ref.id,
                 bucket=%bucket_name,
-                notification_id=?existing_notification.id,
+                notification_id=?json_string(&existing_notification, "id"),
                 "GCS notification already exists; treating as created"
             );
             existing_notification
@@ -5159,13 +5184,13 @@ impl GcpWorkerController {
                 })?
         };
 
-        if let Some(notification_id) = &created_notification.id {
+        if let Some(notification_id) = json_string(&created_notification, "id") {
             if !self.gcs_notification_ids.iter().any(|tracker| {
-                tracker.bucket_name == *bucket_name && tracker.notification_id == *notification_id
+                tracker.bucket_name == *bucket_name && tracker.notification_id == notification_id
             }) {
                 self.gcs_notification_ids.push(GcsNotificationTracker {
                     bucket_name: bucket_name.clone(),
-                    notification_id: notification_id.clone(),
+                    notification_id: notification_id.to_string(),
                 });
             }
         }

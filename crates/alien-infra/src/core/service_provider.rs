@@ -56,7 +56,6 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
     StorageAccountPropertiesCreateParameters, Table, TableProperties,
 };
-use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry as OfficialArtifactRegistry;
 pub use google_cloud_artifactregistry_v1::model::{
@@ -100,7 +99,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::OnceCell;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -909,46 +908,11 @@ pub trait GcsApi: Send + Sync + std::fmt::Debug {
     async fn insert_notification(
         &self,
         bucket_name: String,
-        notification: GcsNotification,
-    ) -> Result<GcsNotification>;
-    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse>;
+        notification: serde_json::Value,
+    ) -> Result<serde_json::Value>;
+    async fn list_notifications(&self, bucket_name: String) -> Result<Vec<serde_json::Value>>;
     async fn delete_notification(&self, bucket_name: String, notification_id: String)
         -> Result<()>;
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct ListNotificationsResponse {
-    /// Response resource kind.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// Notification items.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<GcsNotification>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct GcsNotification {
-    /// Server-assigned notification ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Pub/Sub topic to publish to.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub topic: Option<String>,
-    /// Event types that trigger notification publishing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub event_types: Vec<String>,
-    /// Notification payload format.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload_format: Option<String>,
-    /// Object name prefix filter.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub object_name_prefix: Option<String>,
-    /// Custom Pub/Sub message attributes.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_attributes: HashMap<String, String>,
 }
 
 struct OfficialGcpGcsClient {
@@ -1332,8 +1296,8 @@ impl GcsApi for OfficialGcpGcsClient {
     async fn insert_notification(
         &self,
         bucket_name: String,
-        notification: GcsNotification,
-    ) -> Result<GcsNotification> {
+        notification: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let url = format!(
             "{}/b/{}/notificationConfigs",
             gcs_rest_endpoint(&self.config),
@@ -1348,19 +1312,26 @@ impl GcsApi for OfficialGcpGcsClient {
         .await
     }
 
-    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse> {
+    async fn list_notifications(&self, bucket_name: String) -> Result<Vec<serde_json::Value>> {
         let url = format!(
             "{}/b/{}/notificationConfigs",
             gcs_rest_endpoint(&self.config),
             bucket_name
         );
-        self.send_gcs_json(
-            self.http_client.get(url),
-            "list_notifications",
-            Some(bucket_name),
-            Option::<&()>::None,
-        )
-        .await
+        let response: serde_json::Value = self
+            .send_gcs_json(
+                self.http_client.get(url),
+                "list_notifications",
+                Some(bucket_name),
+                Option::<&()>::None,
+            )
+            .await?;
+
+        Ok(response
+            .get("items")
+            .and_then(|items| items.as_array())
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn delete_notification(
