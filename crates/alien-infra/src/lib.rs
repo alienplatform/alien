@@ -6,6 +6,8 @@ pub use azure_container_apps::*;
 
 mod azure_resources;
 
+mod azure_storage;
+
 mod gcp_compute;
 pub use gcp_compute::*;
 

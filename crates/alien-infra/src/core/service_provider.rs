@@ -1438,162 +1438,6 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
-pub trait AzureTableManagementApi: Send + Sync {
-    async fn create_table(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<()>;
-
-    async fn delete_table(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<()>;
-
-    async fn get_table_signed_identifier_count(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<usize>;
-}
-
-struct OfficialAzureTableManagementClient {
-    config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    client: OnceCell<azure_storage_2023_05::Client>,
-}
-
-impl OfficialAzureTableManagementClient {
-    fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
-        Self {
-            config,
-            credential,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<azure_storage_2023_05::Client> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure management endpoint".to_string(),
-                        resource_id: None,
-                    })?;
-
-                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
-                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
-
-                azure_storage_2023_05::Client::builder(credential)
-                    .endpoint(endpoint)
-                    .build()
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to build official Azure Storage client".to_string(),
-                        resource_id: None,
-                    })
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl AzureTableManagementApi for OfficialAzureTableManagementClient {
-    async fn create_table(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .table_client()
-            .create(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                self.config.subscription_id.clone(),
-                table_name.to_string(),
-            )
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "table create",
-            "Azure Table",
-            table_name,
-        )
-    }
-
-    async fn delete_table(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<()> {
-        let result = self
-            .client()
-            .await?
-            .table_client()
-            .delete(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                self.config.subscription_id.clone(),
-                table_name.to_string(),
-            )
-            .send()
-            .await
-            .map(|_| ());
-        map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "table delete",
-            "Azure Table",
-            table_name,
-        )
-    }
-
-    async fn get_table_signed_identifier_count(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> Result<usize> {
-        let result = self
-            .client()
-            .await?
-            .table_client()
-            .get(
-                resource_group_name.to_string(),
-                storage_account_name.to_string(),
-                self.config.subscription_id.clone(),
-                table_name.to_string(),
-            )
-            .await;
-        let table = map_azure_core_021_sdk_error(
-            "Azure Storage",
-            result,
-            "table get",
-            "Azure Table",
-            table_name,
-        )?;
-        Ok(table
-            .properties
-            .map(|properties| properties.signed_identifiers.len())
-            .unwrap_or_default())
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
 pub trait AzureKeyVaultManagementApi: Send + Sync + std::fmt::Debug {
     async fn create_or_update_vault(
         &self,
@@ -2520,7 +2364,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_table_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureTableManagementApi>>;
+    ) -> Result<azure_storage_2023_05::Client>;
     fn get_azure_service_bus_management_client(
         &self,
         config: &AzureClientConfig,
@@ -2990,11 +2834,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_table_management_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn AzureTableManagementApi>> {
-        Ok(Arc::new(OfficialAzureTableManagementClient::new(
-            config.clone(),
-            azure_credential_from_config(config)?,
-        )))
+    ) -> Result<azure_storage_2023_05::Client> {
+        azure_storage_client_from_alien_config(config)
     }
 
     fn get_azure_service_bus_management_client(
@@ -3969,6 +3810,29 @@ pub(crate) fn azure_resources_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Resources client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_storage_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_storage_2023_05::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_storage_2023_05::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Storage client".to_string(),
             resource_id: None,
         })
 }

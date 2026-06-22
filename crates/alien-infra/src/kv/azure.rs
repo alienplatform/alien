@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use tracing::info;
 
+use crate::azure_storage;
 use crate::azure_utils::get_resource_group_name;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -92,20 +93,21 @@ impl AzureKvController {
             .get_azure_table_management_client(azure_config)?;
 
         // Create the table using the management client
-        management_client
-            .create_table(
-                &resource_group_name,
-                &storage_account_outputs.account_name,
-                &table_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Azure Table Storage table '{}'",
-                    table_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        azure_storage::create_table(
+            &management_client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            &storage_account_outputs.account_name,
+            &table_name,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Azure Table Storage table '{}'",
+                table_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.table_name = Some(table_name.clone());
         self.storage_account_outputs = Some((*storage_account_outputs).clone());
@@ -201,13 +203,14 @@ impl AzureKvController {
         })?;
 
         // Heartbeat check: verify table still exists by reading signed identifier metadata
-        match management_client
-            .get_table_signed_identifier_count(
-                &resource_group_name,
-                &storage_outputs.account_name,
-                table_name,
-            )
-            .await
+        match azure_storage::get_table_signed_identifier_count(
+            &management_client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            &storage_outputs.account_name,
+            table_name,
+        )
+        .await
         {
             Ok(signed_identifier_count) => {
                 let storage_client = ctx
@@ -306,13 +309,14 @@ impl AzureKvController {
             .service_provider
             .get_azure_table_management_client(azure_config)?;
 
-        match management_client
-            .delete_table(
-                &resource_group_name,
-                &self.storage_account_outputs.as_ref().unwrap().account_name,
-                table_name,
-            )
-            .await
+        match azure_storage::delete_table(
+            &management_client,
+            &azure_config.subscription_id,
+            &resource_group_name,
+            &self.storage_account_outputs.as_ref().unwrap().account_name,
+            table_name,
+        )
+        .await
         {
             Ok(_) => {
                 info!(table_name=%table_name, "Azure Table Storage table deleted successfully");
