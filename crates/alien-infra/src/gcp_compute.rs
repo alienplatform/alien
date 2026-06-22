@@ -18,11 +18,11 @@ use google_cloud_compute_v1::model::{
     UrlMap,
 };
 
-pub fn operation_is_done(operation: &Operation) -> bool {
+pub(crate) fn operation_is_done(operation: &Operation) -> bool {
     matches!(operation.status, Some(OperationStatus::Done))
 }
 
-pub fn operation_has_error(operation: &Operation) -> bool {
+pub(crate) fn operation_has_error(operation: &Operation) -> bool {
     operation
         .error
         .as_ref()
