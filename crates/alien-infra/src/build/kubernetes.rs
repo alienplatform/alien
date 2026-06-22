@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get};
+use crate::kubernetes_client::{create, get};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
@@ -14,7 +14,7 @@ use alien_core::{
     ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -263,12 +263,14 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match delete::<Job>(
-                kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-                job_name,
-            )
-            .await
-            {
+            match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+                .delete(job_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{job_name}'"),
+                }) {
                 Ok(_) => {
                     info!(job_name=%job_name, "Old Job deletion initiated");
                 }
@@ -539,12 +541,14 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match delete::<Job>(
-                kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-                job_name,
-            )
-            .await
-            {
+            match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+                .delete(job_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{job_name}'"),
+                }) {
                 Ok(_) => {
                     info!(job_name=%job_name, "Job deletion initiated");
                 }

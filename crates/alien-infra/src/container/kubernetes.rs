@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, replace};
+use crate::kubernetes_client::{create, get, replace};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -932,23 +932,27 @@ impl KubernetesContainerController {
                 .await?;
 
             let delete_result = if self.is_stateful {
-                delete::<StatefulSet>(
-                    kube::Api::<StatefulSet>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
-                )
-                .await
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .delete(workload_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!(
+                            "Kubernetes delete operation failed for '{workload_name}'"
+                        ),
+                    })
             } else {
-                delete::<Deployment>(
-                    kube::Api::<Deployment>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
-                )
-                .await
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .delete(workload_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!(
+                            "Kubernetes delete operation failed for '{workload_name}'"
+                        ),
+                    })
             };
 
             match delete_result {
@@ -1309,12 +1313,14 @@ impl KubernetesContainerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match delete::<Service>(
-            kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
-            service_name,
-        )
-        .await
-        {
+        match kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
+            .delete(service_name, &kube::api::DeleteParams::default())
+            .await
+            .map(|_| ())
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes delete operation failed for '{service_name}'"),
+            }) {
             Ok(()) => Ok(()),
             Err(e)
                 if matches!(

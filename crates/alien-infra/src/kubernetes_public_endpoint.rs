@@ -35,7 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, replace};
+use crate::kubernetes_client::{create, get, replace};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -535,71 +535,92 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
 
     if let Some(route_name) = state.http_route_name.take() {
         delete_not_found_ok(
-            delete::<kube::api::DynamicObject>(
-                http_route_api(&route_client, namespace),
-                &route_name,
-            )
-            .await,
+            http_route_api(&route_client, namespace)
+                .delete(&route_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{route_name}'"),
+                }),
             &route_name,
         )?;
     }
     if let Some(policy_name) = state.gke_health_check_policy_name.take() {
         delete_not_found_ok(
-            delete::<kube::api::DynamicObject>(
-                gke_health_check_policy_api(&route_client, namespace),
-                &policy_name,
-            )
-            .await,
+            gke_health_check_policy_api(&route_client, namespace)
+                .delete(&policy_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{policy_name}'"),
+                }),
             &policy_name,
         )?;
     }
     if let Some(policy_name) = state.azure_health_check_policy_name.take() {
         delete_not_found_ok(
-            delete::<kube::api::DynamicObject>(
-                azure_health_check_policy_api(&route_client, namespace),
-                &policy_name,
-            )
-            .await,
+            azure_health_check_policy_api(&route_client, namespace)
+                .delete(&policy_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{policy_name}'"),
+                }),
             &policy_name,
         )?;
     }
     if let Some(gateway_name) = state.gateway_name.take() {
         delete_not_found_ok(
-            delete::<kube::api::DynamicObject>(
-                gateway_api(&route_client, namespace),
-                &gateway_name,
-            )
-            .await,
+            gateway_api(&route_client, namespace)
+                .delete(&gateway_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{gateway_name}'"),
+                }),
             &gateway_name,
         )?;
     }
     if let Some(ingress_name) = state.ingress_name.take() {
         delete_not_found_ok(
-            delete::<K8sIngress>(
-                kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace),
-                &ingress_name,
-            )
-            .await,
+            kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace)
+                .delete(&ingress_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{ingress_name}'"),
+                }),
             &ingress_name,
         )?;
     }
     if let Some(service_name) = state.service_name.take() {
         delete_not_found_ok(
-            delete::<Service>(
-                kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
-                &service_name,
-            )
-            .await,
+            kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
+                .delete(&service_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{service_name}'"),
+                }),
             &service_name,
         )?;
     }
     if let Some(secret_name) = state.managed_tls_secret_name.take() {
         delete_not_found_ok(
-            delete::<Secret>(
-                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-                &secret_name,
-            )
-            .await,
+            kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+                .delete(&secret_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{secret_name}'"),
+                }),
             &secret_name,
         )?;
     }
@@ -643,11 +664,14 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(route_name) = previous.http_route_name {
         if Some(route_name.as_str()) != active.http_route_name.as_deref() {
             delete_not_found_ok(
-                delete::<kube::api::DynamicObject>(
-                    http_route_api(route_client, namespace),
-                    &route_name,
-                )
-                .await,
+                http_route_api(route_client, namespace)
+                    .delete(&route_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{route_name}'"),
+                    }),
                 &route_name,
             )?;
         }
@@ -655,11 +679,14 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(policy_name) = previous.gke_health_check_policy_name {
         if Some(policy_name.as_str()) != active.gke_health_check_policy_name.as_deref() {
             delete_not_found_ok(
-                delete::<kube::api::DynamicObject>(
-                    gke_health_check_policy_api(route_client, namespace),
-                    &policy_name,
-                )
-                .await,
+                gke_health_check_policy_api(route_client, namespace)
+                    .delete(&policy_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{policy_name}'"),
+                    }),
                 &policy_name,
             )?;
         }
@@ -667,11 +694,14 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(policy_name) = previous.azure_health_check_policy_name {
         if Some(policy_name.as_str()) != active.azure_health_check_policy_name.as_deref() {
             delete_not_found_ok(
-                delete::<kube::api::DynamicObject>(
-                    azure_health_check_policy_api(route_client, namespace),
-                    &policy_name,
-                )
-                .await,
+                azure_health_check_policy_api(route_client, namespace)
+                    .delete(&policy_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{policy_name}'"),
+                    }),
                 &policy_name,
             )?;
         }
@@ -679,11 +709,14 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(gateway_name) = previous.gateway_name {
         if Some(gateway_name.as_str()) != active.gateway_name.as_deref() {
             delete_not_found_ok(
-                delete::<kube::api::DynamicObject>(
-                    gateway_api(route_client, namespace),
-                    &gateway_name,
-                )
-                .await,
+                gateway_api(route_client, namespace)
+                    .delete(&gateway_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{gateway_name}'"),
+                    }),
                 &gateway_name,
             )?;
         }
@@ -691,11 +724,14 @@ async fn cleanup_stale_endpoint_objects(
     if let Some(ingress_name) = previous.ingress_name {
         if Some(ingress_name.as_str()) != active.ingress_name.as_deref() {
             delete_not_found_ok(
-                delete::<K8sIngress>(
-                    kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace),
-                    &ingress_name,
-                )
-                .await,
+                kube::Api::<K8sIngress>::namespaced(route_client.as_ref().clone(), namespace)
+                    .delete(&ingress_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{ingress_name}'"),
+                    }),
                 &ingress_name,
             )?;
         }
@@ -709,11 +745,14 @@ async fn cleanup_stale_endpoint_objects(
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
             delete_not_found_ok(
-                delete::<Secret>(
-                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-                    &secret_name,
-                )
-                .await,
+                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+                    .delete(&secret_name, &kube::api::DeleteParams::default())
+                    .await
+                    .map(|_| ())
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes delete operation failed for '{secret_name}'"),
+                    }),
                 &secret_name,
             )?;
         }

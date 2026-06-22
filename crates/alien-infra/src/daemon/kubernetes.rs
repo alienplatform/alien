@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, replace};
+use crate::kubernetes_client::{create, get, replace};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -16,7 +16,7 @@ use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
     ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::{
@@ -314,12 +314,14 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            match delete::<DaemonSet>(
-                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-                daemon_set_name,
-            )
-            .await
-            {
+            match kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+                .delete(daemon_set_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{daemon_set_name}'"),
+                }) {
                 Ok(_) => {}
                 Err(e)
                     if matches!(

@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, delete, get, replace};
+use crate::kubernetes_client::{create, get, replace};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -612,12 +612,14 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match delete::<Deployment>(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                deployment_name,
-            )
-            .await
-            {
+            match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .delete(deployment_name, &kube::api::DeleteParams::default())
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes delete operation failed for '{deployment_name}'"),
+                }) {
                 Ok(_) => {
                     info!(deployment_name=%deployment_name, "Deployment deletion initiated");
                 }

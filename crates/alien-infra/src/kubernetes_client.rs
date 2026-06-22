@@ -3,7 +3,7 @@ use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use kube::{
-    api::{Api, DeleteParams, ListParams, PostParams},
+    api::{Api, ListParams, PostParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
@@ -454,18 +454,5 @@ where
         .into_alien_error()
         .context(ErrorData::HttpRequestFailed {
             message: format!("Kubernetes replace operation failed for '{name}'"),
-        })
-}
-
-pub(crate) async fn delete<K>(api: Api<K>, name: &str) -> Result<()>
-where
-    K: Clone + Debug + DeserializeOwned,
-{
-    api.delete(name, &DeleteParams::default())
-        .await
-        .map(|_| ())
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Kubernetes delete operation failed for '{name}'"),
         })
 }
