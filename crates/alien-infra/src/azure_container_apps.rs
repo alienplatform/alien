@@ -49,25 +49,6 @@ pub trait ContainerAppsApi: Send + Sync + Debug {
         container_app_name: &str,
     ) -> CloudClientResult<OperationResult<()>>;
 
-    async fn create_or_update_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        managed_environment: &ManagedEnvironment,
-    ) -> CloudClientResult<OperationResult<ManagedEnvironment>>;
-
-    async fn get_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-    ) -> CloudClientResult<ManagedEnvironment>;
-
-    async fn delete_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-    ) -> CloudClientResult<OperationResult<()>>;
-
     async fn create_or_update_managed_environment_certificate(
         &self,
         resource_group_name: &str,
@@ -233,6 +214,82 @@ pub struct ContainerAppProperties {
         skip_serializing_if = "Option::is_none"
     )]
     pub workload_profile_name: Option<String>,
+}
+
+pub(crate) async fn create_or_update_managed_environment(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+    managed_environment: &ManagedEnvironment,
+) -> CloudClientResult<OperationResult<ManagedEnvironment>> {
+    let result = client
+        .managed_environments_client()
+        .create_or_update(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+            managed_environment.clone(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_lro_response(
+        "Azure Container Apps",
+        result,
+        "managed environment create or update",
+        "Azure Container Apps Managed Environment",
+        environment_name,
+        |response| response.into_body(),
+    )
+    .await
+}
+
+pub(crate) async fn get_managed_environment(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+) -> CloudClientResult<ManagedEnvironment> {
+    let result = client
+        .managed_environments_client()
+        .get(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Container Apps",
+        result,
+        "managed environment get",
+        "Azure Container Apps Managed Environment",
+        environment_name,
+    )
+}
+
+pub(crate) async fn delete_managed_environment(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    environment_name: &str,
+) -> CloudClientResult<OperationResult<()>> {
+    let result = client
+        .managed_environments_client()
+        .delete(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            environment_name.to_string(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_delete_lro_response(
+        "Azure Container Apps",
+        result,
+        "managed environment delete",
+        "Azure Container Apps Managed Environment",
+        environment_name,
+    )
+    .await
 }
 
 pub struct OfficialAzureContainerAppsClient {
@@ -412,85 +469,6 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
             self.container_app_url(resource_group_name, container_app_name),
             "Azure Container App",
             container_app_name,
-        )
-        .await
-    }
-
-    async fn create_or_update_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-        managed_environment: &ManagedEnvironment,
-    ) -> CloudClientResult<OperationResult<ManagedEnvironment>> {
-        let result = self
-            .client()
-            .await?
-            .managed_environments_client()
-            .create_or_update(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-                managed_environment.clone(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_lro_response(
-            "Azure Container Apps",
-            result,
-            "managed environment create or update",
-            "Azure Container Apps Managed Environment",
-            environment_name,
-            |response| response.into_body(),
-        )
-        .await
-    }
-
-    async fn get_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-    ) -> CloudClientResult<ManagedEnvironment> {
-        let result = self
-            .client()
-            .await?
-            .managed_environments_client()
-            .get(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-            )
-            .await;
-        map_azure_core_021_sdk_error(
-            "Azure Container Apps",
-            result,
-            "managed environment get",
-            "Azure Container Apps Managed Environment",
-            environment_name,
-        )
-    }
-
-    async fn delete_managed_environment(
-        &self,
-        resource_group_name: &str,
-        environment_name: &str,
-    ) -> CloudClientResult<OperationResult<()>> {
-        let result = self
-            .client()
-            .await?
-            .managed_environments_client()
-            .delete(
-                self.config.subscription_id.clone(),
-                resource_group_name.to_string(),
-                environment_name.to_string(),
-            )
-            .send()
-            .await;
-        map_azure_core_021_delete_lro_response(
-            "Azure Container Apps",
-            result,
-            "managed environment delete",
-            "Azure Container Apps Managed Environment",
-            environment_name,
         )
         .await
     }

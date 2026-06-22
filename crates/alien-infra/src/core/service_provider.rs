@@ -35,6 +35,7 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
+use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_authorization::package_2022_04_01 as azure_authorization_2022_04;
 use azure_mgmt_containerregistry::package_2023_11_preview as azure_containerregistry_2023_11;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
@@ -354,6 +355,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ContainerAppsApi>>;
+    fn get_azure_container_apps_management_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<azure_app_2024_08::Client>;
     fn get_azure_container_registry_client(
         &self,
         config: &AzureClientConfig,
@@ -786,6 +791,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             config.clone(),
             azure_credential_from_config(config)?,
         )))
+    }
+
+    fn get_azure_container_apps_management_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<azure_app_2024_08::Client> {
+        azure_container_apps_management_client_from_alien_config(config)
     }
 
     fn get_azure_container_registry_client(
@@ -1783,6 +1795,29 @@ pub(crate) fn azure_containerregistry_client_from_alien_config(
         .into_alien_error()
         .context(crate::error::ErrorData::CloudPlatformError {
             message: "Failed to build official Azure Container Registry client".to_string(),
+            resource_id: None,
+        })
+}
+
+pub(crate) fn azure_container_apps_management_client_from_alien_config(
+    config: &AzureClientConfig,
+) -> Result<azure_app_2024_08::Client> {
+    let endpoint = azure_core_021::Url::parse(azure_management_endpoint(config))
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to parse Azure management endpoint".to_string(),
+            resource_id: None,
+        })?;
+    let credential: Arc<dyn azure_core_021::auth::TokenCredential> = Arc::new(
+        AzureCore021Credential::new(azure_credential_from_config(config)?),
+    );
+
+    azure_app_2024_08::Client::builder(credential)
+        .endpoint(endpoint)
+        .build()
+        .into_alien_error()
+        .context(crate::error::ErrorData::CloudPlatformError {
+            message: "Failed to build official Azure Container Apps client".to_string(),
             resource_id: None,
         })
 }

@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
+use crate::azure_container_apps;
 use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::core::{LongRunningOperation, OperationResult};
@@ -64,32 +65,33 @@ impl AzureContainerAppsEnvironmentController {
         // Create the managed environment via Azure client
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
         let managed_env = self.build_managed_environment(azure_config, ctx);
 
-        let operation_result = client
-            .create_or_update_managed_environment(
-                &resource_group_name,
-                self.environment_name.as_ref().unwrap(),
-                &managed_env,
-            )
-            .await
-            .map_err(|e| {
-                // Azure quota errors (e.g., MaxNumberOfRegionalEnvironmentsInSubExceeded) are
-                // returned as 409 Conflict, which gets classified as retryable. However, quota
-                // limits won't self-resolve within the retry window, so mark them non-retryable
-                // to fail fast instead of wasting ~8 minutes on futile retries.
-                let is_quota_error =
-                    e.to_string().contains("MaxNumberOf") || e.to_string().contains("Exceeded");
-                let mut err = e.context(ErrorData::CloudPlatformError {
-                    message: "Failed to create Azure Container Apps Environment".to_string(),
-                    resource_id: Some(desired_config.id.clone()),
-                });
-                if is_quota_error {
-                    err.retryable = false;
-                }
-                err
-            })?;
+        let operation_result = azure_container_apps::create_or_update_managed_environment(
+            &client,
+            azure_config,
+            &resource_group_name,
+            self.environment_name.as_ref().unwrap(),
+            &managed_env,
+        )
+        .await
+        .map_err(|e| {
+            // Azure quota errors (e.g., MaxNumberOfRegionalEnvironmentsInSubExceeded) are
+            // returned as 409 Conflict, which gets classified as retryable. However, quota
+            // limits won't self-resolve within the retry window, so mark them non-retryable
+            // to fail fast instead of wasting ~8 minutes on futile retries.
+            let is_quota_error =
+                e.to_string().contains("MaxNumberOf") || e.to_string().contains("Exceeded");
+            let mut err = e.context(ErrorData::CloudPlatformError {
+                message: "Failed to create Azure Container Apps Environment".to_string(),
+                resource_id: Some(desired_config.id.clone()),
+            });
+            if is_quota_error {
+                err.retryable = false;
+            }
+            err
+        })?;
 
         match operation_result {
             OperationResult::Completed(result) => {
@@ -202,11 +204,15 @@ impl AzureContainerAppsEnvironmentController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
 
-        match client
-            .get_managed_environment(&resource_group_name, environment_name)
-            .await
+        match azure_container_apps::get_managed_environment(
+            &client,
+            azure_config,
+            &resource_group_name,
+            environment_name,
+        )
+        .await
         {
             Ok(managed_env) => {
                 if let Some(properties) = &managed_env.properties {
@@ -323,18 +329,22 @@ impl AzureContainerAppsEnvironmentController {
             let resource_group_name = get_resource_group_name(ctx.state)?;
             let client = ctx
                 .service_provider
-                .get_azure_container_apps_client(azure_config)?;
+                .get_azure_container_apps_management_client(azure_config)?;
 
-            let managed_env = client
-                .get_managed_environment(&resource_group_name, environment_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get Container Apps Environment '{}'",
-                        environment_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            let managed_env = azure_container_apps::get_managed_environment(
+                &client,
+                azure_config,
+                &resource_group_name,
+                environment_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to get Container Apps Environment '{}'",
+                    environment_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_container_apps_environment_heartbeat(
                 ctx,
@@ -458,9 +468,17 @@ impl AzureContainerAppsEnvironmentController {
 
         info!(environment_name=%environment_name, "Initiating Azure Container Apps Environment deletion");
 
-        match client
-            .delete_managed_environment(&resource_group_name, environment_name)
-            .await
+        let management_client = ctx
+            .service_provider
+            .get_azure_container_apps_management_client(azure_config)?;
+
+        match azure_container_apps::delete_managed_environment(
+            &management_client,
+            azure_config,
+            &resource_group_name,
+            environment_name,
+        )
+        .await
         {
             Ok(operation_result) => match operation_result {
                 OperationResult::Completed(_) => {
@@ -607,11 +625,15 @@ impl AzureContainerAppsEnvironmentController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_config)?;
+            .get_azure_container_apps_management_client(azure_config)?;
 
-        match client
-            .get_managed_environment(&resource_group_name, environment_name)
-            .await
+        match azure_container_apps::get_managed_environment(
+            &client,
+            azure_config,
+            &resource_group_name,
+            environment_name,
+        )
+        .await
         {
             Ok(_) => {
                 debug!(environment_name=%environment_name, "Environment still exists, continuing to wait");
