@@ -1,11 +1,11 @@
 use crate::azure_container_apps::{
-    certificate, Certificate, CertificateKeyVaultProperties, Configuration,
-    ConfigurationActiveRevisionsMode, Container, ContainerApp, ContainerAppProperties,
-    ContainerAppPropertiesProvisioningState, ContainerResources, CustomDomain,
-    CustomDomainBindingType, Dapr, DaprAppProtocol, EnvironmentVar, IdentitySettings,
-    IdentitySettingsLifecycle, Ingress as AzureContainerAppsIngress, IngressTransport,
-    ManagedServiceIdentity, ManagedServiceIdentityType, RegistryCredentials, Scale, Secret,
-    Template, TrackedResource, TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
+    certificate, custom_domain, dapr, identity_settings, Certificate,
+    CertificateKeyVaultProperties, Configuration, ConfigurationActiveRevisionsMode, Container,
+    ContainerApp, ContainerAppProperties, ContainerAppPropertiesProvisioningState,
+    ContainerResources, CustomDomain, Dapr, EnvironmentVar, IdentitySettings,
+    Ingress as AzureContainerAppsIngress, IngressTransport, ManagedServiceIdentity,
+    ManagedServiceIdentityType, RegistryCredentials, Scale, Secret, Template, TrackedResource,
+    TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -3709,7 +3709,7 @@ impl AzureWorkerController {
                 if let Some(ingress) = &mut config.ingress {
                     ingress.custom_domains = vec![CustomDomain {
                         name: fqdn,
-                        binding_type: Some(CustomDomainBindingType::SniEnabled),
+                        binding_type: Some(custom_domain::BindingType::SniEnabled),
                         certificate_id: Some(certificate_id),
                     }];
                 }
@@ -3857,7 +3857,7 @@ impl AzureWorkerController {
                 target_port: Some(8080),
                 traffic: vec![TrafficWeight {
                     weight: Some(100),
-                    latest_revision: true,
+                    latest_revision: Some(true),
                     revision_name: None,
                     label: None,
                 }],
@@ -3973,9 +3973,9 @@ impl AzureWorkerController {
             Some(Dapr {
                 app_id: Some(container_app_name.to_string()),
                 app_port: Some(8080), // Port that alien-runtime listens on
-                app_protocol: DaprAppProtocol::Http,
+                app_protocol: Some(dapr::AppProtocol::Http),
                 enable_api_logging: Some(false),
-                enabled: true,
+                enabled: Some(true),
                 http_max_request_size: None,
                 http_read_buffer_size: None,
                 log_level: None,
@@ -3991,7 +3991,7 @@ impl AzureWorkerController {
                 .iter()
                 .map(|identity_id| IdentitySettings {
                     identity: identity_id.clone(),
-                    lifecycle: IdentitySettingsLifecycle::All,
+                    lifecycle: Some(identity_settings::Lifecycle::All),
                 })
                 .collect(),
             ingress: ingress_cfg,
@@ -4620,7 +4620,7 @@ mod tests {
                 target_port: Some(8080),
                 fqdn: fqdn.clone(),
                 traffic: vec![TrafficWeight {
-                    latest_revision: true,
+                    latest_revision: Some(true),
                     weight: Some(100),
                     revision_name: None,
                     label: None,
@@ -5062,7 +5062,7 @@ mod tests {
             target_port: Some(8080),
             fqdn: Some(custom_url.to_string()), // Use the full URL as FQDN for the test
             traffic: vec![TrafficWeight {
-                latest_revision: true,
+                latest_revision: Some(true),
                 weight: Some(100),
                 revision_name: None,
                 label: None,

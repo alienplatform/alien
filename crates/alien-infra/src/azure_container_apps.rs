@@ -4,10 +4,11 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
 pub use azure_mgmt_app::package_preview_2024_08::models::{
-    certificate, dapr_component, managed_environment, Certificate, CertificateKeyVaultProperties,
-    ContainerResources, CustomDomainConfiguration, DaprComponent, DaprMetadata, EnvironmentVar,
-    ManagedEnvironment, RegistryCredentials, Secret, TrackedResource, VnetConfiguration,
-    WorkloadProfile,
+    certificate, custom_domain, dapr, dapr_component, identity_settings, managed_environment,
+    Certificate, CertificateKeyVaultProperties, ContainerResources, CustomDomain,
+    CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar, IdentitySettings,
+    ManagedEnvironment, RegistryCredentials, Secret, TrackedResource, TrafficWeight,
+    VnetConfiguration, WorkloadProfile,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
@@ -325,91 +326,6 @@ impl Default for ConfigurationActiveRevisionsMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Dapr {
-    #[serde(rename = "appId", default, skip_serializing_if = "Option::is_none")]
-    pub app_id: Option<String>,
-    #[serde(rename = "appPort", default, skip_serializing_if = "Option::is_none")]
-    pub app_port: Option<i32>,
-    #[serde(rename = "appProtocol", default)]
-    pub app_protocol: DaprAppProtocol,
-    #[serde(
-        rename = "enableApiLogging",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub enable_api_logging: Option<bool>,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(
-        rename = "httpMaxRequestSize",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub http_max_request_size: Option<i32>,
-    #[serde(
-        rename = "httpReadBufferSize",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub http_read_buffer_size: Option<i32>,
-    #[serde(rename = "logLevel", default, skip_serializing_if = "Option::is_none")]
-    pub log_level: Option<String>,
-}
-
-impl Default for Dapr {
-    fn default() -> Self {
-        Self {
-            app_id: None,
-            app_port: None,
-            app_protocol: DaprAppProtocol::Http,
-            enable_api_logging: None,
-            enabled: false,
-            http_max_request_size: None,
-            http_read_buffer_size: None,
-            log_level: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DaprAppProtocol {
-    #[serde(rename = "http")]
-    Http,
-    #[serde(rename = "grpc")]
-    Grpc,
-}
-
-impl Default for DaprAppProtocol {
-    fn default() -> Self {
-        Self::Http
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IdentitySettings {
-    /// Identity resource ID or `system`.
-    pub identity: String,
-    /// Lifecycle where the identity is available.
-    #[serde(default)]
-    pub lifecycle: IdentitySettingsLifecycle,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IdentitySettingsLifecycle {
-    Init,
-    Main,
-    None,
-    All,
-}
-
-impl Default for IdentitySettingsLifecycle {
-    fn default() -> Self {
-        Self::All
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Ingress {
@@ -496,47 +412,6 @@ impl Default for IngressTransport {
     fn default() -> Self {
         Self::Auto
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomDomain {
-    #[serde(
-        rename = "bindingType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub binding_type: Option<CustomDomainBindingType>,
-    #[serde(
-        rename = "certificateId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub certificate_id: Option<String>,
-    /// Hostname.
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CustomDomainBindingType {
-    Disabled,
-    SniEnabled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct TrafficWeight {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(rename = "latestRevision", default)]
-    pub latest_revision: bool,
-    #[serde(
-        rename = "revisionName",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub revision_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weight: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
