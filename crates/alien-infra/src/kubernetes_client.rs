@@ -417,14 +417,6 @@ where
     Api::namespaced(client.clone(), namespace)
 }
 
-pub(crate) fn cluster<K>(client: &Client) -> Api<K>
-where
-    K: kube::Resource<Scope = kube::core::ClusterResourceScope>,
-    <K as kube::Resource>::DynamicType: Default,
-{
-    Api::all(client.clone())
-}
-
 pub(crate) fn dynamic_namespaced(
     client: &Client,
     namespace: &str,
@@ -442,24 +434,6 @@ pub(crate) fn dynamic_namespaced(
     };
 
     Api::namespaced_with(client.clone(), namespace, &resource)
-}
-
-pub(crate) fn dynamic_cluster(
-    client: &Client,
-    group: &str,
-    version: &str,
-    kind: &str,
-    plural: &str,
-) -> Api<DynamicObject> {
-    let resource = ApiResource {
-        group: group.to_string(),
-        version: version.to_string(),
-        api_version: format!("{group}/{version}"),
-        kind: kind.to_string(),
-        plural: plural.to_string(),
-    };
-
-    Api::all_with(client.clone(), &resource)
 }
 
 pub(crate) fn list_params(

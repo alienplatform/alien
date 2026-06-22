@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::kubernetes_client::{
-    cluster, dynamic_cluster, dynamic_namespaced, list, list_params, namespaced,
-    optional_events_read, optional_metrics_read, optional_nodes_read, OptionalKubernetesReadStatus,
+    dynamic_namespaced, list, list_params, namespaced, optional_events_read, optional_metrics_read,
+    optional_nodes_read, OptionalKubernetesReadStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -17,7 +17,7 @@ use alien_error::{Context, IntoAlienError};
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::chrono::Utc;
-use kube::api::DynamicObject;
+use kube::api::{ApiResource, DynamicObject};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -117,7 +117,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
 
     let nodes = optional_nodes_read(
         &input.config.id,
-        list(cluster::<Node>(&node_client), None, None),
+        list(kube::Api::all(node_client.as_ref().clone()), None, None),
     )
     .await
     .context(ErrorData::CloudPlatformError {
@@ -126,19 +126,20 @@ pub async fn emit_kubernetes_cluster_heartbeat(
     })?;
 
     let node_metrics = optional_metrics_read(&input.config.id, None, None, async {
-        dynamic_cluster(
-            &metrics_client,
-            "metrics.k8s.io",
-            "v1beta1",
-            "NodeMetrics",
-            "nodes",
-        )
-        .list(&list_params(None, None))
-        .await
-        .into_alien_error()
-        .context(CloudClientErrorData::HttpRequestFailed {
-            message: "Kubernetes node metrics list operation failed".to_string(),
-        })
+        let node_metrics = ApiResource {
+            group: "metrics.k8s.io".to_string(),
+            version: "v1beta1".to_string(),
+            api_version: "metrics.k8s.io/v1beta1".to_string(),
+            kind: "NodeMetrics".to_string(),
+            plural: "nodes".to_string(),
+        };
+        kube::Api::<DynamicObject>::all_with(metrics_client.as_ref().clone(), &node_metrics)
+            .list(&list_params(None, None))
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes node metrics list operation failed".to_string(),
+            })
     })
     .await
     .context(ErrorData::CloudPlatformError {
