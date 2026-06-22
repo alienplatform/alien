@@ -7,7 +7,17 @@ use alien_core::{
     KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesRouteProviderOptions, KubernetesTlsSecretRef, LoadBalancerEndpoint,
 };
+#[cfg(feature = "aws")]
+use alien_error::IntoAlienErrorDirect;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+#[cfg(feature = "aws")]
+use aws_sdk_acm::{
+    error::{ProvideErrorMetadata as AcmProvideErrorMetadata, SdkError as AcmSdkError},
+    operation::import_certificate::{ImportCertificateInput, ImportCertificateOutput},
+    primitives::Blob,
+    types::Tag,
+    Client as AcmClient,
+};
 use k8s_openapi::api::core::v1::{Secret, Service, ServicePort, ServiceSpec};
 use k8s_openapi::api::networking::v1::{
     HTTPIngressPath, HTTPIngressRuleValue, Ingress as K8sIngress, IngressBackend, IngressRule,
@@ -21,8 +31,6 @@ use serde_json::{json, Value};
 use tokio::net::lookup_host;
 use tracing::info;
 
-#[cfg(feature = "aws")]
-use crate::aws_sdk::{AcmBlob, AcmTag, ImportCertificateRequest};
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
@@ -605,6 +613,117 @@ async fn cleanup_stale_endpoint_objects(
 }
 
 #[cfg(feature = "aws")]
+async fn import_acm_certificate(
+    client: &AcmClient,
+    request: ImportCertificateInput,
+    resource_name: &str,
+) -> Result<ImportCertificateOutput> {
+    let response = acm_result(
+        client
+            .import_certificate()
+            .set_certificate_arn(request.certificate_arn)
+            .set_certificate(request.certificate)
+            .set_private_key(request.private_key)
+            .set_certificate_chain(request.certificate_chain)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "ImportCertificate",
+        "Certificate",
+        resource_name,
+    )?;
+
+    if response.certificate_arn().is_none() {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "ACM ImportCertificate response did not include certificateArn".to_string(),
+            resource_id: None,
+        }));
+    }
+
+    Ok(response)
+}
+
+#[cfg(feature = "aws")]
+async fn reimport_acm_certificate(
+    client: &AcmClient,
+    request: ImportCertificateInput,
+) -> Result<()> {
+    let certificate_arn = request.certificate_arn.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "ACM reimport request did not include certificateArn".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    acm_result(
+        client
+            .import_certificate()
+            .set_certificate_arn(request.certificate_arn)
+            .set_certificate(request.certificate)
+            .set_private_key(request.private_key)
+            .set_certificate_chain(request.certificate_chain)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "ImportCertificate",
+        "Certificate",
+        &certificate_arn,
+    )?;
+
+    Ok(())
+}
+
+#[cfg(feature = "aws")]
+async fn delete_acm_certificate(client: &AcmClient, certificate_arn: &str) -> Result<()> {
+    acm_result(
+        client
+            .delete_certificate()
+            .certificate_arn(certificate_arn)
+            .send()
+            .await,
+        "DeleteCertificate",
+        "Certificate",
+        certificate_arn,
+    )?;
+
+    Ok(())
+}
+
+#[cfg(feature = "aws")]
+fn acm_result<T, E>(
+    result: std::result::Result<T, AcmSdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: AcmProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                if service_error.code() == Some("ResourceNotFoundException") {
+                    return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: resource_type.to_string(),
+                        resource_name: resource_name.to_string(),
+                    }));
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "ACM {operation} API failed for {resource_type} '{resource_name}'"
+                    ),
+                    resource_id: None,
+                }))
+        }
+    }
+}
+
+#[cfg(feature = "aws")]
 async fn publish_managed_acm_certificate(
     ctx: &ResourceControllerContext<'_>,
     target: &KubernetesPublicEndpointTarget<'_>,
@@ -629,19 +748,18 @@ async fn publish_managed_acm_certificate(
     let (leaf, chain) = split_certificate_chain(&input.certificate_chain);
 
     let certificate_arn = if let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() {
-        let request = ImportCertificateRequest::builder()
+        let request = ImportCertificateInput::builder()
             .certificate_arn(certificate_arn.clone())
-            .certificate(AcmBlob::new(leaf.into_bytes()))
-            .private_key(AcmBlob::new(input.private_key.into_bytes()))
-            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .certificate(Blob::new(leaf.into_bytes()))
+            .private_key(Blob::new(input.private_key.into_bytes()))
+            .set_certificate_chain(chain.map(|chain| Blob::new(chain.into_bytes())))
             .build()
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: "Invalid Kubernetes public endpoint ACM reimport request".to_string(),
                 resource_id: Some(target.resource_id.to_string()),
             })?;
-        acm_client
-            .reimport_certificate(request)
+        reimport_acm_certificate(&acm_client, request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to re-import Kubernetes public endpoint certificate to ACM"
@@ -650,10 +768,10 @@ async fn publish_managed_acm_certificate(
             })?;
         certificate_arn
     } else {
-        let request = ImportCertificateRequest::builder()
-            .certificate(AcmBlob::new(leaf.into_bytes()))
-            .private_key(AcmBlob::new(input.private_key.into_bytes()))
-            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+        let request = ImportCertificateInput::builder()
+            .certificate(Blob::new(leaf.into_bytes()))
+            .private_key(Blob::new(input.private_key.into_bytes()))
+            .set_certificate_chain(chain.map(|chain| Blob::new(chain.into_bytes())))
             .set_tags(Some(tags))
             .build()
             .into_alien_error()
@@ -661,13 +779,13 @@ async fn publish_managed_acm_certificate(
                 message: "Invalid Kubernetes public endpoint ACM import request".to_string(),
                 resource_id: Some(target.resource_id.to_string()),
             })?;
-        let response = acm_client.import_certificate(request).await.context(
-            ErrorData::CloudPlatformError {
+        let response = import_acm_certificate(&acm_client, request, "new")
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to import Kubernetes public endpoint certificate to ACM"
                     .to_string(),
                 resource_id: Some(target.resource_id.to_string()),
-            },
-        )?;
+            })?;
         response
             .certificate_arn()
             .ok_or_else(|| {
@@ -712,7 +830,7 @@ async fn delete_managed_acm_certificate(
 
     let aws_config = ctx.get_aws_config()?;
     let acm_client = ctx.service_provider.get_aws_acm_client(aws_config).await?;
-    match acm_client.delete_certificate(&certificate_arn).await {
+    match delete_acm_certificate(&acm_client, &certificate_arn).await {
         Ok(()) => {
             info!(certificate_arn=%certificate_arn, "Deleted Kubernetes public endpoint ACM certificate");
             state.managed_acm_certificate_arn = None;
@@ -1847,7 +1965,7 @@ fn acm_tags(
     resource_prefix: &str,
     resource_id: &str,
     mut custom_tags: HashMap<String, String>,
-) -> Result<Vec<AcmTag>> {
+) -> Result<Vec<Tag>> {
     for (key, value) in alien_core::standard_resource_tags(resource_prefix, resource_id) {
         custom_tags.insert(key, value);
     }
@@ -1856,7 +1974,7 @@ fn acm_tags(
         .into_iter()
         .map(|(key, value)| {
             let tag_key = key.clone();
-            AcmTag::builder()
+            Tag::builder()
                 .key(key)
                 .value(value)
                 .build()

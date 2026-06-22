@@ -5,8 +5,7 @@ use tracing::{debug, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::aws_sdk::{
-    AcmBlob, AcmTag, AddPermissionRequest,
-    ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
+    AddPermissionRequest, ApiGatewayV2CreateApiMappingRequest as CreateApiMappingRequest,
     ApiGatewayV2CreateApiRequest as CreateApiRequest,
     ApiGatewayV2CreateDomainNameRequest as CreateDomainNameRequest,
     ApiGatewayV2CreateIntegrationRequest as CreateIntegrationRequest,
@@ -15,9 +14,9 @@ use crate::aws_sdk::{
     ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
     CreateEventSourceMappingRequest, CreateFunctionInput, DescribeNetworkInterfacesRequest,
     EndpointType, Environment, Filter, FunctionCode, GetFunctionConfigurationResponse,
-    ImportCertificateRequest, IntegrationType, LambdaArchitecture, LambdaFunctionConfiguration,
-    LambdaLastUpdateStatus, LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration,
-    PackageType, ProtocolType, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
+    IntegrationType, LambdaArchitecture, LambdaFunctionConfiguration, LambdaLastUpdateStatus,
+    LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration, PackageType,
+    ProtocolType, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
     UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
@@ -36,8 +35,17 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
+use aws_sdk_acm::{
+    error::{ProvideErrorMetadata as AcmProvideErrorMetadata, SdkError as AcmSdkError},
+    operation::import_certificate::{ImportCertificateInput, ImportCertificateOutput},
+    primitives::Blob,
+    types::Tag,
+    Client as AcmClient,
+};
 use aws_sdk_eventbridge::{
-    error::{ProvideErrorMetadata, SdkError},
+    error::{
+        ProvideErrorMetadata as EventBridgeProvideErrorMetadata, SdkError as EventBridgeSdkError,
+    },
     operation::{
         put_rule::{PutRuleInput, PutRuleOutput},
         put_targets::PutTargetsInput,
@@ -88,6 +96,113 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Result<Vec<EventBridgeTa
                 })
         })
         .collect()
+}
+
+async fn import_acm_certificate(
+    client: &AcmClient,
+    request: ImportCertificateInput,
+    resource_name: &str,
+) -> Result<ImportCertificateOutput> {
+    let response = acm_result(
+        client
+            .import_certificate()
+            .set_certificate_arn(request.certificate_arn)
+            .set_certificate(request.certificate)
+            .set_private_key(request.private_key)
+            .set_certificate_chain(request.certificate_chain)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "ImportCertificate",
+        "Certificate",
+        resource_name,
+    )?;
+
+    if response.certificate_arn().is_none() {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "ACM ImportCertificate response did not include certificateArn".to_string(),
+            resource_id: None,
+        }));
+    }
+
+    Ok(response)
+}
+
+async fn reimport_acm_certificate(
+    client: &AcmClient,
+    request: ImportCertificateInput,
+) -> Result<()> {
+    let certificate_arn = request.certificate_arn.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: "ACM reimport request did not include certificateArn".to_string(),
+            resource_id: None,
+        })
+    })?;
+
+    acm_result(
+        client
+            .import_certificate()
+            .set_certificate_arn(request.certificate_arn)
+            .set_certificate(request.certificate)
+            .set_private_key(request.private_key)
+            .set_certificate_chain(request.certificate_chain)
+            .set_tags(request.tags)
+            .send()
+            .await,
+        "ImportCertificate",
+        "Certificate",
+        &certificate_arn,
+    )?;
+
+    Ok(())
+}
+
+async fn delete_acm_certificate(client: &AcmClient, certificate_arn: &str) -> Result<()> {
+    acm_result(
+        client
+            .delete_certificate()
+            .certificate_arn(certificate_arn)
+            .send()
+            .await,
+        "DeleteCertificate",
+        "Certificate",
+        certificate_arn,
+    )?;
+
+    Ok(())
+}
+
+fn acm_result<T, E>(
+    result: std::result::Result<T, AcmSdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: AcmProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                if service_error.code() == Some("ResourceNotFoundException") {
+                    return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                        resource_type: resource_type.to_string(),
+                        resource_name: resource_name.to_string(),
+                    }));
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "ACM {operation} API failed for {resource_type} '{resource_name}'"
+                    ),
+                    resource_id: None,
+                }))
+        }
+    }
 }
 
 async fn put_eventbridge_rule(
@@ -202,13 +317,13 @@ fn ensure_no_eventbridge_target_failures(
 }
 
 fn eventbridge_result<T, E>(
-    result: std::result::Result<T, SdkError<E>>,
+    result: std::result::Result<T, EventBridgeSdkError<E>>,
     operation: &str,
     resource_type: &str,
     resource_name: &str,
 ) -> Result<T>
 where
-    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    E: EventBridgeProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
 {
     match result {
         Ok(value) => Ok(value),
@@ -851,7 +966,7 @@ impl AwsWorkerController {
             .into_iter()
             .map(|(key, value)| {
                 let tag_key = key.clone();
-                AcmTag::builder()
+                Tag::builder()
                     .key(key)
                     .value(value)
                     .build()
@@ -862,10 +977,10 @@ impl AwsWorkerController {
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-        let import_request = ImportCertificateRequest::builder()
-            .certificate(AcmBlob::new(leaf.into_bytes()))
-            .private_key(AcmBlob::new(private_key.clone().into_bytes()))
-            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+        let import_request = ImportCertificateInput::builder()
+            .certificate(Blob::new(leaf.into_bytes()))
+            .private_key(Blob::new(private_key.clone().into_bytes()))
+            .set_certificate_chain(chain.map(|chain| Blob::new(chain.into_bytes())))
             .set_tags(Some(tags))
             .build()
             .into_alien_error()
@@ -873,8 +988,7 @@ impl AwsWorkerController {
                 message: "Invalid ACM certificate import request".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
-        let response = acm_client
-            .import_certificate(import_request)
+        let response = import_acm_certificate(&acm_client, import_request, "new")
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to import certificate to ACM".to_string(),
@@ -2107,19 +2221,18 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let reimport_request = ImportCertificateRequest::builder()
+        let reimport_request = ImportCertificateInput::builder()
             .certificate_arn(certificate_arn)
-            .certificate(AcmBlob::new(leaf.into_bytes()))
-            .private_key(AcmBlob::new(private_key.clone().into_bytes()))
-            .set_certificate_chain(chain.map(|chain| AcmBlob::new(chain.into_bytes())))
+            .certificate(Blob::new(leaf.into_bytes()))
+            .private_key(Blob::new(private_key.clone().into_bytes()))
+            .set_certificate_chain(chain.map(|chain| Blob::new(chain.into_bytes())))
             .build()
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: "Invalid ACM certificate reimport request".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
-        acm_client
-            .reimport_certificate(reimport_request)
+        reimport_acm_certificate(&acm_client, reimport_request)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to re-import renewed certificate to ACM".to_string(),
@@ -3900,7 +4013,7 @@ impl AwsWorkerController {
         if let Some(certificate_arn) = self.certificate_arn.as_ref() {
             let aws_cfg = ctx.get_aws_config()?;
             let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-            match acm_client.delete_certificate(certificate_arn).await {
+            match delete_acm_certificate(&acm_client, certificate_arn).await {
                 Ok(()) => info!(worker=%worker_config.id, "ACM certificate deleted"),
                 Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "ACM certificate already gone");
@@ -4315,6 +4428,13 @@ mod tests {
         ResourceStatus, Worker, WorkerCode, WorkerOutputs, WorkerTrigger,
     };
     use alien_error::AlienError;
+    use aws_sdk_acm::{
+        operation::{
+            delete_certificate::DeleteCertificateOutput,
+            import_certificate::ImportCertificateOutput,
+        },
+        Client as AcmClient,
+    };
     use aws_sdk_eventbridge::{
         operation::{put_rule::PutRuleOutput, put_targets::PutTargetsOutput},
         types::RuleState,
@@ -4331,10 +4451,9 @@ mod tests {
         ApiGatewayV2CreateIntegrationResponse as Integration,
         ApiGatewayV2CreateRouteResponse as Route, ApiGatewayV2CreateStageResponse as Stage,
         ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration, CreateFunctionResponse,
-        EndpointType, GetFunctionConfigurationResponse, ImportCertificateResponse,
-        LambdaArchitecture, LambdaLastUpdateStatus, LambdaState, MockAcmApi, MockApiGatewayV2Api,
-        MockIamApi, MockLambdaApi, PackageType, SecurityPolicy, UpdateFunctionCodeResponse,
-        UpdateFunctionConfigurationResponse,
+        EndpointType, GetFunctionConfigurationResponse, LambdaArchitecture, LambdaLastUpdateStatus,
+        LambdaState, MockApiGatewayV2Api, MockIamApi, MockLambdaApi, PackageType, SecurityPolicy,
+        UpdateFunctionCodeResponse, UpdateFunctionConfigurationResponse,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -4468,25 +4587,41 @@ mod tests {
         }
     }
 
-    fn create_acm_mock_for_creation() -> Arc<MockAcmApi> {
-        let mut mock_acm = MockAcmApi::new();
-        mock_acm
-            .expect_import_certificate()
-            .returning(|_| Ok(test_import_certificate_response()));
-        Arc::new(mock_acm)
+    fn create_acm_mock_for_creation() -> AcmClient {
+        let import_rule = mock!(AcmClient::import_certificate)
+            .match_requests(|request| {
+                request.certificate().is_some() && request.private_key().is_some()
+            })
+            .then_output(test_import_certificate_response);
+
+        mock_client!(
+            aws_sdk_acm,
+            RuleMode::Sequential,
+            [&import_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
-    fn create_acm_mock_for_creation_and_deletion() -> Arc<MockAcmApi> {
-        let mut mock_acm = MockAcmApi::new();
-        mock_acm
-            .expect_import_certificate()
-            .returning(|_| Ok(test_import_certificate_response()));
-        mock_acm.expect_delete_certificate().returning(|_| Ok(()));
-        Arc::new(mock_acm)
+    fn create_acm_mock_for_creation_and_deletion() -> AcmClient {
+        let import_rule = mock!(AcmClient::import_certificate)
+            .match_requests(|request| {
+                request.certificate().is_some() && request.private_key().is_some()
+            })
+            .then_output(test_import_certificate_response);
+        let delete_rule = mock!(AcmClient::delete_certificate)
+            .match_requests(|request| request.certificate_arn().is_some())
+            .then_output(|| DeleteCertificateOutput::builder().build());
+
+        mock_client!(
+            aws_sdk_acm,
+            RuleMode::Sequential,
+            [&import_rule, &delete_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        )
     }
 
-    fn test_import_certificate_response() -> ImportCertificateResponse {
-        ImportCertificateResponse::builder()
+    fn test_import_certificate_response() -> ImportCertificateOutput {
+        ImportCertificateOutput::builder()
             .certificate_arn("arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id")
             .build()
     }
@@ -4731,7 +4866,7 @@ mod tests {
 
     fn setup_mock_service_provider(
         mock_lambda: Arc<MockLambdaApi>,
-        mock_acm: Option<Arc<MockAcmApi>>,
+        mock_acm: Option<AcmClient>,
         mock_apigw: Option<Arc<MockApiGatewayV2Api>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
@@ -5195,13 +5330,23 @@ mod tests {
                 }))
             });
 
-        // Validate ACM certificate import
-        let mut mock_acm = MockAcmApi::new();
-        mock_acm
-            .expect_import_certificate()
-            .times(1)
-            .returning(|_| Ok(test_import_certificate_response()));
-        mock_acm.expect_delete_certificate().returning(|_| Ok(()));
+        // Validate ACM certificate import through the generated ACM client.
+        let import_certificate_rule = mock!(AcmClient::import_certificate)
+            .match_requests(|request| {
+                request.certificate().is_some()
+                    && request.private_key().is_some()
+                    && request
+                        .tags()
+                        .iter()
+                        .any(|tag| tag.key() == "resource" && tag.value() == Some("public-func"))
+            })
+            .then_output(test_import_certificate_response);
+        let acm_client = mock_client!(
+            aws_sdk_acm,
+            RuleMode::Sequential,
+            [&import_certificate_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
 
         // Validate API Gateway is created with the worker's name in the API name
         let mut mock_apigw = MockApiGatewayV2Api::new();
@@ -5237,7 +5382,7 @@ mod tests {
 
         let mock_provider = setup_mock_service_provider(
             Arc::new(mock_lambda),
-            Some(Arc::new(mock_acm)),
+            Some(acm_client),
             Some(Arc::new(mock_apigw)),
         );
 
@@ -5259,6 +5404,7 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.url.is_some());
+        assert_eq!(import_certificate_rule.num_calls(), 1);
     }
 
     /// Test that verifies private workers don't get URL creation

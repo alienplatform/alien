@@ -38,15 +38,6 @@ use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
 
-pub use aws_sdk_acm::{
-    operation::import_certificate::{
-        ImportCertificateInput as ImportCertificateRequest,
-        ImportCertificateOutput as ImportCertificateResponse,
-    },
-    primitives::Blob as AcmBlob,
-    types::Tag as AcmTag,
-};
-
 pub use aws_sdk_apigatewayv2::{
     operation::{
         create_api::{
@@ -283,23 +274,6 @@ pub trait IamApi: Send + Sync {
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     /// List inline role policies.
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
-}
-
-/// Minimal ACM operations required by infra controllers.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-#[async_trait]
-pub trait AcmApi: Send + Sync {
-    /// Import a new certificate into ACM.
-    async fn import_certificate(
-        &self,
-        request: ImportCertificateRequest,
-    ) -> Result<ImportCertificateResponse>;
-
-    /// Reimport certificate material for an existing ACM certificate.
-    async fn reimport_certificate(&self, request: ImportCertificateRequest) -> Result<()>;
-
-    /// Delete an ACM certificate by ARN.
-    async fn delete_certificate(&self, certificate_arn: &str) -> Result<()>;
 }
 
 /// Minimal Lambda operations required by worker controllers.
@@ -894,75 +868,6 @@ impl IamApi for IamClient {
         )?;
 
         Ok(response)
-    }
-}
-
-#[async_trait]
-impl AcmApi for AcmClient {
-    async fn import_certificate(
-        &self,
-        request: ImportCertificateRequest,
-    ) -> Result<ImportCertificateResponse> {
-        let response = acm_result(
-            self.import_certificate()
-                .set_certificate_arn(request.certificate_arn)
-                .set_certificate(request.certificate)
-                .set_private_key(request.private_key)
-                .set_certificate_chain(request.certificate_chain)
-                .set_tags(request.tags)
-                .send()
-                .await,
-            "ImportCertificate",
-            "Certificate",
-            "new",
-        )?;
-
-        if response.certificate_arn().is_none() {
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "ACM ImportCertificate response did not include certificateArn"
-                    .to_string(),
-                resource_id: None,
-            }));
-        }
-
-        Ok(response)
-    }
-
-    async fn reimport_certificate(&self, request: ImportCertificateRequest) -> Result<()> {
-        let certificate_arn = request.certificate_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "ACM reimport request did not include certificateArn".to_string(),
-                resource_id: None,
-            })
-        })?;
-
-        acm_result(
-            self.import_certificate()
-                .set_certificate_arn(request.certificate_arn)
-                .set_certificate(request.certificate)
-                .set_private_key(request.private_key)
-                .set_certificate_chain(request.certificate_chain)
-                .set_tags(request.tags)
-                .send()
-                .await,
-            "ImportCertificate",
-            "Certificate",
-            &certificate_arn,
-        )?;
-        Ok(())
-    }
-
-    async fn delete_certificate(&self, certificate_arn: &str) -> Result<()> {
-        acm_result(
-            self.delete_certificate()
-                .certificate_arn(certificate_arn)
-                .send()
-                .await,
-            "DeleteCertificate",
-            "Certificate",
-            certificate_arn,
-        )?;
-        Ok(())
     }
 }
 
@@ -2761,39 +2666,6 @@ where
                     message: format!(
                     "API Gateway V2 {operation} API failed for {resource_type} '{resource_name}'"
                 ),
-                    resource_id: None,
-                }))
-        }
-    }
-}
-
-fn acm_result<T, E>(
-    result: std::result::Result<T, aws_sdk_acm::error::SdkError<E>>,
-    operation: &str,
-    resource_type: &str,
-    resource_name: &str,
-) -> Result<T>
-where
-    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
-{
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            if let Some(service_error) = error.as_service_error() {
-                if service_error.code() == Some("ResourceNotFoundException") {
-                    return Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                        resource_type: resource_type.to_string(),
-                        resource_name: resource_name.to_string(),
-                    }));
-                }
-            }
-
-            Err(error
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "ACM {operation} API failed for {resource_type} '{resource_name}'"
-                    ),
                     resource_id: None,
                 }))
         }
