@@ -161,40 +161,6 @@ async fn put_s3_public_access_block(
     Ok(())
 }
 
-async fn put_s3_bucket_policy(client: &S3Client, bucket_name: &str, policy: &str) -> Result<()> {
-    client
-        .put_bucket_policy()
-        .bucket(bucket_name)
-        .policy(policy)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("S3 PutBucketPolicy API failed for bucket '{bucket_name}'"),
-            resource_id: None,
-        })?;
-
-    Ok(())
-}
-
-async fn delete_s3_bucket_policy(client: &S3Client, bucket_name: &str) -> Result<()> {
-    match client
-        .delete_bucket_policy()
-        .bucket(bucket_name)
-        .send()
-        .await
-    {
-        Ok(_) => Ok(()),
-        Err(err) if is_s3_delete_bucket_policy_not_found(&err) => Ok(()),
-        Err(err) => Err(err
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("S3 DeleteBucketPolicy API failed for bucket '{bucket_name}'"),
-                resource_id: None,
-            })),
-    }
-}
-
 async fn put_s3_bucket_lifecycle_configuration(
     client: &S3Client,
     bucket_name: &str,
@@ -226,24 +192,6 @@ async fn put_s3_bucket_lifecycle_configuration(
         })?;
 
     Ok(())
-}
-
-async fn delete_s3_bucket_lifecycle(client: &S3Client, bucket_name: &str) -> Result<()> {
-    match client
-        .delete_bucket_lifecycle()
-        .bucket(bucket_name)
-        .send()
-        .await
-    {
-        Ok(_) => Ok(()),
-        Err(err) if is_s3_delete_bucket_lifecycle_not_found(&err) => Ok(()),
-        Err(err) => Err(err
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("S3 DeleteBucketLifecycle API failed for bucket '{bucket_name}'"),
-                resource_id: None,
-            })),
-    }
 }
 
 async fn get_s3_bucket_metadata(client: &S3Client, bucket_name: &str) -> Result<BucketMetadata> {
@@ -482,19 +430,6 @@ async fn empty_s3_bucket(client: &S3Client, bucket_name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn delete_s3_bucket(client: &S3Client, bucket_name: &str) -> Result<bool> {
-    match client.delete_bucket().bucket(bucket_name).send().await {
-        Ok(_) => Ok(true),
-        Err(err) if is_s3_delete_bucket_not_found(&err) => Ok(false),
-        Err(err) => Err(err
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("S3 DeleteBucket API failed for bucket '{bucket_name}'"),
-                resource_id: None,
-            })),
-    }
 }
 
 fn is_s3_create_bucket_already_owned(
@@ -831,8 +766,13 @@ impl AwsStorageController {
                 ]
             });
 
-            put_s3_bucket_policy(&client, bucket_name, &policy.to_string())
+            client
+                .put_bucket_policy()
+                .bucket(bucket_name)
+                .policy(policy.to_string())
+                .send()
                 .await
+                .into_alien_error()
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to configure bucket policy for S3 bucket '{}'",
@@ -1124,8 +1064,13 @@ impl AwsStorageController {
                     ]
                 });
 
-                put_s3_bucket_policy(&client, bucket_name, &policy.to_string())
+                client
+                    .put_bucket_policy()
+                    .bucket(bucket_name)
+                    .policy(policy.to_string())
+                    .send()
                     .await
+                    .into_alien_error()
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
                             "Failed to update bucket policy for S3 bucket '{}'",
@@ -1136,15 +1081,26 @@ impl AwsStorageController {
 
                 info!(bucket=%bucket_name, "Bucket policy set successfully");
             } else {
-                delete_s3_bucket_policy(&client, bucket_name)
+                match client
+                    .delete_bucket_policy()
+                    .bucket(bucket_name)
+                    .send()
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to remove bucket policy for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(err) if is_s3_delete_bucket_policy_not_found(&err) => {}
+                    Err(err) => {
+                        return Err(err.into_alien_error().context(
+                            ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to remove bucket policy for S3 bucket '{}'",
+                                    bucket_name
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            },
+                        ));
+                    }
+                }
                 info!(bucket=%bucket_name, "Bucket policy removed successfully");
             }
         } else {
@@ -1183,15 +1139,26 @@ impl AwsStorageController {
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Updating lifecycle rules");
 
             if config.lifecycle_rules.is_empty() {
-                delete_s3_bucket_lifecycle(&client, bucket_name)
+                match client
+                    .delete_bucket_lifecycle()
+                    .bucket(bucket_name)
+                    .send()
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to remove lifecycle configuration for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(err) if is_s3_delete_bucket_lifecycle_not_found(&err) => {}
+                    Err(err) => {
+                        return Err(err.into_alien_error().context(
+                            ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to remove lifecycle configuration for S3 bucket '{}'",
+                                    bucket_name
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            },
+                        ));
+                    }
+                }
                 info!(bucket=%bucket_name, "Lifecycle rules removed successfully");
             } else {
                 put_s3_bucket_lifecycle_configuration(
@@ -1300,15 +1267,21 @@ impl AwsStorageController {
             }
         }
 
-        match delete_s3_bucket(&client, bucket_name).await {
-            Ok(true) => {
+        match client.delete_bucket().bucket(bucket_name).send().await {
+            Ok(_) => {
                 info!(bucket=%bucket_name, "S3 bucket deleted successfully");
             }
-            Ok(false) => {
+            Err(err) if is_s3_delete_bucket_not_found(&err) => {
                 info!(bucket=%bucket_name, "Bucket already deleted or never existed");
             }
-            Err(e) => {
-                info!(bucket=%bucket_name, error=?e, "Could not delete bucket, considering deletion complete");
+            Err(err) => {
+                let error = err
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete S3 bucket '{}'", bucket_name),
+                        resource_id: Some(config.id.clone()),
+                    });
+                info!(bucket=%bucket_name, error=?error, "Could not delete bucket, considering deletion complete");
             }
         }
 
