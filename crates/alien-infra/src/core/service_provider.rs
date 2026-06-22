@@ -46,6 +46,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
 use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
+use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
 pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
@@ -2615,7 +2616,7 @@ pub trait ManagedIdentityApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureManagedIdentityClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_msi_2023_01_31::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureManagedIdentityClient {
@@ -2632,104 +2633,36 @@ impl OfficialAzureManagedIdentityClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn user_assigned_identity_url(&self, resource_group_name: &str, resource_name: &str) -> String {
-        format!(
-            "{}/{}?api-version=2023-01-31",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.build_user_assigned_identity_id(resource_group_name, resource_name)
-                .trim_start_matches('/')
-        )
-    }
+    async fn client(&self) -> Result<azure_msi_2023_01_31::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn federated_credential_url(
-        &self,
-        resource_group_name: &str,
-        identity_name: &str,
-        credential_name: &str,
-    ) -> String {
-        format!(
-            "{}/{}/federatedIdentityCredentials/{}?api-version=2023-01-31",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.build_user_assigned_identity_id(resource_group_name, identity_name)
-                .trim_start_matches('/'),
-            credential_name
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                azure_msi_2023_01_31::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Managed Identity client"
+                            .to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -2741,30 +2674,23 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         resource_name: &str,
         identity: &Identity,
     ) -> Result<Identity> {
-        let body = serde_json::to_string(identity).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure managed identity '{resource_name}' request"
-                ),
-                resource_id: None,
-            },
-        )?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.user_assigned_identity_url(resource_group_name, resource_name),
-                Some(body),
-                "Azure managed identity",
-                resource_name,
+        let result = self
+            .client()
+            .await?
+            .user_assigned_identities_client()
+            .create_or_update(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                resource_name.to_string(),
+                identity.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure managed identity '{resource_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity create or update",
+            "Azure managed identity",
+            resource_name,
         )
     }
 
@@ -2773,15 +2699,25 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         resource_group_name: &str,
         resource_name: &str,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.user_assigned_identity_url(resource_group_name, resource_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .user_assigned_identities_client()
+            .delete(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                resource_name.to_string(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity delete",
             "Azure managed identity",
             resource_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_user_assigned_identity(
@@ -2789,22 +2725,22 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         resource_group_name: &str,
         resource_name: &str,
     ) -> Result<Identity> {
-        let response = self
-            .request(
-                Method::GET,
-                self.user_assigned_identity_url(resource_group_name, resource_name),
-                None,
-                "Azure managed identity",
-                resource_name,
+        let result = self
+            .client()
+            .await?
+            .user_assigned_identities_client()
+            .get(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                resource_name.to_string(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure managed identity '{resource_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity get",
+            "Azure managed identity",
+            resource_name,
         )
     }
 
@@ -2815,30 +2751,24 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         credential_name: &str,
         credential: &FederatedIdentityCredential,
     ) -> Result<FederatedIdentityCredential> {
-        let body = serde_json::to_string(credential)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure federated credential '{credential_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.federated_credential_url(resource_group_name, identity_name, credential_name),
-                Some(body),
-                "Azure federated identity credential",
-                credential_name,
+        let result = self
+            .client()
+            .await?
+            .federated_identity_credentials_client()
+            .create_or_update(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                identity_name.to_string(),
+                credential_name.to_string(),
+                credential.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure federated credential '{credential_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "federated credential create or update",
+            "Azure federated identity credential",
+            credential_name,
         )
     }
 
@@ -2848,22 +2778,23 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         identity_name: &str,
         credential_name: &str,
     ) -> Result<FederatedIdentityCredential> {
-        let response = self
-            .request(
-                Method::GET,
-                self.federated_credential_url(resource_group_name, identity_name, credential_name),
-                None,
-                "Azure federated identity credential",
-                credential_name,
+        let result = self
+            .client()
+            .await?
+            .federated_identity_credentials_client()
+            .get(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                identity_name.to_string(),
+                credential_name.to_string(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure federated credential '{credential_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "federated credential get",
+            "Azure federated identity credential",
+            credential_name,
         )
     }
 
@@ -2873,15 +2804,26 @@ impl ManagedIdentityApi for OfficialAzureManagedIdentityClient {
         identity_name: &str,
         credential_name: &str,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.federated_credential_url(resource_group_name, identity_name, credential_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .federated_identity_credentials_client()
+            .delete(
+                self.config.subscription_id.clone(),
+                resource_group_name.to_string(),
+                identity_name.to_string(),
+                credential_name.to_string(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "federated credential delete",
             "Azure federated identity credential",
             credential_name,
         )
-        .await?;
-        Ok(())
     }
 
     fn build_user_assigned_identity_id(
