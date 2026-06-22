@@ -3,9 +3,7 @@ use alien_macros::controller;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::{
-    AzureContainerRegistryResource, OperationResult, Registry, ResourceControllerContext,
-};
+use crate::core::{OperationResult, Registry, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
@@ -14,7 +12,7 @@ use alien_core::{
     ResourceStatus,
 };
 use azure_mgmt_containerregistry::package_2023_11_preview::models::{
-    registry_properties, sku, RegistryProperties, Sku,
+    registry_properties, sku, RegistryProperties, Resource, Sku,
 };
 use chrono::Utc;
 
@@ -82,7 +80,7 @@ impl AzureArtifactRegistryController {
                 message: "Azure region is required but not specified in configuration".to_string(),
             })
         })?;
-        let mut resource = AzureContainerRegistryResource::new(location);
+        let mut resource = Resource::new(location);
         resource.name = Some(registry_name.clone());
 
         let mut registry = Registry::new(resource, Sku::new(sku::Name::Basic));

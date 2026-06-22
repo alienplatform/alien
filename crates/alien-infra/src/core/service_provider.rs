@@ -43,9 +43,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     Permission, RoleAssignment, RoleAssignmentListResult, RoleAssignmentProperties, RoleDefinition,
     RoleDefinitionProperties,
 };
-pub use azure_mgmt_containerregistry::package_2023_11_preview::models::{
-    Registry, Resource as AzureContainerRegistryResource,
-};
+pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
 pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
     Vault as AzureKeyVault, VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
 };
