@@ -14,12 +14,11 @@ use crate::aws_sdk::{
     ApiGatewayV2CreateStageRequest as CreateStageRequest,
     ApiGatewayV2DomainNameConfiguration as DomainNameConfiguration,
     CreateEventSourceMappingRequest, CreateFunctionInput, DescribeNetworkInterfacesRequest,
-    EndpointType, Environment, EventBridgeTag, EventBridgeTarget, Filter, FunctionCode,
-    GetFunctionConfigurationResponse, ImportCertificateRequest, IntegrationType,
-    LambdaArchitecture, LambdaFunctionConfiguration, LambdaLastUpdateStatus, LambdaState,
-    ListEventSourceMappingsRequest, NotificationConfiguration, PackageType, ProtocolType,
-    PutRuleRequest, PutTargetsRequest, RuleState, S3Event, SecurityPolicy,
-    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    EndpointType, Environment, Filter, FunctionCode, GetFunctionConfigurationResponse,
+    ImportCertificateRequest, IntegrationType, LambdaArchitecture, LambdaFunctionConfiguration,
+    LambdaLastUpdateStatus, LambdaState, ListEventSourceMappingsRequest, NotificationConfiguration,
+    PackageType, ProtocolType, S3Event, SecurityPolicy, UpdateFunctionCodeRequest,
+    UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -35,8 +34,17 @@ use alien_core::{
     ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
+use aws_sdk_eventbridge::{
+    error::{ProvideErrorMetadata, SdkError},
+    operation::{
+        put_rule::{PutRuleInput, PutRuleOutput},
+        put_targets::PutTargetsInput,
+    },
+    types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
+    Client as EventBridgeClient,
+};
 use chrono::Utc;
 
 /// Generates the full, prefixed AWS resource name.
@@ -80,6 +88,163 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Result<Vec<EventBridgeTa
                 })
         })
         .collect()
+}
+
+async fn put_eventbridge_rule(
+    client: &EventBridgeClient,
+    request: PutRuleInput,
+) -> Result<PutRuleOutput> {
+    let rule_name = request
+        .name
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    eventbridge_result(
+        client
+            .put_rule()
+            .set_name(request.name)
+            .set_schedule_expression(request.schedule_expression)
+            .set_event_pattern(request.event_pattern)
+            .set_state(request.state)
+            .set_description(request.description)
+            .set_role_arn(request.role_arn)
+            .set_tags(request.tags)
+            .set_event_bus_name(request.event_bus_name)
+            .send()
+            .await,
+        "PutRule",
+        "EventBridgeRule",
+        &rule_name,
+    )
+}
+
+async fn put_eventbridge_targets(
+    client: &EventBridgeClient,
+    request: PutTargetsInput,
+) -> Result<()> {
+    let rule_name = request
+        .rule
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let output = eventbridge_result(
+        client
+            .put_targets()
+            .set_rule(request.rule)
+            .set_event_bus_name(request.event_bus_name)
+            .set_targets(request.targets)
+            .send()
+            .await,
+        "PutTargets",
+        "EventBridgeRule",
+        &rule_name,
+    )?;
+
+    ensure_no_eventbridge_target_failures(
+        output.failed_entry_count,
+        format!("{:?}", output.failed_entries),
+        "PutTargets",
+        &rule_name,
+    )
+}
+
+async fn remove_eventbridge_targets(
+    client: &EventBridgeClient,
+    rule_name: &str,
+    target_ids: Vec<String>,
+) -> Result<()> {
+    let output = eventbridge_result(
+        client
+            .remove_targets()
+            .rule(rule_name)
+            .set_ids(Some(target_ids))
+            .send()
+            .await,
+        "RemoveTargets",
+        "EventBridgeRule",
+        rule_name,
+    )?;
+
+    ensure_no_eventbridge_target_failures(
+        output.failed_entry_count,
+        format!("{:?}", output.failed_entries),
+        "RemoveTargets",
+        rule_name,
+    )
+}
+
+async fn delete_eventbridge_rule(client: &EventBridgeClient, rule_name: &str) -> Result<()> {
+    eventbridge_result(
+        client.delete_rule().name(rule_name).send().await,
+        "DeleteRule",
+        "EventBridgeRule",
+        rule_name,
+    )?;
+
+    Ok(())
+}
+
+fn ensure_no_eventbridge_target_failures(
+    failed_entry_count: i32,
+    failed_entries: String,
+    operation: &str,
+    rule_name: &str,
+) -> Result<()> {
+    if failed_entry_count == 0 {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::CloudPlatformError {
+        message: format!(
+            "EventBridge {operation} reported {failed_entry_count} failed target entries for rule '{rule_name}': {failed_entries}"
+        ),
+        resource_id: None,
+    }))
+}
+
+fn eventbridge_result<T, E>(
+    result: std::result::Result<T, SdkError<E>>,
+    operation: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<T>
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(service_error) = error.as_service_error() {
+                match service_error.code() {
+                    Some("ResourceNotFoundException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                        }));
+                    }
+                    Some("ResourceAlreadyExistsException" | "ConcurrentModificationException") => {
+                        return Err(AlienError::new(ErrorData::CloudResourceConflict {
+                            resource_type: resource_type.to_string(),
+                            resource_name: resource_name.to_string(),
+                            message: service_error
+                                .message()
+                                .unwrap_or("EventBridge conflict")
+                                .to_string(),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+
+            Err(error
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "EventBridge {operation} API failed for {resource_type} '{resource_name}'"
+                    ),
+                    resource_id: None,
+                }))
+        }
+    }
 }
 
 fn is_remote_resource_conflict(error: &AlienError<ErrorData>) -> bool {
@@ -1663,29 +1828,26 @@ impl AwsWorkerController {
                     .get_aws_eventbridge_client(aws_cfg)
                     .await?;
 
-                let rule_response = eventbridge_client
-                    .put_rule(
-                        PutRuleRequest::builder()
-                            .name(rule_name.clone())
-                            .schedule_expression(schedule_expression)
-                            .state(RuleState::Enabled)
-                            .description(format!(
-                                "Alien schedule trigger for worker '{}'",
-                                config.id
-                            ))
-                            .set_tags(Some(eventbridge_tags(ctx.resource_prefix, &config.id)?))
-                            .build()
-                            .into_alien_error()
-                            .context(ErrorData::CloudPlatformError {
-                                message: "Invalid EventBridge rule request".to_string(),
-                                resource_id: Some(config.id.clone()),
-                            })?,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to create EventBridge rule '{}'", rule_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                let rule_response = put_eventbridge_rule(
+                    &eventbridge_client,
+                    PutRuleInput::builder()
+                        .name(rule_name.clone())
+                        .schedule_expression(schedule_expression)
+                        .state(RuleState::Enabled)
+                        .description(format!("Alien schedule trigger for worker '{}'", config.id))
+                        .set_tags(Some(eventbridge_tags(ctx.resource_prefix, &config.id)?))
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Invalid EventBridge rule request".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create EventBridge rule '{}'", rule_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 let rule_arn = rule_response.rule_arn.unwrap_or_default();
 
@@ -1726,36 +1888,33 @@ impl AwsWorkerController {
                 }
 
                 // Add Lambda as the target of the rule
-                eventbridge_client
-                    .put_targets(
-                        PutTargetsRequest::builder()
-                            .rule(rule_name.clone())
-                            .targets(
-                                EventBridgeTarget::builder()
-                                    .id("1")
-                                    .arn(function_arn)
-                                    .build()
-                                    .into_alien_error()
-                                    .context(ErrorData::CloudPlatformError {
-                                        message: "Invalid EventBridge target".to_string(),
-                                        resource_id: Some(config.id.clone()),
-                                    })?,
-                            )
-                            .build()
-                            .into_alien_error()
-                            .context(ErrorData::CloudPlatformError {
-                                message: "Invalid EventBridge targets request".to_string(),
-                                resource_id: Some(config.id.clone()),
-                            })?,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to add target to EventBridge rule '{}'",
-                            rule_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                put_eventbridge_targets(
+                    &eventbridge_client,
+                    PutTargetsInput::builder()
+                        .rule(rule_name.clone())
+                        .targets(
+                            EventBridgeTarget::builder()
+                                .id("1")
+                                .arn(function_arn)
+                                .build()
+                                .into_alien_error()
+                                .context(ErrorData::CloudPlatformError {
+                                    message: "Invalid EventBridge target".to_string(),
+                                    resource_id: Some(config.id.clone()),
+                                })?,
+                        )
+                        .build()
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Invalid EventBridge targets request".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to add target to EventBridge rule '{}'", rule_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
                 if !self.eventbridge_rule_names.contains(&rule_name) {
                     self.eventbridge_rule_names.push(rule_name.clone());
@@ -2881,9 +3040,12 @@ impl AwsWorkerController {
                     .await?;
 
                 for rule_name in &self.eventbridge_rule_names.clone() {
-                    if let Err(e) = eventbridge_client
-                        .remove_targets(rule_name, vec!["1".to_string()])
-                        .await
+                    if let Err(e) = remove_eventbridge_targets(
+                        &eventbridge_client,
+                        rule_name,
+                        vec!["1".to_string()],
+                    )
+                    .await
                     {
                         warn!(
                             worker=%current_config.id,
@@ -2892,7 +3054,7 @@ impl AwsWorkerController {
                             "Failed to remove targets from old EventBridge rule (best-effort)"
                         );
                     }
-                    if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
+                    if let Err(e) = delete_eventbridge_rule(&eventbridge_client, rule_name).await {
                         warn!(
                             worker=%current_config.id,
                             rule=%rule_name,
@@ -3017,32 +3179,32 @@ impl AwsWorkerController {
                         .get_aws_eventbridge_client(aws_cfg)
                         .await?;
 
-                    let rule_response = eventbridge_client
-                        .put_rule(
-                            PutRuleRequest::builder()
-                                .name(rule_name.clone())
-                                .schedule_expression(schedule_expression)
-                                .state(RuleState::Enabled)
-                                .description(format!(
-                                    "Alien schedule trigger for worker '{}'",
-                                    current_config.id
-                                ))
-                                .set_tags(Some(eventbridge_tags(
-                                    ctx.resource_prefix,
-                                    &current_config.id,
-                                )?))
-                                .build()
-                                .into_alien_error()
-                                .context(ErrorData::CloudPlatformError {
-                                    message: "Invalid EventBridge rule request".to_string(),
-                                    resource_id: Some(current_config.id.clone()),
-                                })?,
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to create EventBridge rule '{}'", rule_name),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    let rule_response = put_eventbridge_rule(
+                        &eventbridge_client,
+                        PutRuleInput::builder()
+                            .name(rule_name.clone())
+                            .schedule_expression(schedule_expression)
+                            .state(RuleState::Enabled)
+                            .description(format!(
+                                "Alien schedule trigger for worker '{}'",
+                                current_config.id
+                            ))
+                            .set_tags(Some(eventbridge_tags(
+                                ctx.resource_prefix,
+                                &current_config.id,
+                            )?))
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "Invalid EventBridge rule request".to_string(),
+                                resource_id: Some(current_config.id.clone()),
+                            })?,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create EventBridge rule '{}'", rule_name),
+                        resource_id: Some(current_config.id.clone()),
+                    })?;
 
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", worker_name, index);
@@ -3080,36 +3242,36 @@ impl AwsWorkerController {
                         }
                     }
 
-                    eventbridge_client
-                        .put_targets(
-                            PutTargetsRequest::builder()
-                                .rule(rule_name.clone())
-                                .targets(
-                                    EventBridgeTarget::builder()
-                                        .id("1")
-                                        .arn(function_arn)
-                                        .build()
-                                        .into_alien_error()
-                                        .context(ErrorData::CloudPlatformError {
-                                            message: "Invalid EventBridge target".to_string(),
-                                            resource_id: Some(current_config.id.clone()),
-                                        })?,
-                                )
-                                .build()
-                                .into_alien_error()
-                                .context(ErrorData::CloudPlatformError {
-                                    message: "Invalid EventBridge targets request".to_string(),
-                                    resource_id: Some(current_config.id.clone()),
-                                })?,
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add target to EventBridge rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    put_eventbridge_targets(
+                        &eventbridge_client,
+                        PutTargetsInput::builder()
+                            .rule(rule_name.clone())
+                            .targets(
+                                EventBridgeTarget::builder()
+                                    .id("1")
+                                    .arn(function_arn)
+                                    .build()
+                                    .into_alien_error()
+                                    .context(ErrorData::CloudPlatformError {
+                                        message: "Invalid EventBridge target".to_string(),
+                                        resource_id: Some(current_config.id.clone()),
+                                    })?,
+                            )
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::CloudPlatformError {
+                                message: "Invalid EventBridge targets request".to_string(),
+                                resource_id: Some(current_config.id.clone()),
+                            })?,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to add target to EventBridge rule '{}'",
+                            rule_name
+                        ),
+                        resource_id: Some(current_config.id.clone()),
+                    })?;
 
                     if !self.eventbridge_rule_names.contains(&rule_name) {
                         self.eventbridge_rule_names.push(rule_name);
@@ -3405,9 +3567,12 @@ impl AwsWorkerController {
 
             for rule_name in &self.eventbridge_rule_names.clone() {
                 // Remove targets first (required before deleting rule)
-                if let Err(e) = eventbridge_client
-                    .remove_targets(rule_name, vec!["1".to_string()])
-                    .await
+                if let Err(e) = remove_eventbridge_targets(
+                    &eventbridge_client,
+                    rule_name,
+                    vec!["1".to_string()],
+                )
+                .await
                 {
                     warn!(
                         worker=%worker_config.id,
@@ -3420,7 +3585,7 @@ impl AwsWorkerController {
                 }
 
                 // Delete the rule
-                if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
+                if let Err(e) = delete_eventbridge_rule(&eventbridge_client, rule_name).await {
                     warn!(
                         worker=%worker_config.id,
                         rule=%rule_name,
@@ -4147,9 +4312,16 @@ mod tests {
 
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
-        ResourceStatus, Worker, WorkerOutputs,
+        ResourceStatus, Worker, WorkerCode, WorkerOutputs, WorkerTrigger,
     };
     use alien_error::AlienError;
+    use aws_sdk_eventbridge::{
+        operation::{put_rule::PutRuleOutput, put_targets::PutTargetsOutput},
+        types::RuleState,
+        Client as EventBridgeClient,
+    };
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use httpmock::prelude::*;
     use rstest::rstest;
 
@@ -4706,6 +4878,142 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    #[tokio::test]
+    async fn create_schedule_trigger_uses_sdk_native_eventbridge_mock() {
+        let worker = Worker::new("schedule-func".to_string())
+            .code(WorkerCode::Image {
+                image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/schedule:latest".to_string(),
+            })
+            .permissions("default-profile".to_string())
+            .trigger(WorkerTrigger::Schedule {
+                cron: "*/5 * * * *".to_string(),
+            })
+            .build();
+        let worker_name = format!("test-{}", worker.id);
+        let function_arn = format!(
+            "arn:aws:lambda:us-east-1:123456789012:function:{}",
+            worker_name
+        );
+        let rule_name = format!("{worker_name}-cron-0");
+        let rule_arn = format!("arn:aws:events:us-east-1:123456789012:rule/{rule_name}");
+
+        let expected_rule_name = rule_name.clone();
+        let put_rule_output_arn = rule_arn.clone();
+        let put_rule_rule = mock!(EventBridgeClient::put_rule)
+            .match_requests(move |request| {
+                request.name() == Some(expected_rule_name.as_str())
+                    && request.schedule_expression() == Some("rate(5 minutes)")
+                    && request.state() == Some(&RuleState::Enabled)
+                    && request
+                        .description()
+                        .is_some_and(|description| description.contains("schedule-func"))
+                    && request
+                        .tags()
+                        .iter()
+                        .any(|tag| tag.key() == "resource" && tag.value() == "schedule-func")
+            })
+            .then_output(move || {
+                PutRuleOutput::builder()
+                    .rule_arn(put_rule_output_arn.clone())
+                    .build()
+            });
+
+        let expected_target_rule_name = rule_name.clone();
+        let expected_target_arn = function_arn.clone();
+        let put_targets_rule = mock!(EventBridgeClient::put_targets)
+            .match_requests(move |request| {
+                request.rule() == Some(expected_target_rule_name.as_str())
+                    && request.targets().iter().any(|target| {
+                        target.id() == "1" && target.arn() == expected_target_arn.as_str()
+                    })
+            })
+            .then_output(|| PutTargetsOutput::builder().failed_entry_count(0).build());
+
+        let eventbridge_client = mock_client!(
+            aws_sdk_eventbridge,
+            RuleMode::Sequential,
+            [&put_rule_rule, &put_targets_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+
+        let mut mock_lambda = MockLambdaApi::new();
+        let worker_name_for_create = worker_name.clone();
+        mock_lambda.expect_create_function().returning(move |_| {
+            Ok(create_successful_create_function_response(
+                &worker_name_for_create,
+            ))
+        });
+        let worker_name_for_get = worker_name.clone();
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                Ok(create_successful_get_function_response(
+                    &worker_name_for_get,
+                ))
+            });
+        mock_lambda
+            .expect_add_permission()
+            .times(1)
+            .returning(|_| Ok(AddPermissionResponse::builder().build()));
+        mock_lambda
+            .expect_put_function_concurrency()
+            .returning(|_, _| Ok(()));
+        mock_lambda
+            .expect_delete_function_concurrency()
+            .returning(|_| Ok(()));
+        let worker_name_for_code_update = worker_name.clone();
+        mock_lambda
+            .expect_update_function_code()
+            .returning(move |_| {
+                Ok(create_successful_update_code_response(
+                    &worker_name_for_code_update,
+                ))
+            });
+        let worker_name_for_config_update = worker_name.clone();
+        mock_lambda
+            .expect_update_function_configuration()
+            .returning(move |_| {
+                Ok(create_successful_update_config_response(
+                    &worker_name_for_config_update,
+                ))
+            });
+
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        let mock_lambda = Arc::new(mock_lambda);
+        mock_provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(mock_lambda.clone()));
+        let mock_iam = create_aws_iam_mock_for_resource_permissions();
+        mock_provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(mock_iam.clone()));
+        mock_provider
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(eventbridge_client.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(mock_provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let outputs = executor.outputs().unwrap();
+        let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        assert_eq!(
+            function_outputs.identifier.as_deref(),
+            Some(function_arn.as_str())
+        );
+        assert_eq!(put_rule_rule.num_calls(), 1);
+        assert_eq!(put_targets_rule.num_calls(), 1);
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────

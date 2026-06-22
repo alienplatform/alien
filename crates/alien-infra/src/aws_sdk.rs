@@ -155,14 +155,6 @@ pub use aws_sdk_ec2::{
     },
 };
 
-pub use aws_sdk_eventbridge::{
-    operation::{
-        put_rule::{PutRuleInput as PutRuleRequest, PutRuleOutput as PutRuleResponse},
-        put_targets::PutTargetsInput as PutTargetsRequest,
-    },
-    types::{RuleState, Tag as EventBridgeTag, Target as EventBridgeTarget},
-};
-
 pub use aws_sdk_iam::{
     operation::{
         create_policy::CreatePolicyOutput as CreatePolicyResponse,
@@ -412,20 +404,6 @@ pub trait ApiGatewayV2Api: Send + Sync {
     ) -> Result<ApiGatewayV2GetApiMappingsResponse>;
     /// Delete a custom domain API mapping.
     async fn delete_api_mapping(&self, domain_name: &str, api_mapping_id: &str) -> Result<()>;
-}
-
-/// Minimal EventBridge operations required by worker schedule triggers.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-#[async_trait]
-pub trait EventBridgeApi: Send + Sync {
-    /// Create or update a rule.
-    async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse>;
-    /// Add or update targets on a rule.
-    async fn put_targets(&self, request: PutTargetsRequest) -> Result<()>;
-    /// Remove targets from a rule.
-    async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
-    /// Delete a rule.
-    async fn delete_rule(&self, rule_name: &str) -> Result<()>;
 }
 
 /// Minimal EC2 operations required by infra network and worker controllers.
@@ -1581,87 +1559,6 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
             "DeleteApiMapping",
             "ApiGatewayApiMapping",
             domain_name,
-        )?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl EventBridgeApi for EventBridgeClient {
-    async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse> {
-        let rule_name = request
-            .name
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let output = eventbridge_result(
-            self.put_rule()
-                .set_name(request.name)
-                .set_schedule_expression(request.schedule_expression)
-                .set_event_pattern(request.event_pattern)
-                .set_state(request.state)
-                .set_description(request.description)
-                .set_role_arn(request.role_arn)
-                .set_tags(request.tags)
-                .set_event_bus_name(request.event_bus_name)
-                .send()
-                .await,
-            "PutRule",
-            "EventBridgeRule",
-            &rule_name,
-        )?;
-
-        Ok(output)
-    }
-
-    async fn put_targets(&self, request: PutTargetsRequest) -> Result<()> {
-        let rule_name = request
-            .rule
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let output = eventbridge_result(
-            self.put_targets()
-                .set_rule(request.rule)
-                .set_event_bus_name(request.event_bus_name)
-                .set_targets(request.targets)
-                .send()
-                .await,
-            "PutTargets",
-            "EventBridgeRule",
-            &rule_name,
-        )?;
-        ensure_no_eventbridge_target_failures(
-            output.failed_entry_count,
-            format!("{:?}", output.failed_entries),
-            "PutTargets",
-            &rule_name,
-        )
-    }
-
-    async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()> {
-        let output = eventbridge_result(
-            self.remove_targets()
-                .rule(rule_name)
-                .set_ids(Some(target_ids))
-                .send()
-                .await,
-            "RemoveTargets",
-            "EventBridgeRule",
-            rule_name,
-        )?;
-        ensure_no_eventbridge_target_failures(
-            output.failed_entry_count,
-            format!("{:?}", output.failed_entries),
-            "RemoveTargets",
-            rule_name,
-        )
-    }
-
-    async fn delete_rule(&self, rule_name: &str) -> Result<()> {
-        eventbridge_result(
-            self.delete_rule().name(rule_name).send().await,
-            "DeleteRule",
-            "EventBridgeRule",
-            rule_name,
         )?;
         Ok(())
     }
@@ -2864,70 +2761,6 @@ where
                     message: format!(
                     "API Gateway V2 {operation} API failed for {resource_type} '{resource_name}'"
                 ),
-                    resource_id: None,
-                }))
-        }
-    }
-}
-
-fn ensure_no_eventbridge_target_failures(
-    failed_entry_count: i32,
-    failed_entries: String,
-    operation: &str,
-    rule_name: &str,
-) -> Result<()> {
-    if failed_entry_count == 0 {
-        return Ok(());
-    }
-
-    Err(AlienError::new(ErrorData::CloudPlatformError {
-        message: format!(
-            "EventBridge {operation} reported {failed_entry_count} failed target entries for rule '{rule_name}': {failed_entries}"
-        ),
-        resource_id: None,
-    }))
-}
-
-fn eventbridge_result<T, E>(
-    result: std::result::Result<T, aws_sdk_eventbridge::error::SdkError<E>>,
-    operation: &str,
-    resource_type: &str,
-    resource_name: &str,
-) -> Result<T>
-where
-    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
-{
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            if let Some(service_error) = error.as_service_error() {
-                match service_error.code() {
-                    Some("ResourceNotFoundException") => {
-                        return Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                            resource_type: resource_type.to_string(),
-                            resource_name: resource_name.to_string(),
-                        }));
-                    }
-                    Some("ResourceAlreadyExistsException" | "ConcurrentModificationException") => {
-                        return Err(AlienError::new(ErrorData::CloudResourceConflict {
-                            resource_type: resource_type.to_string(),
-                            resource_name: resource_name.to_string(),
-                            message: service_error
-                                .message()
-                                .unwrap_or("EventBridge conflict")
-                                .to_string(),
-                        }));
-                    }
-                    _ => {}
-                }
-            }
-
-            Err(error
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "EventBridge {operation} API failed for {resource_type} '{resource_name}'"
-                    ),
                     resource_id: None,
                 }))
         }

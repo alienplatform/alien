@@ -5,7 +5,7 @@ use crate::aws_sdk::{
     ec2_client_from_alien_config, ecr_client_from_alien_config,
     eventbridge_client_from_alien_config, iam_client_from_alien_config,
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
-    AcmApi, ApiGatewayV2Api, Ec2Api, EventBridgeApi, IamApi, LambdaApi, S3Api,
+    AcmApi, ApiGatewayV2Api, Ec2Api, IamApi, LambdaApi, S3Api,
 };
 use crate::azure_container_apps::{
     ContainerAppsApi, LongRunningOperationApi, OfficialAzureContainerAppsClient,
@@ -4632,7 +4632,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_eventbridge_client(
         &self,
         config: &AwsClientConfig,
-    ) -> Result<Arc<dyn EventBridgeApi>>;
+    ) -> Result<aws_sdk_eventbridge::Client>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -4924,10 +4924,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     async fn get_aws_eventbridge_client(
         &self,
         config: &AwsClientConfig,
-    ) -> Result<Arc<dyn EventBridgeApi>> {
-        Ok(Arc::new(
-            eventbridge_client_from_alien_config(config).await?,
-        ))
+    ) -> Result<aws_sdk_eventbridge::Client> {
+        eventbridge_client_from_alien_config(config).await
     }
 
     // GCP implementations
