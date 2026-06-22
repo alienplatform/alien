@@ -1573,7 +1573,7 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
+        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
@@ -1621,20 +1621,18 @@ impl AzureWorkerController {
         }
 
         let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
+            proxy_resource: Default::default(),
+            properties: Some(dapr_component::Properties {
                 component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
+                ignore_errors: Some(false),
                 init_timeout: None,
                 version: Some("v1".to_string()),
                 metadata,
                 scopes: vec![container_app_name.clone()],
                 secret_store_component: None,
-                secrets: vec![],
+                secrets: Vec::new(),
+                service_component_bind: Vec::new(),
             }),
-            id: None,
-            system_data: None,
-            type_: None,
         };
 
         info!(
@@ -3357,7 +3355,7 @@ impl AzureWorkerController {
         })?;
 
         // Create Dapr component for commands queue
-        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
+        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
         let component_name = format!("servicebus-{}-commands", container_app_name);
@@ -3401,20 +3399,18 @@ impl AzureWorkerController {
         }
 
         let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
+            proxy_resource: Default::default(),
+            properties: Some(dapr_component::Properties {
                 component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
+                ignore_errors: Some(false),
                 init_timeout: None,
                 version: Some("v1".to_string()),
                 metadata,
                 scopes: vec![container_app_name.to_string()],
                 secret_store_component: None,
-                secrets: vec![],
+                secrets: Vec::new(),
+                service_component_bind: Vec::new(),
             }),
-            id: None,
-            system_data: None,
-            type_: None,
         };
 
         info!(
@@ -4058,7 +4054,7 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
+        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         // Dapr components live on the Container Apps Environment, which may be in a
@@ -4092,10 +4088,10 @@ impl AzureWorkerController {
         })?;
 
         let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
+            proxy_resource: Default::default(),
+            properties: Some(dapr_component::Properties {
                 component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
+                ignore_errors: Some(false),
                 init_timeout: None,
                 version: Some("v1".to_string()),
                 metadata: {
@@ -4138,11 +4134,9 @@ impl AzureWorkerController {
                 },
                 scopes: vec![container_app_name.to_string()],
                 secret_store_component: None,
-                secrets: vec![],
+                secrets: Vec::new(),
+                service_component_bind: Vec::new(),
             }),
-            id: None,
-            system_data: None,
-            type_: None,
         };
 
         info!(
@@ -4204,7 +4198,7 @@ impl AzureWorkerController {
         storage_ref: &alien_core::ResourceRef,
         _events: &[String],
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
+        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -4272,20 +4266,18 @@ impl AzureWorkerController {
         }
 
         let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
+            proxy_resource: Default::default(),
+            properties: Some(dapr_component::Properties {
                 component_type: Some("bindings.azure.blobstorage".to_string()),
-                ignore_errors: false,
+                ignore_errors: Some(false),
                 init_timeout: None,
                 version: Some("v1".to_string()),
                 metadata,
                 scopes: vec![container_app_name.to_string()],
                 secret_store_component: None,
-                secrets: vec![],
+                secrets: Vec::new(),
+                service_component_bind: Vec::new(),
             }),
-            id: None,
-            system_data: None,
-            type_: None,
         };
 
         let client = ctx
@@ -4339,7 +4331,7 @@ impl AzureWorkerController {
         cron: &str,
         index: usize,
     ) -> Result<DaprComponentOperation> {
-        use crate::azure_container_apps::{DaprComponent, DaprComponentProperties, DaprMetadata};
+        use crate::azure_container_apps::{dapr_component, DaprComponent, DaprMetadata};
 
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -4349,10 +4341,10 @@ impl AzureWorkerController {
         let component_name = format!("cron-{}-{}", container_app_name, index);
 
         let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
+            proxy_resource: Default::default(),
+            properties: Some(dapr_component::Properties {
                 component_type: Some("bindings.cron".to_string()),
-                ignore_errors: false,
+                ignore_errors: Some(false),
                 init_timeout: None,
                 version: Some("v1".to_string()),
                 metadata: vec![
@@ -4369,11 +4361,9 @@ impl AzureWorkerController {
                 ],
                 scopes: vec![container_app_name.to_string()],
                 secret_store_component: None,
-                secrets: vec![],
+                secrets: Vec::new(),
+                service_component_bind: Vec::new(),
             }),
-            id: None,
-            system_data: None,
-            type_: None,
         };
 
         let client = ctx
@@ -4659,7 +4649,7 @@ mod tests {
                     active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
                     identity_settings: vec![],
                     registries: vec![],
-                    secrets: vec![],
+                    secrets: Vec::new(),
                     dapr: None,
                     max_inactive_revisions: None,
                     runtime: None,
@@ -5098,7 +5088,7 @@ mod tests {
                     active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
                     identity_settings: vec![],
                     registries: vec![],
-                    secrets: vec![],
+                    secrets: Vec::new(),
                     dapr: None,
                     max_inactive_revisions: None,
                     runtime: None,

@@ -3,6 +3,9 @@ use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClient
 use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
+pub use azure_mgmt_app::package_preview_2024_08::models::{
+    dapr_component, DaprComponent, DaprMetadata,
+};
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 
@@ -1019,98 +1022,6 @@ pub struct ManagedEnvironmentCertificateKeyVaultProperties {
 pub struct ManagedEnvironmentCertificateResponse {
     /// Certificate resource ID.
     pub id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DaprComponent {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<DaprComponentProperties>,
-    #[serde(
-        rename = "systemData",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub system_data: Option<serde_json::Value>,
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DaprComponentProperties {
-    #[serde(
-        rename = "componentType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub component_type: Option<String>,
-    #[serde(rename = "ignoreErrors", default)]
-    pub ignore_errors: bool,
-    #[serde(
-        rename = "initTimeout",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub init_timeout: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub metadata: Vec<DaprMetadata>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub scopes: Vec<String>,
-    #[serde(
-        rename = "secretStoreComponent",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub secret_store_component: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub secrets: Vec<DaprSecretDefinition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DaprMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(rename = "secretRef", default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DaprSecretDefinition {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
-    #[serde(
-        rename = "keyVaultUrl",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub key_vault_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
 }
 
 pub struct OfficialAzureContainerAppsClient {
