@@ -63,7 +63,7 @@ pub use azure_mgmt_storage::package_2023_05::models::{
     StorageAccountPropertiesCreateParameters,
 };
 use futures_util::StreamExt;
-use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
+use google_cloud_api_serviceusage_v1::client::ServiceUsage;
 use google_cloud_artifactregistry_v1::client::ArtifactRegistry;
 pub use google_cloud_artifactregistry_v1::model::{
     repository::Format as ArtifactRegistryRepositoryFormat,
@@ -1315,83 +1315,6 @@ impl GcsApi for OfficialGcpGcsClient {
             Some(bucket_name),
         )
         .await
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait GcpServiceUsageApi: Send + Sync {
-    async fn enable_service(&self, service_name: String) -> Result<Operation>;
-    async fn get_service(&self, service_name: String) -> Result<Service>;
-    async fn get_operation(&self, operation_name: String) -> Result<Operation>;
-}
-
-struct OfficialGcpServiceUsageClient {
-    config: GcpClientConfig,
-    client: OnceCell<ServiceUsage>,
-}
-
-impl OfficialGcpServiceUsageClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<ServiceUsage> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                service_usage_client_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl GcpServiceUsageApi for OfficialGcpServiceUsageClient {
-    async fn enable_service(&self, service_name: String) -> Result<Operation> {
-        self.client()
-            .await?
-            .enable_service()
-            .set_name(service_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "ServiceUsage enable_service request failed".to_string(),
-                resource_id: None,
-            })
-    }
-
-    async fn get_service(&self, service_name: String) -> Result<Service> {
-        self.client()
-            .await?
-            .get_service()
-            .set_name(service_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "ServiceUsage get_service request failed".to_string(),
-                resource_id: None,
-            })
-    }
-
-    async fn get_operation(&self, operation_name: String) -> Result<Operation> {
-        self.client()
-            .await?
-            .get_operation()
-            .set_name(operation_name)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "ServiceUsage get_operation request failed".to_string(),
-                resource_id: None,
-            })
     }
 }
 
@@ -4643,10 +4566,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ResourceManagerApi>>;
-    fn get_gcp_service_usage_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn GcpServiceUsageApi>>;
+    async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
     fn get_gcp_artifact_registry_client(
         &self,
@@ -4949,11 +4869,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
-    fn get_gcp_service_usage_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn GcpServiceUsageApi>> {
-        Ok(Arc::new(OfficialGcpServiceUsageClient::new(config.clone())))
+    async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage> {
+        service_usage_client_from_alien_config(config).await
     }
 
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>> {

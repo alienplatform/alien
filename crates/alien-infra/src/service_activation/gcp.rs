@@ -9,10 +9,14 @@ use alien_core::{
     ResourceStatus, ServiceActivation, ServiceActivationHeartbeatData,
     ServiceActivationHeartbeatStatus, ServiceActivationOutputs,
 };
-use alien_error::{AlienError, Context, ContextError as _};
+use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
-use google_cloud_api_serviceusage_v1::model::{Service, State};
+use google_cloud_api_serviceusage_v1::{
+    client::ServiceUsage,
+    model::{Service, State},
+};
+use google_cloud_longrunning::model::Operation;
 
 #[controller]
 pub struct GcpServiceActivationController {
@@ -37,7 +41,8 @@ impl GcpServiceActivationController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
             .service_provider
-            .get_gcp_service_usage_client(gcp_config)?;
+            .get_gcp_service_usage_client(gcp_config)
+            .await?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
         info!(
@@ -47,7 +52,7 @@ impl GcpServiceActivationController {
         );
 
         // Check if the service is already enabled (reading before command is allowed)
-        let already_enabled = match client.get_service(config.service_name.clone()).await {
+        let already_enabled = match get_gcp_service(&client, &config.service_name).await {
             Ok(service) => service.state == State::Enabled,
             Err(e) => {
                 let msg = format!("Failed to get GCP service '{}': {}", config.service_name, e);
@@ -88,7 +93,8 @@ impl GcpServiceActivationController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
             .service_provider
-            .get_gcp_service_usage_client(gcp_config)?;
+            .get_gcp_service_usage_client(gcp_config)
+            .await?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
         info!(
@@ -112,7 +118,7 @@ impl GcpServiceActivationController {
         }
 
         // Service is not enabled, proceed to enable it
-        match client.enable_service(config.service_name.clone()).await {
+        match enable_gcp_service(&client, &config.service_name).await {
             Ok(operation) => {
                 let operation_name = operation.name;
                 info!(
@@ -153,7 +159,8 @@ impl GcpServiceActivationController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
             .service_provider
-            .get_gcp_service_usage_client(gcp_config)?;
+            .get_gcp_service_usage_client(gcp_config)
+            .await?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
         debug!(
@@ -188,7 +195,7 @@ impl GcpServiceActivationController {
                     "Service enablement was a noop (service already enabled), skipping operation poll"
                 );
             } else {
-                match client.get_operation(op_name.to_string()).await {
+                match get_gcp_service_operation(&client, op_name).await {
                     Ok(operation) => {
                         if operation.done {
                             if let Some(error) = operation.error() {
@@ -233,7 +240,7 @@ impl GcpServiceActivationController {
         }
 
         // Check the actual service status
-        match client.get_service(config.service_name.clone()).await {
+        match get_gcp_service(&client, &config.service_name).await {
             Ok(service) => {
                 if service.state == State::Enabled {
                     info!(
@@ -285,9 +292,10 @@ impl GcpServiceActivationController {
         if let Some(service_name) = &self.service_name {
             let client = ctx
                 .service_provider
-                .get_gcp_service_usage_client(gcp_config)?;
+                .get_gcp_service_usage_client(gcp_config)
+                .await?;
 
-            let service = client.get_service(service_name.clone()).await.context(
+            let service = get_gcp_service(&client, service_name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get GCP service '{}'", service_name),
                     resource_id: Some(config.id.clone()),
@@ -388,6 +396,139 @@ impl GcpServiceActivationController {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+    use alien_core::Platform;
+    use google_cloud_api_serviceusage_v1::{
+        client::ServiceUsage,
+        model::{EnableServiceRequest, GetServiceRequest},
+        stub::ServiceUsage as ServiceUsageStub,
+    };
+    use google_cloud_gax::{options::RequestOptions, response::Response};
+    use google_cloud_longrunning::model::GetOperationRequest;
+    use std::sync::Arc;
+
+    mockall::mock! {
+        #[derive(Debug)]
+        ServiceUsage {}
+
+        impl ServiceUsageStub for ServiceUsage {
+            async fn enable_service(
+                &self,
+                request: EnableServiceRequest,
+                options: RequestOptions,
+            ) -> google_cloud_api_serviceusage_v1::Result<Response<Operation>>;
+
+            async fn get_service(
+                &self,
+                request: GetServiceRequest,
+                options: RequestOptions,
+            ) -> google_cloud_api_serviceusage_v1::Result<Response<Service>>;
+
+            async fn get_operation(
+                &self,
+                request: GetOperationRequest,
+                options: RequestOptions,
+            ) -> google_cloud_api_serviceusage_v1::Result<Response<Operation>>;
+        }
+    }
+
+    fn service_activation() -> ServiceActivation {
+        ServiceActivation::new("enable-run".to_string())
+            .service_name("run.googleapis.com".to_string())
+            .build()
+    }
+
+    fn service(state: State) -> Service {
+        Service::new()
+            .set_name("projects/test-project/services/run.googleapis.com")
+            .set_parent("projects/test-project")
+            .set_state(state)
+    }
+
+    fn setup_mock_provider(service_usage: ServiceUsage) -> Arc<MockPlatformServiceProvider> {
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_gcp_service_usage_client()
+            .returning(move |_| Ok(service_usage.clone()));
+        Arc::new(mock_provider)
+    }
+
+    #[tokio::test]
+    async fn create_flow_uses_sdk_native_service_usage_stub() {
+        let expected_service_name = "run.googleapis.com".to_string();
+        let operation_name = "operations/service-enable".to_string();
+
+        let mut stub = MockServiceUsage::new();
+        stub.expect_get_service()
+            .withf({
+                let expected_service_name = expected_service_name.clone();
+                move |request, _| request.name == expected_service_name
+            })
+            .times(2)
+            .returning(|_, _| {
+                static CALL_COUNT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let previous = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let state = if previous == 0 {
+                    State::Disabled
+                } else {
+                    State::Enabled
+                };
+                Ok(Response::from(service(state)))
+            });
+        stub.expect_enable_service()
+            .withf({
+                let expected_service_name = expected_service_name.clone();
+                move |request, _| request.name == expected_service_name
+            })
+            .once()
+            .returning({
+                let operation_name = operation_name.clone();
+                move |_, _| {
+                    Ok(Response::from(
+                        Operation::new().set_name(operation_name.clone()),
+                    ))
+                }
+            });
+        stub.expect_get_operation()
+            .withf({
+                let operation_name = operation_name.clone();
+                move |request, _| request.name == operation_name
+            })
+            .once()
+            .returning(|_, _| Ok(Response::from(Operation::new().set_done(true))));
+
+        let service_usage = ServiceUsage::from_stub(stub);
+        let mock_provider = setup_mock_provider(service_usage);
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(service_activation())
+            .controller(GcpServiceActivationController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("service activation should reach ready");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let outputs = executor.outputs().expect("outputs should be present");
+        let outputs = outputs
+            .downcast_ref::<ServiceActivationOutputs>()
+            .expect("outputs should be service activation outputs");
+        assert_eq!(outputs.service_name, "run.googleapis.com");
+        assert!(outputs.activated);
+    }
+}
+
 fn emit_gcp_service_activation_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -447,6 +588,48 @@ fn emit_gcp_service_activation_heartbeat(
         ),
         raw: vec![],
     });
+}
+
+async fn enable_gcp_service(client: &ServiceUsage, service_name: &str) -> Result<Operation> {
+    client
+        .enable_service()
+        .set_name(service_name.to_string())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ServiceUsage enable_service request failed".to_string(),
+            resource_id: None,
+        })
+}
+
+async fn get_gcp_service(client: &ServiceUsage, service_name: &str) -> Result<Service> {
+    client
+        .get_service()
+        .set_name(service_name.to_string())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ServiceUsage get_service request failed".to_string(),
+            resource_id: None,
+        })
+}
+
+async fn get_gcp_service_operation(
+    client: &ServiceUsage,
+    operation_name: &str,
+) -> Result<Operation> {
+    client
+        .get_operation()
+        .set_name(operation_name.to_string())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "ServiceUsage get_operation request failed".to_string(),
+            resource_id: None,
+        })
 }
 
 impl GcpServiceActivationController {
