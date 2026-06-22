@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alien_core::{ClientConfig, DeploymentConfig, KubernetesClientConfig, Platform};
+use alien_core::{ClientConfig, KubernetesClientConfig, Platform};
 use alien_error::Context;
 use alien_observer::{
     AwsObserveContext, AwsObserver, AzureObserveContext, AzureObserver, GcpObserveContext,
@@ -16,7 +16,6 @@ pub async fn run_observe_pass(
     client_config: &ClientConfig,
     service_provider: &Arc<dyn alien_infra::PlatformServiceProvider>,
     deployment_id: &str,
-    _config: &DeploymentConfig,
 ) -> Result<ObserveReport> {
     match platform {
         Platform::Aws => {

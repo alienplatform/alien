@@ -152,6 +152,10 @@ pub struct InitializeRequest {
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
+    /// Setup method that is registering this deployment, such as `manual` for
+    /// rendered Operator manifests or `helm` for generated Helm installs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_method: Option<String>,
     /// Optional base cloud platform for Kubernetes setup targets such as
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]

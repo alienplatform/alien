@@ -6,8 +6,11 @@
 use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::{run_operator_with_cancel_and_debug_loop, InstanceLock, OperatorConfig};
-use alien_core::{validate_public_endpoint_urls, Platform, PublicEndpointUrls};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
+use alien_core::{
+    validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
+    DEPLOYMENT_PROTOCOL_VERSION,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::net::IpAddr;
@@ -58,6 +61,9 @@ pub struct Args {
 
     #[arg(long, env = "OPERATOR_PERMISSION")]
     pub operator_permission: Option<String>,
+
+    #[arg(long, env = "OPERATOR_SETUP_METHOD")]
+    pub operator_setup_method: Option<String>,
 
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
@@ -222,6 +228,7 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
     });
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
+    let operator_setup_method = args.operator_setup_method;
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -260,10 +267,15 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
                         args.operator_name.as_deref(),
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
+                        operator_setup_method.as_deref(),
                     )
                     .await?;
 
                     db.set_deployment_id(&initialized_deployment_id).await?;
+                    if is_observe_permission(operator_permission.as_deref()) {
+                        db.set_deployment_state(&observe_only_initial_state(args.platform))
+                            .await?;
+                    }
 
                     if let Some(ref dt) = deployment_token {
                         info!("   Received deployment-scoped token from manager");
@@ -414,6 +426,25 @@ fn select_startup_deployment_id(
         (Some(stored), _) => Ok(StartupDeploymentId::Stored(stored)),
         (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
         (None, None) => Ok(StartupDeploymentId::Initialize),
+    }
+}
+
+fn is_observe_permission(permission: Option<&str>) -> bool {
+    matches!(permission, Some("observe"))
+}
+
+fn observe_only_initial_state(platform: Platform) -> DeploymentState {
+    DeploymentState {
+        platform,
+        status: DeploymentStatus::Running,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        error: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
     }
 }
 
@@ -573,6 +604,7 @@ async fn initialize_with_manager(
     operator_name: Option<&str>,
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
+    operator_setup_method: Option<&str>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -624,6 +656,9 @@ async fn initialize_with_manager(
     }
     if let Some(permission) = operator_permission {
         builder = builder.body_map(|b| b.permission(permission.to_string()));
+    }
+    if let Some(setup_method) = operator_setup_method {
+        builder = builder.body_map(|b| b.setup_method(setup_method.to_string()));
     }
 
     let response = builder
@@ -811,7 +846,11 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{is_secret_file_mode_allowed, select_startup_deployment_id, StartupDeploymentId};
+    use super::{
+        is_observe_permission, is_secret_file_mode_allowed, observe_only_initial_state,
+        select_startup_deployment_id, StartupDeploymentId,
+    };
+    use alien_core::{DeploymentStatus, Platform};
 
     #[test]
     fn secret_file_mode_allows_kubernetes_fs_group_read() {
@@ -834,7 +873,7 @@ mod tests {
         let selected = select_startup_deployment_id(
             Some("dep_existing".to_string()),
             Some("dep_existing".to_string()),
-            "/var/lib/alien-agent",
+            "/var/lib/alien-operator",
         )
         .expect("matching configured deployment should be accepted");
 
@@ -849,7 +888,7 @@ mod tests {
         let err = select_startup_deployment_id(
             Some("dep_existing".to_string()),
             Some("dep_other".to_string()),
-            "/var/lib/alien-agent",
+            "/var/lib/alien-operator",
         )
         .expect_err("mismatched configured deployment should fail");
 
@@ -863,7 +902,7 @@ mod tests {
         let selected = select_startup_deployment_id(
             None,
             Some("dep_configured".to_string()),
-            "/var/lib/alien-agent",
+            "/var/lib/alien-operator",
         )
         .expect("configured deployment should be used for empty state");
 
@@ -871,5 +910,19 @@ mod tests {
             selected,
             StartupDeploymentId::Configured("dep_configured".to_string())
         );
+    }
+
+    #[test]
+    fn observe_permission_initializes_running_observe_state() {
+        assert!(is_observe_permission(Some("observe")));
+        assert!(!is_observe_permission(Some("manage")));
+        assert!(!is_observe_permission(None));
+
+        let state = observe_only_initial_state(Platform::Kubernetes);
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(state.platform, Platform::Kubernetes);
+        assert!(state.current_release.is_none());
+        assert!(state.target_release.is_none());
+        assert!(state.stack_state.is_none());
     }
 }

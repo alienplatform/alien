@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  ObservedInventoryBatch,
+  ObservedInventoryBatch$Outbound,
+  ObservedInventoryBatch$outboundSchema,
+} from "./observedinventorybatch.js";
+import {
   ResourceHeartbeat,
   ResourceHeartbeat$Outbound,
   ResourceHeartbeat$outboundSchema,
@@ -11,7 +16,8 @@ import {
 
 export type ReconcileRequest = {
   deploymentId: string;
-  heartbeats?: Array<ResourceHeartbeat> | undefined;
+  observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -21,7 +27,8 @@ export type ReconcileRequest = {
 /** @internal */
 export type ReconcileRequest$Outbound = {
   deploymentId: string;
-  heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
+  observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -34,7 +41,9 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   ReconcileRequest
 > = z.object({
   deploymentId: z.string(),
-  heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
+  observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
+    .optional(),
+  resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string(),
   state: z.any(),
   suggestedDelayMs: z.nullable(z.int()).optional(),

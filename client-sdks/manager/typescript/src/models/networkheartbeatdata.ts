@@ -17,6 +17,7 @@ export type NetworkHeartbeatDataAzureVnet = {
   location?: string | null | undefined;
   natGatewayId?: string | null | undefined;
   nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
   privateSubnetName?: string | null | undefined;
   publicIpId?: string | null | undefined;
   publicSubnetName?: string | null | undefined;
@@ -72,6 +73,7 @@ export type NetworkHeartbeatDataAzureVnet$Outbound = {
   location?: string | null | undefined;
   natGatewayId?: string | null | undefined;
   nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
   privateSubnetName?: string | null | undefined;
   publicIpId?: string | null | undefined;
   publicSubnetName?: string | null | undefined;
@@ -94,6 +96,7 @@ export const NetworkHeartbeatDataAzureVnet$outboundSchema: z.ZodType<
   location: z.nullable(z.string()).optional(),
   natGatewayId: z.nullable(z.string()).optional(),
   nsgId: z.nullable(z.string()).optional(),
+  privateEndpointSubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.nullable(z.string()).optional(),
   publicIpId: z.nullable(z.string()).optional(),
   publicSubnetName: z.nullable(z.string()).optional(),

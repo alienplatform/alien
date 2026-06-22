@@ -460,6 +460,7 @@ fn resource_data_for_graph_resource(
                 cidr_block: property_first_string(resource, &["addressSpace", "addressPrefixes"]),
                 public_subnet_name: None,
                 private_subnet_name: None,
+                private_endpoint_subnet_name: None,
                 application_gateway_subnet_name: None,
                 nat_gateway_id: None,
                 public_ip_id: None,

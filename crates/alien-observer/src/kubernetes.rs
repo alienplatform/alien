@@ -22,6 +22,12 @@ use crate::{
     Result,
 };
 
+const APP_KUBERNETES_NAME_LABEL: &str = "app.kubernetes.io/name";
+const APP_KUBERNETES_COMPONENT_LABEL: &str = "app.kubernetes.io/component";
+const OPERATOR_APP_NAME: &str = "operator";
+const OPERATOR_COMPONENT: &str = "operator";
+const LOG_COLLECTOR_COMPONENT: &str = "whitelabeled-log-collector";
+
 #[derive(Clone)]
 pub struct KubernetesObserveContext {
     pub deployment_id: String,
@@ -230,6 +236,10 @@ impl KubernetesObserver {
         command_supported: bool,
         workload: KubernetesWorkload,
     ) -> Result<Option<alien_core::ObservedResourceSample>> {
+        if is_generated_operator_workload(labels) {
+            return Ok(None);
+        }
+
         let raw_id = raw_identity(workload_kind, &scope.namespace, name);
         let data = match alien_k8s_clients::read_kubernetes_workload(
             &self.context.pod_client,
@@ -391,6 +401,21 @@ pub fn alien_resource_id_from_labels(
     labels.get(&resource_key).cloned()
 }
 
+fn is_generated_operator_workload(labels: Option<&BTreeMap<String, String>>) -> bool {
+    let Some(labels) = labels else {
+        return false;
+    };
+    if labels.get(APP_KUBERNETES_NAME_LABEL).map(String::as_str) != Some(OPERATOR_APP_NAME) {
+        return false;
+    }
+    matches!(
+        labels
+            .get(APP_KUBERNETES_COMPONENT_LABEL)
+            .map(String::as_str),
+        Some(OPERATOR_COMPONENT | LOG_COLLECTOR_COMPONENT)
+    )
+}
+
 fn resource_type_for_workload(kind: KubernetesWorkloadKind) -> ResourceType {
     match kind {
         KubernetesWorkloadKind::DaemonSet => ResourceType::from_static("daemon"),
@@ -467,5 +492,49 @@ mod tests {
             alien_resource_id_from_labels(DEFAULT_ALIEN_LABEL_DOMAIN, Some(&labels)),
             None
         );
+    }
+
+    #[test]
+    fn generated_operator_workload_filter_excludes_operator_and_collector() {
+        let operator_labels = BTreeMap::from([
+            (
+                APP_KUBERNETES_NAME_LABEL.to_string(),
+                OPERATOR_APP_NAME.to_string(),
+            ),
+            (
+                APP_KUBERNETES_COMPONENT_LABEL.to_string(),
+                OPERATOR_COMPONENT.to_string(),
+            ),
+        ]);
+        let collector_labels = BTreeMap::from([
+            (
+                APP_KUBERNETES_NAME_LABEL.to_string(),
+                OPERATOR_APP_NAME.to_string(),
+            ),
+            (
+                APP_KUBERNETES_COMPONENT_LABEL.to_string(),
+                LOG_COLLECTOR_COMPONENT.to_string(),
+            ),
+        ]);
+
+        assert!(is_generated_operator_workload(Some(&operator_labels)));
+        assert!(is_generated_operator_workload(Some(&collector_labels)));
+    }
+
+    #[test]
+    fn generated_operator_workload_filter_keeps_other_workloads() {
+        let labels = BTreeMap::from([
+            (
+                APP_KUBERNETES_NAME_LABEL.to_string(),
+                OPERATOR_APP_NAME.to_string(),
+            ),
+            (
+                APP_KUBERNETES_COMPONENT_LABEL.to_string(),
+                "api".to_string(),
+            ),
+        ]);
+
+        assert!(!is_generated_operator_workload(Some(&labels)));
+        assert!(!is_generated_operator_workload(None));
     }
 }

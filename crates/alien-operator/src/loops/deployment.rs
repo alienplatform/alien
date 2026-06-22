@@ -385,7 +385,7 @@ async fn enrich_config(
 }
 
 /// Resolve client config based on platform
-async fn resolve_client_config(
+pub(super) async fn resolve_client_config(
     platform: Platform,
     base_platform: Option<Platform>,
     data_dir: &str,

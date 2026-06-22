@@ -3,6 +3,16 @@
  */
 
 import * as z from "zod/v4";
+import {
+  ObservedInventoryBatch,
+  ObservedInventoryBatch$Outbound,
+  ObservedInventoryBatch$outboundSchema,
+} from "./observedinventorybatch.js";
+import {
+  ResourceHeartbeat,
+  ResourceHeartbeat$Outbound,
+  ResourceHeartbeat$outboundSchema,
+} from "./resourceheartbeat.js";
 
 export type AgentSyncRequest = {
   /**
@@ -14,12 +24,19 @@ export type AgentSyncRequest = {
    */
   currentState?: any | undefined;
   deploymentId: string;
+  observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  /**
+   * Managed resource status samples emitted by pull-mode deployment steps.
+   */
+  resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
 };
 
 /** @internal */
 export type AgentSyncRequest$Outbound = {
   currentState?: any | undefined;
   deploymentId: string;
+  observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
 };
 
 /** @internal */
@@ -29,6 +46,9 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
 > = z.object({
   currentState: z.any().optional(),
   deploymentId: z.string(),
+  observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
+    .optional(),
+  resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
 });
 
 export function agentSyncRequestToJSON(
