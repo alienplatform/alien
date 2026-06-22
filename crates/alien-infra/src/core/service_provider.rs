@@ -204,8 +204,6 @@ pub trait GcpIamApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Role>;
 }
 
-pub type GcpIamPolicy = IamPolicy;
-
 struct OfficialGcpIamClient {
     config: GcpClientConfig,
     client: OnceCell<OfficialGcpIam>,
@@ -1765,15 +1763,15 @@ pub trait ArtifactRegistryApi: Send + Sync + std::fmt::Debug {
         project_id: String,
         location: String,
         repository_id: String,
-    ) -> Result<GcpIamPolicy>;
+    ) -> Result<IamPolicy>;
 
     async fn set_repository_iam_policy(
         &self,
         project_id: String,
         location: String,
         repository_id: String,
-        iam_policy: GcpIamPolicy,
-    ) -> Result<GcpIamPolicy>;
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy>;
 
     async fn get_operation(
         &self,
@@ -1913,7 +1911,7 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
         project_id: String,
         location: String,
         repository_id: String,
-    ) -> Result<GcpIamPolicy> {
+    ) -> Result<IamPolicy> {
         self.client()
             .await?
             .get_iam_policy()
@@ -1936,8 +1934,8 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
         project_id: String,
         location: String,
         repository_id: String,
-        iam_policy: GcpIamPolicy,
-    ) -> Result<GcpIamPolicy> {
+        iam_policy: IamPolicy,
+    ) -> Result<IamPolicy> {
         self.client()
             .await?
             .set_iam_policy()
@@ -1983,14 +1981,14 @@ pub trait ResourceManagerApi: Send + Sync + std::fmt::Debug {
         &self,
         project_id: String,
         options: Option<GetPolicyOptions>,
-    ) -> Result<GcpIamPolicy>;
+    ) -> Result<IamPolicy>;
 
     async fn set_project_iam_policy(
         &self,
         project_id: String,
-        policy: GcpIamPolicy,
+        policy: IamPolicy,
         update_mask: Option<String>,
-    ) -> Result<GcpIamPolicy>;
+    ) -> Result<IamPolicy>;
 
     async fn get_project_metadata(&self, project_id: String) -> Result<Project>;
 }
@@ -2034,7 +2032,7 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
         &self,
         project_id: String,
         options: Option<GetPolicyOptions>,
-    ) -> Result<GcpIamPolicy> {
+    ) -> Result<IamPolicy> {
         let mut request = self
             .client()
             .await?
@@ -2055,9 +2053,9 @@ impl ResourceManagerApi for OfficialGcpResourceManagerClient {
     async fn set_project_iam_policy(
         &self,
         project_id: String,
-        policy: GcpIamPolicy,
+        policy: IamPolicy,
         update_mask: Option<String>,
-    ) -> Result<GcpIamPolicy> {
+    ) -> Result<IamPolicy> {
         if let Some(update_mask) = update_mask {
             return Err(AlienError::new(
                 crate::error::ErrorData::CloudPlatformError {
