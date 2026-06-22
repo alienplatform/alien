@@ -895,6 +895,7 @@ async fn apply_render_mutations_with_management_config(
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: None,
+        label_domain: None,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -1776,6 +1777,7 @@ async fn terraform_kubernetes_stack_for_target(
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: target.base_platform(),
+        label_domain: None,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -4142,6 +4144,7 @@ mod tests {
             "azure-resource-group/heartbeat",
             "azure-storage-account/heartbeat",
             "azure-service-bus-namespace/heartbeat",
+            "observe/observe",
             "service-account/heartbeat",
             "service-activation/heartbeat",
         ] {

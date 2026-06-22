@@ -237,8 +237,6 @@ fn emit_local_vault_heartbeat(
         resource_type: Vault::RESOURCE_TYPE,
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Vault(VaultHeartbeatData::Local(LocalVaultHeartbeatData {
             status: VaultHeartbeatStatus {

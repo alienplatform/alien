@@ -223,8 +223,6 @@ fn emit_local_kv_heartbeat(ctx: &ResourceControllerContext<'_>, resource_id: &st
         resource_type: Kv::RESOURCE_TYPE,
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Kv(KvHeartbeatData::Local(LocalKvHeartbeatData {
             status: KvHeartbeatStatus {

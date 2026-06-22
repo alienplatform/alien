@@ -336,6 +336,7 @@ async fn setup() -> TestSetup {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
                 },
             )
@@ -808,6 +809,7 @@ async fn test_proxy_push_then_pull() {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
                 },
             )

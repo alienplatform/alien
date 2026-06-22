@@ -76,6 +76,9 @@ pub struct OperatorConfig {
     /// Kubernetes namespace (Kubernetes platform only)
     pub namespace: Option<String>,
 
+    /// DNS-style domain used for branded Kubernetes resource labels.
+    pub label_domain: Option<String>,
+
     /// In-cluster token accepted by `/internal/logs` for node log collectors.
     pub collector_token: Option<String>,
 

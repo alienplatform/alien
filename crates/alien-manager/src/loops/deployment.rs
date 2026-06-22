@@ -397,6 +397,7 @@ impl DeploymentLoop {
                                 update_heartbeat: false,
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
+                                observed_inventory_batches: Vec::new(),
                             },
                         )
                         .await?;
@@ -530,6 +531,7 @@ impl DeploymentLoop {
                     .clone()
                     .unwrap_or_default(),
                 base_platform: deployment.base_platform,
+                label_domain: None,
                 public_urls: None,
                 domain_metadata: None,
                 monitoring,

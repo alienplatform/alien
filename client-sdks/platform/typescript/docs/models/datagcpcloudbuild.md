@@ -14,15 +14,15 @@ let value: DataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "gcpCloudBuild",
 };
@@ -30,12 +30,12 @@ let value: DataGcpCloudBuild = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `buildConfigId`                                            | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `environmentVariableCount`                                 | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `location`                                                 | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `projectId`                                                | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `serviceAccount`                                           | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus51](../models/heartbeatstatus51.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"gcpCloudBuild"*                                          | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `buildConfigId`                                                            | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `environmentVariableCount`                                                 | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `location`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `projectId`                                                                | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `serviceAccount`                                                           | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus51](../models/resourceheartbeatstatus51.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"gcpCloudBuild"*                                                          | :heavy_check_mark:                                                         | N/A                                                                        |

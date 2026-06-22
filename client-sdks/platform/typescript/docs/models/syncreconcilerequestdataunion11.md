@@ -12,15 +12,15 @@ const value: models.DataAwsIamRole2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unknown",
     lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -37,7 +37,7 @@ const value: models.DataGcpServiceAccount2 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],

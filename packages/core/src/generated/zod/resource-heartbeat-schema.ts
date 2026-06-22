@@ -5,15 +5,13 @@
 
 import * as z from "zod";
 import { HeartbeatBackendSchema } from "./heartbeat-backend-schema.js";
-import { HeartbeatSourceSchema } from "./heartbeat-source-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
 import { RawHeartbeatSnippetSchema } from "./raw-heartbeat-snippet-schema.js";
 import { ResourceHeartbeatDataSchema } from "./resource-heartbeat-data-schema.js";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
 
 export const ResourceHeartbeatSchema = z.object({
-    "alienResourceId": z.string().nullish(),
-get "backend"(){
+    get "backend"(){
                 return HeartbeatBackendSchema
               },
 get "controllerPlatform"(){
@@ -27,12 +25,9 @@ get "data"(){
 get "raw"(){
                 return z.array(RawHeartbeatSnippetSchema)
               },
-"resourceId": z.string().describe("For managed heartbeats this is the Alien resource id. For observed heartbeats this is the\nraw provider identity, such as a Kubernetes object identity."),
+"resourceId": z.string().describe("Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."),
 get "resourceType"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
-              },
-get "source"(){
-                return HeartbeatSourceSchema.optional()
               }
     })
 

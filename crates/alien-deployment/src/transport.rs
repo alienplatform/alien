@@ -17,7 +17,7 @@
 //! See [`crate::manager_api_transport`] for the shared `ManagerApiTransport`
 //! used by external callers (CLI, Terraform).
 
-use alien_core::{DeploymentConfig, DeploymentState, ResourceHeartbeat};
+use alien_core::{DeploymentConfig, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::AlienError;
 use async_trait::async_trait;
 
@@ -56,5 +56,6 @@ pub trait DeploymentLoopTransport: Send + Sync {
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
+        observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> Result<StepReconcileResult, AlienError>;
 }

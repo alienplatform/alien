@@ -471,8 +471,6 @@ fn emit_azure_storage_account_heartbeat(
         resource_type: AzureStorageAccount::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::AzureStorageAccount(AzureStorageAccountHeartbeatData {
             status: StorageHeartbeatStatus {

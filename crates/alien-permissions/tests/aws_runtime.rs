@@ -37,6 +37,19 @@ fn test_aws_policy_with_conditions() {
 }
 
 #[test]
+fn test_aws_observe_generates_account_wide_read_policy() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("observe/observe").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS observe policy successfully");
+
+    assert_json_snapshot!("aws_observe_account_wide_read_policy", result);
+}
+
+#[test]
 fn test_compute_cluster_management_can_tag_otlp_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

@@ -13,17 +13,22 @@ use alien_core::{
     AzureServiceBusNamespaceHeartbeatData, AzureServiceBusQueueHeartbeatData,
     AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData, AzureVnetNetworkHeartbeatData,
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
-    HeartbeatIssueSeverity, HeartbeatSource, NetworkHeartbeatData, NetworkHeartbeatStatus,
-    ObservedHealth, Platform, ProviderLifecycleState, QueueHeartbeatData, QueueHeartbeatStatus,
-    RawHeartbeatSnippet, RawHeartbeatSnippetFormat, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceType, WorkerHeartbeatData, WorkloadHeartbeatStatus, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
+    HeartbeatIssueSeverity, NetworkHeartbeatData, NetworkHeartbeatStatus, ObservedHealth, Platform,
+    ProviderLifecycleState, QueueHeartbeatData, QueueHeartbeatStatus, RawHeartbeatSnippet,
+    RawHeartbeatSnippetFormat, ResourceHeartbeatData, ResourceType, WorkerHeartbeatData,
+    WorkloadHeartbeatStatus, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
+    ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use async_trait::async_trait;
 use chrono::Utc;
 use tracing::warn;
 
-use crate::{ObserveScope, Observer, Result};
+use serde_json::json;
+
+use crate::{
+    observed_resource_sample, ObserveReport, ObserveScope, ObservedResourceSampleInput, Observer,
+    Result,
+};
 
 const MAX_RESOURCE_GRAPH_PAGES: usize = 20;
 
@@ -83,7 +88,7 @@ impl AzureObserver {
         }
     }
 
-    async fn discover_resources(&self) -> Result<Vec<ResourceGraphResource>> {
+    async fn discover_resources(&self) -> Result<InventoryDiscovery<ResourceGraphResource>> {
         let mut resources = Vec::new();
         let mut skip_token = None;
 
@@ -103,45 +108,80 @@ impl AzureObserver {
                 Ok(response) => response,
                 Err(error) => {
                     warn!(error = %error, "Azure Resource Graph observe pass failed");
-                    return Ok(resources);
+                    return Ok(InventoryDiscovery {
+                        resources,
+                        complete: false,
+                    });
                 }
             };
 
             resources.extend(response.data);
             skip_token = response.skip_token.filter(|token| !token.is_empty());
             if skip_token.is_none() {
-                break;
+                return Ok(InventoryDiscovery {
+                    resources,
+                    complete: true,
+                });
             }
         }
 
-        Ok(resources)
+        Ok(InventoryDiscovery {
+            resources,
+            complete: false,
+        })
     }
 
-    fn heartbeat_for_resource(
+    fn observed_resource_for_resource(
         &self,
         resource: ResourceGraphResource,
         monitor_issue: Option<&HeartbeatCollectionIssue>,
-    ) -> Option<ResourceHeartbeat> {
+    ) -> Option<alien_core::ObservedResourceSample> {
         let alien_resource_id = alien_resource_id_from_tags(&self.label_domain, &resource.tags);
-        if alien_resource_id.is_some() {
-            return None;
-        }
 
         let resource_id = resource.id.clone()?;
+        let provider_kind = resource
+            .type_
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let display_name = resource
+            .name
+            .clone()
+            .unwrap_or_else(|| resource_leaf(&resource_id));
+        let location = resource.location.clone();
+        let resource_group = resource
+            .resource_group
+            .clone()
+            .or_else(|| resource_group_from_id(&resource_id).map(str::to_string));
         let data = resource_data_for_graph_resource(&resource, monitor_issue.cloned())?;
+        let resource_type_hint = resource_type_for_data(&data);
 
-        Some(ResourceHeartbeat {
-            deployment_id: Some(self.context.deployment_id.clone()),
-            resource_id: azure_raw_identity(&resource_id),
-            source: HeartbeatSource::Observed,
+        let mut attributes = BTreeMap::new();
+        attributes.insert("resourceGroup".to_string(), json!(resource_group));
+        attributes.insert(
+            "subscriptionId".to_string(),
+            json!(resource.subscription_id),
+        );
+        attributes.insert("kind".to_string(), json!(resource.kind));
+        attributes.insert("sku".to_string(), json!(resource.sku));
+        let raw = raw_snippet(&resource);
+
+        Some(observed_resource_sample(ObservedResourceSampleInput {
+            deployment_id: self.context.deployment_id.clone(),
+            raw_identity: azure_raw_identity(&resource_id),
+            provider_kind,
+            display_name,
+            namespace: None,
+            region: location,
+            scope: Some(azure_inventory_scope(&self.context.subscription_id)),
+            resource_type_hint: Some(resource_type_hint),
             alien_resource_id,
-            resource_type: resource_type_for_data(&data),
             controller_platform: Platform::Azure,
             backend: HeartbeatBackend::Azure,
-            observed_at: Utc::now(),
+            labels: resource.tags,
+            attributes,
             data,
-            raw: vec![raw_snippet(&resource)],
-        })
+            raw: vec![raw],
+        }))
     }
 }
 
@@ -151,19 +191,42 @@ impl Observer for AzureObserver {
         Platform::Azure
     }
 
-    async fn discover(&self, _scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
-        let resources = self.discover_resources().await?;
-        let monitor_issue = self.monitor_issue(&resources).await;
-
-        Ok(resources
+    async fn discover(&self, _scope: &ObserveScope) -> Result<ObserveReport> {
+        let discovery = self.discover_resources().await?;
+        let monitor_issue = self.monitor_issue(&discovery.resources).await;
+        let resources = discovery
+            .resources
             .into_iter()
-            .filter_map(|resource| self.heartbeat_for_resource(resource, monitor_issue.as_ref()))
-            .collect())
+            .filter_map(|resource| {
+                self.observed_resource_for_resource(resource, monitor_issue.as_ref())
+            })
+            .collect();
+
+        Ok(ObserveReport {
+            inventory_batches: vec![alien_core::ObservedInventoryBatch {
+                source_kind: "manager-observer".to_string(),
+                inventory_scope: azure_inventory_scope(&self.context.subscription_id),
+                controller_platform: Platform::Azure,
+                backend: HeartbeatBackend::Azure,
+                observed_at: Utc::now(),
+                complete: discovery.complete,
+                resources,
+            }],
+        })
     }
+}
+
+struct InventoryDiscovery<T> {
+    resources: Vec<T>,
+    complete: bool,
 }
 
 pub fn azure_raw_identity(id: &str) -> String {
     id.to_string()
+}
+
+pub fn azure_inventory_scope(subscription_id: &str) -> String {
+    format!("azure:resourcegraph:{subscription_id}")
 }
 
 fn observed_resource_graph_query() -> String {

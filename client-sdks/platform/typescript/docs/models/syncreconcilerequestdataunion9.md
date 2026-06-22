@@ -91,8 +91,8 @@ const value: models.DataAzureManagedIdentity1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
+        reason: "forbidden",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -115,14 +115,14 @@ const value: models.DataLocal9 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "collection-failed",
         severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopped",
-    partial: false,
+    health: "unhealthy",
+    lifecycle: "unknown",
+    partial: true,
     stale: true,
   },
   backend: "local",

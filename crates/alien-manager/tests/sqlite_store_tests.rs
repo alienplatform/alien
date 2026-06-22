@@ -643,6 +643,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
                 suggested_delay_ms: None,
             },
         )
@@ -707,6 +708,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
                 suggested_delay_ms: None,
             },
         )

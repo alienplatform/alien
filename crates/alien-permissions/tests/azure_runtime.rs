@@ -2,8 +2,9 @@ mod common;
 
 use alien_core::PermissionGrant;
 use alien_permissions::generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator};
-use alien_permissions::BindingTarget;
+use alien_permissions::{get_permission_set, BindingTarget};
 use common::*;
+use insta::assert_json_snapshot;
 use rstest::rstest;
 
 #[rstest]
@@ -66,6 +67,19 @@ fn test_azure_custom_grant_plan() {
             key: "storage/metadata-read:microsoft_storage_storage_accounts_read".to_string(),
         }
     );
+}
+
+#[test]
+fn test_azure_observe_generates_subscription_scoped_read_grant_plan() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("observe/observe").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate Azure observe grant plan successfully");
+
+    assert_json_snapshot!("azure_observe_subscription_scoped_read_grant_plan", result);
 }
 
 #[test]

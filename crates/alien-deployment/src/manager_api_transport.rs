@@ -8,7 +8,7 @@
 //! | alien-cli        | `resolve_manager()` (discovers URL via platform)   |
 //! | alien-terraform  | `manager_url` from SyncAcquire response            |
 
-use alien_core::{DeploymentState, ResourceHeartbeat};
+use alien_core::{DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
@@ -46,6 +46,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
+        observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> Result<StepReconcileResult, AlienError> {
         let state_json =
             serde_json::to_value(state)
@@ -62,19 +63,38 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                 message: "suggested_delay_ms exceeded manager API integer range".to_string(),
             })?;
         let heartbeats = to_manager_api_heartbeats(heartbeats)?;
+        #[cfg(not(feature = "openapi"))]
+        let observed_inventory_batches =
+            to_manager_api_observed_inventory_batches(observed_inventory_batches)?;
+        #[cfg(feature = "openapi")]
+        let _ = observed_inventory_batches;
+
+        #[cfg(feature = "openapi")]
+        let body = alien_manager_api::types::ReconcileRequest {
+            deployment_id: deployment_id.to_string(),
+            session: self.session.clone(),
+            state: state_json,
+            update_heartbeat: Some(update_heartbeat),
+            suggested_delay_ms,
+            resource_heartbeats: heartbeats,
+            observed_inventory_batches: vec![],
+        };
+        #[cfg(not(feature = "openapi"))]
+        let body = alien_manager_api::types::ReconcileRequest {
+            deployment_id: deployment_id.to_string(),
+            session: self.session.clone(),
+            state: state_json,
+            update_heartbeat: Some(update_heartbeat),
+            suggested_delay_ms,
+            resource_heartbeats: heartbeats,
+            observed_inventory_batches,
+        };
 
         // POST state to the manager
         let resp = self
             .client
             .reconcile()
-            .body(alien_manager_api::types::ReconcileRequest {
-                deployment_id: deployment_id.to_string(),
-                session: self.session.clone(),
-                state: state_json,
-                update_heartbeat: Some(update_heartbeat),
-                suggested_delay_ms,
-                heartbeats,
-            })
+            .body(body)
             .send()
             .await
             .into_sdk_error()
@@ -137,6 +157,20 @@ fn to_manager_api_heartbeats(
         .into_alien_error()
         .context(alien_error::GenericError {
             message: "Failed to convert heartbeats for manager API".to_string(),
+        })
+}
+
+#[cfg(not(feature = "openapi"))]
+fn to_manager_api_observed_inventory_batches(
+    snapshots: Vec<ObservedInventoryBatch>,
+) -> Result<Vec<alien_manager_api::types::ObservedInventoryBatch>, AlienError> {
+    snapshots
+        .into_iter()
+        .map(|snapshot| serde_json::to_value(snapshot).and_then(serde_json::from_value))
+        .collect::<Result<Vec<alien_manager_api::types::ObservedInventoryBatch>, _>>()
+        .into_alien_error()
+        .context(alien_error::GenericError {
+            message: "Failed to convert observed inventory snapshots for manager API".to_string(),
         })
 }
 
@@ -255,7 +289,8 @@ pub async fn final_reconcile(
             state: state_json,
             update_heartbeat: Some(false),
             suggested_delay_ms: None,
-            heartbeats: vec![],
+            resource_heartbeats: vec![],
+            observed_inventory_batches: vec![],
         })
         .send()
         .await
@@ -273,10 +308,9 @@ mod tests {
     use super::*;
     use alien_core::{
         ContainerHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
-        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, HeartbeatSource,
-        KubernetesContainerHeartbeatData, KubernetesWorkloadKind, ObservedHealth, Platform,
-        ProviderLifecycleState, ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus,
-        WorkloadReplicaStatus,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, KubernetesContainerHeartbeatData,
+        KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState,
+        ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
     };
     use chrono::TimeZone;
 
@@ -284,8 +318,6 @@ mod tests {
         ResourceHeartbeat {
             deployment_id: Some("dep_test".to_string()),
             resource_id: "api".to_string(),
-            source: HeartbeatSource::Managed,
-            alien_resource_id: None,
             resource_type: ResourceType::from("container"),
             controller_platform: Platform::Kubernetes,
             backend: HeartbeatBackend::Kubernetes,

@@ -121,8 +121,8 @@ logCollector:
   enabled: false
   token: "replace-me-with-a-stable-in-cluster-collector-token"
   image:
-    repository: registry.example.com/deployment/log-collector
-    tag: latest
+    repository: fluent/fluent-bit
+    tag: "3.2"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -131,7 +131,7 @@ logCollector:
     limits:
       memory: 256Mi
   scope:
-    deploymentLabelKey: ""
+    deploymentLabelKey: "alien.dev/deployment"
     deploymentLabelValue: ""
 
 heartbeat:
@@ -1203,6 +1203,40 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
     app.kubernetes.io/component: whitelabeled-log-collector
 automountServiceAccountToken: true
+{{- end }}
+
+=== templates/whitelabeled-log-collector-role.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+
+=== templates/whitelabeled-log-collector-rolebinding.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    namespace: {{ .Release.Namespace }}
 {{- end }}
 
 === templates/whitelabeled-log-collector-configmap.yaml ===

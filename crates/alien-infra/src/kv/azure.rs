@@ -492,8 +492,6 @@ fn emit_azure_table_kv_heartbeat(
         resource_type: Kv::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Kv(KvHeartbeatData::AzureTable(AzureTableKvHeartbeatData {
             status: KvHeartbeatStatus {

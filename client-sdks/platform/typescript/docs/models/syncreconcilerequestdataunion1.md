@@ -38,10 +38,10 @@ const value: models.DataGcpCloudStorage = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "failed",
-    partial: true,
-    stale: true,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: false,
   },
   backend: "gcpCloudStorage",
 };
@@ -56,15 +56,15 @@ const value: models.DataAzureBlob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "unknown",
+    health: "degraded",
+    lifecycle: "scaling",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureBlob",
 };
@@ -80,8 +80,8 @@ const value: models.DataLocal1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],

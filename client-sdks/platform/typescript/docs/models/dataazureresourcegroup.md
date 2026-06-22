@@ -13,7 +13,7 @@ let value: DataAzureResourceGroup = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "timed-out",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },

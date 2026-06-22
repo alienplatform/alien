@@ -395,6 +395,7 @@ mod tests {
             compute_backend: None,
             external_bindings: Default::default(),
             base_platform: None,
+            label_domain: None,
             public_urls: None,
             domain_metadata: None,
             monitoring: None,

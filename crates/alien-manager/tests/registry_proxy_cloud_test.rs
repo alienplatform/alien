@@ -456,6 +456,7 @@ impl CloudProxyTest {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
                 },
             )

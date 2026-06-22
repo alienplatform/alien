@@ -62,8 +62,6 @@ fn emit_gcp_network_heartbeat(
         resource_type: Network::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Network(NetworkHeartbeatData::GcpVpc(
             GcpVpcNetworkHeartbeatData {

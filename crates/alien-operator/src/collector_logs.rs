@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
 
-const COLLECTOR_SOURCE: &str = "node-log-collector";
+const COLLECTOR_SOURCE: &str = "node-fluentbit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedLogSource {

@@ -13,7 +13,7 @@ let value: DataGcpServiceAccount2 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -28,11 +28,11 @@ let value: DataGcpServiceAccount2 = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `impersonationGranted`                                     | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `roleBound`                                                | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `serviceAccountEmail`                                      | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `serviceAccountUniqueId`                                   | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus44](../models/heartbeatstatus44.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"gcpServiceAccount"*                                      | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `impersonationGranted`                                                     | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `roleBound`                                                                | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `serviceAccountEmail`                                                      | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `serviceAccountUniqueId`                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus44](../models/resourceheartbeatstatus44.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"gcpServiceAccount"*                                                      | :heavy_check_mark:                                                         | N/A                                                                        |

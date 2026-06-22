@@ -20,7 +20,7 @@ const value: models.DataAwsVpc = {
       {
         message: "<value>",
         reason: "collection-failed",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],

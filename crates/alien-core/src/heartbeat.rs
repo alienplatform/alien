@@ -10,13 +10,9 @@ use serde_json::Value as JsonValue;
 #[serde(rename_all = "camelCase")]
 pub struct ResourceHeartbeat {
     pub deployment_id: Option<String>,
-    /// For managed heartbeats this is the Alien resource id. For observed heartbeats this is the
-    /// raw provider identity, such as a Kubernetes object identity.
+    /// Alien resource id, such as the `alien.Container` or `alien.Storage`
+    /// resource id from the stack.
     pub resource_id: String,
-    #[serde(default)]
-    pub source: HeartbeatSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alien_resource_id: Option<String>,
     pub resource_type: ResourceType,
     pub controller_platform: Platform,
     pub backend: HeartbeatBackend,
@@ -25,13 +21,67 @@ pub struct ResourceHeartbeat {
     pub raw: Vec<RawHeartbeatSnippet>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum HeartbeatSource {
-    #[default]
-    Managed,
-    Observed,
+#[serde(rename_all = "camelCase")]
+pub struct ObservedInventoryBatch {
+    /// Writer/source for this inventory pass, such as `operator` or
+    /// `manager-observer`.
+    pub source_kind: String,
+    /// Stable scope for the provider list operation that produced this batch.
+    pub inventory_scope: String,
+    /// Platform whose observer produced this snapshot.
+    pub controller_platform: Platform,
+    /// Backend whose observer produced this snapshot.
+    pub backend: HeartbeatBackend,
+    /// Time the inventory scope was observed.
+    pub observed_at: DateTime<Utc>,
+    /// Whether this batch is a complete replacement for the scope. Complete
+    /// batches tombstone previously observed rows in the same scope when they
+    /// are absent from `resources`.
+    pub complete: bool,
+    pub resources: Vec<ObservedResourceSample>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedResourceSample {
+    pub deployment_id: Option<String>,
+    /// Provider-native stable identity: Kubernetes object identity, cloud ARN,
+    /// GCP full resource name, Azure resource id, etc.
+    pub raw_identity: String,
+    /// Provider-native kind, such as `apps/v1/Deployment`,
+    /// `AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure
+    /// resource type.
+    pub provider_kind: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_type_hint: Option<ResourceType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alien_resource_id: Option<String>,
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub partial: bool,
+    pub provider_stale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<ObservedCounts>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw: Vec<RawHeartbeatSnippet>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2131,8 +2181,6 @@ mod tests {
             resource_type: ResourceType::from(resource_type),
             controller_platform: Platform::Kubernetes,
             backend: HeartbeatBackend::Kubernetes,
-            source: Default::default(),
-            alien_resource_id: None,
             observed_at: observed_at(),
             data,
             raw: vec![RawHeartbeatSnippet {
@@ -2146,8 +2194,8 @@ mod tests {
     }
 
     #[test]
-    fn resource_heartbeat_defaults_missing_source_to_managed() {
-        let mut heartbeat_json = serde_json::to_value(heartbeat(
+    fn resource_heartbeat_roundtrips_managed_resource_data() {
+        let heartbeat_json = serde_json::to_value(heartbeat(
             ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(
                 KubernetesContainerHeartbeatData {
                     status: workload_status(),
@@ -2167,15 +2215,12 @@ mod tests {
         ))
         .unwrap();
 
-        heartbeat_json.as_object_mut().unwrap().remove("source");
-        heartbeat_json
-            .as_object_mut()
-            .unwrap()
-            .remove("alienResourceId");
-
         let parsed: ResourceHeartbeat = serde_json::from_value(heartbeat_json).unwrap();
-        assert_eq!(parsed.source, HeartbeatSource::Managed);
-        assert_eq!(parsed.alien_resource_id, None);
+        assert_eq!(parsed.resource_id, "api");
+        assert!(matches!(
+            parsed.data,
+            ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(_))
+        ));
     }
 
     #[test]

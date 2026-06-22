@@ -76,7 +76,7 @@ const value: models.DataKubernetesSecret = {
       {
         message: "<value>",
         reason: "forbidden",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],

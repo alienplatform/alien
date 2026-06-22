@@ -13,8 +13,8 @@ let value: DataLocal2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -40,6 +40,6 @@ let value: DataLocal2 = {
 | `pid`                                                                          | *number*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `process`                                                                      | *models.ProcessUnion*                                                          | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `readinessProbeOk`                                                             | *boolean*                                                                      | :heavy_minus_sign:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus9](../models/heartbeatstatus9.md)                       | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus9](../models/resourceheartbeatstatus9.md)       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `triggerCount`                                                                 | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"local"*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |

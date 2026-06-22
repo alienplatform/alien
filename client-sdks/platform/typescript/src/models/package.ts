@@ -342,6 +342,10 @@ export type OutputsOperatorImage = {
    * Full image reference (e.g., "public.ecr.aws/acme/operators/project-id:1.2.3")
    */
   image: string;
+  /**
+   * DNS-style label domain embedded into the Operator binary, if whitelabeled.
+   */
+  labelDomain?: string | null | undefined;
   type: OutputsTypeOperatorImage;
 };
 
@@ -780,6 +784,7 @@ export const OutputsOperatorImage$inboundSchema: z.ZodType<
 > = z.object({
   digest: z.string(),
   image: z.string(),
+  labelDomain: z.nullable(z.string()).optional(),
   type: OutputsTypeOperatorImage$inboundSchema,
 });
 

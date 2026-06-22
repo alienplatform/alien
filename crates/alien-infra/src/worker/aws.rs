@@ -266,8 +266,6 @@ fn emit_aws_lambda_worker_heartbeat(
         resource_type: Worker::RESOURCE_TYPE,
         controller_platform: Platform::Aws,
         backend: HeartbeatBackend::Aws,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::AwsLambda(
             AwsLambdaWorkerHeartbeatData {

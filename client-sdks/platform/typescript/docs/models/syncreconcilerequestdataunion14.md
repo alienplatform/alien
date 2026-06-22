@@ -14,7 +14,7 @@ const value: models.DataGcpServiceUsage = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "not-installed",
         severity: "error",
         source: "<value>",
       },

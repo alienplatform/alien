@@ -7,12 +7,12 @@ use alien_core::{
     GcpCloudBuildHeartbeatData, GcpCloudRunWorkerHeartbeatData, GcpCloudStorageHeartbeatData,
     GcpFirestoreKvHeartbeatData, GcpPubSubQueueHeartbeatData, GcpVpcNetworkHeartbeatData,
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
-    HeartbeatIssueSeverity, HeartbeatSource, KvHeartbeatData, KvHeartbeatStatus,
-    NetworkHeartbeatData, NetworkHeartbeatStatus, ObservedHealth, Platform, ProviderLifecycleState,
-    QueueHeartbeatData, QueueHeartbeatStatus, RawHeartbeatSnippet, RawHeartbeatSnippetFormat,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceType, StorageHeartbeatData,
-    StorageHeartbeatStatus, WorkerHeartbeatData, WorkloadHeartbeatStatus, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
+    HeartbeatIssueSeverity, KvHeartbeatData, KvHeartbeatStatus, NetworkHeartbeatData,
+    NetworkHeartbeatStatus, ObservedHealth, Platform, ProviderLifecycleState, QueueHeartbeatData,
+    QueueHeartbeatStatus, RawHeartbeatSnippet, RawHeartbeatSnippetFormat, ResourceHeartbeatData,
+    ResourceType, StorageHeartbeatData, StorageHeartbeatStatus, WorkerHeartbeatData,
+    WorkloadHeartbeatStatus, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
+    ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use alien_gcp_clients::cloudasset::{ResourceSearchResult, SearchAllResourcesRequest};
 use alien_gcp_clients::monitoring::{ListTimeSeriesRequest, TimeInterval, TimeSeriesView};
@@ -21,7 +21,12 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use tracing::warn;
 
-use crate::{ObserveScope, Observer, Result};
+use serde_json::json;
+
+use crate::{
+    observed_resource_sample, ObserveReport, ObserveScope, ObservedResourceSampleInput, Observer,
+    Result,
+};
 
 const MAX_SEARCH_ALL_RESOURCES_PAGES: usize = 20;
 
@@ -88,7 +93,7 @@ impl GcpObserver {
         }
     }
 
-    async fn discover_resources(&self) -> Result<Vec<ResourceSearchResult>> {
+    async fn discover_resources(&self) -> Result<InventoryDiscovery<ResourceSearchResult>> {
         let mut resources = Vec::new();
         let mut page_token = None;
 
@@ -123,50 +128,78 @@ impl GcpObserver {
                 Ok(response) => response,
                 Err(error) => {
                     warn!(error = %error, "GCP Cloud Asset Inventory observe pass failed");
-                    return Ok(resources);
+                    return Ok(InventoryDiscovery {
+                        resources,
+                        complete: false,
+                    });
                 }
             };
 
             resources.extend(response.results);
             page_token = response.next_page_token.filter(|token| !token.is_empty());
             if page_token.is_none() {
-                break;
+                return Ok(InventoryDiscovery {
+                    resources,
+                    complete: true,
+                });
             }
         }
 
-        Ok(resources)
+        Ok(InventoryDiscovery {
+            resources,
+            complete: false,
+        })
     }
 
-    fn heartbeat_for_resource(
+    fn observed_resource_for_resource(
         &self,
         resource: ResourceSearchResult,
         monitoring_issue: Option<&HeartbeatCollectionIssue>,
-    ) -> Option<ResourceHeartbeat> {
+    ) -> Option<alien_core::ObservedResourceSample> {
         let alien_resource_id = alien_resource_id_from_labels(&self.label_domain, &resource.labels);
-        if alien_resource_id.is_some() {
-            return None;
-        }
 
         let raw_identity = resource.name.clone()?;
+        let provider_kind = resource.asset_type.clone()?;
+        let display_name = resource
+            .display_name
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| gcp_resource_leaf(&raw_identity));
         let data = resource_data_for_result(
             &resource,
             &self.context.project_id,
             &self.context.region,
             monitoring_issue.cloned(),
         )?;
+        let resource_type_hint = resource_type_for_data(&data);
 
-        Some(ResourceHeartbeat {
-            deployment_id: Some(self.context.deployment_id.clone()),
-            resource_id: gcp_raw_identity(&raw_identity),
-            source: HeartbeatSource::Observed,
+        let mut attributes = BTreeMap::new();
+        attributes.insert("project".to_string(), json!(resource.project));
+        attributes.insert("assetType".to_string(), json!(resource.asset_type));
+        attributes.insert("state".to_string(), json!(resource.state));
+        attributes.insert("location".to_string(), json!(resource.location));
+        let raw = raw_snippet(&resource);
+
+        Some(observed_resource_sample(ObservedResourceSampleInput {
+            deployment_id: self.context.deployment_id.clone(),
+            raw_identity: gcp_raw_identity(&raw_identity),
+            provider_kind,
+            display_name,
+            namespace: None,
+            region: resource
+                .location
+                .clone()
+                .or(Some(self.context.region.clone())),
+            scope: Some(gcp_inventory_scope(&self.context.project_id)),
+            resource_type_hint: Some(resource_type_hint),
             alien_resource_id,
-            resource_type: resource_type_for_data(&data),
             controller_platform: Platform::Gcp,
             backend: HeartbeatBackend::Gcp,
-            observed_at: Utc::now(),
+            labels: resource.labels,
+            attributes,
             data,
-            raw: vec![raw_snippet(&resource)],
-        })
+            raw: vec![raw],
+        }))
     }
 }
 
@@ -176,19 +209,46 @@ impl Observer for GcpObserver {
         Platform::Gcp
     }
 
-    async fn discover(&self, _scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
+    async fn discover(&self, _scope: &ObserveScope) -> Result<ObserveReport> {
         let monitoring_issue = self.monitoring_issue().await;
-        let resources = self.discover_resources().await?;
-
-        Ok(resources
+        let discovery = self.discover_resources().await?;
+        let resources = discovery
+            .resources
             .into_iter()
-            .filter_map(|resource| self.heartbeat_for_resource(resource, monitoring_issue.as_ref()))
-            .collect())
+            .filter_map(|resource| {
+                self.observed_resource_for_resource(resource, monitoring_issue.as_ref())
+            })
+            .collect();
+
+        Ok(ObserveReport {
+            inventory_batches: vec![alien_core::ObservedInventoryBatch {
+                source_kind: "manager-observer".to_string(),
+                inventory_scope: gcp_inventory_scope(&self.context.project_id),
+                controller_platform: Platform::Gcp,
+                backend: HeartbeatBackend::Gcp,
+                observed_at: Utc::now(),
+                complete: discovery.complete,
+                resources,
+            }],
+        })
     }
+}
+
+struct InventoryDiscovery<T> {
+    resources: Vec<T>,
+    complete: bool,
 }
 
 pub fn gcp_raw_identity(name: &str) -> String {
     name.to_string()
+}
+
+pub fn gcp_inventory_scope(project_id: &str) -> String {
+    format!("gcp:cloudasset:{project_id}")
+}
+
+fn gcp_resource_leaf(name: &str) -> String {
+    name.rsplit('/').next().unwrap_or(name).to_string()
 }
 
 fn observed_asset_types() -> Vec<String> {

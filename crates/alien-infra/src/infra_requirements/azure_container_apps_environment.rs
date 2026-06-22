@@ -719,8 +719,6 @@ fn emit_azure_container_apps_environment_heartbeat(
         resource_type: AzureContainerAppsEnvironment::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::AzureContainerAppsEnvironment(
             AzureContainerAppsEnvironmentHeartbeatData {

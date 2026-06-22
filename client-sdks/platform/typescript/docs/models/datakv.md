@@ -11,8 +11,8 @@ let value: DataKv = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "not-installed",
+          severity: "warning",
           source: "<value>",
         },
       ],

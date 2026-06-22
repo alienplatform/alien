@@ -449,8 +449,6 @@ fn emit_gcp_build_heartbeat(
         resource_type: Build::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Build(BuildHeartbeatData::GcpCloudBuild(
             GcpCloudBuildHeartbeatData {

@@ -139,6 +139,14 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         whitelabeled_log_collector_serviceaccount_tpl(),
     );
     files.insert(
+        "templates/whitelabeled-log-collector-role.yaml".to_string(),
+        whitelabeled_log_collector_role_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-rolebinding.yaml".to_string(),
+        whitelabeled_log_collector_rolebinding_tpl(),
+    );
+    files.insert(
         "templates/whitelabeled-log-collector-configmap.yaml".to_string(),
         whitelabeled_log_collector_configmap_tpl(),
     );
@@ -256,6 +264,16 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             &operator_name,
             &collector_labels,
         ));
+        docs.push(operator_log_collector_role_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_role_binding_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
         docs.push(operator_log_collector_configmap_doc(
             namespace,
             &operator_name,
@@ -360,6 +378,13 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         "serviceAccountPrefix: {}\n",
         yaml_string(&options.stack_state.resource_prefix)
     ));
+    yaml.push_str("logCollector:\n");
+    yaml.push_str("  scope:\n");
+    yaml.push_str(&format!(
+        "    deploymentLabelValue: {}\n",
+        yaml_string(&options.stack_state.resource_prefix)
+    ));
+    yaml.push('\n');
 
     append_manager_service_account(&mut yaml, options.stack_state, options.base_platform)?;
     append_registered_service_accounts(
@@ -677,6 +702,50 @@ fn operator_log_collector_service_account_doc(
     let name = format!("{operator_name}-whitelabeled-log-collector");
     let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, &name, labels);
     yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_log_collector_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &name,
+        labels,
+    );
+    yaml.push_str("rules:\n");
+    yaml.push_str("  - apiGroups: [\"\"]\n");
+    yaml.push_str("    resources: [\"pods\"]\n");
+    yaml.push_str("    verbs: [\"get\", \"list\", \"watch\"]\n");
+    yaml
+}
+
+fn operator_log_collector_role_binding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &name,
+        labels,
+    );
+    yaml.push_str("roleRef:\n");
+    yaml.push_str("  apiGroup: rbac.authorization.k8s.io\n");
+    yaml.push_str("  kind: Role\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(&name)));
+    yaml.push_str("subjects:\n");
+    yaml.push_str("  - kind: ServiceAccount\n");
+    yaml.push_str(&format!("    name: {}\n", yaml_string(&name)));
+    yaml.push_str(&format!("    namespace: {}\n", yaml_string(namespace)));
     yaml
 }
 
@@ -1196,8 +1265,8 @@ logCollector:
   enabled: false
   token: "replace-me-with-a-stable-in-cluster-collector-token"
   image:
-    repository: registry.example.com/deployment/log-collector
-    tag: latest
+    repository: fluent/fluent-bit
+    tag: "3.2"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -1206,7 +1275,7 @@ logCollector:
     limits:
       memory: 256Mi
   scope:
-    deploymentLabelKey: ""
+    deploymentLabelKey: "alien.dev/deployment"
     deploymentLabelValue: ""
 
 heartbeat:
@@ -2827,6 +2896,46 @@ automountServiceAccountToken: true
     .to_string()
 }
 
+fn whitelabeled_log_collector_role_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_rolebinding_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn whitelabeled_log_collector_configmap_tpl() -> String {
     r#"{{- if .Values.logCollector.enabled }}
 apiVersion: v1
@@ -3570,7 +3679,7 @@ mod tests {
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             image: "registry.example.com/operator:test",
             log_collector: Some(OperatorLogCollectorOptions {
-                image: "acme-log-collector:dev",
+                image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
             }),
             namespace: "demo",
@@ -3746,15 +3855,38 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(kinds.contains(&"Service"));
+        assert!(kinds.contains(&"Role"));
+        assert!(kinds.contains(&"RoleBinding"));
         assert!(kinds.contains(&"DaemonSet"));
         assert!(manifest.contains("whitelabeled-log-collector"));
         assert!(manifest.contains("/var/log/pods/demo_"));
         assert!(manifest.contains("/internal/logs"));
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
-        let upstream_collector_name = ["fluent", "-bit"].concat();
-        assert!(!manifest.contains(&upstream_collector_name));
+        assert!(manifest.contains("fluent/fluent-bit:3.2"));
+        assert!(!manifest.contains("pods/log"));
         assert!(!manifest.contains("void"));
+
+        let collector_role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .find(|role| {
+                role.get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.ends_with("-whitelabeled-log-collector"))
+            })
+            .expect("operator manifest should include collector Role");
+        let resources = collector_role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .and_then(|rules| rules.first())
+            .and_then(|rule| rule.get("resources"))
+            .and_then(YamlValue::as_sequence)
+            .expect("collector Role should include resources")
+            .iter()
+            .filter_map(YamlValue::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(resources, vec!["pods"]);
 
         let daemonset = docs_by_kind(&docs, "DaemonSet")
             .into_iter()
@@ -3842,10 +3974,8 @@ mod tests {
 logCollector:
   enabled: true
   token: test-collector-token
-  image:
-    repository: acme-log-collector
-    tag: dev
-    pullPolicy: IfNotPresent
+  scope:
+    deploymentLabelValue: e2e123
 "#;
 
         let files = chart.files.clone();
@@ -3857,8 +3987,15 @@ logCollector:
         assert!(rendered.stdout.contains("whitelabeled-log-collector"));
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
         assert!(rendered.stdout.contains("/var/log/pods/default_"));
-        let upstream_collector_name = ["fluent", "-bit"].concat();
-        assert!(!rendered.stdout.contains(&upstream_collector_name));
+        assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
+        assert!(rendered
+            .stdout
+            .contains("$kubernetes['labels']['alien.dev/deployment'] ^e2e123$"));
+        assert!(rendered.stdout.contains("resources: [\"pods\"]"));
+        assert!(rendered
+            .stdout
+            .contains("verbs: [\"get\", \"list\", \"watch\"]"));
+        assert!(!rendered.stdout.contains("resources: [\"pods/log\"]"));
         assert!(!rendered.stdout.contains("void"));
     }
 
@@ -3885,6 +4022,7 @@ logCollector:
 
         assert!(values.contains("runtime:\n  encryption:\n"));
         assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
+        assert!(values.contains("logCollector:\n  scope:\n    deploymentLabelValue: e2e123"));
     }
 
     #[test]

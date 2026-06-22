@@ -503,8 +503,6 @@ fn emit_aws_remote_stack_management_heartbeat(
         resource_type: RemoteStackManagement::RESOURCE_TYPE,
         controller_platform: Platform::Aws,
         backend: HeartbeatBackend::Aws,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::RemoteStackManagement(
             RemoteStackManagementHeartbeatData::AwsIamRole(AwsRemoteStackManagementHeartbeatData {

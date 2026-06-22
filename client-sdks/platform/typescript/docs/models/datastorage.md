@@ -13,8 +13,8 @@ let value: DataStorage = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "error",
+          reason: "collection-failed",
+          severity: "warning",
           source: "<value>",
         },
       ],

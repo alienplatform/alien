@@ -1,6 +1,5 @@
 use alien_core::{
-    HeartbeatBackend, HeartbeatSource, KubernetesWorkloadKind, Platform, ResourceHeartbeat,
-    ResourceType,
+    HeartbeatBackend, KubernetesWorkloadKind, Platform, ResourceHeartbeat, ResourceType,
 };
 use alien_error::Context;
 use alien_k8s_clients::read_kubernetes_workload;
@@ -74,8 +73,6 @@ pub async fn emit_kubernetes_workload_heartbeat(
         resource_type: input.resource_type,
         controller_platform: Platform::Kubernetes,
         backend: HeartbeatBackend::Kubernetes,
-        source: HeartbeatSource::Managed,
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data,
         raw: vec![],
