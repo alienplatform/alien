@@ -49,6 +49,7 @@ pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential
 pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
+use azure_mgmt_resources::package_resources_2021_04 as azure_resources_2021_04;
 pub use azure_mgmt_resources::package_resources_2021_04::models::{Provider, ResourceGroup};
 use azure_mgmt_servicebus::package_2024_01;
 pub use azure_mgmt_servicebus::package_2024_01::models::{SbNamespace, SbQueue, SbQueueProperties};
@@ -4005,7 +4006,7 @@ pub trait AzureResourcesApi: Send + Sync {
 struct OfficialAzureResourcesClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_resources_2021_04::Client>,
 }
 
 impl OfficialAzureResourcesClient {
@@ -4013,102 +4014,35 @@ impl OfficialAzureResourcesClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn resource_group_url(&self, resource_group_name: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourcegroups/{}?api-version=2021-04-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name
-        )
-    }
+    async fn client(&self) -> Result<azure_resources_2021_04::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn provider_url(&self, resource_provider_namespace: &str, action: Option<&str>) -> String {
-        let action = action
-            .map(|action| format!("/{action}"))
-            .unwrap_or_default();
-        format!(
-            "{}/subscriptions/{}/providers/{}{}?api-version=2021-04-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_provider_namespace,
-            action
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                azure_resources_2021_04::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Resources client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -4119,102 +4053,100 @@ impl AzureResourcesApi for OfficialAzureResourcesClient {
         resource_group_name: &str,
         resource_group: &ResourceGroup,
     ) -> Result<ResourceGroup> {
-        let body = serde_json::to_string(resource_group)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure resource group '{resource_group_name}' request"
-                ),
-                resource_id: None,
-            })?;
-        let response = self
-            .request(
-                Method::PUT,
-                self.resource_group_url(resource_group_name),
-                Some(body),
-                "Azure Resource Group",
-                resource_group_name,
+        let result = self
+            .client()
+            .await?
+            .resource_groups_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                resource_group.clone(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure resource group '{resource_group_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Resources",
+            result,
+            "resource group create or update",
+            "Azure Resource Group",
+            resource_group_name,
         )
     }
 
     async fn delete_resource_group(&self, resource_group_name: &str) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.resource_group_url(resource_group_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .resource_groups_client()
+            .delete(
+                resource_group_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Resources",
+            result,
+            "resource group delete",
             "Azure Resource Group",
             resource_group_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup> {
-        let response = self
-            .request(
-                Method::GET,
-                self.resource_group_url(resource_group_name),
-                None,
-                "Azure Resource Group",
-                resource_group_name,
+        let result = self
+            .client()
+            .await?
+            .resource_groups_client()
+            .get(
+                resource_group_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure resource group '{resource_group_name}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Resources",
+            result,
+            "resource group get",
+            "Azure Resource Group",
+            resource_group_name,
         )
     }
 
     async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
-        let response = self
-            .request(
-                Method::GET,
-                self.provider_url(resource_provider_namespace, None),
-                None,
-                "Azure Resource Provider",
-                resource_provider_namespace,
+        let result = self
+            .client()
+            .await?
+            .providers_client()
+            .get(
+                resource_provider_namespace.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure provider '{resource_provider_namespace}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Resources",
+            result,
+            "provider get",
+            "Azure Resource Provider",
+            resource_provider_namespace,
         )
     }
 
     async fn register_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
-        let response = self
-            .request(
-                Method::POST,
-                self.provider_url(resource_provider_namespace, Some("register")),
-                Some("{}".to_string()),
-                "Azure Resource Provider",
-                resource_provider_namespace,
+        let result = self
+            .client()
+            .await?
+            .providers_client()
+            .register(
+                resource_provider_namespace.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        serde_json::from_str(&response).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure provider registration '{resource_provider_namespace}' response"
-                ),
-                resource_id: None,
-            },
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Resources",
+            result,
+            "provider register",
+            "Azure Resource Provider",
+            resource_provider_namespace,
         )
     }
 }
