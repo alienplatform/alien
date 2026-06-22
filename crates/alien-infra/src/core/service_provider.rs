@@ -61,7 +61,7 @@ use azure_mgmt_storage::package_2023_05 as azure_storage_2023_05;
 use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 pub use azure_mgmt_storage::package_2023_05::models::{
     Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
-    StorageAccountPropertiesCreateParameters, Table, TableProperties,
+    StorageAccountPropertiesCreateParameters,
 };
 use futures_util::StreamExt;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
@@ -3651,7 +3651,7 @@ pub trait AzureTableManagementApi: Send + Sync {
 struct OfficialAzureTableManagementClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_storage_2023_05::Client>,
 }
 
 impl OfficialAzureTableManagementClient {
@@ -3659,96 +3659,35 @@ impl OfficialAzureTableManagementClient {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn table_url(
-        &self,
-        resource_group_name: &str,
-        storage_account_name: &str,
-        table_name: &str,
-    ) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/tableServices/default/tables/{}?api-version=2024-01-01",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            storage_account_name,
-            table_name
-        )
-    }
+    async fn client(&self) -> Result<azure_storage_2023_05::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
+
+                azure_storage_2023_05::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Storage client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<String> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok(text)
+            .await?;
+        Ok(client.clone())
     }
 }
 
@@ -3760,33 +3699,25 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         storage_account_name: &str,
         table_name: &str,
     ) -> Result<()> {
-        let table = Table {
-            resource: azure_mgmt_storage::package_2023_05::models::Resource {
-                id: None,
-                name: Some(table_name.to_string()),
-                type_: None,
-            },
-            properties: Some(TableProperties {
-                signed_identifiers: vec![],
-                table_name: Some(table_name.to_string()),
-            }),
-        };
-        let body = serde_json::to_string(&table).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to serialize Azure Table '{table_name}' request"),
-                resource_id: None,
-            },
-        )?;
-
-        self.request(
-            Method::PUT,
-            self.table_url(resource_group_name, storage_account_name, table_name),
-            Some(body),
+        let result = self
+            .client()
+            .await?
+            .table_client()
+            .create(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                self.config.subscription_id.clone(),
+                table_name.to_string(),
+            )
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table create",
             "Azure Table",
             table_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn delete_table(
@@ -3795,15 +3726,26 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         storage_account_name: &str,
         table_name: &str,
     ) -> Result<()> {
-        self.request(
-            Method::DELETE,
-            self.table_url(resource_group_name, storage_account_name, table_name),
-            None,
+        let result = self
+            .client()
+            .await?
+            .table_client()
+            .delete(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                self.config.subscription_id.clone(),
+                table_name.to_string(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table delete",
             "Azure Table",
             table_name,
         )
-        .await?;
-        Ok(())
     }
 
     async fn get_table_signed_identifier_count(
@@ -3812,21 +3754,24 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         storage_account_name: &str,
         table_name: &str,
     ) -> Result<usize> {
-        let body = self
-            .request(
-                Method::GET,
-                self.table_url(resource_group_name, storage_account_name, table_name),
-                None,
-                "Azure Table",
-                table_name,
+        let result = self
+            .client()
+            .await?
+            .table_client()
+            .get(
+                resource_group_name.to_string(),
+                storage_account_name.to_string(),
+                self.config.subscription_id.clone(),
+                table_name.to_string(),
             )
-            .await?;
-        let table = serde_json::from_str::<Table>(&body)
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: format!("Failed to parse Azure Table '{table_name}' response"),
-                resource_id: None,
-            })?;
+            .await;
+        let table = map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table get",
+            "Azure Table",
+            table_name,
+        )?;
         Ok(table
             .properties
             .map(|properties| properties.signed_identifiers.len())
