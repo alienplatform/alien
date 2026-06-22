@@ -1,9 +1,13 @@
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use aws_sdk_ssm::{
+    operation::describe_parameters::DescribeParametersOutput,
+    primitives::DateTimeFormat,
+    types::{ParameterMetadata, ParameterTier, ParameterType},
+};
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::aws_sdk::{DescribeSsmParametersResponse, SsmParameterMetadata};
 use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
@@ -241,12 +245,12 @@ fn emit_aws_parameter_store_vault_heartbeat(
     account_id: &str,
     region: &str,
     prefix: &str,
-    response: DescribeSsmParametersResponse,
+    response: DescribeParametersOutput,
 ) {
-    let parameters = response.parameters;
-    let has_more_parameters = response.has_more_parameters;
+    let parameters = response.parameters();
+    let has_more_parameters = response.next_token().is_some();
     let sampled_parameter_count = parameters.len() as u32;
-    let latest_modified_at = latest_modified_at(&parameters);
+    let latest_modified_at = latest_modified_at(parameters);
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -283,7 +287,7 @@ fn emit_aws_parameter_store_vault_heartbeat(
                 sampled_kms_key_metadata_present_count: Some(
                     parameters
                         .iter()
-                        .filter(|parameter| parameter.has_key_id)
+                        .filter(|parameter| parameter.key_id().is_some())
                         .count() as u32,
                 ),
                 latest_modified_at,
@@ -294,23 +298,65 @@ fn emit_aws_parameter_store_vault_heartbeat(
     });
 }
 
-fn count_parameter_type(parameters: &[SsmParameterMetadata], parameter_type: &str) -> u32 {
+fn count_parameter_type(parameters: &[ParameterMetadata], parameter_type: &str) -> u32 {
     parameters
         .iter()
-        .filter(|parameter| parameter.parameter_type.as_deref() == Some(parameter_type))
+        .filter(|parameter| parameter.r#type().map(parameter_type_name) == Some(parameter_type))
         .count() as u32
 }
 
-fn count_parameter_tier(parameters: &[SsmParameterMetadata], tier: &str) -> u32 {
+fn count_parameter_tier(parameters: &[ParameterMetadata], tier: &str) -> u32 {
     parameters
         .iter()
-        .filter(|parameter| parameter.tier.as_deref() == Some(tier))
+        .filter(|parameter| parameter.tier().map(parameter_tier_name) == Some(tier))
         .count() as u32
 }
 
-fn latest_modified_at(parameters: &[SsmParameterMetadata]) -> Option<DateTime<Utc>> {
+fn latest_modified_at(parameters: &[ParameterMetadata]) -> Option<DateTime<Utc>> {
     parameters
         .iter()
-        .filter_map(|parameter| parameter.last_modified_at)
+        .filter_map(|parameter| {
+            parameter
+                .last_modified_date()
+                .and_then(|modified_at| smithy_datetime_to_chrono_utc(modified_at).ok())
+        })
         .max()
+}
+
+fn smithy_datetime_to_chrono_utc(
+    date_time: &aws_sdk_ssm::primitives::DateTime,
+) -> Result<DateTime<Utc>> {
+    let formatted = date_time
+        .fmt(DateTimeFormat::DateTime)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to format SSM Parameter Store timestamp".to_string(),
+            resource_id: None,
+        })?;
+
+    chrono::DateTime::parse_from_rfc3339(&formatted)
+        .map(|date_time| date_time.to_utc())
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to parse SSM Parameter Store timestamp '{formatted}'"),
+            resource_id: None,
+        })
+}
+
+fn parameter_type_name(parameter_type: &ParameterType) -> &str {
+    match parameter_type {
+        ParameterType::String => "String",
+        ParameterType::StringList => "StringList",
+        ParameterType::SecureString => "SecureString",
+        _ => parameter_type.as_str(),
+    }
+}
+
+fn parameter_tier_name(tier: &ParameterTier) -> &str {
+    match tier {
+        ParameterTier::Standard => "Standard",
+        ParameterTier::Advanced => "Advanced",
+        ParameterTier::IntelligentTiering => "Intelligent-Tiering",
+        _ => tier.as_str(),
+    }
 }

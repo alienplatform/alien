@@ -45,11 +45,9 @@ use aws_sdk_s3::{
 };
 use aws_sdk_sqs::{types::QueueAttributeName, Client as SqsClient};
 use aws_sdk_ssm::{
-    primitives::DateTimeFormat,
-    types::{ParameterStringFilter, ParameterTier, ParameterType},
+    operation::describe_parameters::DescribeParametersOutput, types::ParameterStringFilter,
 };
 use aws_types::region::Region;
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::error::{ErrorData, Result};
@@ -251,28 +249,6 @@ pub use aws_sdk_lambda::types::{
     Architecture as LambdaArchitecture, Environment, FunctionCode,
     LastUpdateStatus as LambdaLastUpdateStatus, PackageType, State as LambdaState, VpcConfig,
 };
-
-/// Parameter metadata returned from SSM for vault heartbeat sampling.
-#[derive(Debug, Clone)]
-pub struct SsmParameterMetadata {
-    /// Parameter type, such as String, StringList, or SecureString.
-    pub parameter_type: Option<String>,
-    /// Parameter tier, such as Standard or Advanced.
-    pub tier: Option<String>,
-    /// Whether KMS key metadata is present.
-    pub has_key_id: bool,
-    /// Last modified timestamp.
-    pub last_modified_at: Option<DateTime<Utc>>,
-}
-
-/// Result of describing parameters for a prefix.
-#[derive(Debug, Clone)]
-pub struct DescribeSsmParametersResponse {
-    /// Sampled parameter metadata.
-    pub parameters: Vec<SsmParameterMetadata>,
-    /// Whether SSM returned a next token.
-    pub has_more_parameters: bool,
-}
 
 /// S3 bucket metadata used for storage heartbeats.
 #[derive(Debug, Clone)]
@@ -547,7 +523,7 @@ pub trait SsmApi: Send + Sync {
         &self,
         prefix: &str,
         max_results: i32,
-    ) -> Result<DescribeSsmParametersResponse>;
+    ) -> Result<DescribeParametersOutput>;
 }
 
 /// Minimal SQS operations required by infra controllers.
@@ -1881,7 +1857,7 @@ impl SsmApi for aws_sdk_ssm::Client {
         &self,
         prefix: &str,
         max_results: i32,
-    ) -> Result<DescribeSsmParametersResponse> {
+    ) -> Result<DescribeParametersOutput> {
         let name_prefix_filter = ParameterStringFilter::builder()
             .key("Name")
             .option("BeginsWith")
@@ -1896,8 +1872,7 @@ impl SsmApi for aws_sdk_ssm::Client {
                 resource_id: None,
             })?;
 
-        let response = self
-            .describe_parameters()
+        self.describe_parameters()
             .parameter_filters(name_prefix_filter)
             .max_results(max_results)
             .send()
@@ -1909,25 +1884,7 @@ impl SsmApi for aws_sdk_ssm::Client {
                     prefix
                 ),
                 resource_id: None,
-            })?;
-
-        let parameters = response
-            .parameters()
-            .iter()
-            .map(|parameter| SsmParameterMetadata {
-                parameter_type: parameter.r#type().map(parameter_type_name),
-                tier: parameter.tier().map(parameter_tier_name),
-                has_key_id: parameter.key_id().is_some(),
-                last_modified_at: parameter
-                    .last_modified_date()
-                    .and_then(|modified_at| smithy_datetime_to_chrono_utc(modified_at).ok()),
             })
-            .collect();
-
-        Ok(DescribeSsmParametersResponse {
-            parameters,
-            has_more_parameters: response.next_token().is_some(),
-        })
     }
 }
 
@@ -3932,46 +3889,6 @@ fn notification_configuration_from_get_output(
         .set_lambda_function_configurations(output.lambda_function_configurations)
         .set_event_bridge_configuration(output.event_bridge_configuration)
         .build()
-}
-
-fn smithy_datetime_to_chrono_utc(
-    date_time: &aws_sdk_ssm::primitives::DateTime,
-) -> Result<DateTime<Utc>> {
-    let formatted = date_time
-        .fmt(DateTimeFormat::DateTime)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to format SSM Parameter Store timestamp".to_string(),
-            resource_id: None,
-        })?;
-
-    chrono::DateTime::parse_from_rfc3339(&formatted)
-        .map(|date_time| date_time.to_utc())
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to parse SSM Parameter Store timestamp '{formatted}'"),
-            resource_id: None,
-        })
-}
-
-fn parameter_type_name(parameter_type: &ParameterType) -> String {
-    match parameter_type {
-        ParameterType::String => "String",
-        ParameterType::StringList => "StringList",
-        ParameterType::SecureString => "SecureString",
-        _ => parameter_type.as_str(),
-    }
-    .to_string()
-}
-
-fn parameter_tier_name(tier: &ParameterTier) -> String {
-    match tier {
-        ParameterTier::Standard => "Standard",
-        ParameterTier::Advanced => "Advanced",
-        ParameterTier::IntelligentTiering => "Intelligent-Tiering",
-        _ => tier.as_str(),
-    }
-    .to_string()
 }
 
 /// Build an official AWS SDK config from Alien's public AWS client config.
