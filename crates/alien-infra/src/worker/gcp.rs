@@ -36,7 +36,8 @@ use google_cloud_compute_v1::model::{
     ssl_certificate::Type as SslCertificateType,
     Address, Backend, BackendService, ForwardingRule, NetworkEndpointGroup,
     NetworkEndpointGroupCloudRun, Operation as ComputeOperation, SslCertificate,
-    SslCertificateSelfManagedSslCertificate as SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
+    SslCertificateSelfManagedSslCertificate as SslCertificateSelfManaged,
+    TargetHttpsProxiesSetSslCertificatesRequest, TargetHttpsProxy, UrlMap,
 };
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::client::IAMPolicy;
@@ -888,19 +889,30 @@ impl GcpWorkerController {
                 .service_provider
                 .get_gcp_compute_region_operations_client(gcp_config)
                 .await?;
-            gcp_compute::get_region_operation(
-                &client,
-                &gcp_config.project_id,
-                region,
-                operation_name,
-            )
-            .await
+            client
+                .get()
+                .set_project(&gcp_config.project_id)
+                .set_region(region)
+                .set_operation(operation_name)
+                .send()
+                .await
+                .map_err(|error| {
+                    gcp_compute::compute_error(error, "regionOperation", operation_name)
+                })
         } else {
             let client = ctx
                 .service_provider
                 .get_gcp_compute_global_operations_client(gcp_config)
                 .await?;
-            gcp_compute::get_global_operation(&client, &gcp_config.project_id, operation_name).await
+            client
+                .get()
+                .set_project(&gcp_config.project_id)
+                .set_operation(operation_name)
+                .send()
+                .await
+                .map_err(|error| {
+                    gcp_compute::compute_error(error, "globalOperation", operation_name)
+                })
         }
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to check {operation_label} status"),
@@ -1307,16 +1319,17 @@ impl GcpWorkerController {
                     .set_private_key(private_key.clone()),
             );
 
-        let operation = gcp_compute::insert_ssl_certificate(
-            &ssl_certificates_client,
-            &gcp_config.project_id,
-            ssl_certificate,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to import SSL certificate to GCP".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = ssl_certificates_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(ssl_certificate)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "sslCertificate", &ssl_cert_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to import SSL certificate to GCP".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.ssl_certificate_name = Some(ssl_cert_name);
         self.record_compute_operation(
@@ -1416,17 +1429,20 @@ impl GcpWorkerController {
             .set_network_endpoint_type(NetworkEndpointType::Serverless)
             .set_cloud_run(cloud_run_config);
 
-        let operation = gcp_compute::insert_region_network_endpoint_group(
-            &neg_client,
-            &gcp_config.project_id,
-            &gcp_config.region,
-            neg,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to create serverless NEG".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = neg_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_region(&gcp_config.region)
+            .set_body(neg)
+            .send()
+            .await
+            .map_err(|error| {
+                gcp_compute::compute_error(error, "regionNetworkEndpointGroup", &neg_name)
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create serverless NEG".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.serverless_neg_name = Some(neg_name);
         self.record_compute_operation(
@@ -1527,16 +1543,19 @@ impl GcpWorkerController {
                 .set_group(neg_url)
                 .set_balancing_mode(BalancingMode::Utilization)]);
 
-        let operation = gcp_compute::insert_backend_service(
-            &backend_services_client,
-            &gcp_config.project_id,
-            backend_service,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to create backend service".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = backend_services_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(backend_service)
+            .send()
+            .await
+            .map_err(|error| {
+                gcp_compute::compute_error(error, "backendService", &backend_service_name)
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create backend service".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.backend_service_name = Some(backend_service_name);
         self.record_compute_operation(
@@ -1633,13 +1652,17 @@ impl GcpWorkerController {
             .set_description(format!("URL map for worker {}", worker_config.id))
             .set_default_service(backend_service_url);
 
-        let operation =
-            gcp_compute::insert_url_map(&url_maps_client, &gcp_config.project_id, url_map)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to create URL map".to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
+        let operation = url_maps_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(url_map)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "urlMap", &url_map_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create URL map".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.url_map_name = Some(url_map_name);
         self.record_compute_operation(operation, None, &worker_config.id, "URL map creation")?;
@@ -1744,16 +1767,17 @@ impl GcpWorkerController {
             .set_url_map(url_map_url)
             .set_ssl_certificates([ssl_cert_url]);
 
-        let operation = gcp_compute::insert_target_https_proxy(
-            &target_https_proxies_client,
-            &gcp_config.project_id,
-            https_proxy,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to create target HTTPS proxy".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = target_https_proxies_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(https_proxy)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "targetHttpsProxy", &proxy_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create target HTTPS proxy".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.target_https_proxy_name = Some(proxy_name);
         self.record_compute_operation(
@@ -1838,16 +1862,17 @@ impl GcpWorkerController {
             .set_description(format!("Global IP for worker {}", worker_config.id))
             .set_address_type(AddressType::External);
 
-        let operation = gcp_compute::insert_global_address(
-            &global_addresses_client,
-            &gcp_config.project_id,
-            address,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to create global address".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = global_addresses_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(address)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "globalAddress", &address_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create global address".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.global_address_name = Some(address_name);
         self.record_compute_operation(
@@ -1959,16 +1984,19 @@ impl GcpWorkerController {
             .set_target(proxy_url)
             .set_load_balancing_scheme(ForwardingRuleLoadBalancingScheme::External);
 
-        let operation = gcp_compute::insert_global_forwarding_rule(
-            &global_forwarding_rules_client,
-            &gcp_config.project_id,
-            forwarding_rule,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to create forwarding rule".to_string(),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
+        let operation = global_forwarding_rules_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(forwarding_rule)
+            .send()
+            .await
+            .map_err(|error| {
+                gcp_compute::compute_error(error, "globalForwardingRule", &forwarding_rule_name)
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create forwarding rule".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         self.forwarding_rule_name = Some(forwarding_rule_name);
         self.record_compute_operation(
@@ -2717,12 +2745,13 @@ impl GcpWorkerController {
                     .set_private_key(private_key.clone()),
             );
 
-        match gcp_compute::insert_ssl_certificate(
-            &ssl_certificates_client,
-            &gcp_config.project_id,
-            ssl_certificate,
-        )
-        .await
+        match ssl_certificates_client
+            .insert()
+            .set_project(&gcp_config.project_id)
+            .set_body(ssl_certificate)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "sslCertificate", &ssl_cert_name))
         {
             Ok(_) => {}
             Err(e) if is_remote_resource_conflict(&e) => {
@@ -2744,17 +2773,21 @@ impl GcpWorkerController {
             "projects/{}/global/sslCertificates/{}",
             gcp_config.project_id, ssl_cert_name
         );
-        gcp_compute::set_target_https_proxy_ssl_certificates(
-            &target_https_proxies_client,
-            &gcp_config.project_id,
-            &proxy_name,
-            vec![ssl_cert_url],
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
-            resource_id: Some(cfg.id.clone()),
-        })?;
+        target_https_proxies_client
+            .set_ssl_certificates()
+            .set_project(&gcp_config.project_id)
+            .set_target_https_proxy(&proxy_name)
+            .set_body(
+                TargetHttpsProxiesSetSslCertificatesRequest::new()
+                    .set_ssl_certificates([ssl_cert_url]),
+            )
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "targetHttpsProxy", &proxy_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
 
         let previous_ssl_certificate_name = self.ssl_certificate_name.clone();
 
@@ -2764,13 +2797,19 @@ impl GcpWorkerController {
         if let Some(previous_ssl_certificate_name) = previous_ssl_certificate_name {
             if self.ssl_certificate_name.as_deref() != Some(previous_ssl_certificate_name.as_str())
             {
-                match gcp_compute::delete_ssl_certificate(
-                    &ssl_certificates_client,
-                    &gcp_config.project_id,
-                    &previous_ssl_certificate_name,
-                )
-                .await
-                {
+                match ssl_certificates_client
+                    .delete()
+                    .set_project(&gcp_config.project_id)
+                    .set_ssl_certificate(&previous_ssl_certificate_name)
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        gcp_compute::compute_error(
+                            error,
+                            "sslCertificate",
+                            &previous_ssl_certificate_name,
+                        )
+                    }) {
                     Ok(_) => {
                         info!(
                             worker=%cfg.id,
@@ -3912,13 +3951,15 @@ impl GcpWorkerController {
                 .get_gcp_compute_global_forwarding_rules_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_global_forwarding_rule(
-                &global_forwarding_rules_client,
-                &gcp_config.project_id,
-                forwarding_rule_name,
-            )
-            .await
-            {
+            match global_forwarding_rules_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_forwarding_rule(forwarding_rule_name)
+                .send()
+                .await
+                .map_err(|error| {
+                    gcp_compute::compute_error(error, "globalForwardingRule", forwarding_rule_name)
+                }) {
                 Ok(_) => {
                     info!(name=%forwarding_rule_name, "Forwarding rule deletion initiated");
                 }
@@ -3968,12 +4009,13 @@ impl GcpWorkerController {
                 .get_gcp_compute_target_https_proxies_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_target_https_proxy(
-                &target_https_proxies_client,
-                &gcp_config.project_id,
-                proxy_name,
-            )
-            .await
+            match target_https_proxies_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_target_https_proxy(proxy_name)
+                .send()
+                .await
+                .map_err(|error| gcp_compute::compute_error(error, "targetHttpsProxy", proxy_name))
             {
                 Ok(_) => {
                     info!(name=%proxy_name, "Target HTTPS proxy deletion initiated");
@@ -4021,12 +4063,13 @@ impl GcpWorkerController {
                 .get_gcp_compute_url_maps_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_url_map(
-                &url_maps_client,
-                &gcp_config.project_id,
-                url_map_name,
-            )
-            .await
+            match url_maps_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_url_map(url_map_name)
+                .send()
+                .await
+                .map_err(|error| gcp_compute::compute_error(error, "urlMap", url_map_name))
             {
                 Ok(_) => {
                     info!(name=%url_map_name, "URL map deletion initiated");
@@ -4074,13 +4117,15 @@ impl GcpWorkerController {
                 .get_gcp_compute_backend_services_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_backend_service(
-                &backend_services_client,
-                &gcp_config.project_id,
-                backend_service_name,
-            )
-            .await
-            {
+            match backend_services_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_backend_service(backend_service_name)
+                .send()
+                .await
+                .map_err(|error| {
+                    gcp_compute::compute_error(error, "backendService", backend_service_name)
+                }) {
                 Ok(_) => {
                     info!(name=%backend_service_name, "Backend service deletion initiated");
                 }
@@ -4130,14 +4175,16 @@ impl GcpWorkerController {
                 .get_gcp_compute_region_network_endpoint_groups_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_region_network_endpoint_group(
-                &neg_client,
-                &gcp_config.project_id,
-                &gcp_config.region,
-                neg_name,
-            )
-            .await
-            {
+            match neg_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_region(&gcp_config.region)
+                .set_network_endpoint_group(neg_name)
+                .send()
+                .await
+                .map_err(|error| {
+                    gcp_compute::compute_error(error, "regionNetworkEndpointGroup", neg_name)
+                }) {
                 Ok(_) => {
                     info!(name=%neg_name, "Serverless NEG deletion initiated");
                 }
@@ -4184,12 +4231,13 @@ impl GcpWorkerController {
                 .get_gcp_compute_ssl_certificates_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_ssl_certificate(
-                &ssl_certificates_client,
-                &gcp_config.project_id,
-                ssl_cert_name,
-            )
-            .await
+            match ssl_certificates_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_ssl_certificate(ssl_cert_name)
+                .send()
+                .await
+                .map_err(|error| gcp_compute::compute_error(error, "sslCertificate", ssl_cert_name))
             {
                 Ok(_) => {
                     info!(name=%ssl_cert_name, "SSL certificate deletion initiated");
@@ -4237,12 +4285,13 @@ impl GcpWorkerController {
                 .get_gcp_compute_global_addresses_client(gcp_config)
                 .await?;
 
-            match gcp_compute::delete_global_address(
-                &global_addresses_client,
-                &gcp_config.project_id,
-                address_name,
-            )
-            .await
+            match global_addresses_client
+                .delete()
+                .set_project(&gcp_config.project_id)
+                .set_address(address_name)
+                .send()
+                .await
+                .map_err(|error| gcp_compute::compute_error(error, "globalAddress", address_name))
             {
                 Ok(_) => {
                     info!(name=%address_name, "Global address deletion initiated");
@@ -4938,16 +4987,17 @@ impl GcpWorkerController {
             .service_provider
             .get_gcp_compute_global_addresses_client(gcp_config)
             .await?;
-        let address = gcp_compute::get_global_address(
-            &global_addresses_client,
-            &gcp_config.project_id,
-            address_name,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to get global address".to_string(),
-            resource_id: Some(resource_id.to_string()),
-        })?;
+        let address = global_addresses_client
+            .get()
+            .set_project(&gcp_config.project_id)
+            .set_address(address_name)
+            .send()
+            .await
+            .map_err(|error| gcp_compute::compute_error(error, "globalAddress", address_name))
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get global address".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
 
         let ip_address = address.address.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
