@@ -4,11 +4,12 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use azure_core::credentials::{AccessToken, TokenCredential};
 pub use azure_mgmt_app::package_preview_2024_08::models::{
-    certificate, custom_domain, dapr, dapr_component, identity_settings, managed_environment,
-    BaseContainer, Certificate, CertificateKeyVaultProperties, Container, ContainerResources,
-    CustomDomain, CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar,
-    IdentitySettings, ManagedEnvironment, RegistryCredentials, Scale, Secret, Template,
-    TrackedResource, TrafficWeight, VnetConfiguration, WorkloadProfile,
+    certificate, configuration, container_app, custom_domain, dapr, dapr_component,
+    identity_settings, ingress, managed_environment, BaseContainer, Certificate,
+    CertificateKeyVaultProperties, Configuration, Container, ContainerResources, CustomDomain,
+    CustomDomainConfiguration, Dapr, DaprComponent, DaprMetadata, EnvironmentVar, IdentitySettings,
+    Ingress, ManagedEnvironment, RegistryCredentials, Scale, Secret, Template, TrackedResource,
+    TrafficWeight, VnetConfiguration, WorkloadProfile,
 };
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
@@ -219,7 +220,7 @@ pub struct ContainerAppProperties {
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub provisioning_state: Option<ContainerAppPropertiesProvisioningState>,
+    pub provisioning_state: Option<container_app::properties::ProvisioningState>,
     #[serde(
         rename = "runningStatus",
         default,
@@ -234,184 +235,6 @@ pub struct ContainerAppProperties {
         skip_serializing_if = "Option::is_none"
     )]
     pub workload_profile_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ContainerAppPropertiesProvisioningState {
-    InProgress,
-    Succeeded,
-    Failed,
-    Canceled,
-    Deleting,
-}
-
-impl std::fmt::Display for ContainerAppPropertiesProvisioningState {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::InProgress => "InProgress",
-            Self::Succeeded => "Succeeded",
-            Self::Failed => "Failed",
-            Self::Canceled => "Canceled",
-            Self::Deleting => "Deleting",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Configuration {
-    /// Active revision mode.
-    #[serde(rename = "activeRevisionsMode", default)]
-    pub active_revisions_mode: ConfigurationActiveRevisionsMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dapr: Option<Dapr>,
-    #[serde(
-        rename = "identitySettings",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub identity_settings: Vec<IdentitySettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ingress: Option<Ingress>,
-    #[serde(
-        rename = "maxInactiveRevisions",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub max_inactive_revisions: Option<i32>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub registries: Vec<RegistryCredentials>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime: Option<serde_json::Value>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub secrets: Vec<Secret>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service: Option<serde_json::Value>,
-}
-
-impl Default for Configuration {
-    fn default() -> Self {
-        Self {
-            active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
-            dapr: None,
-            identity_settings: vec![],
-            ingress: None,
-            max_inactive_revisions: None,
-            registries: vec![],
-            runtime: None,
-            secrets: vec![],
-            service: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ConfigurationActiveRevisionsMode {
-    Multiple,
-    Single,
-}
-
-impl Default for ConfigurationActiveRevisionsMode {
-    fn default() -> Self {
-        Self::Single
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Ingress {
-    #[serde(
-        rename = "additionalPortMappings",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub additional_port_mappings: Vec<serde_json::Value>,
-    #[serde(rename = "allowInsecure", default)]
-    pub allow_insecure: bool,
-    #[serde(
-        rename = "clientCertificateMode",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub client_certificate_mode: Option<serde_json::Value>,
-    #[serde(
-        rename = "corsPolicy",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cors_policy: Option<serde_json::Value>,
-    #[serde(
-        rename = "customDomains",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub custom_domains: Vec<CustomDomain>,
-    #[serde(
-        rename = "exposedPort",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub exposed_port: Option<i32>,
-    #[serde(default)]
-    pub external: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fqdn: Option<String>,
-    #[serde(
-        rename = "ipSecurityRestrictions",
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub ip_security_restrictions: Vec<serde_json::Value>,
-    #[serde(
-        rename = "stickySessions",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub sticky_sessions: Option<serde_json::Value>,
-    #[serde(
-        rename = "targetPort",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub target_port: Option<i32>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub traffic: Vec<TrafficWeight>,
-    #[serde(default)]
-    pub transport: IngressTransport,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IngressTransport {
-    #[serde(rename = "auto")]
-    Auto,
-    #[serde(rename = "http")]
-    Http,
-    #[serde(rename = "http2")]
-    Http2,
-    #[serde(rename = "tcp")]
-    Tcp,
-}
-
-impl Default for IngressTransport {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,9 +1,8 @@
 use crate::azure_container_apps::{
-    certificate, custom_domain, dapr, identity_settings, BaseContainer, Certificate,
-    CertificateKeyVaultProperties, Configuration, ConfigurationActiveRevisionsMode, Container,
-    ContainerApp, ContainerAppProperties, ContainerAppPropertiesProvisioningState,
-    ContainerResources, CustomDomain, Dapr, EnvironmentVar, IdentitySettings,
-    Ingress as AzureContainerAppsIngress, IngressTransport, ManagedServiceIdentity,
+    certificate, configuration, container_app, custom_domain, dapr, identity_settings, ingress,
+    BaseContainer, Certificate, CertificateKeyVaultProperties, Configuration, Container,
+    ContainerApp, ContainerAppProperties, ContainerResources, CustomDomain, Dapr, EnvironmentVar,
+    IdentitySettings, Ingress as AzureContainerAppsIngress, ManagedServiceIdentity,
     ManagedServiceIdentityType, RegistryCredentials, Scale, Secret, Template, TrackedResource,
     TrafficWeight, UserAssignedIdentities, UserAssignedIdentity,
 };
@@ -821,7 +820,7 @@ impl AzureWorkerController {
             Ok(app) => {
                 if let Some(props) = &app.properties {
                     match props.provisioning_state.as_ref() {
-                        Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
+                        Some(container_app::properties::ProvisioningState::Succeeded) => {
                             info!(name=%container_app_name, "Provisioning succeeded – configuring Dapr components");
                             self.handle_creation_completed(ctx, &app);
 
@@ -860,14 +859,14 @@ impl AzureWorkerController {
                                 suggested_delay: None,
                             })
                         }
-                        Some(ContainerAppPropertiesProvisioningState::InProgress) => {
+                        Some(container_app::properties::ProvisioningState::InProgress) => {
                             debug!(name=%container_app_name, "Provisioning still in progress");
                             Ok(HandlerAction::Stay {
                                 max_times: 60,
                                 suggested_delay: Some(Duration::from_secs(10)),
                             })
                         }
-                        Some(ContainerAppPropertiesProvisioningState::Failed) => {
+                        Some(container_app::properties::ProvisioningState::Failed) => {
                             error!(name=%container_app_name, "Container app provisioning failed");
                             Err(AlienError::new(ErrorData::CloudPlatformError {
                                 message: "Container app provisioning failed".to_string(),
@@ -1957,9 +1956,8 @@ impl AzureWorkerController {
 
         // Verify Container App is in Succeeded state - drift is non-retryable
         if let Some(properties) = &container_app.properties {
-            use crate::azure_container_apps::ContainerAppPropertiesProvisioningState;
             if properties.provisioning_state
-                == Some(ContainerAppPropertiesProvisioningState::Failed)
+                == Some(container_app::properties::ProvisioningState::Failed)
             {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: func_cfg.id.clone(),
@@ -2308,7 +2306,7 @@ impl AzureWorkerController {
 
         if let Some(props) = &app.properties {
             match props.provisioning_state.as_ref() {
-                Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
+                Some(container_app::properties::ProvisioningState::Succeeded) => {
                     info!(name=%container_app_name, "Update provisioning succeeded – updating Dapr components");
 
                     let container_app_url = self.extract_url_from_container_app(&app);
@@ -2326,13 +2324,13 @@ impl AzureWorkerController {
                         suggested_delay: None,
                     })
                 }
-                Some(ContainerAppPropertiesProvisioningState::InProgress) => {
+                Some(container_app::properties::ProvisioningState::InProgress) => {
                     Ok(HandlerAction::Stay {
                         max_times: 60,
                         suggested_delay: Some(Duration::from_secs(10)),
                     })
                 }
-                Some(ContainerAppPropertiesProvisioningState::Failed) => {
+                Some(container_app::properties::ProvisioningState::Failed) => {
                     Err(AlienError::new(ErrorData::CloudPlatformError {
                         message: "Container app update failed".to_string(),
                         resource_id: Some(func_cfg.id.clone()),
@@ -3856,7 +3854,7 @@ impl AzureWorkerController {
 
         let ingress_cfg = if func.ingress == Ingress::Public {
             Some(AzureContainerAppsIngress {
-                external: true,
+                external: Some(true),
                 target_port: Some(8080),
                 traffic: vec![TrafficWeight {
                     weight: Some(100),
@@ -3864,8 +3862,8 @@ impl AzureWorkerController {
                     revision_name: None,
                     label: None,
                 }],
-                transport: IngressTransport::Auto,
-                allow_insecure: false,
+                transport: Some(ingress::Transport::Auto),
+                allow_insecure: Some(false),
                 additional_port_mappings: vec![],
                 custom_domains: vec![],
                 ip_security_restrictions: vec![],
@@ -3873,6 +3871,7 @@ impl AzureWorkerController {
                 client_certificate_mode: None,
                 exposed_port: None,
                 sticky_sessions: None,
+                target_port_http_scheme: None,
                 fqdn: None,
             })
         } else {
@@ -3988,7 +3987,7 @@ impl AzureWorkerController {
         };
 
         let configuration = Configuration {
-            active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
+            active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
             dapr: dapr_config,
             identity_settings: identity_resource_ids
                 .iter()
@@ -4523,9 +4522,9 @@ mod tests {
     use std::time::Duration;
 
     use crate::azure_container_apps::{
-        Configuration, ConfigurationActiveRevisionsMode, ContainerApp, ContainerAppProperties,
-        ContainerAppPropertiesProvisioningState, Ingress as AzureContainerAppsIngress,
-        IngressTransport, MockContainerAppsApi, MockLongRunningOperationApi, TrafficWeight,
+        configuration, container_app, ingress, Configuration, ContainerApp, ContainerAppProperties,
+        Ingress as AzureContainerAppsIngress, MockContainerAppsApi, MockLongRunningOperationApi,
+        TrafficWeight,
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
@@ -4619,7 +4618,7 @@ mod tests {
 
         let ingress = if has_url {
             Some(AzureContainerAppsIngress {
-                external: true,
+                external: Some(true),
                 target_port: Some(8080),
                 fqdn: fqdn.clone(),
                 traffic: vec![TrafficWeight {
@@ -4628,8 +4627,8 @@ mod tests {
                     revision_name: None,
                     label: None,
                 }],
-                transport: IngressTransport::Auto,
-                allow_insecure: false,
+                transport: Some(ingress::Transport::Auto),
+                allow_insecure: Some(false),
                 additional_port_mappings: vec![],
                 custom_domains: vec![],
                 ip_security_restrictions: vec![],
@@ -4637,6 +4636,7 @@ mod tests {
                 client_certificate_mode: None,
                 exposed_port: None,
                 sticky_sessions: None,
+                target_port_http_scheme: None,
             })
         } else {
             None
@@ -4650,10 +4650,10 @@ mod tests {
             name: Some(app_name.to_string()),
             location: "East US".to_string(),
             properties: Some(ContainerAppProperties {
-                provisioning_state: Some(ContainerAppPropertiesProvisioningState::Succeeded),
+                provisioning_state: Some(container_app::properties::ProvisioningState::Succeeded),
                 configuration: Some(Configuration {
                     ingress,
-                    active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
+                    active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
                     identity_settings: vec![],
                     registries: vec![],
                     secrets: Vec::new(),
@@ -4692,7 +4692,7 @@ mod tests {
             name: Some(app_name.to_string()),
             location: "East US".to_string(),
             properties: Some(ContainerAppProperties {
-                provisioning_state: Some(ContainerAppPropertiesProvisioningState::InProgress),
+                provisioning_state: Some(container_app::properties::ProvisioningState::InProgress),
                 outbound_ip_addresses: vec![],
                 custom_domain_verification_id: None,
                 environment_id: None,
@@ -5061,7 +5061,7 @@ mod tests {
         };
 
         let ingress = Some(AzureContainerAppsIngress {
-            external: true,
+            external: Some(true),
             target_port: Some(8080),
             fqdn: Some(custom_url.to_string()), // Use the full URL as FQDN for the test
             traffic: vec![TrafficWeight {
@@ -5070,8 +5070,8 @@ mod tests {
                 revision_name: None,
                 label: None,
             }],
-            transport: IngressTransport::Auto,
-            allow_insecure: false,
+            transport: Some(ingress::Transport::Auto),
+            allow_insecure: Some(false),
             additional_port_mappings: vec![],
             custom_domains: vec![],
             ip_security_restrictions: vec![],
@@ -5079,6 +5079,7 @@ mod tests {
             client_certificate_mode: None,
             exposed_port: None,
             sticky_sessions: None,
+            target_port_http_scheme: None,
         });
 
         ContainerApp {
@@ -5089,10 +5090,10 @@ mod tests {
             name: Some(app_name.to_string()),
             location: "East US".to_string(),
             properties: Some(ContainerAppProperties {
-                provisioning_state: Some(ContainerAppPropertiesProvisioningState::Succeeded),
+                provisioning_state: Some(container_app::properties::ProvisioningState::Succeeded),
                 configuration: Some(Configuration {
                     ingress,
-                    active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
+                    active_revisions_mode: Some(configuration::ActiveRevisionsMode::Single),
                     identity_settings: vec![],
                     registries: vec![],
                     secrets: Vec::new(),
