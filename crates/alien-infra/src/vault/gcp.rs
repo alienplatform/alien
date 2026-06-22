@@ -5,6 +5,7 @@ use tracing::{debug, info};
 
 use crate::core::{GetPolicyOptions, Policy, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
+use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::{
     GcpSecretManagerVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -330,18 +331,19 @@ impl GcpVaultController {
 
         let rm_client = ctx
             .service_provider
-            .get_gcp_resource_manager_client(gcp_config)?;
-        let current_policy = rm_client
-            .get_project_iam_policy(
-                gcp_config.project_id.clone(),
-                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get project IAM policy before binding vault management roles"
-                    .to_string(),
-                resource_id: Some(vault_id.to_string()),
-            })?;
+            .get_gcp_resource_manager_client(gcp_config)
+            .await?;
+        let current_policy = get_project_iam_policy(
+            &rm_client,
+            &gcp_config.project_id,
+            Some(GetPolicyOptions::new().set_requested_policy_version(3)),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to get project IAM policy before binding vault management roles"
+                .to_string(),
+            resource_id: Some(vault_id.to_string()),
+        })?;
 
         let member = format!("serviceAccount:{management_sa_email}");
         let owned_role_prefixes =
@@ -374,8 +376,7 @@ impl GcpVaultController {
             .set_audit_configs(current_policy.audit_configs)
             .set_etag(current_policy.etag);
 
-        rm_client
-            .set_project_iam_policy(gcp_config.project_id.clone(), new_policy, None)
+        set_project_iam_policy(&rm_client, &gcp_config.project_id, new_policy, None)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to bind vault management roles at project level".to_string(),

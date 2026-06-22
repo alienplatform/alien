@@ -85,7 +85,6 @@ pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
 use google_cloud_resourcemanager_v3::client::Projects;
-pub use google_cloud_resourcemanager_v3::model::Project;
 use google_cloud_scheduler_v1::client::CloudScheduler;
 use google_cloud_storage::{
     client::StorageControl,
@@ -1243,129 +1242,6 @@ impl ArtifactRegistryApi for OfficialGcpArtifactRegistryClient {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Artifact Registry get_operation request failed".to_string(),
                 resource_id: Some(operation_name),
-            })
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait ResourceManagerApi: Send + Sync + std::fmt::Debug {
-    async fn get_project_iam_policy(
-        &self,
-        project_id: String,
-        options: Option<GetPolicyOptions>,
-    ) -> Result<Policy>;
-
-    async fn set_project_iam_policy(
-        &self,
-        project_id: String,
-        policy: Policy,
-        update_mask: Option<String>,
-    ) -> Result<Policy>;
-
-    async fn get_project_metadata(&self, project_id: String) -> Result<Project>;
-}
-
-struct OfficialGcpResourceManagerClient {
-    config: GcpClientConfig,
-    client: OnceCell<Projects>,
-}
-
-impl std::fmt::Debug for OfficialGcpResourceManagerClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialGcpResourceManagerClient")
-            .field("project_id", &self.config.project_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialGcpResourceManagerClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<Projects> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                resource_manager_projects_client_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl ResourceManagerApi for OfficialGcpResourceManagerClient {
-    async fn get_project_iam_policy(
-        &self,
-        project_id: String,
-        options: Option<GetPolicyOptions>,
-    ) -> Result<Policy> {
-        let mut request = self
-            .client()
-            .await?
-            .get_iam_policy()
-            .set_resource(format!("projects/{project_id}"));
-        if let Some(options) = options {
-            request = request.set_options(options);
-        }
-
-        request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Resource Manager get_iam_policy request failed".to_string(),
-                resource_id: Some(project_id),
-            },
-        )
-    }
-
-    async fn set_project_iam_policy(
-        &self,
-        project_id: String,
-        policy: Policy,
-        update_mask: Option<String>,
-    ) -> Result<Policy> {
-        if let Some(update_mask) = update_mask {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Resource Manager set_project_iam_policy update_mask '{update_mask}' is not supported by the official adapter yet"
-                    ),
-                    resource_id: Some(project_id),
-                },
-            ));
-        }
-
-        let request = self
-            .client()
-            .await?
-            .set_iam_policy()
-            .set_resource(format!("projects/{project_id}"))
-            .set_policy(policy);
-
-        request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: "Resource Manager set_iam_policy request failed".to_string(),
-                resource_id: Some(project_id),
-            },
-        )
-    }
-
-    async fn get_project_metadata(&self, project_id: String) -> Result<Project> {
-        self.client()
-            .await?
-            .get_project()
-            .set_name(format!("projects/{project_id}"))
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Resource Manager get_project request failed".to_string(),
-                resource_id: Some(project_id),
             })
     }
 }
@@ -3993,10 +3869,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
     fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>>;
-    fn get_gcp_resource_manager_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn ResourceManagerApi>>;
+    async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects>;
     async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
     fn get_gcp_artifact_registry_client(
@@ -4297,13 +4170,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         Ok(Arc::new(OfficialGcpCloudRunClient::new(config.clone())))
     }
 
-    fn get_gcp_resource_manager_client(
-        &self,
-        config: &GcpClientConfig,
-    ) -> Result<Arc<dyn ResourceManagerApi>> {
-        Ok(Arc::new(OfficialGcpResourceManagerClient::new(
-            config.clone(),
-        )))
+    async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects> {
+        resource_manager_projects_client_from_alien_config(config).await
     }
 
     async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage> {

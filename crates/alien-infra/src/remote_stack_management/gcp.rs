@@ -6,6 +6,7 @@ use crate::core::{
     ResourceControllerContext, ResourcePermissionsHelper, ServiceAccount as GcpServiceAccount,
 };
 use crate::error::{ErrorData, Result};
+use crate::gcp_resource_manager::{get_project_iam_policy, set_project_iam_policy};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
     GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
@@ -260,14 +261,15 @@ impl GcpRemoteStackManagementController {
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
             .service_provider
-            .get_gcp_resource_manager_client(gcp_config)?;
+            .get_gcp_resource_manager_client(gcp_config)
+            .await?;
 
-        let current_policy = rm_client
-            .get_project_iam_policy(
-                project_id.clone(),
-                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-            )
-            .await
+        let current_policy = get_project_iam_policy(
+            &rm_client,
+            project_id,
+            Some(GetPolicyOptions::new().set_requested_policy_version(3)),
+        )
+        .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -291,8 +293,7 @@ impl GcpRemoteStackManagementController {
                 .set_audit_configs(current_policy.audit_configs)
                 .set_etag(current_policy.etag);
 
-            rm_client
-                .set_project_iam_policy(project_id.clone(), new_policy, None)
+            set_project_iam_policy(&rm_client, project_id, new_policy, None)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -503,14 +504,15 @@ impl GcpRemoteStackManagementController {
             let project_id = &gcp_config.project_id;
             let rm_client = ctx
                 .service_provider
-                .get_gcp_resource_manager_client(gcp_config)?;
+                .get_gcp_resource_manager_client(gcp_config)
+                .await?;
 
-            match rm_client
-                .get_project_iam_policy(
-                    project_id.clone(),
-                    Some(GetPolicyOptions::new().set_requested_policy_version(3)),
-                )
-                .await
+            match get_project_iam_policy(
+                &rm_client,
+                project_id,
+                Some(GetPolicyOptions::new().set_requested_policy_version(3)),
+            )
+            .await
             {
                 Ok(mut current_policy) => {
                     let service_account_member =
@@ -523,8 +525,7 @@ impl GcpRemoteStackManagementController {
                         None,
                     );
 
-                    rm_client
-                        .set_project_iam_policy(project_id.clone(), current_policy, None)
+                    set_project_iam_policy(&rm_client, project_id, current_policy, None)
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to unbind roles from management service account '{}' at project level", service_account_email),

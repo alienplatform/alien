@@ -9,6 +9,8 @@ pub use gcp_compute::*;
 
 pub mod gcp_cloudrun;
 
+mod gcp_resource_manager;
+
 mod error;
 pub use error::*;
 
