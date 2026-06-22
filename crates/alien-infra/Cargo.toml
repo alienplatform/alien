@@ -190,5 +190,6 @@ tracing-subscriber = { workspace = true }
 aws-smithy-mocks = { workspace = true }
 aws-smithy-async = { workspace = true, features = ["rt-tokio"] }
 aws-sdk-codebuild = { workspace = true, features = ["test-util"] }
+aws-sdk-dynamodb = { workspace = true, features = ["test-util"] }
 aws-sdk-sqs = { workspace = true, features = ["test-util"] }
 aws-sdk-ssm = { workspace = true, features = ["test-util"] }

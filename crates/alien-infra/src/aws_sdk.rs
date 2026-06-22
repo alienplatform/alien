@@ -8,17 +8,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_acm::Client as AcmClient;
 use aws_sdk_apigatewayv2::Client as ApiGatewayV2Client;
 use aws_sdk_codebuild::Client as CodeBuildClient;
-use aws_sdk_dynamodb::{
-    operation::{
-        delete_table::DeleteTableError, describe_table::DescribeTableError,
-        describe_time_to_live::DescribeTimeToLiveError,
-    },
-    types::{
-        AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
-        Tag as DynamoDbTag, TimeToLiveSpecification,
-    },
-    Client as DynamoDbClient,
-};
+use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
@@ -91,10 +81,6 @@ pub use aws_sdk_apigatewayv2::{
         DomainNameConfiguration as ApiGatewayV2DomainNameConfiguration, EndpointType,
         IntegrationType, ProtocolType, SecurityPolicy,
     },
-};
-
-pub use aws_sdk_dynamodb::types::{
-    TableDescription as DynamoDbTableDescription, TimeToLiveDescription as DynamoDbTtlDescription,
 };
 
 pub use aws_sdk_ec2::{
@@ -449,25 +435,6 @@ pub trait EventBridgeApi: Send + Sync {
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
     /// Delete a rule.
     async fn delete_rule(&self, rule_name: &str) -> Result<()>;
-}
-
-/// Minimal DynamoDB operations required by infra controllers.
-#[async_trait]
-pub trait DynamoDbApi: Send + Sync {
-    /// Create the KV table shape used by Alien.
-    async fn create_kv_table(&self, table_name: &str, tags: HashMap<String, String>) -> Result<()>;
-
-    /// Describe a table, returning None when the table is not found.
-    async fn describe_table(&self, table_name: &str) -> Result<Option<DynamoDbTableDescription>>;
-
-    /// Enable DynamoDB TTL on the named attribute.
-    async fn enable_ttl(&self, table_name: &str, attribute_name: &str) -> Result<()>;
-
-    /// Describe TTL metadata for a table.
-    async fn describe_ttl(&self, table_name: &str) -> Result<Option<DynamoDbTtlDescription>>;
-
-    /// Delete a table. Returns false when it was already absent.
-    async fn delete_table(&self, table_name: &str) -> Result<bool>;
 }
 
 /// Minimal ECR operations required by infra artifact registry controllers.
@@ -1730,159 +1697,6 @@ impl EventBridgeApi for EventBridgeClient {
 }
 
 #[async_trait]
-#[async_trait]
-impl DynamoDbApi for DynamoDbClient {
-    async fn create_kv_table(&self, table_name: &str, tags: HashMap<String, String>) -> Result<()> {
-        let key_schema = vec![
-            KeySchemaElement::builder()
-                .attribute_name("pk")
-                .key_type(KeyType::Hash)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build DynamoDB partition key schema".to_string(),
-                    resource_id: None,
-                })?,
-            KeySchemaElement::builder()
-                .attribute_name("sk")
-                .key_type(KeyType::Range)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build DynamoDB sort key schema".to_string(),
-                    resource_id: None,
-                })?,
-        ];
-
-        let attribute_definitions = vec![
-            AttributeDefinition::builder()
-                .attribute_name("pk")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build DynamoDB partition key attribute definition"
-                        .to_string(),
-                    resource_id: None,
-                })?,
-            AttributeDefinition::builder()
-                .attribute_name("sk")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build DynamoDB sort key attribute definition".to_string(),
-                    resource_id: None,
-                })?,
-        ];
-
-        let tags = tags
-            .into_iter()
-            .map(|(key, value)| {
-                DynamoDbTag::builder()
-                    .key(key)
-                    .value(value)
-                    .build()
-                    .into_alien_error()
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to build DynamoDB tag for table '{table_name}'"),
-                        resource_id: None,
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.create_table()
-            .table_name(table_name)
-            .set_key_schema(Some(key_schema))
-            .set_attribute_definitions(Some(attribute_definitions))
-            .billing_mode(BillingMode::PayPerRequest)
-            .set_tags(Some(tags))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("DynamoDB CreateTable API failed for table '{table_name}'"),
-                resource_id: None,
-            })?;
-
-        Ok(())
-    }
-
-    async fn describe_table(&self, table_name: &str) -> Result<Option<DynamoDbTableDescription>> {
-        match self.describe_table().table_name(table_name).send().await {
-            Ok(output) => Ok(output.table().cloned()),
-            Err(err) if is_dynamodb_table_not_found(&err) => Ok(None),
-            Err(err) => Err(err
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("DynamoDB DescribeTable API failed for table '{table_name}'"),
-                    resource_id: None,
-                })),
-        }
-    }
-
-    async fn enable_ttl(&self, table_name: &str, attribute_name: &str) -> Result<()> {
-        let ttl_spec = TimeToLiveSpecification::builder()
-            .attribute_name(attribute_name)
-            .enabled(true)
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to build DynamoDB TTL specification for table '{table_name}'"
-                ),
-                resource_id: None,
-            })?;
-
-        self.update_time_to_live()
-            .table_name(table_name)
-            .time_to_live_specification(ttl_spec)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("DynamoDB UpdateTimeToLive API failed for table '{table_name}'"),
-                resource_id: None,
-            })?;
-
-        Ok(())
-    }
-
-    async fn describe_ttl(&self, table_name: &str) -> Result<Option<DynamoDbTtlDescription>> {
-        match self
-            .describe_time_to_live()
-            .table_name(table_name)
-            .send()
-            .await
-        {
-            Ok(output) => Ok(output.time_to_live_description().cloned()),
-            Err(err) if is_dynamodb_ttl_table_not_found(&err) => Ok(None),
-            Err(err) => Err(err
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "DynamoDB DescribeTimeToLive API failed for table '{table_name}'"
-                    ),
-                    resource_id: None,
-                })),
-        }
-    }
-
-    async fn delete_table(&self, table_name: &str) -> Result<bool> {
-        match self.delete_table().table_name(table_name).send().await {
-            Ok(_) => Ok(true),
-            Err(err) if is_dynamodb_delete_table_not_found(&err) => Ok(false),
-            Err(err) => Err(err
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("DynamoDB DeleteTable API failed for table '{table_name}'"),
-                    resource_id: None,
-                })),
-        }
-    }
-}
-
-#[async_trait]
 impl EcrApi for EcrClient {
     async fn describe_repositories(
         &self,
@@ -2983,30 +2797,6 @@ impl S3Api for S3Client {
 
         Ok(())
     }
-}
-
-fn is_dynamodb_table_not_found(
-    error: &aws_sdk_dynamodb::error::SdkError<DescribeTableError>,
-) -> bool {
-    error
-        .as_service_error()
-        .is_some_and(DescribeTableError::is_resource_not_found_exception)
-}
-
-fn is_dynamodb_ttl_table_not_found(
-    error: &aws_sdk_dynamodb::error::SdkError<DescribeTimeToLiveError>,
-) -> bool {
-    error
-        .as_service_error()
-        .is_some_and(DescribeTimeToLiveError::is_resource_not_found_exception)
-}
-
-fn is_dynamodb_delete_table_not_found(
-    error: &aws_sdk_dynamodb::error::SdkError<DeleteTableError>,
-) -> bool {
-    error
-        .as_service_error()
-        .is_some_and(DeleteTableError::is_resource_not_found_exception)
 }
 
 fn ec2_result<T, E>(

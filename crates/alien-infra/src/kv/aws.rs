@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::aws_sdk::{DynamoDbTableDescription, DynamoDbTtlDescription};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -12,8 +12,20 @@ use alien_core::{
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
+use aws_sdk_dynamodb::{
+    error::SdkError,
+    operation::{
+        delete_table::DeleteTableError, describe_table::DescribeTableError,
+        describe_time_to_live::DescribeTimeToLiveError,
+    },
+    types::{
+        AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
+        TableDescription, Tag as DynamoDbTag, TimeToLiveDescription, TimeToLiveSpecification,
+    },
+    Client as DynamoDbClient,
+};
 use chrono::Utc;
 
 /// Generates the full, prefixed AWS DynamoDB table name.
@@ -52,16 +64,16 @@ impl AwsKvController {
             .get_aws_dynamodb_client(aws_config)
             .await?;
 
-        client
-            .create_kv_table(
-                &table_name,
-                standard_resource_tags(ctx.resource_prefix, &config.id),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create DynamoDB table '{}'", table_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        create_dynamodb_kv_table(
+            &client,
+            &table_name,
+            standard_resource_tags(ctx.resource_prefix, &config.id),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create DynamoDB table '{}'", table_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.table_name = Some(table_name.clone());
         info!(table_name=%table_name, "DynamoDB table creation initiated");
@@ -97,7 +109,7 @@ impl AwsKvController {
 
         debug!(table_name=%table_name, "Checking DynamoDB table status");
 
-        match client.describe_table(table_name).await {
+        match describe_dynamodb_table(&client, table_name).await {
             Ok(Some(table)) => {
                 match table.table_status().map(|status| status.as_str()) {
                     Some("ACTIVE") => {
@@ -172,8 +184,7 @@ impl AwsKvController {
 
         info!(table_name=%table_name, "Enabling TTL on DynamoDB table");
 
-        client
-            .enable_ttl(table_name, "ttl")
+        enable_dynamodb_ttl(&client, table_name, "ttl")
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to enable TTL on DynamoDB table '{}'", table_name),
@@ -240,7 +251,7 @@ impl AwsKvController {
             .await?;
 
         // Heartbeat check: verify table still exists and is active
-        match client.describe_table(table_name).await {
+        match describe_dynamodb_table(&client, table_name).await {
             Ok(Some(table)) => {
                 if table.table_status().map(|status| status.as_str()) != Some("ACTIVE") {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -252,21 +263,22 @@ impl AwsKvController {
                     }));
                 }
 
-                let (ttl_description, ttl_issue) = match client.describe_ttl(table_name).await {
-                    Ok(ttl_description) => (ttl_description, None),
-                    Err(e) => (
-                        None,
-                        Some(HeartbeatCollectionIssue {
-                            source: "ttl".to_string(),
-                            reason: HeartbeatCollectionIssueReason::CollectionFailed,
-                            severity: HeartbeatIssueSeverity::Warning,
-                            message: format!(
-                                "Failed to describe DynamoDB TTL metadata for table '{}': {}",
-                                table_name, e
-                            ),
-                        }),
-                    ),
-                };
+                let (ttl_description, ttl_issue) =
+                    match describe_dynamodb_ttl(&client, table_name).await {
+                        Ok(ttl_description) => (ttl_description, None),
+                        Err(e) => (
+                            None,
+                            Some(HeartbeatCollectionIssue {
+                                source: "ttl".to_string(),
+                                reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                                severity: HeartbeatIssueSeverity::Warning,
+                                message: format!(
+                                    "Failed to describe DynamoDB TTL metadata for table '{}': {}",
+                                    table_name, e
+                                ),
+                            }),
+                        ),
+                    };
 
                 emit_aws_dynamodb_kv_heartbeat(ctx, &config.id, table, ttl_description, ttl_issue);
             }
@@ -341,7 +353,7 @@ impl AwsKvController {
             .get_aws_dynamodb_client(aws_config)
             .await?;
 
-        match client.delete_table(table_name).await {
+        match delete_dynamodb_table(&client, table_name).await {
             Ok(true) => {
                 info!(table_name=%table_name, "DynamoDB table deletion initiated");
                 Ok(HandlerAction::Continue {
@@ -389,7 +401,7 @@ impl AwsKvController {
 
         debug!(table_name=%table_name, "Checking DynamoDB table deletion status");
 
-        match client.describe_table(table_name).await {
+        match describe_dynamodb_table(&client, table_name).await {
             Ok(Some(table)) => {
                 if table.table_status().map(|status| status.as_str()) == Some("DELETING") {
                     debug!(table_name=%table_name, "DynamoDB table still deleting");
@@ -504,11 +516,189 @@ impl AwsKvController {
     }
 }
 
+async fn create_dynamodb_kv_table(
+    client: &DynamoDbClient,
+    table_name: &str,
+    tags: HashMap<String, String>,
+) -> Result<()> {
+    let key_schema = vec![
+        KeySchemaElement::builder()
+            .attribute_name("pk")
+            .key_type(KeyType::Hash)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build DynamoDB partition key schema".to_string(),
+                resource_id: None,
+            })?,
+        KeySchemaElement::builder()
+            .attribute_name("sk")
+            .key_type(KeyType::Range)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build DynamoDB sort key schema".to_string(),
+                resource_id: None,
+            })?,
+    ];
+
+    let attribute_definitions = vec![
+        AttributeDefinition::builder()
+            .attribute_name("pk")
+            .attribute_type(ScalarAttributeType::S)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build DynamoDB partition key attribute definition".to_string(),
+                resource_id: None,
+            })?,
+        AttributeDefinition::builder()
+            .attribute_name("sk")
+            .attribute_type(ScalarAttributeType::S)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to build DynamoDB sort key attribute definition".to_string(),
+                resource_id: None,
+            })?,
+    ];
+
+    let tags = tags
+        .into_iter()
+        .map(|(key, value)| {
+            DynamoDbTag::builder()
+                .key(key)
+                .value(value)
+                .build()
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to build DynamoDB tag for table '{table_name}'"),
+                    resource_id: None,
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    client
+        .create_table()
+        .table_name(table_name)
+        .set_key_schema(Some(key_schema))
+        .set_attribute_definitions(Some(attribute_definitions))
+        .billing_mode(BillingMode::PayPerRequest)
+        .set_tags(Some(tags))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("DynamoDB CreateTable API failed for table '{table_name}'"),
+            resource_id: None,
+        })?;
+
+    Ok(())
+}
+
+async fn describe_dynamodb_table(
+    client: &DynamoDbClient,
+    table_name: &str,
+) -> Result<Option<TableDescription>> {
+    match client.describe_table().table_name(table_name).send().await {
+        Ok(output) => Ok(output.table().cloned()),
+        Err(err) if is_dynamodb_table_not_found(&err) => Ok(None),
+        Err(err) => Err(err
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("DynamoDB DescribeTable API failed for table '{table_name}'"),
+                resource_id: None,
+            })),
+    }
+}
+
+async fn enable_dynamodb_ttl(
+    client: &DynamoDbClient,
+    table_name: &str,
+    attribute_name: &str,
+) -> Result<()> {
+    let ttl_spec = TimeToLiveSpecification::builder()
+        .attribute_name(attribute_name)
+        .enabled(true)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to build DynamoDB TTL specification for table '{table_name}'"),
+            resource_id: None,
+        })?;
+
+    client
+        .update_time_to_live()
+        .table_name(table_name)
+        .time_to_live_specification(ttl_spec)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("DynamoDB UpdateTimeToLive API failed for table '{table_name}'"),
+            resource_id: None,
+        })?;
+
+    Ok(())
+}
+
+async fn describe_dynamodb_ttl(
+    client: &DynamoDbClient,
+    table_name: &str,
+) -> Result<Option<TimeToLiveDescription>> {
+    match client
+        .describe_time_to_live()
+        .table_name(table_name)
+        .send()
+        .await
+    {
+        Ok(output) => Ok(output.time_to_live_description().cloned()),
+        Err(err) if is_dynamodb_ttl_table_not_found(&err) => Ok(None),
+        Err(err) => Err(err
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("DynamoDB DescribeTimeToLive API failed for table '{table_name}'"),
+                resource_id: None,
+            })),
+    }
+}
+
+async fn delete_dynamodb_table(client: &DynamoDbClient, table_name: &str) -> Result<bool> {
+    match client.delete_table().table_name(table_name).send().await {
+        Ok(_) => Ok(true),
+        Err(err) if is_dynamodb_delete_table_not_found(&err) => Ok(false),
+        Err(err) => Err(err
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!("DynamoDB DeleteTable API failed for table '{table_name}'"),
+                resource_id: None,
+            })),
+    }
+}
+
+fn is_dynamodb_table_not_found(error: &SdkError<DescribeTableError>) -> bool {
+    error
+        .as_service_error()
+        .is_some_and(DescribeTableError::is_resource_not_found_exception)
+}
+
+fn is_dynamodb_ttl_table_not_found(error: &SdkError<DescribeTimeToLiveError>) -> bool {
+    error
+        .as_service_error()
+        .is_some_and(DescribeTimeToLiveError::is_resource_not_found_exception)
+}
+
+fn is_dynamodb_delete_table_not_found(error: &SdkError<DeleteTableError>) -> bool {
+    error
+        .as_service_error()
+        .is_some_and(DeleteTableError::is_resource_not_found_exception)
+}
+
 fn emit_aws_dynamodb_kv_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
-    table: DynamoDbTableDescription,
-    ttl_description: Option<DynamoDbTtlDescription>,
+    table: TableDescription,
+    ttl_description: Option<TimeToLiveDescription>,
     ttl_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let table_name = table
@@ -620,4 +810,196 @@ fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {
         .and_then(|arn| arn.split(':').nth(3))
         .filter(|region| !region.is_empty())
         .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alien_core::{Kv, Platform, ResourceStatus};
+    use aws_sdk_dynamodb::{
+        operation::{
+            create_table::CreateTableOutput, delete_table::DeleteTableOutput,
+            describe_table::DescribeTableOutput, update_time_to_live::UpdateTimeToLiveOutput,
+        },
+        types::{
+            AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
+            TableDescription, TableStatus,
+        },
+        Client,
+    };
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
+
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::kv::AwsKvController;
+
+    fn setup_mock_provider(dynamodb_client: Client) -> Arc<MockPlatformServiceProvider> {
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_dynamodb_client()
+            .returning(move |_| Ok(dynamodb_client.clone()));
+        Arc::new(provider)
+    }
+
+    fn table_description(table_name: &str, status: TableStatus) -> TableDescription {
+        let partition_key = KeySchemaElement::builder()
+            .attribute_name("pk")
+            .key_type(KeyType::Hash)
+            .build()
+            .expect("partition key schema should build");
+        let sort_key = KeySchemaElement::builder()
+            .attribute_name("sk")
+            .key_type(KeyType::Range)
+            .build()
+            .expect("sort key schema should build");
+        let partition_attribute = AttributeDefinition::builder()
+            .attribute_name("pk")
+            .attribute_type(ScalarAttributeType::S)
+            .build()
+            .expect("partition attribute should build");
+        let sort_attribute = AttributeDefinition::builder()
+            .attribute_name("sk")
+            .attribute_type(ScalarAttributeType::S)
+            .build()
+            .expect("sort attribute should build");
+
+        TableDescription::builder()
+            .table_name(table_name)
+            .table_status(status)
+            .table_arn(format!(
+                "arn:aws:dynamodb:us-east-1:123456789012:table/{}",
+                table_name
+            ))
+            .billing_mode_summary(
+                aws_sdk_dynamodb::types::BillingModeSummary::builder()
+                    .billing_mode(BillingMode::PayPerRequest)
+                    .build(),
+            )
+            .key_schema(partition_key)
+            .key_schema(sort_key)
+            .attribute_definitions(partition_attribute)
+            .attribute_definitions(sort_attribute)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_create_and_delete_flow_uses_sdk_native_dynamodb_mock() {
+        let kv = Kv::new("settings".to_string()).build();
+        let table_name = "test-settings";
+
+        let create_table_name = table_name.to_string();
+        let create_rule = mock!(Client::create_table)
+            .match_requests(move |request| {
+                request.table_name() == Some(create_table_name.as_str())
+                    && request.billing_mode() == Some(&BillingMode::PayPerRequest)
+                    && request
+                        .key_schema()
+                        .iter()
+                        .any(|key| key.attribute_name() == "pk" && key.key_type() == &KeyType::Hash)
+                    && request.key_schema().iter().any(|key| {
+                        key.attribute_name() == "sk" && key.key_type() == &KeyType::Range
+                    })
+                    && request.attribute_definitions().iter().any(|attr| {
+                        attr.attribute_name() == "pk"
+                            && attr.attribute_type() == &ScalarAttributeType::S
+                    })
+                    && request.attribute_definitions().iter().any(|attr| {
+                        attr.attribute_name() == "sk"
+                            && attr.attribute_type() == &ScalarAttributeType::S
+                    })
+            })
+            .then_output(|| CreateTableOutput::builder().build());
+
+        let describe_active_table_name = table_name.to_string();
+        let describe_active_output_name = table_name.to_string();
+        let describe_active_rule = mock!(Client::describe_table)
+            .match_requests(move |request| {
+                request.table_name() == Some(describe_active_table_name.as_str())
+            })
+            .then_output(move || {
+                DescribeTableOutput::builder()
+                    .table(table_description(
+                        &describe_active_output_name,
+                        TableStatus::Active,
+                    ))
+                    .build()
+            });
+
+        let ttl_table_name = table_name.to_string();
+        let ttl_rule = mock!(Client::update_time_to_live)
+            .match_requests(move |request| {
+                request.table_name() == Some(ttl_table_name.as_str())
+                    && request
+                        .time_to_live_specification()
+                        .map(|spec| spec.attribute_name() == "ttl" && spec.enabled())
+                        .unwrap_or(false)
+            })
+            .then_output(|| UpdateTimeToLiveOutput::builder().build());
+
+        let delete_table_name = table_name.to_string();
+        let delete_output_name = table_name.to_string();
+        let delete_rule = mock!(Client::delete_table)
+            .match_requests(move |request| request.table_name() == Some(delete_table_name.as_str()))
+            .then_output(move || {
+                DeleteTableOutput::builder()
+                    .table_description(table_description(
+                        &delete_output_name,
+                        TableStatus::Deleting,
+                    ))
+                    .build()
+            });
+
+        let describe_deleted_table_name = table_name.to_string();
+        let describe_deleted_rule = mock!(Client::describe_table)
+            .match_requests(move |request| {
+                request.table_name() == Some(describe_deleted_table_name.as_str())
+            })
+            .then_output(|| DescribeTableOutput::builder().build());
+
+        let dynamodb_client = mock_client!(
+            aws_sdk_dynamodb,
+            RuleMode::Sequential,
+            [
+                &create_rule,
+                &describe_active_rule,
+                &ttl_rule,
+                &delete_rule,
+                &describe_deleted_rule
+            ],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+        let mock_provider = setup_mock_provider(dynamodb_client);
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(kv)
+            .controller(AwsKvController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create flow should complete");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(executor.outputs().is_some());
+
+        executor.delete().expect("delete should start");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete flow should complete");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(executor.outputs().is_none());
+
+        assert_eq!(create_rule.num_calls(), 1);
+        assert_eq!(describe_active_rule.num_calls(), 1);
+        assert_eq!(ttl_rule.num_calls(), 1);
+        assert_eq!(delete_rule.num_calls(), 1);
+        assert_eq!(describe_deleted_rule.num_calls(), 1);
+    }
 }
