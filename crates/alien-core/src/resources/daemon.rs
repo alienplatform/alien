@@ -57,15 +57,6 @@ pub struct Daemon {
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
-    /// When true, the auto-generated ComputeCluster for this daemon is
-    /// constrained to instance types that expose nested virtualization
-    /// (VT-x/EPT) to guest VMs. Required by workloads that boot QEMU/KVM
-    /// inside the container (e.g. bear-agent's sandboxes).
-    /// Defaults to false; ignored on platforms whose backends don't pick
-    /// instance types (Kubernetes, Local).
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub nested_virtualization: bool,
 }
 
 impl Daemon {
@@ -228,56 +219,4 @@ mod tests {
         assert_eq!(roundtrip.resource_type().as_ref(), "daemon");
     }
 
-    /// `nested_virtualization` survives a JSON roundtrip and is exposed under
-    /// the `nestedVirtualization` camelCase key the TS surface produces.
-    /// Catches accidental serde rename divergence and `skip_serializing_if`
-    /// stripping the field when set to `true`.
-    #[test]
-    fn daemon_nested_virtualization_serde_roundtrip() {
-        let daemon = Daemon::new("bear-agent".to_string())
-            .code(DaemonCode::Image {
-                image: "bear-agent:latest".to_string(),
-            })
-            .cluster("compute".to_string())
-            .permissions("loader".to_string())
-            .nested_virtualization(true)
-            .build();
-
-        let json = serde_json::to_value(&daemon).expect("daemon should serialize");
-        assert_eq!(
-            json["nestedVirtualization"], true,
-            "field must serialize as camelCase nestedVirtualization=true (TS surface expects this)"
-        );
-
-        let roundtrip: Daemon =
-            serde_json::from_value(json).expect("daemon should deserialize from camelCase JSON");
-        assert!(
-            roundtrip.nested_virtualization,
-            "nested_virtualization must survive the roundtrip"
-        );
-    }
-
-    /// Default `nested_virtualization = false` is omitted from JSON by
-    /// `skip_serializing_if = "std::ops::Not::not"`. Keeps the customer-facing
-    /// JSON minimal and avoids gratuitous diffs in stored deployment state.
-    #[test]
-    fn daemon_default_nested_virtualization_is_omitted_from_json() {
-        let daemon = Daemon::new("regular".to_string())
-            .code(DaemonCode::Image {
-                image: "regular:latest".to_string(),
-            })
-            .permissions("default".to_string())
-            .build();
-
-        let json = serde_json::to_value(&daemon).expect("daemon should serialize");
-        assert!(
-            json.get("nestedVirtualization").is_none(),
-            "default false should be omitted, got: {json}"
-        );
-
-        // And deserializing JSON without the field defaults to false.
-        let roundtrip: Daemon =
-            serde_json::from_value(json).expect("daemon should deserialize without the field");
-        assert!(!roundtrip.nested_virtualization);
-    }
 }

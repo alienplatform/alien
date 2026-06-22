@@ -35,7 +35,7 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
                 .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         for (resource_id, entry) in &stack.resources {
@@ -44,7 +44,7 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
             };
 
             for group in &cluster.capacity_groups {
-                if group.instance_type.is_none() {
+                let Some(instance_type) = group.instance_type.as_deref() else {
                     errors.push(format!(
                         "ComputeCluster '{}' capacity group '{}': instance_type is not set. \
                         This is required for cloud platforms. If using an auto-generated cluster, \
@@ -52,15 +52,26 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
                         manually, set instance_type explicitly.",
                         resource_id, group.group_id
                     ));
-                }
+                    continue;
+                };
 
-                if group.profile.is_none() {
+                // Profile may be None on customer-declared groups; the
+                // backfill step in ComputeClusterMutation resolves it from
+                // the instance catalog at deployment time. Here we only
+                // require that the resolution will succeed — i.e. the
+                // instance_type is in the catalog. If it isn't, neither
+                // backfill nor downstream provisioning will work, so we
+                // surface that early.
+                if group.profile.is_none()
+                    && alien_core::instance_catalog::find_instance_type(platform, instance_type)
+                        .is_none()
+                {
                     errors.push(format!(
-                        "ComputeCluster '{}' capacity group '{}': profile is not set. \
-                        This is required for cloud platforms (the managed container backend needs the machine profile \
-                        for capacity planning). If using an auto-generated cluster, this should \
-                        be resolved by ComputeClusterMutation.",
-                        resource_id, group.group_id
+                        "ComputeCluster '{}' capacity group '{}': profile is not set and \
+                        instance_type '{}' is not in the {:?} instance catalog \
+                        (cannot derive profile). Set `profile` explicitly or pick a \
+                        catalog-known instance_type.",
+                        resource_id, group.group_id, instance_type, platform
                     ));
                 }
             }
@@ -151,7 +162,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fails_without_profile() {
+    async fn test_passes_without_profile_when_instance_type_is_catalog_known() {
+        // No `profile` set, but `instance_type` is in the catalog → the
+        // mutation phase will derive `profile` from the catalog entry, so
+        // the check passes.
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
@@ -166,8 +180,30 @@ mod tests {
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(result.success, "should pass: {:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn test_fails_without_profile_when_instance_type_unknown() {
+        // No `profile` and instance_type is NOT in the catalog → backfill
+        // can't help, so surface the error.
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("fictional.42xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 10,
+                nested_virtualization: None,
+            })
+            .build();
+
+        let stack = make_stack(cluster);
+        let check = CapacityGroupProfileCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(!result.success);
-        assert!(result.errors[0].contains("profile is not set"));
+        assert!(result.errors[0].contains("not in the"));
+        assert!(result.errors[0].contains("instance catalog"));
     }
 
     #[tokio::test]

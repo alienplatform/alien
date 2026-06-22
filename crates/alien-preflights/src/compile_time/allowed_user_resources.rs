@@ -34,6 +34,10 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "vault",
             "container",
             "service-account",
+            // Customer-declarable to express pool/capacity-group config
+            // (instance type, sizing, nestedVirtualization). Auto-generated
+            // by the ComputeClusterMutation when not declared.
+            "compute-cluster",
         ]);
         let mut errors = Vec::new();
 

@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "description": "GPU specification for a capacity group.",
+  "required": ["type", "count"],
+  "properties": {
+    "count": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Number of GPUs per machine",
+      "minimum": 0
+    },
+    "type": {
+      "type": "string",
+      "description": "GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")"
+    }
+  },
+  "x-readme-ref-name": "GpuSpec"
+}

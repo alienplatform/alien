@@ -75,6 +75,16 @@ impl StackMutation for ComputeClusterMutation {
             .find(|e| e.config.resource_type().as_ref() == "compute-cluster")
         {
             if let Some(cluster) = cluster_entry.config.downcast_ref::<ComputeCluster>() {
+                // Any customer-declared capacity group that's missing
+                // `profile` needs the backfill mutation to run so the
+                // controller sees a complete CapacityGroup.
+                if cluster
+                    .capacity_groups
+                    .iter()
+                    .any(|g| g.profile.is_none())
+                {
+                    return true;
+                }
                 let existing: Vec<&str> = cluster
                     .capacity_groups
                     .iter()
@@ -106,15 +116,63 @@ impl StackMutation for ComputeClusterMutation {
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "compute-cluster");
 
-        if !has_cluster {
-            return self.create_cluster(stack, stack_state).await;
+        let stack = if !has_cluster {
+            self.create_cluster(stack, stack_state).await?
         } else {
-            return self.add_missing_capacity_groups(stack, stack_state).await;
-        }
+            self.add_missing_capacity_groups(stack, stack_state).await?
+        };
+
+        // Backfill any missing `profile` from `instance_type` on
+        // customer-declared capacity groups. The compile-time
+        // CapacityGroupProfileCheck requires both fields for cloud
+        // platforms; the customer-facing SDK lets you set `instanceType`
+        // alone, so we derive the profile from the instance catalog here.
+        Ok(self.backfill_capacity_group_profiles(stack, stack_state))
     }
 }
 
 impl ComputeClusterMutation {
+    /// Backfill `profile` on every ComputeCluster capacity group whose
+    /// `instance_type` is set but whose `profile` is None. Looking up the
+    /// catalog entry by instance type gives us the canonical machine
+    /// profile (CPU, memory, ephemeral storage, GPU) without making the
+    /// customer specify all four. Customer-declared groups that omit
+    /// `instance_type` are left alone — the downstream
+    /// `CapacityGroupProfileCheck` will surface a clear error and the
+    /// auto-generated groups go through `build_capacity_group_for_id`
+    /// which already sets both fields.
+    fn backfill_capacity_group_profiles(
+        &self,
+        mut stack: Stack,
+        stack_state: &StackState,
+    ) -> Stack {
+        if !matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            return stack;
+        }
+        for entry in stack.resources.values_mut() {
+            let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                continue;
+            };
+            for group in cluster.capacity_groups.iter_mut() {
+                if group.profile.is_some() {
+                    continue;
+                }
+                let Some(instance) = group.instance_type.as_deref() else {
+                    continue;
+                };
+                if let Some(spec) =
+                    alien_core::instance_catalog::find_instance_type(stack_state.platform, instance)
+                {
+                    group.profile = Some(spec.to_machine_profile());
+                }
+            }
+        }
+        stack
+    }
+
     async fn create_cluster(&self, mut stack: Stack, stack_state: &StackState) -> Result<Stack> {
         info!("Auto-generating ComputeCluster for containers in stack");
         // If a daemon explicitly references a cluster, use its name so the
@@ -133,37 +191,18 @@ impl ComputeClusterMutation {
             .filter(|c| c.cluster.is_none())
             .collect();
 
-        // Build capacity groups, categorized by hardware needs for cloud platforms.
-        // Propagate `nested_virtualization` from any daemon in this cluster
-        // up to every capacity group. (At least one daemon needing nested
-        // virt is enough to constrain the whole pool — daemons share hosts.)
-        // We compute this BEFORE building capacity groups so the instance-type
-        // selector can restrict its candidates to nested-virt-capable
-        // families (m8i/c8i/r8i on AWS); otherwise the selector might
-        // return a t-class or *7g instance that AWS rejects at RunInstances
-        // with `nested virtualization is not supported for this instance type`.
-        let needs_nested_virt = stack
-            .resources
-            .values()
-            .filter_map(|entry| entry.config.downcast_ref::<Daemon>())
-            .any(|d| d.cluster.as_deref() == Some(cluster_id.as_str()) && d.nested_virtualization);
-
-        let mut capacity_groups = build_categorized_capacity_groups(
-            &containers,
-            stack_state.platform,
-            needs_nested_virt,
-        )?;
-
-        if needs_nested_virt {
-            for group in &mut capacity_groups {
-                group.nested_virtualization = Some(true);
-            }
-        }
+        // Build capacity groups, categorized by hardware needs for cloud
+        // platforms. Auto-generated clusters never carry a nested-virtualization
+        // requirement — that's a hardware capability the customer has to opt
+        // into by declaring a ComputeCluster explicitly with a capacity group
+        // whose `nestedVirtualization: true` is set. The preflight does not
+        // smuggle the flag in from workloads.
+        let capacity_groups =
+            build_categorized_capacity_groups(&containers, stack_state.platform, false)?;
 
         info!(
             platform = %stack_state.platform,
             groups = capacity_groups.len(),
-            nested_virtualization = needs_nested_virt,
             "Creating ComputeCluster with {} capacity group(s)",
             capacity_groups.len()
         );
@@ -298,15 +337,11 @@ impl ComputeClusterMutation {
         new_group_ids.sort();
         new_group_ids.dedup();
 
-        // Detect nested-virt requirement the same way `create_cluster` does
-        // so newly-added capacity groups on an existing cluster also pick
-        // nested-virt-capable instance types.
-        let needs_nested_virt = stack
-            .resources
-            .values()
-            .filter_map(|entry| entry.config.downcast_ref::<Daemon>())
-            .any(|d| d.cluster.as_deref() == Some(cluster_id.as_str()) && d.nested_virtualization);
-
+        // Newly-added capacity groups on an existing cluster do not inherit
+        // nested-virtualization from any other group. If the customer needs
+        // nested virt on a new pool, they must declare it on the cluster
+        // explicitly. Existing customer-declared groups keep whatever
+        // `nested_virtualization` setting they were created with.
         let mut new_groups: Vec<CapacityGroup> = Vec::new();
         for group_id in &new_group_ids {
             let group_containers: Vec<&Container> = stack
@@ -315,15 +350,12 @@ impl ComputeClusterMutation {
                 .filter_map(|e| e.config.downcast_ref::<Container>())
                 .filter(|c| c.pool.is_none() && needed_capacity_group(c) == group_id.as_str())
                 .collect();
-            let mut group = build_capacity_group_for_id(
+            let group = build_capacity_group_for_id(
                 group_id,
                 &group_containers,
                 stack_state.platform,
-                needs_nested_virt,
+                false,
             )?;
-            if needs_nested_virt {
-                group.nested_virtualization = Some(true);
-            }
             info!(group_id = %group_id, instance_type = ?group.instance_type, "Adding new capacity group");
             new_groups.push(group);
         }
@@ -1477,12 +1509,14 @@ mod tests {
         }
     }
 
-    /// Daemon with `nested_virtualization = true` propagates the flag to every
-    /// CapacityGroup auto-generated for the cluster it targets. The flag is
-    /// what `AwsComputeClusterController::launch_template_cpu_options` later
-    /// keys off to set `CpuOptions.NestedVirtualization=enabled` on the LT.
+    /// Auto-generated clusters never carry a `nested_virtualization`
+    /// constraint — the daemon's old `.nested_virtualization()` smuggle
+    /// flag is gone. Customers who need nested virt must declare a
+    /// ComputeCluster explicitly with a capacity group that sets it.
+    /// This test guards the negative case to catch any future inference
+    /// from drifting back in.
     #[tokio::test]
-    async fn test_daemon_nested_virtualization_propagates_to_capacity_groups() {
+    async fn test_auto_generated_cluster_leaves_groups_unconstrained() {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {
                 image: "api:latest".to_string(),
@@ -1499,136 +1533,11 @@ mod tests {
             .permissions("api".to_string())
             .build();
 
-        let daemon = Daemon::new("bear-agent".to_string())
-            .code(alien_core::DaemonCode::Image {
-                image: "bear-agent:latest".to_string(),
-            })
-            .cluster("compute".to_string())
-            .permissions("loader".to_string())
-            .nested_virtualization(true)
-            .build();
-
         let mut resources = IndexMap::new();
         resources.insert(
             "api".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(container),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: Vec::new(),
-                remote_access: false,
-            },
-        );
-        resources.insert(
-            "bear-agent".to_string(),
-            ResourceEntry {
-                config: alien_core::Resource::new(daemon),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: Vec::new(),
-                remote_access: false,
-            },
-        );
-
-        let stack = Stack {
-            id: "test-stack".to_string(),
-            resources,
-            permissions: alien_core::permissions::PermissionsConfig::default(),
-            supported_platforms: None,
-        };
-        let stack_state = StackState {
-            platform: Platform::Aws,
-            resources: Default::default(),
-            resource_prefix: "test".to_string(),
-        };
-        let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
-
-        let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
-        let cluster = result
-            .resources
-            .get("compute")
-            .unwrap()
-            .config
-            .downcast_ref::<ComputeCluster>()
-            .unwrap();
-
-        assert!(
-            !cluster.capacity_groups.is_empty(),
-            "expected at least one capacity group"
-        );
-        for group in &cluster.capacity_groups {
-            assert_eq!(
-                group.nested_virtualization,
-                Some(true),
-                "group '{}' should inherit nested_virtualization from the daemon",
-                group.group_id
-            );
-            // The propagation must also force a nested-virt-capable
-            // instance type. Without this, AWS would create the launch
-            // template with `CpuOptions.NestedVirtualization=enabled` but
-            // RunInstances would later reject the type (e.g. t4g.xlarge).
-            let instance = group
-                .instance_type
-                .as_deref()
-                .expect("propagation should produce a concrete instance_type");
-            assert!(
-                instance.starts_with("m8i.")
-                    || instance.starts_with("c8i.")
-                    || instance.starts_with("r8i."),
-                "group '{}' should pick a nested-virt-capable instance (m8i/c8i/r8i family); got {}",
-                group.group_id,
-                instance,
-            );
-        }
-    }
-
-    /// Negative case: daemon with default `nested_virtualization = false`
-    /// leaves CapacityGroups unconstrained (`None`). Prevents accidentally
-    /// upgrading the cluster's instance-type allowlist when no daemon asked.
-    #[tokio::test]
-    async fn test_daemon_default_nested_virtualization_leaves_groups_unconstrained() {
-        let container = Container::new("api".to_string())
-            .code(ContainerCode::Image {
-                image: "api:latest".to_string(),
-            })
-            .cpu(ResourceSpec {
-                min: "0.5".to_string(),
-                desired: "1".to_string(),
-            })
-            .memory(ResourceSpec {
-                min: "512Mi".to_string(),
-                desired: "1Gi".to_string(),
-            })
-            .port(8080)
-            .permissions("api".to_string())
-            .build();
-
-        let daemon = Daemon::new("collector".to_string())
-            .code(alien_core::DaemonCode::Image {
-                image: "collector:latest".to_string(),
-            })
-            .cluster("compute".to_string())
-            .permissions("default".to_string())
-            .build();
-
-        let mut resources = IndexMap::new();
-        resources.insert(
-            "api".to_string(),
-            ResourceEntry {
-                config: alien_core::Resource::new(container),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: Vec::new(),
-                remote_access: false,
-            },
-        );
-        resources.insert(
-            "collector".to_string(),
-            ResourceEntry {
-                config: alien_core::Resource::new(daemon),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -1666,9 +1575,107 @@ mod tests {
         for group in &cluster.capacity_groups {
             assert_eq!(
                 group.nested_virtualization, None,
-                "group '{}' should not be constrained when no daemon opts in",
+                "auto-generated group '{}' should not be constrained",
                 group.group_id
             );
         }
+    }
+
+    /// Customer-declared ComputeCluster with a capacity group that opts
+    /// into `nested_virtualization` survives the preflight unchanged.
+    /// The preflight must not blow away or rewrite customer-supplied
+    /// settings on an already-declared cluster.
+    #[tokio::test]
+    async fn test_customer_declared_capacity_group_nested_virt_survives() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("api".to_string())
+            .build();
+
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                nested_virtualization: Some(true),
+            })
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let mutation = ComputeClusterMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = result
+            .resources
+            .get("compute")
+            .unwrap()
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+
+        let group = cluster
+            .capacity_groups
+            .iter()
+            .find(|g| g.group_id == "general")
+            .expect("customer-declared 'general' group must survive");
+        assert_eq!(
+            group.nested_virtualization,
+            Some(true),
+            "customer-declared nested_virtualization must not be overwritten"
+        );
+        assert_eq!(
+            group.instance_type.as_deref(),
+            Some("m8i.xlarge"),
+            "customer-declared instance_type must not be overwritten"
+        );
     }
 }
