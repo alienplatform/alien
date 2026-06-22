@@ -4,12 +4,11 @@ use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
-    container_app, Certificate, Configuration, DaprComponent, ManagedEnvironment, Template,
-    TrackedResource,
+    container_app, Certificate, DaprComponent, ManagedEnvironment, TrackedResource,
 };
 use futures_util::StreamExt;
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
-use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{collections::HashMap, fmt::Debug, ops, sync::Arc, time::Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -53,76 +52,28 @@ pub struct ContainerApp {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerAppProperties {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub configuration: Option<Configuration>,
-    #[serde(
-        rename = "customDomainVerificationId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub custom_domain_verification_id: Option<String>,
-    #[serde(
-        rename = "environmentId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub environment_id: Option<String>,
-    #[serde(
-        rename = "eventStreamEndpoint",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub event_stream_endpoint: Option<String>,
-    #[serde(
-        rename = "latestReadyRevisionName",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub latest_ready_revision_name: Option<String>,
-    #[serde(
-        rename = "latestRevisionFqdn",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub latest_revision_fqdn: Option<String>,
-    #[serde(
-        rename = "latestRevisionName",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub latest_revision_name: Option<String>,
-    #[serde(
-        rename = "managedEnvironmentId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub managed_environment_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_default",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub outbound_ip_addresses: Vec<String>,
-    #[serde(
-        rename = "provisioningState",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub provisioning_state: Option<container_app::properties::ProvisioningState>,
+    #[serde(flatten)]
+    pub sdk: container_app::Properties,
     #[serde(
         rename = "runningStatus",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub running_status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub template: Option<Template>,
-    #[serde(
-        rename = "workloadProfileName",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub workload_profile_name: Option<String>,
+}
+
+impl ops::Deref for ContainerAppProperties {
+    type Target = container_app::Properties;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sdk
+    }
+}
+
+impl ops::DerefMut for ContainerAppProperties {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sdk
+    }
 }
 
 pub(crate) async fn create_or_update_managed_environment(
@@ -1104,12 +1055,4 @@ fn azure_operation_body_status(
     }
 
     Ok(Some(body))
-}
-
-fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
