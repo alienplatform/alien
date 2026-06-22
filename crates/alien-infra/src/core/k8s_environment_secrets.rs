@@ -9,7 +9,6 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -123,8 +122,14 @@ pub async fn reconcile_environment_secret(
         Err(e) => {
             let err = format!("{e}");
             if err.contains("AlreadyExists") || err.contains("409") {
-                let existing = get(kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace), &secret_name)
+                let existing =
+                    kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+                        .get(&secret_name)
                     .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{secret_name}'"),
+                    })
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
                             "Failed to read existing environment Secret for {resource_kind} '{resource_id}'",

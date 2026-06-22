@@ -35,7 +35,6 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -296,18 +295,23 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 target.namespace,
                 target.resource_id,
             )?;
-            get(
-                kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), secret_namespace),
-                &secret_ref.secret_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Kubernetes TLS Secret '{}' was not found",
-                    secret_ref.secret_name
-                ),
-                resource_id: Some(target.resource_id.to_string()),
-            })?;
+            kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), secret_namespace)
+                .get(&secret_ref.secret_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!(
+                        "Kubernetes get operation failed for '{}'",
+                        secret_ref.secret_name
+                    ),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Kubernetes TLS Secret '{}' was not found",
+                        secret_ref.secret_name
+                    ),
+                    resource_id: Some(target.resource_id.to_string()),
+                })?;
             Some(KubernetesTlsSecretRef {
                 secret_name: secret_ref.secret_name.clone(),
                 namespace: Some(secret_namespace.to_string()),
@@ -1632,15 +1636,17 @@ async fn upsert_service(
         }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(
-                kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
-                name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get Service '{}' before update", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            let existing = kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace)
+                .get(name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get Service '{}' before update", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             service.metadata.resource_version = existing.metadata.resource_version;
             kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace)
                 .replace(name, &kube::api::PostParams::default(), &service)
@@ -1708,15 +1714,17 @@ async fn upsert_tls_secret(
         }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(
-                kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
-                name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get TLS Secret '{}' before update", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            let existing = kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace)
+                .get(name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get TLS Secret '{}' before update", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             secret.metadata.resource_version = existing.metadata.resource_version;
             kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace)
                 .replace(name, &kube::api::PostParams::default(), &secret)
@@ -1754,15 +1762,17 @@ async fn upsert_ingress(
         }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get(
-                kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
-                name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get Ingress '{}' before update", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            let existing = kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace)
+                .get(name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get Ingress '{}' before update", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             ingress.metadata.resource_version = existing.metadata.resource_version;
             kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace)
                 .replace(name, &kube::api::PostParams::default(), &ingress)
@@ -2046,15 +2056,17 @@ async fn observe_ingress_endpoint(
     name: &str,
     profile: &KubernetesIngressRouteProfile,
 ) -> Result<Option<LoadBalancerEndpoint>> {
-    let ingress = get(
-        kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
-        name,
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!("Failed to get Ingress '{}'", name),
-        resource_id: None,
-    })?;
+    let ingress = kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace)
+        .get(name)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: format!("Kubernetes get operation failed for '{name}'"),
+        })
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to get Ingress '{}'", name),
+            resource_id: None,
+        })?;
     let Some(status) = ingress.status else {
         return Ok(None);
     };

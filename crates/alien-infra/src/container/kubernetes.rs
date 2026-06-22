@@ -7,7 +7,6 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -180,14 +179,16 @@ impl KubernetesContainerController {
                     info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
                 }
                 Err(err) if is_already_exists(&err) => {
-                    let existing = get(
-                        kube::Api::<StatefulSet>::namespaced(
-                            deployment_client.as_ref().clone(),
-                            &namespace,
-                        ),
-                        &container_name,
+                    let existing = kube::Api::<StatefulSet>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        &namespace,
                     )
+                    .get(&container_name)
                     .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{container_name}'"),
+                    })
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
                             "Failed to read existing statefulset '{}' before adoption.",
@@ -246,14 +247,16 @@ impl KubernetesContainerController {
                     info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
                 }
                 Err(err) if is_already_exists(&err) => {
-                    let existing = get(
-                        kube::Api::<Deployment>::namespaced(
-                            deployment_client.as_ref().clone(),
-                            &namespace,
-                        ),
-                        &container_name,
+                    let existing = kube::Api::<Deployment>::namespaced(
+                        deployment_client.as_ref().clone(),
+                        &namespace,
                     )
+                    .get(&container_name)
                     .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{container_name}'"),
+                    })
                     .context(ErrorData::CloudPlatformError {
                         message: format!(
                             "Failed to read existing deployment '{}' before adoption.",
@@ -321,12 +324,16 @@ impl KubernetesContainerController {
 
         // Check workload status (different API for Deployment vs StatefulSet)
         let (ready_replicas, replicas) = if self.is_stateful {
-            match get(
-                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
+            match kube::Api::<StatefulSet>::namespaced(
+                deployment_client.as_ref().clone(),
+                namespace,
             )
+            .get(workload_name)
             .await
-            {
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{workload_name}'"),
+            }) {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
                         (status.ready_replicas, Some(status.replicas))
@@ -351,12 +358,13 @@ impl KubernetesContainerController {
                 }
             }
         } else {
-            match get(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-            )
-            .await
-            {
+            match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .get(workload_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                }) {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
                         (status.ready_replicas, status.replicas)
@@ -478,14 +486,16 @@ impl KubernetesContainerController {
                 .await?;
 
             let (ready_replicas, replicas, workload) = if self.is_stateful {
-                let statefulset = get(
-                    kube::Api::<StatefulSet>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
+                let statefulset = kube::Api::<StatefulSet>::namespaced(
+                    deployment_client.as_ref().clone(),
+                    namespace,
                 )
+                .get(workload_name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get statefulset '{}'", workload_name),
                     resource_id: Some(config.id.clone()),
@@ -504,14 +514,16 @@ impl KubernetesContainerController {
                     (None, None, KubernetesWorkload::StatefulSet(statefulset))
                 }
             } else {
-                let deployment = get(
-                    kube::Api::<Deployment>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
+                let deployment = kube::Api::<Deployment>::namespaced(
+                    deployment_client.as_ref().clone(),
+                    namespace,
                 )
+                .get(workload_name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get deployment '{}'", workload_name),
                     resource_id: Some(config.id.clone()),
@@ -662,18 +674,21 @@ impl KubernetesContainerController {
 
         if self.is_stateful {
             // Get existing StatefulSet to carry over resourceVersion
-            let existing = get(
-                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to get statefulset '{}' before update",
-                    workload_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let existing =
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .get(workload_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to get statefulset '{}' before update",
+                            workload_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_statefulset = self
@@ -706,15 +721,21 @@ impl KubernetesContainerController {
                 })?;
         } else {
             // Get existing Deployment to carry over resourceVersion
-            let existing = get(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get deployment '{}' before update", workload_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let existing =
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .get(workload_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to get deployment '{}' before update",
+                            workload_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_deployment = self
@@ -787,12 +808,16 @@ impl KubernetesContainerController {
             .await?;
 
         let (ready_replicas, replicas) = if self.is_stateful {
-            match get(
-                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
+            match kube::Api::<StatefulSet>::namespaced(
+                deployment_client.as_ref().clone(),
+                namespace,
             )
+            .get(workload_name)
             .await
-            {
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{workload_name}'"),
+            }) {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
                         (status.ready_replicas, Some(status.replicas))
@@ -811,12 +836,13 @@ impl KubernetesContainerController {
                 }
             }
         } else {
-            match get(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                workload_name,
-            )
-            .await
-            {
+            match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .get(workload_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                }) {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
                         (status.ready_replicas, status.replicas)
@@ -1037,25 +1063,23 @@ impl KubernetesContainerController {
                 .await?;
 
             let get_result = if self.is_stateful {
-                get(
-                    kube::Api::<StatefulSet>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
-                )
-                .await
-                .map(|_| ())
+                kube::Api::<StatefulSet>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .get(workload_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                    })
+                    .map(|_| ())
             } else {
-                get(
-                    kube::Api::<Deployment>::namespaced(
-                        deployment_client.as_ref().clone(),
-                        namespace,
-                    ),
-                    workload_name,
-                )
-                .await
-                .map(|_| ())
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .get(workload_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{workload_name}'"),
+                    })
+                    .map(|_| ())
             };
 
             match get_result {
@@ -1285,18 +1309,23 @@ impl KubernetesContainerController {
             }) {
             Ok(_) => Ok(()),
             Err(e) if is_already_exists(&e) => {
-                let existing = get(
-                    kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
-                    service_name,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get internal Service '{}' before update",
-                        service_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+                let existing =
+                    kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
+                        .get(service_name)
+                        .await
+                        .into_alien_error()
+                        .context(CloudClientErrorData::HttpRequestFailed {
+                            message: format!(
+                                "Kubernetes get operation failed for '{service_name}'"
+                            ),
+                        })
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to get internal Service '{}' before update",
+                                service_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
                 service.metadata.resource_version = existing.metadata.resource_version;
                 kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
                     .replace(service_name, &kube::api::PostParams::default(), &service)

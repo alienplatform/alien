@@ -7,7 +7,6 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -166,12 +165,13 @@ impl KubernetesWorkerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match get(
-            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-            deployment_name,
-        )
-        .await
-        {
+        match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+            .get(deployment_name)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{deployment_name}'"),
+            }) {
             Ok(deployment) => {
                 if let Some(status) = &deployment.status {
                     if let (Some(ready_replicas), Some(replicas)) =
@@ -281,15 +281,18 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            let deployment = get(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                deployment_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get deployment '{}'", deployment_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let deployment =
+                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                    .get(deployment_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{deployment_name}'"),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to get deployment '{}'", deployment_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
 
             if let Some(status) = deployment.status.clone() {
                 if let (Some(ready_replicas), Some(replicas)) =
@@ -390,18 +393,21 @@ impl KubernetesWorkerController {
             .await?;
 
         // Get the existing deployment to carry over resourceVersion (required for PUT)
-        let existing = get(
-            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-            deployment_name,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to get deployment '{}' before update",
-                deployment_name
-            ),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let existing =
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .get(deployment_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{deployment_name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get deployment '{}' before update",
+                        deployment_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         let resource_version = existing.metadata.resource_version.clone();
 
@@ -498,12 +504,13 @@ impl KubernetesWorkerController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match get(
-            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-            deployment_name,
-        )
-        .await
-        {
+        match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+            .get(deployment_name)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{deployment_name}'"),
+            }) {
             Ok(deployment) => {
                 if let Some(status) = &deployment.status {
                     if let (Some(ready_replicas), Some(replicas)) =
@@ -688,12 +695,13 @@ impl KubernetesWorkerController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match get(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace),
-                deployment_name,
-            )
-            .await
-            {
+            match kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), namespace)
+                .get(deployment_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{deployment_name}'"),
+                }) {
                 Ok(_) => {
                     debug!(deployment_name=%deployment_name, "Deployment still exists, continuing to wait");
                 }

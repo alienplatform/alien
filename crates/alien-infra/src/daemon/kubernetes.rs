@@ -6,7 +6,6 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -149,15 +148,18 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            let daemonset = get(
-                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-                daemon_set_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get daemonset '{}'", daemon_set_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let daemonset =
+                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+                    .get(daemon_set_name)
+                    .await
+                    .into_alien_error()
+                    .context(CloudClientErrorData::HttpRequestFailed {
+                        message: format!("Kubernetes get operation failed for '{daemon_set_name}'"),
+                    })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to get daemonset '{}'", daemon_set_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
             let labels = self.build_labels(daemon_set_name);
             emit_kubernetes_workload_heartbeat(
                 ctx,
@@ -209,18 +211,21 @@ impl KubernetesDaemonController {
             .service_provider
             .get_kubernetes_client(kubernetes_config)
             .await?;
-        let existing = get(
-            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-            daemon_set_name,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to get daemonset '{}' before update",
-                daemon_set_name
-            ),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let existing =
+            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+                .get(daemon_set_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{daemon_set_name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get daemonset '{}' before update",
+                        daemon_set_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
         let resource_version = existing.metadata.resource_version.clone();
 
         let service_account_name =
@@ -381,12 +386,13 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
-            match get(
-                kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-                daemon_set_name,
-            )
-            .await
-            {
+            match kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+                .get(daemon_set_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{daemon_set_name}'"),
+                }) {
                 Ok(_) => {
                     debug!(daemon_set_name=%daemon_set_name, "Daemon daemonset still exists");
                 }
@@ -461,12 +467,13 @@ impl KubernetesDaemonController {
             .service_provider
             .get_kubernetes_client(kubernetes_config)
             .await?;
-        match get(
-            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace),
-            daemon_set_name,
-        )
-        .await
-        {
+        match kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), namespace)
+            .get(daemon_set_name)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{daemon_set_name}'"),
+            }) {
             Ok(daemonset) => {
                 if let Some(status) = &daemonset.status {
                     return Ok(status.number_ready >= status.desired_number_scheduled

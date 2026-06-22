@@ -6,7 +6,6 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::get;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
@@ -124,12 +123,13 @@ impl KubernetesBuildController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match get(
-            kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-            job_name,
-        )
-        .await
-        {
+        match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+            .get(job_name)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{job_name}'"),
+            }) {
             Ok(job) => {
                 if let Some(status) = &job.status {
                     // Check if job completed successfully
@@ -202,15 +202,17 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            let job = get(
-                kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-                job_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get job '{}'", job_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+            let job = kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+                .get(job_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{job_name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get job '{}'", job_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
             if let Some(status) = &job.status {
                 if let Some(succeeded) = status.succeeded {
@@ -330,12 +332,13 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match get(
-                kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-                job_name,
-            )
-            .await
-            {
+            match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+                .get(job_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{job_name}'"),
+                }) {
                 Ok(_) => {
                     debug!(job_name=%job_name, "Old Job still exists, waiting for deletion");
                 }
@@ -462,12 +465,13 @@ impl KubernetesBuildController {
             .get_kubernetes_client(kubernetes_config)
             .await?;
 
-        match get(
-            kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-            job_name,
-        )
-        .await
-        {
+        match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+            .get(job_name)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: format!("Kubernetes get operation failed for '{job_name}'"),
+            }) {
             Ok(job) => {
                 if let Some(status) = &job.status {
                     if let Some(succeeded) = status.succeeded {
@@ -614,12 +618,13 @@ impl KubernetesBuildController {
                 .get_kubernetes_client(kubernetes_config)
                 .await?;
 
-            match get(
-                kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-                job_name,
-            )
-            .await
-            {
+            match kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+                .get(job_name)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{job_name}'"),
+                }) {
                 Ok(_) => {
                     debug!(job_name=%job_name, "Job still exists, continuing to wait");
                 }

@@ -3,13 +3,11 @@ use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use kube::{
-    api::{Api, ListParams},
+    api::ListParams,
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
 use secrecy::SecretString;
-use serde::de::DeserializeOwned;
-use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalKubernetesReadSource {
@@ -419,16 +417,4 @@ pub(crate) fn list_params(
         params = params.fields(&field_selector);
     }
     params
-}
-
-pub(crate) async fn get<K>(api: Api<K>, name: &str) -> Result<K>
-where
-    K: Clone + Debug + DeserializeOwned,
-{
-    api.get(name)
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Kubernetes get operation failed for '{name}'"),
-        })
 }
