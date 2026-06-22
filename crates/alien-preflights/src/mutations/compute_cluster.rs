@@ -75,13 +75,13 @@ impl StackMutation for ComputeClusterMutation {
             .find(|e| e.config.resource_type().as_ref() == "compute-cluster")
         {
             if let Some(cluster) = cluster_entry.config.downcast_ref::<ComputeCluster>() {
-                // Any customer-declared capacity group that's missing
-                // `profile` needs the backfill mutation to run so the
-                // controller sees a complete CapacityGroup.
+                // A customer-declared capacity group that names an
+                // `instance_type` but has no `profile` needs the backfill
+                // mutation to fill the profile from the instance catalog.
                 if cluster
                     .capacity_groups
                     .iter()
-                    .any(|g| g.profile.is_none())
+                    .any(|g| g.profile.is_none() && g.instance_type.is_some())
                 {
                     return true;
                 }
