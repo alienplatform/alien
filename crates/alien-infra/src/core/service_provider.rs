@@ -50,6 +50,7 @@ use azure_mgmt_keyvault::package_preview_2022_02 as azure_keyvault_2022_02;
 use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 use azure_mgmt_msi::package_2023_01_31 as azure_msi_2023_01_31;
 pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
+use azure_mgmt_network::package_2024_03 as azure_network_2024_03;
 pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
 };
@@ -102,7 +103,7 @@ use google_cloud_storage::{
 };
 pub use google_cloud_type::model::Expr;
 use http::{header::AUTHORIZATION, Extensions, HeaderMap, HeaderValue};
-use reqwest::{Method, StatusCode};
+use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
@@ -2798,69 +2799,6 @@ impl LongRunningOperation {
             location_url: async_operation_url.and(location_url),
         }))
     }
-
-    fn from_response_headers(headers: &reqwest::header::HeaderMap) -> Result<Option<Self>> {
-        let async_operation_url = headers
-            .get("azure-asyncoperation")
-            .map(|value| {
-                value.to_str().into_alien_error().context(
-                    crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure-AsyncOperation header".to_string(),
-                        resource_id: None,
-                    },
-                )
-            })
-            .transpose()?
-            .map(ToString::to_string);
-
-        let location_url = headers
-            .get("location")
-            .map(|value| {
-                value.to_str().into_alien_error().context(
-                    crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure Location header".to_string(),
-                        resource_id: None,
-                    },
-                )
-            })
-            .transpose()?
-            .map(ToString::to_string);
-
-        let url = async_operation_url
-            .as_ref()
-            .or(location_url.as_ref())
-            .cloned();
-        let Some(url) = url else {
-            return Ok(None);
-        };
-
-        let retry_after = headers
-            .get("retry-after")
-            .map(|value| {
-                let value = value.to_str().into_alien_error().context(
-                    crate::error::ErrorData::CloudPlatformError {
-                        message: "Failed to parse Azure Retry-After header".to_string(),
-                        resource_id: None,
-                    },
-                )?;
-                let seconds = value.parse::<u64>().into_alien_error().context(
-                    crate::error::ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to parse Azure Retry-After header '{value}' as seconds"
-                        ),
-                        resource_id: None,
-                    },
-                )?;
-                Ok(Duration::from_secs(seconds))
-            })
-            .transpose()?;
-
-        Ok(Some(Self {
-            url,
-            retry_after,
-            location_url: async_operation_url.and(location_url),
-        }))
-    }
 }
 
 fn azure_core_021_header(
@@ -3149,7 +3087,7 @@ pub trait AzureNetworkApi: Send + Sync + std::fmt::Debug {
 struct OfficialAzureNetworkClient {
     config: AzureClientConfig,
     credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    client: OnceCell<azure_network_2024_03::Client>,
 }
 
 impl std::fmt::Debug for OfficialAzureNetworkClient {
@@ -3162,229 +3100,39 @@ impl std::fmt::Debug for OfficialAzureNetworkClient {
 }
 
 impl OfficialAzureNetworkClient {
-    const API_VERSION: &'static str = "2024-05-01";
-
     fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn network_resource_url(&self, resource_group_name: &str, path: &str) -> String {
-        format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/{}?api-version={}",
-            azure_management_endpoint(&self.config).trim_end_matches('/'),
-            self.config.subscription_id,
-            resource_group_name,
-            path.trim_start_matches('/'),
-            Self::API_VERSION
-        )
-    }
+    async fn client(&self) -> Result<azure_network_2024_03::Client> {
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                let endpoint = azure_core_021::Url::parse(azure_management_endpoint(&self.config))
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to parse Azure management endpoint".to_string(),
+                        resource_id: None,
+                    })?;
 
-    fn virtual_network_url(&self, resource_group_name: &str, virtual_network_name: &str) -> String {
-        self.network_resource_url(
-            resource_group_name,
-            &format!("virtualNetworks/{virtual_network_name}"),
-        )
-    }
+                let credential: Arc<dyn azure_core_021::auth::TokenCredential> =
+                    Arc::new(AzureCore021Credential::new(self.credential.clone()));
 
-    fn subnet_url(
-        &self,
-        resource_group_name: &str,
-        virtual_network_name: &str,
-        subnet_name: &str,
-    ) -> String {
-        self.network_resource_url(
-            resource_group_name,
-            &format!("virtualNetworks/{virtual_network_name}/subnets/{subnet_name}"),
-        )
-    }
-
-    fn nat_gateway_url(&self, resource_group_name: &str, nat_gateway_name: &str) -> String {
-        self.network_resource_url(
-            resource_group_name,
-            &format!("natGateways/{nat_gateway_name}"),
-        )
-    }
-
-    fn public_ip_url(&self, resource_group_name: &str, public_ip_name: &str) -> String {
-        self.network_resource_url(
-            resource_group_name,
-            &format!("publicIPAddresses/{public_ip_name}"),
-        )
-    }
-
-    fn network_security_group_url(&self, resource_group_name: &str, nsg_name: &str) -> String {
-        self.network_resource_url(
-            resource_group_name,
-            &format!("networkSecurityGroups/{nsg_name}"),
-        )
-    }
-
-    async fn bearer_token(&self) -> Result<AccessToken> {
-        self.credential
-            .get_token(&["https://management.azure.com/.default"], None)
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to get Azure management access token".to_string(),
-                resource_id: None,
+                azure_network_2024_03::Client::builder(credential)
+                    .endpoint(endpoint)
+                    .build()
+                    .into_alien_error()
+                    .context(crate::error::ErrorData::CloudPlatformError {
+                        message: "Failed to build official Azure Network client".to_string(),
+                        resource_id: None,
+                    })
             })
-    }
-
-    async fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<String>,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<(StatusCode, reqwest::header::HeaderMap, String)> {
-        let token = self.bearer_token().await?;
-        let mut request = self
-            .http_client
-            .request(method, &url)
-            .bearer_auth(token.token.secret());
-
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
-
-        let response = request.send().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-                resource_id: None,
-            },
-        )?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let text = response.text().await.into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
-                ),
-                resource_id: None,
-            },
-        )?;
-
-        if status == StatusCode::NOT_FOUND {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: resource_type.to_string(),
-                    resource_name: resource_name.to_string(),
-                },
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(AlienError::new(
-                crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}: {}",
-                        status.as_u16(),
-                        text
-                    ),
-                    resource_id: None,
-                },
-            ));
-        }
-
-        Ok((status, headers, text))
-    }
-
-    fn parse_response<T: DeserializeOwned>(
-        resource_type: &str,
-        resource_name: &str,
-        body: &str,
-    ) -> Result<T> {
-        serde_json::from_str(body).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to parse Azure ARM {resource_type} '{resource_name}' response"
-                ),
-                resource_id: None,
-            },
-        )
-    }
-
-    async fn put_resource<T, B>(
-        &self,
-        url: String,
-        body: &B,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<OperationResult<T>>
-    where
-        T: DeserializeOwned,
-        B: Serialize + Sync,
-    {
-        let body = serde_json::to_string(body).into_alien_error().context(
-            crate::error::ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to serialize Azure ARM {resource_type} '{resource_name}' request"
-                ),
-                resource_id: None,
-            },
-        )?;
-        let (status, headers, response) = self
-            .request(Method::PUT, url, Some(body), resource_type, resource_name)
             .await?;
-        self.operation_result(status, headers, response, resource_type, resource_name)
-    }
-
-    async fn delete_resource(
-        &self,
-        url: String,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<OperationResult<()>> {
-        let (status, headers, _) = self
-            .request(Method::DELETE, url, None, resource_type, resource_name)
-            .await?;
-        if status == StatusCode::ACCEPTED {
-            let operation = LongRunningOperation::from_response_headers(&headers)?.ok_or_else(|| {
-                AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM {resource_type} '{resource_name}' returned 202 without an operation URL"
-                    ),
-                    resource_id: None,
-                })
-            })?;
-            Ok(OperationResult::LongRunning(operation))
-        } else {
-            Ok(OperationResult::Completed(()))
-        }
-    }
-
-    fn operation_result<T: DeserializeOwned>(
-        &self,
-        status: StatusCode,
-        headers: reqwest::header::HeaderMap,
-        response: String,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> Result<OperationResult<T>> {
-        if status == StatusCode::ACCEPTED {
-            let operation = LongRunningOperation::from_response_headers(&headers)?.ok_or_else(|| {
-                AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Azure ARM {resource_type} '{resource_name}' returned 202 without an operation URL"
-                    ),
-                    resource_id: None,
-                })
-            })?;
-            Ok(OperationResult::LongRunning(operation))
-        } else {
-            Ok(OperationResult::Completed(Self::parse_response(
-                resource_type,
-                resource_name,
-                &response,
-            )?))
-        }
+        Ok(client.clone())
     }
 }
 
@@ -3396,11 +3144,25 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         virtual_network_name: &str,
         virtual_network: &VirtualNetwork,
     ) -> Result<OperationResult<VirtualNetwork>> {
-        self.put_resource(
-            self.virtual_network_url(resource_group_name, virtual_network_name),
-            virtual_network,
+        let result = self
+            .client()
+            .await?
+            .virtual_networks_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                virtual_network.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "virtual network create or update",
             "Azure virtual network",
             virtual_network_name,
+            |response| response.into_body(),
         )
         .await
     }
@@ -3410,16 +3172,23 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         virtual_network_name: &str,
     ) -> Result<VirtualNetwork> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.virtual_network_url(resource_group_name, virtual_network_name),
-                None,
-                "Azure virtual network",
-                virtual_network_name,
+        let result = self
+            .client()
+            .await?
+            .virtual_networks_client()
+            .get(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        Self::parse_response("Azure virtual network", virtual_network_name, &response)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "virtual network get",
+            "Azure virtual network",
+            virtual_network_name,
+        )
     }
 
     async fn delete_virtual_network(
@@ -3427,8 +3196,21 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         virtual_network_name: &str,
     ) -> Result<OperationResult<()>> {
-        self.delete_resource(
-            self.virtual_network_url(resource_group_name, virtual_network_name),
+        let result = self
+            .client()
+            .await?
+            .virtual_networks_client()
+            .delete(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "virtual network delete",
             "Azure virtual network",
             virtual_network_name,
         )
@@ -3442,11 +3224,26 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         subnet_name: &str,
         subnet: &Subnet,
     ) -> Result<OperationResult<Subnet>> {
-        self.put_resource(
-            self.subnet_url(resource_group_name, virtual_network_name, subnet_name),
-            subnet,
+        let result = self
+            .client()
+            .await?
+            .subnets_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                subnet_name.to_string(),
+                subnet.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
             "Azure subnet",
             subnet_name,
+            |response| response.into_body(),
         )
         .await
     }
@@ -3457,16 +3254,24 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         virtual_network_name: &str,
         subnet_name: &str,
     ) -> Result<Subnet> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.subnet_url(resource_group_name, virtual_network_name, subnet_name),
-                None,
-                "Azure subnet",
-                subnet_name,
+        let result = self
+            .client()
+            .await?
+            .subnets_client()
+            .get(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                subnet_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        Self::parse_response("Azure subnet", subnet_name, &response)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
+            subnet_name,
+        )
     }
 
     async fn delete_subnet(
@@ -3475,8 +3280,22 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         virtual_network_name: &str,
         subnet_name: &str,
     ) -> Result<OperationResult<()>> {
-        self.delete_resource(
-            self.subnet_url(resource_group_name, virtual_network_name, subnet_name),
+        let result = self
+            .client()
+            .await?
+            .subnets_client()
+            .delete(
+                resource_group_name.to_string(),
+                virtual_network_name.to_string(),
+                subnet_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "subnet delete",
             "Azure subnet",
             subnet_name,
         )
@@ -3489,11 +3308,25 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         nat_gateway_name: &str,
         nat_gateway: &NatGateway,
     ) -> Result<OperationResult<NatGateway>> {
-        self.put_resource(
-            self.nat_gateway_url(resource_group_name, nat_gateway_name),
-            nat_gateway,
+        let result = self
+            .client()
+            .await?
+            .nat_gateways_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                nat_gateway_name.to_string(),
+                nat_gateway.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "NAT gateway create or update",
             "Azure NAT gateway",
             nat_gateway_name,
+            |response| response.into_body(),
         )
         .await
     }
@@ -3503,16 +3336,23 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         nat_gateway_name: &str,
     ) -> Result<NatGateway> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.nat_gateway_url(resource_group_name, nat_gateway_name),
-                None,
-                "Azure NAT gateway",
-                nat_gateway_name,
+        let result = self
+            .client()
+            .await?
+            .nat_gateways_client()
+            .get(
+                resource_group_name.to_string(),
+                nat_gateway_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        Self::parse_response("Azure NAT gateway", nat_gateway_name, &response)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "NAT gateway get",
+            "Azure NAT gateway",
+            nat_gateway_name,
+        )
     }
 
     async fn delete_nat_gateway(
@@ -3520,8 +3360,21 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         nat_gateway_name: &str,
     ) -> Result<OperationResult<()>> {
-        self.delete_resource(
-            self.nat_gateway_url(resource_group_name, nat_gateway_name),
+        let result = self
+            .client()
+            .await?
+            .nat_gateways_client()
+            .delete(
+                resource_group_name.to_string(),
+                nat_gateway_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "NAT gateway delete",
             "Azure NAT gateway",
             nat_gateway_name,
         )
@@ -3534,11 +3387,25 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         public_ip_address_name: &str,
         public_ip_address: &PublicIpAddress,
     ) -> Result<OperationResult<PublicIpAddress>> {
-        self.put_resource(
-            self.public_ip_url(resource_group_name, public_ip_address_name),
-            public_ip_address,
+        let result = self
+            .client()
+            .await?
+            .public_ip_addresses_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                public_ip_address_name.to_string(),
+                public_ip_address.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "public IP address create or update",
             "Azure public IP address",
             public_ip_address_name,
+            |response| response.into_body(),
         )
         .await
     }
@@ -3548,16 +3415,23 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         public_ip_address_name: &str,
     ) -> Result<PublicIpAddress> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.public_ip_url(resource_group_name, public_ip_address_name),
-                None,
-                "Azure public IP address",
-                public_ip_address_name,
+        let result = self
+            .client()
+            .await?
+            .public_ip_addresses_client()
+            .get(
+                resource_group_name.to_string(),
+                public_ip_address_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        Self::parse_response("Azure public IP address", public_ip_address_name, &response)
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "public IP address get",
+            "Azure public IP address",
+            public_ip_address_name,
+        )
     }
 
     async fn delete_public_ip_address(
@@ -3565,8 +3439,21 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         public_ip_address_name: &str,
     ) -> Result<OperationResult<()>> {
-        self.delete_resource(
-            self.public_ip_url(resource_group_name, public_ip_address_name),
+        let result = self
+            .client()
+            .await?
+            .public_ip_addresses_client()
+            .delete(
+                resource_group_name.to_string(),
+                public_ip_address_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "public IP address delete",
             "Azure public IP address",
             public_ip_address_name,
         )
@@ -3579,11 +3466,25 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         network_security_group_name: &str,
         network_security_group: &NetworkSecurityGroup,
     ) -> Result<OperationResult<NetworkSecurityGroup>> {
-        self.put_resource(
-            self.network_security_group_url(resource_group_name, network_security_group_name),
-            network_security_group,
+        let result = self
+            .client()
+            .await?
+            .network_security_groups_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                network_security_group_name.to_string(),
+                network_security_group.clone(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "network security group create or update",
             "Azure network security group",
             network_security_group_name,
+            |response| response.into_body(),
         )
         .await
     }
@@ -3593,19 +3494,22 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         network_security_group_name: &str,
     ) -> Result<NetworkSecurityGroup> {
-        let (_, _, response) = self
-            .request(
-                Method::GET,
-                self.network_security_group_url(resource_group_name, network_security_group_name),
-                None,
-                "Azure network security group",
-                network_security_group_name,
+        let result = self
+            .client()
+            .await?
+            .network_security_groups_client()
+            .get(
+                resource_group_name.to_string(),
+                network_security_group_name.to_string(),
+                self.config.subscription_id.clone(),
             )
-            .await?;
-        Self::parse_response(
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "network security group get",
             "Azure network security group",
             network_security_group_name,
-            &response,
         )
     }
 
@@ -3614,8 +3518,21 @@ impl AzureNetworkApi for OfficialAzureNetworkClient {
         resource_group_name: &str,
         network_security_group_name: &str,
     ) -> Result<OperationResult<()>> {
-        self.delete_resource(
-            self.network_security_group_url(resource_group_name, network_security_group_name),
+        let result = self
+            .client()
+            .await?
+            .network_security_groups_client()
+            .delete(
+                resource_group_name.to_string(),
+                network_security_group_name.to_string(),
+                self.config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "network security group delete",
             "Azure network security group",
             network_security_group_name,
         )
@@ -6053,6 +5970,75 @@ fn map_azure_core_021_sdk_error<T>(
                     }))
             }
         }
+    }
+}
+
+async fn map_azure_core_021_lro_response<T, R, F, Fut>(
+    service_name: &str,
+    result: azure_core_021::Result<R>,
+    action: &str,
+    resource_type: &str,
+    resource_name: &str,
+    into_body: F,
+) -> Result<OperationResult<T>>
+where
+    R: AsRef<azure_core_021::Response>,
+    F: FnOnce(R) -> Fut,
+    Fut: std::future::Future<Output = azure_core_021::Result<T>>,
+{
+    let response =
+        map_azure_core_021_sdk_error(service_name, result, action, resource_type, resource_name)?;
+    if response.as_ref().status() == azure_core_021::StatusCode::Accepted {
+        let operation =
+            LongRunningOperation::from_azure_core_021_headers(response.as_ref().headers())?
+                .ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                        message: format!(
+                            "{service_name} {action} for {resource_type} '{resource_name}' returned 202 without an operation URL"
+                        ),
+                        resource_id: None,
+                    })
+                })?;
+        Ok(OperationResult::LongRunning(operation))
+    } else {
+        let body = into_body(response).await.into_alien_error().context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to parse {service_name} {action} response for {resource_type} '{resource_name}'"
+                ),
+                resource_id: None,
+            },
+        )?;
+        Ok(OperationResult::Completed(body))
+    }
+}
+
+async fn map_azure_core_021_delete_lro_response<R>(
+    service_name: &str,
+    result: azure_core_021::Result<R>,
+    action: &str,
+    resource_type: &str,
+    resource_name: &str,
+) -> Result<OperationResult<()>>
+where
+    R: AsRef<azure_core_021::Response>,
+{
+    let response =
+        map_azure_core_021_sdk_error(service_name, result, action, resource_type, resource_name)?;
+    if response.as_ref().status() == azure_core_021::StatusCode::Accepted {
+        let operation =
+            LongRunningOperation::from_azure_core_021_headers(response.as_ref().headers())?
+                .ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                        message: format!(
+                            "{service_name} {action} for {resource_type} '{resource_name}' returned 202 without an operation URL"
+                        ),
+                        resource_id: None,
+                    })
+                })?;
+        Ok(OperationResult::LongRunning(operation))
+    } else {
+        Ok(OperationResult::Completed(()))
     }
 }
 
