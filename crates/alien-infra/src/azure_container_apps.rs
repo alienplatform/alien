@@ -112,6 +112,29 @@ pub(crate) async fn list_container_apps_by_resource_group(
     Ok(azure_app_2024_08::models::ContainerAppCollection::new(apps))
 }
 
+pub(crate) async fn get_container_app(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    container_app_name: &str,
+) -> CloudClientResult<ContainerApp> {
+    let result = client
+        .container_apps_client()
+        .get(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            container_app_name.to_string(),
+        )
+        .await;
+    map_azure_core_021_sdk_error(
+        "Azure Container Apps",
+        result,
+        "container app get",
+        "Azure Container App",
+        container_app_name,
+    )
+}
+
 pub(crate) async fn create_or_update_managed_environment_certificate(
     client: &azure_app_2024_08::Client,
     config: &AzureClientConfig,
@@ -334,24 +357,13 @@ impl OfficialAzureContainerAppsClient {
         &self,
         method: azure_core_021::Method,
         url: String,
-        body: Option<String>,
+        body: String,
         resource_type: &str,
         resource_name: &str,
     ) -> CloudClientResult<AzureCoreArmResponse> {
         azure_core_arm_request(self, method, url, body, resource_type, resource_name).await
     }
 
-    fn parse_response<T: DeserializeOwned>(
-        &self,
-        resource_type: &str,
-        resource_name: &str,
-        body: &str,
-    ) -> CloudClientResult<T> {
-        parse_response(resource_type, resource_name, body)
-    }
-}
-
-impl OfficialAzureContainerAppsClient {
     pub async fn create_or_update_container_app(
         &self,
         resource_group_name: &str,
@@ -364,7 +376,7 @@ impl OfficialAzureContainerAppsClient {
             .request(
                 azure_core_021::Method::Put,
                 self.container_app_url(resource_group_name, container_app_name),
-                Some(body),
+                body,
                 "Azure Container App",
                 container_app_name,
             )
@@ -376,23 +388,6 @@ impl OfficialAzureContainerAppsClient {
             "Azure Container App",
             container_app_name,
         )
-    }
-
-    pub async fn get_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-    ) -> CloudClientResult<ContainerApp> {
-        let response = self
-            .request(
-                azure_core_021::Method::Get,
-                self.container_app_url(resource_group_name, container_app_name),
-                None,
-                "Azure Container App",
-                container_app_name,
-            )
-            .await?;
-        self.parse_response("Azure Container App", container_app_name, &response.body)
     }
 
     pub async fn update_container_app(
@@ -407,7 +402,7 @@ impl OfficialAzureContainerAppsClient {
             .request(
                 azure_core_021::Method::Patch,
                 self.container_app_url(resource_group_name, container_app_name),
-                Some(body),
+                body,
                 "Azure Container App",
                 container_app_name,
             )
@@ -432,7 +427,7 @@ async fn azure_core_arm_request(
     client: &OfficialAzureContainerAppsClient,
     method: azure_core_021::Method,
     url: String,
-    body: Option<String>,
+    body: String,
     resource_type: &str,
     resource_name: &str,
 ) -> CloudClientResult<AzureCoreArmResponse> {
@@ -456,16 +451,12 @@ async fn azure_core_arm_request(
         format!("Bearer {}", token.token.secret()),
     );
 
-    if let Some(body) = body {
-        request.insert_header(azure_core_021::headers::CONTENT_TYPE, "application/json");
-        request.insert_header(
-            azure_core_021::headers::CONTENT_LENGTH,
-            body.len().to_string(),
-        );
-        request.set_body(body);
-    } else {
-        request.set_body(azure_core_021::EMPTY_BODY);
-    }
+    request.insert_header(azure_core_021::headers::CONTENT_TYPE, "application/json");
+    request.insert_header(
+        azure_core_021::headers::CONTENT_LENGTH,
+        body.len().to_string(),
+    );
+    request.set_body(body);
 
     let response = match client
         .pipeline

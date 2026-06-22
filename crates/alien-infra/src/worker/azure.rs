@@ -751,11 +751,15 @@ impl AzureWorkerController {
 
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match client
-            .get_container_app(&resource_group_name, container_app_name)
-            .await
+        match azure_container_apps::get_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            container_app_name,
+        )
+        .await
         {
             Ok(app) => {
                 if let Some(props) = &app.properties {
@@ -1835,16 +1839,20 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
         // Heartbeat check: verify Container App still exists and is in correct state
-        let container_app = client
-            .get_container_app(&resource_group_name, container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get Container App during heartbeat check".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+        let container_app = azure_container_apps::get_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            container_app_name,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to get Container App during heartbeat check".to_string(),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
 
         // Verify Container App is in Succeeded state - drift is non-retryable
         if let Some(properties) = &container_app.properties {
@@ -2172,15 +2180,19 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
-        let app = client
-            .get_container_app(&resource_group_name, container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Error checking container app update status".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+        let app = azure_container_apps::get_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            container_app_name,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Error checking container app update status".to_string(),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
 
         if let Some(props) = &app.properties {
             match props.provisioning_state.as_ref() {
@@ -2844,11 +2856,15 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match client
-            .get_container_app(&resource_group_name, &container_app_name)
-            .await
+        match azure_container_apps::get_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            &container_app_name,
+        )
+        .await
         {
             Err(e)
                 if matches!(
@@ -4619,13 +4635,50 @@ mod tests {
 
     #[derive(Debug)]
     struct AppManagementTransport {
+        app_name: String,
+        has_url: bool,
+        custom_url: Option<String>,
         container_app_delete_missing: bool,
+        create_long_running: bool,
+        get_count: Mutex<u32>,
     }
 
     impl AppManagementTransport {
-        fn new(container_app_delete_missing: bool) -> Self {
+        fn new(app_name: &str, has_url: bool) -> Self {
             Self {
-                container_app_delete_missing,
+                app_name: app_name.to_string(),
+                has_url,
+                custom_url: None,
+                container_app_delete_missing: false,
+                create_long_running: false,
+                get_count: Mutex::new(0),
+            }
+        }
+
+        fn custom_url(mut self, custom_url: &str) -> Self {
+            self.custom_url = Some(custom_url.to_string());
+            self
+        }
+
+        fn delete_missing(mut self, delete_missing: bool) -> Self {
+            self.container_app_delete_missing = delete_missing;
+            self
+        }
+
+        fn long_running_create(mut self) -> Self {
+            self.create_long_running = true;
+            self
+        }
+
+        fn response_app(&self, in_progress: bool) -> ContainerApp {
+            if let Some(custom_url) = &self.custom_url {
+                return create_container_app_with_custom_url(&self.app_name, custom_url);
+            }
+
+            if in_progress {
+                create_in_progress_container_app_response(&self.app_name)
+            } else {
+                create_successful_container_app_response(&self.app_name, self.has_url)
             }
         }
     }
@@ -4710,6 +4763,25 @@ mod tests {
 
             if path.contains("/providers/Microsoft.App/containerApps/") {
                 match request.method() {
+                    &Method::Get => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        if self.container_app_delete_missing {
+                            return Ok(Response::new(
+                                StatusCode::NotFound,
+                                Headers::new(),
+                                Box::pin(BytesStream::new("{}")),
+                            ));
+                        }
+                        let mut get_count = self.get_count.lock().expect(
+                            "Container Apps management get count mutex should not be poisoned",
+                        );
+                        *get_count += 1;
+                        let in_progress = self.create_long_running && *get_count == 1;
+                        return Ok(json_response(json!(self.response_app(in_progress))));
+                    }
                     &Method::Delete => {
                         assert_eq!(
                             request.url().query(),
@@ -4745,10 +4817,8 @@ mod tests {
         app_name: String,
         has_url: bool,
         custom_url: Option<String>,
-        delete_missing: bool,
         create_long_running: bool,
         assertion: Option<ContainerAppRequestAssertion>,
-        get_count: Mutex<u32>,
     }
 
     impl ContainerAppsTransport {
@@ -4757,20 +4827,13 @@ mod tests {
                 app_name: app_name.to_string(),
                 has_url,
                 custom_url: None,
-                delete_missing: false,
                 create_long_running: false,
                 assertion: None,
-                get_count: Mutex::new(0),
             }
         }
 
         fn custom_url(mut self, custom_url: &str) -> Self {
             self.custom_url = Some(custom_url.to_string());
-            self
-        }
-
-        fn delete_missing(mut self, delete_missing: bool) -> Self {
-            self.delete_missing = delete_missing;
             self
         }
 
@@ -4851,36 +4914,6 @@ mod tests {
                         );
                     }
                     Ok(json_response(json!(self.response_app(false))))
-                }
-                &Method::Get => {
-                    if self.delete_missing {
-                        return Ok(Response::new(
-                            StatusCode::NotFound,
-                            Headers::new(),
-                            Box::pin(BytesStream::new("{}")),
-                        ));
-                    }
-                    let mut get_count = self
-                        .get_count
-                        .lock()
-                        .expect("Container Apps get count mutex should not be poisoned");
-                    *get_count += 1;
-                    let in_progress = self.create_long_running && *get_count == 1;
-                    Ok(json_response(json!(self.response_app(in_progress))))
-                }
-                &Method::Delete => {
-                    if self.delete_missing {
-                        return Ok(Response::new(
-                            StatusCode::NotFound,
-                            Headers::new(),
-                            Box::pin(BytesStream::new("{}")),
-                        ));
-                    }
-                    Ok(Response::new(
-                        StatusCode::NoContent,
-                        Headers::new(),
-                        Box::pin(BytesStream::new("{}")),
-                    ))
                 }
                 method => panic!("unexpected Azure Container Apps method: {method:?}"),
             }
@@ -4997,13 +5030,31 @@ mod tests {
 
     fn setup_mock_service_provider(
         container_apps_client: Arc<OfficialAzureContainerAppsClient>,
+        app_name: &str,
+        has_url: bool,
     ) -> Arc<MockPlatformServiceProvider> {
-        setup_mock_service_provider_with_delete_missing(container_apps_client, false)
+        setup_mock_service_provider_with_app_management(
+            container_apps_client,
+            AppManagementTransport::new(app_name, has_url),
+        )
     }
 
     fn setup_mock_service_provider_with_delete_missing(
         container_apps_client: Arc<OfficialAzureContainerAppsClient>,
+        app_name: &str,
+        has_url: bool,
         container_app_delete_missing: bool,
+    ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_app_management(
+            container_apps_client,
+            AppManagementTransport::new(app_name, has_url)
+                .delete_missing(container_app_delete_missing),
+        )
+    }
+
+    fn setup_mock_service_provider_with_app_management(
+        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
+        app_management_transport: AppManagementTransport,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
@@ -5011,9 +5062,7 @@ mod tests {
             .expect_get_azure_container_apps_client()
             .returning(move |_| Ok(container_apps_client.clone()));
 
-        let app_management_client = app_management_client_with_transport(
-            AppManagementTransport::new(container_app_delete_missing),
-        );
+        let app_management_client = app_management_client_with_transport(app_management_transport);
         mock_provider
             .expect_get_azure_container_apps_management_client()
             .returning(move |_| Ok(app_management_client.clone()));
@@ -5044,17 +5093,25 @@ mod tests {
         };
 
         // Set up Container Apps client mock - create custom response if we need to override URL
+        let app_management_transport;
         let container_apps_mock = if needs_readiness_probe && mock_server.is_some() {
             // Create custom mock that returns the mock server URL
             let mock_server_url = mock_server.as_ref().unwrap().base_url();
+            app_management_transport =
+                AppManagementTransport::new(app_name, true).custom_url(&mock_server_url);
             setup_mock_client_with_custom_url(app_name, &mock_server_url, for_deletion)
         } else if for_deletion {
+            app_management_transport = AppManagementTransport::new(app_name, has_url);
             setup_mock_client_for_creation_and_deletion(app_name, has_url)
         } else {
+            app_management_transport = AppManagementTransport::new(app_name, has_url);
             setup_mock_client_for_creation_and_update(app_name, has_url)
         };
 
-        let mock_provider = setup_mock_service_provider(container_apps_mock);
+        let mock_provider = setup_mock_service_provider_with_app_management(
+            container_apps_mock,
+            app_management_transport,
+        );
 
         (mock_provider, mock_server)
     }
@@ -5065,9 +5122,7 @@ mod tests {
         _for_deletion: bool,
     ) -> Arc<OfficialAzureContainerAppsClient> {
         container_apps_client_with_transport(
-            ContainerAppsTransport::new(app_name, true)
-                .custom_url(custom_url)
-                .delete_missing(false),
+            ContainerAppsTransport::new(app_name, true).custom_url(custom_url),
         )
     }
 
@@ -5398,8 +5453,12 @@ mod tests {
     ) {
         let app_name = format!("test-{}", worker.id);
         let mock_container_apps = setup_mock_client_for_best_effort_deletion(&app_name);
-        let mock_provider =
-            setup_mock_service_provider_with_delete_missing(mock_container_apps, app_missing);
+        let mock_provider = setup_mock_service_provider_with_delete_missing(
+            mock_container_apps,
+            &app_name,
+            worker.ingress == Ingress::Public,
+            app_missing,
+        );
 
         // Start with a ready controller
         let mut ready_controller = AzureWorkerController::mock_ready(&app_name);
@@ -5438,7 +5497,10 @@ mod tests {
         let worker = basic_function();
         let app_name = format!("test-{}", worker.id);
         let mock_container_apps = setup_mock_client_for_long_running_creation(&app_name, false);
-        let mock_provider = setup_mock_service_provider(mock_container_apps);
+        let mock_provider = setup_mock_service_provider_with_app_management(
+            mock_container_apps,
+            AppManagementTransport::new(&app_name, false).long_running_create(),
+        );
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5470,7 +5532,7 @@ mod tests {
 
         let container_apps_client =
             container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, true));
-        let mock_provider = setup_mock_service_provider(container_apps_client);
+        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, true);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5504,7 +5566,7 @@ mod tests {
 
         let container_apps_client =
             container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, false));
-        let mock_provider = setup_mock_service_provider(container_apps_client);
+        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5535,7 +5597,7 @@ mod tests {
             ContainerAppsTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_custom_resources),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client);
+        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5561,7 +5623,7 @@ mod tests {
             ContainerAppsTransport::new(&app_name, false)
                 .assert_request(container_app_body_has_expected_env_vars),
         );
-        let mock_provider = setup_mock_service_provider(container_apps_client);
+        let mock_provider = setup_mock_service_provider(container_apps_client, &app_name, false);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
