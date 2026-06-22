@@ -5,8 +5,6 @@ mod azure_container_apps;
 
 mod azure_authorization;
 
-mod azure_msi;
-
 mod azure_network;
 
 mod azure_storage;

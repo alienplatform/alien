@@ -2,10 +2,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper, Scope};
+use crate::azure_authorization;
+use crate::core::{
+    map_azure_core_021_sdk_error, ResourceControllerContext, ResourcePermissionsHelper, Scope,
+};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
-use crate::{azure_authorization, azure_msi};
 use alien_core::{
     AzureRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, NetworkSettings,
     ObservedHealth, PermissionProfile, Platform, ProviderLifecycleState, RemoteStackManagement,
@@ -201,14 +203,22 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        let created = azure_msi::create_or_update_user_assigned_identity(
-            &client,
-            &azure_cfg.subscription_id,
-            &resource_group_name,
+        let result = client
+            .user_assigned_identities_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                identity_name.clone(),
+                identity,
+            )
+            .await;
+        let created = map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity create or update",
+            "Azure managed identity",
             &identity_name,
-            &identity,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to create management identity '{}'", identity_name),
             resource_id: Some(config.id.clone()),
@@ -303,15 +313,23 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        azure_msi::create_or_update_federated_credential(
-            &client,
-            &azure_cfg.subscription_id,
-            &resource_group_name,
-            &identity_name,
+        let result = client
+            .federated_identity_credentials_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                identity_name.clone(),
+                fic_name.clone(),
+                credential,
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "federated credential create or update",
+            "Azure federated identity credential",
             &fic_name,
-            &credential,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create federated identity credential '{}' on identity '{}'",
@@ -576,13 +594,21 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            let identity = azure_msi::get_user_assigned_identity(
-                &client,
-                &azure_cfg.subscription_id,
-                &resource_group_name,
+            let result = client
+                .user_assigned_identities_client()
+                .get(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    identity_name.clone(),
+                )
+                .await;
+            let identity = map_azure_core_021_sdk_error(
+                "Azure Managed Identity",
+                result,
+                "user assigned identity get",
+                "Azure managed identity",
                 &identity_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get management identity during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -707,15 +733,23 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        azure_msi::create_or_update_federated_credential(
-            &mi_client,
-            &azure_cfg.subscription_id,
-            &resource_group_name,
-            &identity_name,
+        let result = mi_client
+            .federated_identity_credentials_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                identity_name.clone(),
+                fic_name.clone(),
+                credential,
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "federated credential create or update",
+            "Azure federated identity credential",
             &fic_name,
-            &credential,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to update federated identity credential".to_string(),
             resource_id: Some(config.id.clone()),
@@ -844,15 +878,24 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            match azure_msi::delete_federated_credential(
-                &client,
-                &azure_cfg.subscription_id,
-                &resource_group_name,
-                &identity_name,
+            let result = client
+                .federated_identity_credentials_client()
+                .delete(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    identity_name.clone(),
+                    fic_name.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            match map_azure_core_021_sdk_error(
+                "Azure Managed Identity",
+                result,
+                "federated credential delete",
+                "Azure federated identity credential",
                 fic_name,
-            )
-            .await
-            {
+            ) {
                 Ok(_) => {
                     info!(fic_name = %fic_name, "Federated credential deleted");
                 }
@@ -895,14 +938,23 @@ impl AzureRemoteStackManagementController {
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
-            match azure_msi::delete_user_assigned_identity(
-                &client,
-                &azure_cfg.subscription_id,
-                &resource_group_name,
+            let result = client
+                .user_assigned_identities_client()
+                .delete(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    identity_name.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            match map_azure_core_021_sdk_error(
+                "Azure Managed Identity",
+                result,
+                "user assigned identity delete",
+                "Azure managed identity",
                 &identity_name,
-            )
-            .await
-            {
+            ) {
                 Ok(_) => {
                     info!(identity_name = %identity_name, "Management identity deleted");
                 }
@@ -969,7 +1021,155 @@ impl AzureRemoteStackManagementController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{PermissionProfile, PermissionSetReference};
+    use crate::core::{azure_credential_from_config, AzureCore021Credential};
+    use alien_core::{
+        AzureClientConfig, AzureCredentials, PermissionProfile, PermissionSetReference,
+    };
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context as AzureCoreContext, Method, Policy,
+        PolicyResult, Request, Response, StatusCode, TransportOptions,
+    };
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct ManagedIdentityTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for ManagedIdentityTransport {
+        async fn send(
+            &self,
+            _ctx: &AzureCoreContext,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(request.method(), &Method::Put);
+            assert_eq!(request.url().query(), Some("api-version=2023-01-31"));
+
+            match request.url().path() {
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-identity" => {
+                    assert_json_body(request, |body| {
+                        assert_eq!(body["location"], "eastus");
+                    });
+                    Ok(json_response(serde_json::json!({
+                        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-identity",
+                        "name": "test-identity",
+                        "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                        "location": "eastus",
+                        "properties": {
+                            "clientId": "22222222-2222-2222-2222-222222222222",
+                            "principalId": "33333333-3333-3333-3333-333333333333",
+                            "tenantId": "11111111-1111-1111-1111-111111111111"
+                        }
+                    })))
+                }
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-identity/federatedIdentityCredentials/test-fic" => {
+                    assert_json_body(request, |body| {
+                        assert_eq!(body["properties"]["issuer"], "https://issuer.example");
+                        assert_eq!(body["properties"]["subject"], "system:serviceaccount:ns:name");
+                        assert_eq!(body["properties"]["audiences"][0], "api://AzureADTokenExchange");
+                    });
+                    Ok(json_response(serde_json::json!({
+                        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-identity/federatedIdentityCredentials/test-fic",
+                        "name": "test-fic",
+                        "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+                        "properties": {
+                            "issuer": "https://issuer.example",
+                            "subject": "system:serviceaccount:ns:name",
+                            "audiences": ["api://AzureADTokenExchange"]
+                        }
+                    })))
+                }
+                path => panic!("unexpected Azure Managed Identity path: {path}"),
+            }
+        }
+    }
+
+    fn assert_json_body(request: &Request, assert_body: impl FnOnce(serde_json::Value)) {
+        match request.body() {
+            Body::Bytes(bytes) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(bytes).expect("MSI request body should be JSON");
+                assert_body(body);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Body::SeekableStream(_) => panic!("MSI request should use JSON bytes"),
+        }
+    }
+
+    fn json_response(value: serde_json::Value) -> Response {
+        Response::new(
+            StatusCode::Ok,
+            Headers::new(),
+            Box::pin(BytesStream::new(value.to_string())),
+        )
+    }
+
+    fn msi_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_mgmt_msi::package_2023_01_31::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_mgmt_msi::package_2023_01_31::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Managed Identity client should build")
+    }
+
+    #[tokio::test]
+    async fn msi_generated_client_requests_are_sdk_native() {
+        let client = msi_client_with_transport(ManagedIdentityTransport);
+
+        let identity = Identity::new(TrackedResource::new("eastus".to_string()));
+        let created = client
+            .user_assigned_identities_client()
+            .create_or_update(
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "test-rg".to_string(),
+                "test-identity".to_string(),
+                identity,
+            )
+            .await
+            .expect("identity should be created");
+        assert_eq!(
+            created.tracked_resource.resource.name.as_deref(),
+            Some("test-identity")
+        );
+
+        let mut credential = FederatedIdentityCredential::new();
+        credential.properties = Some(FederatedIdentityCredentialProperties::new(
+            "https://issuer.example".to_string(),
+            "system:serviceaccount:ns:name".to_string(),
+            vec!["api://AzureADTokenExchange".to_string()],
+        ));
+        let created = client
+            .federated_identity_credentials_client()
+            .create_or_update(
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "test-rg".to_string(),
+                "test-identity".to_string(),
+                "test-fic".to_string(),
+                credential,
+            )
+            .await
+            .expect("federated credential should be created");
+        assert_eq!(
+            created.proxy_resource.resource.name.as_deref(),
+            Some("test-fic")
+        );
+    }
 
     fn permission_context() -> PermissionContext {
         PermissionContext::new()

@@ -2,9 +2,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::{ResourceControllerContext, Scope};
+use crate::azure_authorization;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext, Scope};
 use crate::error::{ErrorData, Result};
-use crate::{azure_authorization, azure_msi};
 use alien_core::{
     AzureManagedIdentityServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -182,14 +182,22 @@ impl AzureServiceAccountController {
         let client = ctx
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
-        let created_identity = azure_msi::create_or_update_user_assigned_identity(
-            &client,
-            &azure_cfg.subscription_id,
-            &resource_group_name,
+        let result = client
+            .user_assigned_identities_client()
+            .create_or_update(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                identity_name.clone(),
+                identity,
+            )
+            .await;
+        let created_identity = map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity create or update",
+            "Azure managed identity",
             &identity_name,
-            &identity,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to create managed identity '{}'", identity_name),
             resource_id: Some(config.id.clone()),
@@ -602,13 +610,21 @@ impl AzureServiceAccountController {
             let managed_identity_client = ctx
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
-            let identity = azure_msi::get_user_assigned_identity(
-                &managed_identity_client,
-                &azure_cfg.subscription_id,
-                &resource_group_name,
+            let result = managed_identity_client
+                .user_assigned_identities_client()
+                .get(
+                    azure_cfg.subscription_id.clone(),
+                    resource_group_name.clone(),
+                    identity_name.clone(),
+                )
+                .await;
+            let identity = map_azure_core_021_sdk_error(
+                "Azure Managed Identity",
+                result,
+                "user assigned identity get",
+                "Azure managed identity",
                 &identity_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get managed identity during heartbeat check".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -909,14 +925,23 @@ impl AzureServiceAccountController {
             .service_provider
             .get_azure_managed_identity_client(azure_cfg)?;
 
-        match azure_msi::delete_user_assigned_identity(
-            &client,
-            &azure_cfg.subscription_id,
-            &resource_group_name,
+        let result = client
+            .user_assigned_identities_client()
+            .delete(
+                azure_cfg.subscription_id.clone(),
+                resource_group_name.clone(),
+                identity_name.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        match map_azure_core_021_sdk_error(
+            "Azure Managed Identity",
+            result,
+            "user assigned identity delete",
+            "Azure managed identity",
             &identity_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 info!(config_id = %config.id, identity_name = %identity_name, "Managed identity deleted successfully");
             }
