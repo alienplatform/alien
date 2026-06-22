@@ -3,7 +3,7 @@ use alien_macros::controller;
 use aws_sdk_ssm::{
     operation::describe_parameters::DescribeParametersOutput,
     primitives::DateTimeFormat,
-    types::{ParameterMetadata, ParameterTier, ParameterType},
+    types::{ParameterMetadata, ParameterStringFilter, ParameterTier, ParameterType},
 };
 use std::time::Duration;
 use tracing::{debug, info};
@@ -170,8 +170,7 @@ impl AwsVaultController {
 
         if let Some(vault_prefix) = &self.vault_prefix {
             let client = ctx.service_provider.get_aws_ssm_client(aws_cfg).await?;
-            let response = client
-                .describe_parameters_by_prefix(vault_prefix, 50)
+            let response = describe_parameters_by_prefix(&client, vault_prefix, 50)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -237,6 +236,37 @@ impl AwsVaultController {
             Ok(None)
         }
     }
+}
+
+async fn describe_parameters_by_prefix(
+    client: &aws_sdk_ssm::Client,
+    prefix: &str,
+    max_results: i32,
+) -> Result<DescribeParametersOutput> {
+    let name_prefix_filter = ParameterStringFilter::builder()
+        .key("Name")
+        .option("BeginsWith")
+        .values(prefix)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to build SSM Parameter Store prefix filter for '{prefix}'"),
+            resource_id: None,
+        })?;
+
+    client
+        .describe_parameters()
+        .parameter_filters(name_prefix_filter)
+        .max_results(max_results)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to describe SSM Parameter Store metadata for prefix '{prefix}'"
+            ),
+            resource_id: None,
+        })
 }
 
 fn emit_aws_parameter_store_vault_heartbeat(
@@ -358,5 +388,85 @@ fn parameter_tier_name(tier: &ParameterTier) -> &str {
         ParameterTier::Advanced => "Advanced",
         ParameterTier::IntelligentTiering => "Intelligent-Tiering",
         _ => tier.as_str(),
+    }
+}
+
+impl AwsVaultController {
+    /// Creates a controller in a ready state with mock values for testing purposes.
+    #[cfg(feature = "test-utils")]
+    pub fn mock_ready(account_id: &str, region: &str, vault_prefix: &str) -> Self {
+        Self {
+            state: AwsVaultState::Ready,
+            account_id: Some(account_id.to_string()),
+            region: Some(region.to_string()),
+            vault_prefix: Some(vault_prefix.to_string()),
+            _internal_stay_count: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alien_core::{Platform, ResourceStatus, Vault};
+    use aws_sdk_ssm::{operation::describe_parameters::DescribeParametersOutput, Client};
+    use aws_smithy_async::rt::sleep::{SharedAsyncSleep, TokioSleep};
+    use aws_smithy_mocks::{mock, mock_client};
+
+    use crate::{
+        core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider},
+        vault::AwsVaultController,
+    };
+
+    #[tokio::test]
+    async fn ready_uses_sdk_native_ssm_mock_for_parameter_metadata() {
+        let vault_prefix = "test-vault-prefix";
+        let describe_rule = mock!(Client::describe_parameters)
+            .match_requests(move |request| {
+                let filters = request.parameter_filters();
+                let Some(filter) = filters.first() else {
+                    return false;
+                };
+
+                request.max_results() == Some(50)
+                    && filter.key() == "Name"
+                    && filter.option() == Some("BeginsWith")
+                    && filter.values().first().map(String::as_str) == Some(vault_prefix)
+            })
+            .then_output(|| DescribeParametersOutput::builder().build());
+        let ssm_client = mock_client!(
+            aws_sdk_ssm,
+            aws_smithy_mocks::RuleMode::Sequential,
+            [&describe_rule],
+            |config| config.sleep_impl(SharedAsyncSleep::new(TokioSleep::new()))
+        );
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ssm_client()
+            .times(1)
+            .returning(move |_| Ok(ssm_client.clone()));
+
+        let vault = Vault::new("vault".to_string()).build();
+        let controller = AwsVaultController::mock_ready("123456789012", "us-east-1", vault_prefix);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(vault)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        executor
+            .step()
+            .await
+            .expect("ready heartbeat should succeed");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(describe_rule.num_calls(), 1);
     }
 }

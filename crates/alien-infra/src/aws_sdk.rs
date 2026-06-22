@@ -44,9 +44,6 @@ use aws_sdk_s3::{
     Client as S3Client,
 };
 use aws_sdk_sqs::{types::QueueAttributeName, Client as SqsClient};
-use aws_sdk_ssm::{
-    operation::describe_parameters::DescribeParametersOutput, types::ParameterStringFilter,
-};
 use aws_types::region::Region;
 
 use crate::error::{ErrorData, Result};
@@ -460,17 +457,6 @@ pub trait EventBridgeApi: Send + Sync {
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
     /// Delete a rule.
     async fn delete_rule(&self, rule_name: &str) -> Result<()>;
-}
-
-/// Minimal SSM operations required by infra controllers.
-#[async_trait]
-pub trait SsmApi: Send + Sync {
-    /// Describe parameter metadata whose name begins with the provided prefix.
-    async fn describe_parameters_by_prefix(
-        &self,
-        prefix: &str,
-        max_results: i32,
-    ) -> Result<DescribeParametersOutput>;
 }
 
 /// Minimal SQS operations required by infra controllers.
@@ -1799,42 +1785,6 @@ impl EventBridgeApi for EventBridgeClient {
 }
 
 #[async_trait]
-impl SsmApi for aws_sdk_ssm::Client {
-    async fn describe_parameters_by_prefix(
-        &self,
-        prefix: &str,
-        max_results: i32,
-    ) -> Result<DescribeParametersOutput> {
-        let name_prefix_filter = ParameterStringFilter::builder()
-            .key("Name")
-            .option("BeginsWith")
-            .values(prefix)
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to build SSM Parameter Store prefix filter for '{}'",
-                    prefix
-                ),
-                resource_id: None,
-            })?;
-
-        self.describe_parameters()
-            .parameter_filters(name_prefix_filter)
-            .max_results(max_results)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to describe SSM Parameter Store metadata for prefix '{}'",
-                    prefix
-                ),
-                resource_id: None,
-            })
-    }
-}
-
 #[async_trait]
 impl DynamoDbApi for DynamoDbClient {
     async fn create_kv_table(&self, table_name: &str, tags: HashMap<String, String>) -> Result<()> {
