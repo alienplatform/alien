@@ -2,7 +2,6 @@ use crate::core::{LongRunningOperation, OperationResult};
 use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 use alien_core::AzureClientConfig;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
-use azure_core::credentials::{AccessToken, TokenCredential};
 use azure_mgmt_app::package_preview_2024_08 as azure_app_2024_08;
 use azure_mgmt_app::package_preview_2024_08::models::{
     container_app, Certificate, Configuration, DaprComponent, ManagedEnvironment, Template,
@@ -11,39 +10,6 @@ use azure_mgmt_app::package_preview_2024_08::models::{
 use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
-
-#[cfg(any(test, feature = "test-utils"))]
-use mockall::automock;
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait ContainerAppsApi: Send + Sync + Debug {
-    async fn create_or_update_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-        container_app: &ContainerApp,
-    ) -> CloudClientResult<OperationResult<ContainerApp>>;
-
-    async fn update_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-        container_app: &ContainerApp,
-    ) -> CloudClientResult<OperationResult<ContainerApp>>;
-
-    async fn get_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-    ) -> CloudClientResult<ContainerApp>;
-
-    async fn delete_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-    ) -> CloudClientResult<OperationResult<()>>;
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -381,8 +347,9 @@ pub(crate) async fn delete_dapr_component(
 
 pub struct OfficialAzureContainerAppsClient {
     config: AzureClientConfig,
-    credential: Arc<dyn TokenCredential>,
-    http_client: reqwest::Client,
+    credential: Arc<dyn azure_core_021::auth::TokenCredential>,
+    scopes: Vec<String>,
+    pipeline: Arc<azure_core_021::Pipeline>,
 }
 
 impl Debug for OfficialAzureContainerAppsClient {
@@ -395,11 +362,23 @@ impl Debug for OfficialAzureContainerAppsClient {
 }
 
 impl OfficialAzureContainerAppsClient {
-    pub fn new(config: AzureClientConfig, credential: Arc<dyn TokenCredential>) -> Self {
+    pub fn new(
+        config: AzureClientConfig,
+        credential: Arc<dyn azure_core_021::auth::TokenCredential>,
+        options: azure_core_021::ClientOptions,
+    ) -> Self {
+        let pipeline = azure_core_021::Pipeline::new(
+            option_env!("CARGO_PKG_NAME"),
+            option_env!("CARGO_PKG_VERSION"),
+            options,
+            Vec::new(),
+            Vec::new(),
+        );
         Self {
             config,
             credential,
-            http_client: reqwest::Client::new(),
+            scopes: vec!["https://management.azure.com/.default".to_string()],
+            pipeline: Arc::new(pipeline),
         }
     }
 
@@ -418,22 +397,13 @@ impl OfficialAzureContainerAppsClient {
 
     async fn request(
         &self,
-        method: reqwest::Method,
+        method: azure_core_021::Method,
         url: String,
         body: Option<String>,
         resource_type: &str,
         resource_name: &str,
-    ) -> CloudClientResult<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
-        azure_arm_request(
-            &self.http_client,
-            self.credential.as_ref(),
-            method,
-            url,
-            body,
-            resource_type,
-            resource_name,
-        )
-        .await
+    ) -> CloudClientResult<AzureCoreArmResponse> {
+        azure_core_arm_request(self, method, url, body, resource_type, resource_name).await
     }
 
     fn parse_response<T: DeserializeOwned>(
@@ -446,9 +416,8 @@ impl OfficialAzureContainerAppsClient {
     }
 }
 
-#[async_trait::async_trait]
-impl ContainerAppsApi for OfficialAzureContainerAppsClient {
-    async fn create_or_update_container_app(
+impl OfficialAzureContainerAppsClient {
+    pub async fn create_or_update_container_app(
         &self,
         resource_group_name: &str,
         container_app_name: &str,
@@ -463,24 +432,24 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
         .await
     }
 
-    async fn get_container_app(
+    pub async fn get_container_app(
         &self,
         resource_group_name: &str,
         container_app_name: &str,
     ) -> CloudClientResult<ContainerApp> {
-        let (_, _, body) = self
+        let response = self
             .request(
-                reqwest::Method::GET,
+                azure_core_021::Method::Get,
                 self.container_app_url(resource_group_name, container_app_name),
                 None,
                 "Azure Container App",
                 container_app_name,
             )
             .await?;
-        self.parse_response("Azure Container App", container_app_name, &body)
+        self.parse_response("Azure Container App", container_app_name, &response.body)
     }
 
-    async fn update_container_app(
+    pub async fn update_container_app(
         &self,
         resource_group_name: &str,
         container_app_name: &str,
@@ -495,7 +464,7 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
         .await
     }
 
-    async fn delete_container_app(
+    pub async fn delete_container_app(
         &self,
         resource_group_name: &str,
         container_app_name: &str,
@@ -507,9 +476,7 @@ impl ContainerAppsApi for OfficialAzureContainerAppsClient {
         )
         .await
     }
-}
 
-impl OfficialAzureContainerAppsClient {
     async fn put_lro<T>(
         &self,
         url: String,
@@ -521,16 +488,22 @@ impl OfficialAzureContainerAppsClient {
         T: Serialize + DeserializeOwned,
     {
         let body = serialize_request(resource_type, resource_name, resource)?;
-        let (status, headers, body) = self
+        let response = self
             .request(
-                reqwest::Method::PUT,
+                azure_core_021::Method::Put,
                 url,
                 Some(body),
                 resource_type,
                 resource_name,
             )
             .await?;
-        operation_result_from_response(status, &headers, &body, resource_type, resource_name)
+        operation_result_from_response(
+            response.status,
+            &response.headers,
+            &response.body,
+            resource_type,
+            resource_name,
+        )
     }
 
     async fn patch_lro<T>(
@@ -544,16 +517,22 @@ impl OfficialAzureContainerAppsClient {
         T: Serialize + DeserializeOwned,
     {
         let body = serialize_request(resource_type, resource_name, resource)?;
-        let (status, headers, body) = self
+        let response = self
             .request(
-                reqwest::Method::PATCH,
+                azure_core_021::Method::Patch,
                 url,
                 Some(body),
                 resource_type,
                 resource_name,
             )
             .await?;
-        operation_result_from_response(status, &headers, &body, resource_type, resource_name)
+        operation_result_from_response(
+            response.status,
+            &response.headers,
+            &response.body,
+            resource_type,
+            resource_name,
+        )
     }
 
     async fn delete_lro(
@@ -562,18 +541,22 @@ impl OfficialAzureContainerAppsClient {
         resource_type: &str,
         resource_name: &str,
     ) -> CloudClientResult<OperationResult<()>> {
-        let (status, headers, _) = self
+        let response = self
             .request(
-                reqwest::Method::DELETE,
+                azure_core_021::Method::Delete,
                 url,
                 None,
                 resource_type,
                 resource_name,
             )
             .await?;
-        if status == reqwest::StatusCode::ACCEPTED {
+        if response.status == azure_core_021::StatusCode::Accepted {
             return Ok(OperationResult::LongRunning(
-                long_running_operation_from_headers(&headers, resource_type, resource_name)?,
+                long_running_operation_from_azure_core_021_headers(
+                    &response.headers,
+                    resource_type,
+                    resource_name,
+                )?,
             ));
         }
         Ok(OperationResult::Completed(()))
@@ -692,42 +675,92 @@ impl AzureLongRunningOperationClient {
     }
 }
 
-async fn azure_arm_request(
-    http_client: &reqwest::Client,
-    credential: &dyn TokenCredential,
-    method: reqwest::Method,
+struct AzureCoreArmResponse {
+    status: azure_core_021::StatusCode,
+    headers: azure_core_021::headers::Headers,
+    body: String,
+}
+
+async fn azure_core_arm_request(
+    client: &OfficialAzureContainerAppsClient,
+    method: azure_core_021::Method,
     url: String,
     body: Option<String>,
     resource_type: &str,
     resource_name: &str,
-) -> CloudClientResult<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
-    let token = azure_bearer_token(credential).await?;
-    let mut request = http_client
-        .request(method, &url)
-        .bearer_auth(token.token.secret());
+) -> CloudClientResult<AzureCoreArmResponse> {
+    let scopes = client.scopes.iter().map(String::as_str).collect::<Vec<_>>();
+    let token = client
+        .credential
+        .get_token(&scopes)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::AuthenticationError {
+            message: "Failed to get Azure management access token".to_string(),
+        })?;
+    let url = azure_core_021::Url::parse(&url)
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: format!("Invalid Azure ARM request URL for {resource_type} '{resource_name}'"),
+        })?;
+    let mut request = azure_core_021::Request::new(url.clone(), method);
+    request.insert_header(
+        azure_core_021::headers::AUTHORIZATION,
+        format!("Bearer {}", token.token.secret()),
+    );
 
     if let Some(body) = body {
-        request = request
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body);
+        request.insert_header(azure_core_021::headers::CONTENT_TYPE, "application/json");
+        request.insert_header(
+            azure_core_021::headers::CONTENT_LENGTH,
+            body.len().to_string(),
+        );
+        request.set_body(body);
+    } else {
+        request.set_body(azure_core_021::EMPTY_BODY);
     }
 
-    let response = request.send().await.into_alien_error().context(
-        CloudClientErrorData::HttpRequestFailed {
-            message: format!("Azure ARM request failed for {resource_type} '{resource_name}'"),
-        },
-    )?;
+    let response = match client
+        .pipeline
+        .send(&azure_core_021::Context::default(), &mut request)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let mapped: CloudClientResult<azure_core_021::Response> = map_azure_core_021_sdk_error(
+                "Azure Container Apps",
+                Err(error),
+                "ARM request",
+                resource_type,
+                resource_name,
+            );
+            return match mapped {
+                Ok(_) => unreachable!("Azure Core send error unexpectedly mapped to success"),
+                Err(error) => Err(error),
+            };
+        }
+    };
     let status = response.status();
     let headers = response.headers().clone();
-    let text = response.text().await.into_alien_error().context(
-        CloudClientErrorData::HttpRequestFailed {
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
             message: format!(
                 "Failed to read Azure ARM response for {resource_type} '{resource_name}'"
             ),
-        },
-    )?;
+        })?;
+    let text = String::from_utf8(body.to_vec())
+        .into_alien_error()
+        .context(CloudClientErrorData::SerializationError {
+            message: format!(
+                "Azure ARM response for {resource_type} '{resource_name}' was not UTF-8"
+            ),
+        })?;
 
-    if status == reqwest::StatusCode::NOT_FOUND {
+    if status == azure_core_021::StatusCode::NotFound {
         return Err(AlienError::new(
             CloudClientErrorData::RemoteResourceNotFound {
                 resource_type: resource_type.to_string(),
@@ -736,7 +769,7 @@ async fn azure_arm_request(
         ));
     }
 
-    if status == reqwest::StatusCode::CONFLICT {
+    if status == azure_core_021::StatusCode::Conflict {
         return Err(AlienError::new(
             CloudClientErrorData::RemoteResourceConflict {
                 resource_type: resource_type.to_string(),
@@ -746,37 +779,39 @@ async fn azure_arm_request(
         ));
     }
 
-    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
+    if status == azure_core_021::StatusCode::Forbidden
+        || status == azure_core_021::StatusCode::Unauthorized
+    {
         return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
             resource_type: resource_type.to_string(),
             resource_name: resource_name.to_string(),
         }));
     }
 
-    if !status.is_success() {
+    if !matches!(
+        status,
+        azure_core_021::StatusCode::Ok
+            | azure_core_021::StatusCode::Created
+            | azure_core_021::StatusCode::Accepted
+            | azure_core_021::StatusCode::NoContent
+    ) {
         return Err(AlienError::new(CloudClientErrorData::HttpResponseError {
             message: format!(
                 "Azure ARM request for {resource_type} '{resource_name}' returned HTTP {}",
-                status.as_u16()
+                status as u16
             ),
-            url,
-            http_status: status.as_u16(),
+            url: url.to_string(),
+            http_status: status as u16,
             http_request_text: None,
             http_response_text: Some(text),
         }));
     }
 
-    Ok((status, headers, text))
-}
-
-async fn azure_bearer_token(credential: &dyn TokenCredential) -> CloudClientResult<AccessToken> {
-    credential
-        .get_token(&["https://management.azure.com/.default"], None)
-        .await
-        .into_alien_error()
-        .context(CloudClientErrorData::AuthenticationError {
-            message: "Failed to get Azure management access token".to_string(),
-        })
+    Ok(AzureCoreArmResponse {
+        status,
+        headers,
+        body: text,
+    })
 }
 
 fn map_azure_core_021_sdk_error<T>(
@@ -965,8 +1000,8 @@ async fn parse_azure_core_021_response_body_or_default_certificate(
 }
 
 fn operation_result_from_response<T>(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
+    status: azure_core_021::StatusCode,
+    headers: &azure_core_021::headers::Headers,
     body: &str,
     resource_type: &str,
     resource_name: &str,
@@ -974,68 +1009,17 @@ fn operation_result_from_response<T>(
 where
     T: DeserializeOwned,
 {
-    if status == reqwest::StatusCode::ACCEPTED {
+    if status == azure_core_021::StatusCode::Accepted {
         return Ok(OperationResult::LongRunning(
-            long_running_operation_from_headers(headers, resource_type, resource_name)?,
+            long_running_operation_from_azure_core_021_headers(
+                headers,
+                resource_type,
+                resource_name,
+            )?,
         ));
     }
 
     parse_response(resource_type, resource_name, body).map(OperationResult::Completed)
-}
-
-fn long_running_operation_from_headers(
-    headers: &reqwest::header::HeaderMap,
-    resource_type: &str,
-    resource_name: &str,
-) -> CloudClientResult<LongRunningOperation> {
-    let async_operation_url = header_to_string(headers, "azure-asyncoperation")?;
-    let location_url = header_to_string(headers, "location")?;
-    let url = async_operation_url
-        .clone()
-        .or_else(|| location_url.clone())
-        .ok_or_else(|| {
-            AlienError::new(CloudClientErrorData::GenericError {
-                message: format!(
-                    "{resource_type} '{resource_name}' returned 202 without Azure-AsyncOperation or Location header"
-                ),
-            })
-        })?;
-    let retry_after = header_to_string(headers, "retry-after")?
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map(Duration::from_secs)
-                .map_err(|error| {
-                    AlienError::new(CloudClientErrorData::SerializationError {
-                        message: format!(
-                            "Failed to parse Azure Retry-After header '{value}': {error}"
-                        ),
-                    })
-                })
-        })
-        .transpose()?;
-
-    Ok(LongRunningOperation {
-        url,
-        retry_after,
-        location_url: async_operation_url.and(location_url),
-    })
-}
-
-fn header_to_string(
-    headers: &reqwest::header::HeaderMap,
-    name: &'static str,
-) -> CloudClientResult<Option<String>> {
-    headers
-        .get(name)
-        .map(|value| {
-            value.to_str().map(ToString::to_string).map_err(|error| {
-                AlienError::new(CloudClientErrorData::SerializationError {
-                    message: format!("Failed to parse Azure {name} header: {error}"),
-                })
-            })
-        })
-        .transpose()
 }
 
 fn serialize_request<T: Serialize>(

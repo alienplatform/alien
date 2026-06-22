@@ -4533,7 +4533,8 @@ mod tests {
     use std::time::Duration;
 
     use crate::azure_container_apps::{
-        AzureLongRunningOperationClient, ContainerApp, ContainerAppProperties, MockContainerAppsApi,
+        AzureLongRunningOperationClient, ContainerApp, ContainerAppProperties,
+        OfficialAzureContainerAppsClient,
     };
     use crate::core::{azure_credential_from_config, AzureCore021Credential};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -4558,7 +4559,6 @@ mod tests {
 
     use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
-    use crate::core::{LongRunningOperation, OperationResult};
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
@@ -4742,179 +4742,39 @@ mod tests {
     fn setup_mock_client_for_creation_and_update(
         app_name: &str,
         has_url: bool,
-    ) -> Arc<MockContainerAppsApi> {
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock successful app creation - immediate completion
-        let app_name = app_name.to_string();
-        let app_name_for_create = app_name.clone();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name_for_create, has_url),
-                ))
-            });
-
-        // Mock successful updates - immediate completion
-        let app_name_for_update = app_name.clone();
-        mock_container_apps
-            .expect_update_container_app()
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name_for_update, has_url),
-                ))
-            });
-
-        // Mock get operations - may be called multiple times during creation and update flows
-        let app_name_for_get = app_name.clone();
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| {
-                Ok(create_successful_container_app_response(
-                    &app_name_for_get,
-                    has_url,
-                ))
-            })
-            .times(0..); // Allow 0 or more calls
-
-        Arc::new(mock_container_apps)
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, has_url))
     }
 
     fn setup_mock_client_for_creation_and_deletion(
         app_name: &str,
         has_url: bool,
-    ) -> Arc<MockContainerAppsApi> {
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock successful app creation - immediate completion
-        let app_name = app_name.to_string();
-        let app_name_for_create = app_name.clone();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name_for_create, has_url),
-                ))
-            });
-
-        // Mock successful deletion - immediate completion
-        mock_container_apps
-            .expect_delete_container_app()
-            .returning(|_, _| Ok(OperationResult::Completed(())));
-
-        // Mock get operations during creation (may be called multiple times)
-        let app_name_for_get_creation = app_name.clone();
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| {
-                Ok(create_successful_container_app_response(
-                    &app_name_for_get_creation,
-                    has_url,
-                ))
-            })
-            .times(0..); // Allow 0 or more calls during creation
-
-        // Mock get operation failure for deletion verification
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            })
-            .times(0..);
-
-        Arc::new(mock_container_apps)
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, has_url))
     }
 
     fn setup_mock_client_for_long_running_creation(
         app_name: &str,
         has_url: bool,
-    ) -> (Arc<MockContainerAppsApi>, AzureLongRunningOperationClient) {
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock creation that starts as long-running
-        // Use minimal retry_after for fast tests (actual Azure would use seconds)
-        let app_name = app_name.to_string();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(|_, _, _| {
-                Ok(OperationResult::LongRunning(LongRunningOperation {
-                    url: "https://management.azure.com/subscriptions/.../operations/test-op"
-                        .to_string(),
-                    retry_after: Some(Duration::from_millis(10)),
-                    location_url: None,
-                }))
-            });
-
-        // Mock get operations showing progression
-        let app_name_for_get1 = app_name.clone();
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| {
-                Ok(create_in_progress_container_app_response(
-                    &app_name_for_get1,
-                ))
-            })
-            .times(1);
-
-        let app_name_for_get2 = app_name.clone();
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| {
-                Ok(create_successful_container_app_response(
-                    &app_name_for_get2,
-                    has_url,
-                ))
-            });
-
+    ) -> (
+        Arc<OfficialAzureContainerAppsClient>,
+        AzureLongRunningOperationClient,
+    ) {
         (
-            Arc::new(mock_container_apps),
+            container_apps_client_with_transport(
+                ContainerAppsTransport::new(app_name, has_url).long_running_create(),
+            ),
             long_running_operation_client_with_transport(LongRunningOperationTransport::new()),
         )
     }
 
     fn setup_mock_client_for_best_effort_deletion(
-        _app_name: &str,
+        app_name: &str,
         app_missing: bool,
-    ) -> Arc<MockContainerAppsApi> {
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock deletion (might fail if app missing)
-        if app_missing {
-            mock_container_apps
-                .expect_delete_container_app()
-                .returning(|_, _| {
-                    Err(AlienError::new(
-                        CloudClientErrorData::RemoteResourceNotFound {
-                            resource_type: "ContainerApp".to_string(),
-                            resource_name: "test-app".to_string(),
-                        },
-                    ))
-                });
-        } else {
-            mock_container_apps
-                .expect_delete_container_app()
-                .returning(|_, _| Ok(OperationResult::Completed(())));
-        }
-
-        // Always return not found for final status check
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            });
-
-        Arc::new(mock_container_apps)
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        container_apps_client_with_transport(
+            ContainerAppsTransport::new(app_name, true).delete_missing(app_missing),
+        )
     }
 
     #[derive(Debug)]
@@ -5115,6 +4975,176 @@ mod tests {
         }
     }
 
+    type ContainerAppRequestAssertion = fn(&serde_json::Value) -> bool;
+
+    #[derive(Debug)]
+    struct ContainerAppsTransport {
+        app_name: String,
+        has_url: bool,
+        custom_url: Option<String>,
+        delete_missing: bool,
+        create_long_running: bool,
+        assertion: Option<ContainerAppRequestAssertion>,
+        get_count: Mutex<u32>,
+    }
+
+    impl ContainerAppsTransport {
+        fn new(app_name: &str, has_url: bool) -> Self {
+            Self {
+                app_name: app_name.to_string(),
+                has_url,
+                custom_url: None,
+                delete_missing: false,
+                create_long_running: false,
+                assertion: None,
+                get_count: Mutex::new(0),
+            }
+        }
+
+        fn custom_url(mut self, custom_url: &str) -> Self {
+            self.custom_url = Some(custom_url.to_string());
+            self
+        }
+
+        fn delete_missing(mut self, delete_missing: bool) -> Self {
+            self.delete_missing = delete_missing;
+            self
+        }
+
+        fn long_running_create(mut self) -> Self {
+            self.create_long_running = true;
+            self
+        }
+
+        fn assert_request(mut self, assertion: ContainerAppRequestAssertion) -> Self {
+            self.assertion = Some(assertion);
+            self
+        }
+
+        fn response_app(&self, in_progress: bool) -> ContainerApp {
+            if let Some(custom_url) = &self.custom_url {
+                return create_container_app_with_custom_url(&self.app_name, custom_url);
+            }
+
+            if in_progress {
+                create_in_progress_container_app_response(&self.app_name)
+            } else {
+                create_successful_container_app_response(&self.app_name, self.has_url)
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Policy for ContainerAppsTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            let path = request.url().path();
+            assert!(
+                path.contains("/providers/Microsoft.App/containerApps/"),
+                "unexpected Azure Container Apps path: {path}"
+            );
+            assert_eq!(request.url().query(), Some("api-version=2025-01-01"));
+            assert!(request
+                .headers()
+                .get_str(&headers::AUTHORIZATION)
+                .expect("Container Apps request should include authorization")
+                .starts_with("Bearer "));
+
+            match request.method() {
+                &Method::Put => {
+                    let body = assert_json_body(request);
+                    if let Some(assertion) = self.assertion {
+                        assert!(
+                            assertion(&body),
+                            "Container App PUT body did not match test assertion: {body}"
+                        );
+                    }
+                    if self.create_long_running {
+                        let mut headers = Headers::new();
+                        headers.insert(
+                            "azure-asyncoperation",
+                            "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.App/operations/test-op",
+                        );
+                        headers.insert("retry-after", "1");
+                        return Ok(Response::new(
+                            StatusCode::Accepted,
+                            headers,
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    Ok(json_response(json!(self.response_app(false))))
+                }
+                &Method::Patch => {
+                    let body = assert_json_body(request);
+                    if let Some(assertion) = self.assertion {
+                        assert!(
+                            assertion(&body),
+                            "Container App PATCH body did not match test assertion: {body}"
+                        );
+                    }
+                    Ok(json_response(json!(self.response_app(false))))
+                }
+                &Method::Get => {
+                    if self.delete_missing {
+                        return Ok(Response::new(
+                            StatusCode::NotFound,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    let mut get_count = self
+                        .get_count
+                        .lock()
+                        .expect("Container Apps get count mutex should not be poisoned");
+                    *get_count += 1;
+                    let in_progress = self.create_long_running && *get_count == 1;
+                    Ok(json_response(json!(self.response_app(in_progress))))
+                }
+                &Method::Delete => {
+                    if self.delete_missing {
+                        return Ok(Response::new(
+                            StatusCode::NotFound,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    Ok(Response::new(
+                        StatusCode::NoContent,
+                        Headers::new(),
+                        Box::pin(BytesStream::new("{}")),
+                    ))
+                }
+                method => panic!("unexpected Azure Container Apps method: {method:?}"),
+            }
+        }
+    }
+
+    fn container_app_body_has_custom_resources(body: &serde_json::Value) -> bool {
+        let resources = &body["properties"]["template"]["containers"][0]["resources"];
+        let expected_memory = format!("{}Gi", 512.0 / 1024.0);
+        resources["memory"].as_str() == Some(expected_memory.as_str())
+            && resources["cpu"].as_f64() == Some(0.25)
+    }
+
+    fn container_app_body_has_expected_env_vars(body: &serde_json::Value) -> bool {
+        let Some(env) = body["properties"]["template"]["containers"][0]["env"].as_array() else {
+            return false;
+        };
+        let has_var = |name: &str, value: &str| {
+            env.iter().any(|env_var| {
+                env_var["name"].as_str() == Some(name) && env_var["value"].as_str() == Some(value)
+            })
+        };
+        has_var("APP_ENV", "production")
+            && has_var("LOG_LEVEL", "debug")
+            && has_var("DB_NAME", "myapp")
+    }
+
     fn assert_json_body(request: &Request) -> serde_json::Value {
         match request.body() {
             Body::Bytes(bytes) => {
@@ -5179,6 +5209,29 @@ mod tests {
             .expect("Azure Container Apps management client should build")
     }
 
+    fn container_apps_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        Arc::new(OfficialAzureContainerAppsClient::new(
+            config,
+            credential,
+            ClientOptions::new(TransportOptions::new_custom_policy(Arc::new(transport))),
+        ))
+    }
+
     fn long_running_operation_client_with_transport(
         transport: impl Policy + 'static,
     ) -> AzureLongRunningOperationClient {
@@ -5203,14 +5256,14 @@ mod tests {
     }
 
     fn setup_mock_service_provider(
-        mock_container_apps: Arc<MockContainerAppsApi>,
+        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
         mock_lro: Option<AzureLongRunningOperationClient>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_azure_container_apps_client()
-            .returning(move |_| Ok(mock_container_apps.clone()));
+            .returning(move |_| Ok(container_apps_client.clone()));
 
         let app_management_client = app_management_client_with_transport(AppManagementTransport);
         mock_provider
@@ -5267,62 +5320,13 @@ mod tests {
     fn setup_mock_client_with_custom_url(
         app_name: &str,
         custom_url: &str,
-        for_deletion: bool,
-    ) -> Arc<MockContainerAppsApi> {
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Create a container app response with custom URL
-        let custom_response = create_container_app_with_custom_url(app_name, custom_url);
-
-        // Mock successful app creation
-        let response_for_create = custom_response.clone();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(move |_, _, _| Ok(OperationResult::Completed(response_for_create.clone())));
-
-        if for_deletion {
-            // Mock successful deletion
-            mock_container_apps
-                .expect_delete_container_app()
-                .returning(|_, _| Ok(OperationResult::Completed(())));
-
-            // Mock get operations during creation (may be called multiple times)
-            let response_for_get_creation = custom_response.clone();
-            mock_container_apps
-                .expect_get_container_app()
-                .returning(move |_, _| Ok(response_for_get_creation.clone()))
-                .times(0..);
-
-            // Mock get operation failure for deletion verification
-            mock_container_apps
-                .expect_get_container_app()
-                .returning(|_, _| {
-                    Err(AlienError::new(
-                        CloudClientErrorData::RemoteResourceNotFound {
-                            resource_type: "ContainerApp".to_string(),
-                            resource_name: "test-app".to_string(),
-                        },
-                    ))
-                })
-                .times(0..);
-        } else {
-            // Mock successful updates
-            let response_for_update = custom_response.clone();
-            mock_container_apps
-                .expect_update_container_app()
-                .returning(move |_, _, _| {
-                    Ok(OperationResult::Completed(response_for_update.clone()))
-                });
-
-            // Mock get operations (may be called multiple times)
-            let response_for_get = custom_response.clone();
-            mock_container_apps
-                .expect_get_container_app()
-                .returning(move |_, _| Ok(response_for_get.clone()))
-                .times(0..);
-        }
-
-        Arc::new(mock_container_apps)
+        _for_deletion: bool,
+    ) -> Arc<OfficialAzureContainerAppsClient> {
+        container_apps_client_with_transport(
+            ContainerAppsTransport::new(app_name, true)
+                .custom_url(custom_url)
+                .delete_missing(false),
+        )
     }
 
     fn create_container_app_with_custom_url(app_name: &str, custom_url: &str) -> ContainerApp {
@@ -5732,33 +5736,9 @@ mod tests {
         let worker = function_public_ingress();
         let app_name = format!("test-{}", worker.id);
 
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock creation with URL
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name, true),
-                ))
-            });
-
-        mock_container_apps
-            .expect_delete_container_app()
-            .returning(|_, _| Ok(OperationResult::Completed(())));
-
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_container_apps), None);
+        let container_apps_client =
+            container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, true));
+        let mock_provider = setup_mock_service_provider(container_apps_client, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5790,33 +5770,9 @@ mod tests {
         let worker = function_private_ingress();
         let app_name = format!("test-{}", worker.id);
 
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Mock creation without URL
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name, false),
-                ))
-            });
-
-        mock_container_apps
-            .expect_delete_container_app()
-            .returning(|_, _| Ok(OperationResult::Completed(())));
-
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_container_apps), None);
+        let container_apps_client =
+            container_apps_client_with_transport(ContainerAppsTransport::new(&app_name, false));
+        let mock_provider = setup_mock_service_provider(container_apps_client, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5843,58 +5799,11 @@ mod tests {
         let worker = function_custom_config();
         let app_name = format!("test-{}", worker.id);
 
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Validate container app creation request has correct parameters
-        let app_name_for_response = app_name.clone();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .withf(|_rg, _name, container_app| {
-                // Check that the container has correct resource configuration
-                if let Some(properties) = &container_app.properties {
-                    if let Some(template) = &properties.template {
-                        if let Some(container) = template.containers.first() {
-                            if let Some(resources) = &container.base_container.resources {
-                                // function_custom_config has 512MB memory
-                                let expected_memory = format!("{}Gi", 512.0 / 1024.0);
-                                return resources.memory.as_ref() == Some(&expected_memory)
-                                    && resources.cpu == Some(0.25);
-                            }
-                        }
-                    }
-                }
-                false
-            })
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name_for_response, false),
-                ))
-            });
-
-        mock_container_apps
-            .expect_delete_container_app()
-            .returning(|_, _| Ok(OperationResult::Completed(())));
-
-        // Allow get_container_app calls during creation (may be called 0 or more times)
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| Ok(create_successful_container_app_response(&app_name, false)))
-            .times(0..);
-
-        // Mock get operation failure for deletion verification
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            })
-            .times(0..);
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_container_apps), None);
+        let container_apps_client = container_apps_client_with_transport(
+            ContainerAppsTransport::new(&app_name, false)
+                .assert_request(container_app_body_has_custom_resources),
+        );
+        let mock_provider = setup_mock_service_provider(container_apps_client, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -5916,66 +5825,11 @@ mod tests {
         let worker = function_with_env_vars();
         let app_name = format!("test-{}", worker.id);
 
-        let mut mock_container_apps = MockContainerAppsApi::new();
-
-        // Validate container app creation request has environment variables
-        let app_name_for_response = app_name.clone();
-        mock_container_apps
-            .expect_create_or_update_container_app()
-            .withf(|_rg, _name, container_app| {
-                if let Some(properties) = &container_app.properties {
-                    if let Some(template) = &properties.template {
-                        if let Some(container) = template.containers.first() {
-                            // Check that environment variables are present
-                            let has_app_env = container.base_container.env.iter().any(|env_var| {
-                                env_var.name.as_deref() == Some("APP_ENV")
-                                    && env_var.value.as_deref() == Some("production")
-                            });
-                            let has_log_level =
-                                container.base_container.env.iter().any(|env_var| {
-                                    env_var.name.as_deref() == Some("LOG_LEVEL")
-                                        && env_var.value.as_deref() == Some("debug")
-                                });
-                            let has_db_name = container.base_container.env.iter().any(|env_var| {
-                                env_var.name.as_deref() == Some("DB_NAME")
-                                    && env_var.value.as_deref() == Some("myapp")
-                            });
-                            return has_app_env && has_log_level && has_db_name;
-                        }
-                    }
-                }
-                false
-            })
-            .returning(move |_, _, _| {
-                Ok(OperationResult::Completed(
-                    create_successful_container_app_response(&app_name_for_response, false),
-                ))
-            });
-
-        mock_container_apps
-            .expect_delete_container_app()
-            .returning(|_, _| Ok(OperationResult::Completed(())));
-
-        // Allow get_container_app calls during creation (may be called 0 or more times)
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(move |_, _| Ok(create_successful_container_app_response(&app_name, false)))
-            .times(0..);
-
-        // Mock get operation failure for deletion verification
-        mock_container_apps
-            .expect_get_container_app()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "ContainerApp".to_string(),
-                        resource_name: "test-app".to_string(),
-                    },
-                ))
-            })
-            .times(0..);
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_container_apps), None);
+        let container_apps_client = container_apps_client_with_transport(
+            ContainerAppsTransport::new(&app_name, false)
+                .assert_request(container_app_body_has_expected_env_vars),
+        );
+        let mock_provider = setup_mock_service_provider(container_apps_client, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)

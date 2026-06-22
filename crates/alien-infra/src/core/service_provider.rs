@@ -7,7 +7,7 @@ use crate::aws_sdk::{
     lambda_client_from_alien_config, s3_client_from_alien_config, sqs_client_from_alien_config,
 };
 use crate::azure_container_apps::{
-    AzureLongRunningOperationClient, ContainerAppsApi, OfficialAzureContainerAppsClient,
+    AzureLongRunningOperationClient, OfficialAzureContainerAppsClient,
 };
 use crate::error::Result;
 use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
@@ -350,7 +350,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_azure_container_apps_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ContainerAppsApi>>;
+    ) -> Result<Arc<OfficialAzureContainerAppsClient>>;
     fn get_azure_container_apps_management_client(
         &self,
         config: &AzureClientConfig,
@@ -737,10 +737,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_azure_container_apps_client(
         &self,
         config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ContainerAppsApi>> {
+    ) -> Result<Arc<OfficialAzureContainerAppsClient>> {
         Ok(Arc::new(OfficialAzureContainerAppsClient::new(
             config.clone(),
-            azure_credential_from_config(config)?,
+            Arc::new(AzureCore021Credential::new(azure_credential_from_config(
+                config,
+            )?)),
+            azure_core_021::ClientOptions::default(),
         )))
     }
 
