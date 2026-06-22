@@ -48,7 +48,6 @@ use aws_sdk_ssm::{
     operation::describe_parameters::DescribeParametersOutput, types::ParameterStringFilter,
 };
 use aws_types::region::Region;
-use serde::Serialize;
 
 use crate::error::{ErrorData, Result};
 
@@ -265,56 +264,6 @@ pub struct S3BucketMetadata {
     pub bucket_policy_present: Option<bool>,
     /// Whether bucket ACL metadata is present.
     pub bucket_acl_present: Option<bool>,
-}
-
-/// Trust policy principal.
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum TrustPolicyPrincipal {
-    /// AWS service principal.
-    Service {
-        /// Service principal value.
-        #[serde(rename = "Service")]
-        service: TrustPolicyPrincipalValue,
-    },
-    /// AWS principal.
-    Aws {
-        /// AWS principal value.
-        #[serde(rename = "AWS")]
-        aws: TrustPolicyPrincipalValue,
-    },
-}
-
-/// Trust policy principal value.
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum TrustPolicyPrincipalValue {
-    /// Single principal.
-    Single(String),
-    /// Multiple principals.
-    Multiple(Vec<String>),
-}
-
-/// Trust policy statement.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct TrustPolicyStatement {
-    /// Statement effect.
-    pub effect: String,
-    /// Principal.
-    pub principal: TrustPolicyPrincipal,
-    /// Action.
-    pub action: String,
-}
-
-/// Trust policy document.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct TrustPolicyDocument {
-    /// Policy version.
-    pub version: String,
-    /// Statements.
-    pub statement: Vec<TrustPolicyStatement>,
 }
 
 /// Minimal IAM operations required by infra controllers.

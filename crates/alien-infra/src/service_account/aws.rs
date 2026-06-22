@@ -1,10 +1,7 @@
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::aws_sdk::{
-    CreateRoleInput, IamTag, Role, TrustPolicyDocument, TrustPolicyPrincipal,
-    TrustPolicyPrincipalValue, TrustPolicyStatement,
-};
+use crate::aws_sdk::{CreateRoleInput, IamTag, Role};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -20,6 +17,7 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+use serde_json::json;
 
 /// Generates the AWS IAM role name for a ServiceAccount.
 fn get_aws_role_name(prefix: &str, name: &str) -> String {
@@ -858,42 +856,41 @@ impl AwsServiceAccountController {
         // Statement for AWS services (only if there are services that need to assume this role)
         if !services.is_empty() {
             let principal_value = if services.len() == 1 {
-                TrustPolicyPrincipalValue::Single(services[0].clone())
+                json!(services[0])
             } else {
-                TrustPolicyPrincipalValue::Multiple(services)
+                json!(services)
             };
 
-            statements.push(TrustPolicyStatement {
-                effect: "Allow".to_string(),
-                principal: TrustPolicyPrincipal::Service {
-                    service: principal_value,
+            statements.push(json!({
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": principal_value,
                 },
-                action: "sts:AssumeRole".to_string(),
-            });
+                "Action": "sts:AssumeRole",
+            }));
         }
 
         // Statement for other IAM roles (impersonators)
         if !role_arns.is_empty() {
             let principal_value = if role_arns.len() == 1 {
-                TrustPolicyPrincipalValue::Single(role_arns[0].clone())
+                json!(role_arns[0])
             } else {
-                TrustPolicyPrincipalValue::Multiple(role_arns)
+                json!(role_arns)
             };
 
-            statements.push(TrustPolicyStatement {
-                effect: "Allow".to_string(),
-                principal: TrustPolicyPrincipal::Aws {
-                    aws: principal_value,
+            statements.push(json!({
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": principal_value,
                 },
-                action: "sts:AssumeRole".to_string(),
-            });
+                "Action": "sts:AssumeRole",
+            }));
         }
 
-        // Create the complete trust policy document
-        let trust_policy = TrustPolicyDocument {
-            version: "2012-10-17".to_string(),
-            statement: statements,
-        };
+        let trust_policy = json!({
+            "Version": "2012-10-17",
+            "Statement": statements,
+        });
 
         // Serialize to JSON
         serde_json::to_string(&trust_policy)
