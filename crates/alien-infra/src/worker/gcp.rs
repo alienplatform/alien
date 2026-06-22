@@ -3,9 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, HttpTarget, OidcToken,
-    Policy, PushConfig, ResourcePermissionsHelper, SchedulerHttpMethod, SchedulerJob,
-    SchedulerOidcToken, Subscription, Topic,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, OidcToken, Policy,
+    PushConfig, ResourcePermissionsHelper, Subscription, Topic,
 };
 
 use crate::core::ResourceControllerContext;
@@ -32,9 +31,19 @@ use alien_core::{
     ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
     ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
-use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
+use alien_error::{
+    AlienError, AlienErrorData, Context, ContextError, IntoAlienError, IntoAlienErrorDirect,
+};
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_gax::error::rpc::Code as GaxRpcCode;
+use google_cloud_scheduler_v1::{
+    client::CloudScheduler,
+    model::{
+        HttpMethod as SchedulerHttpMethod, HttpTarget, Job as SchedulerJob,
+        OidcToken as SchedulerOidcToken,
+    },
+};
 use sha2::{Digest, Sha256};
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
@@ -59,6 +68,10 @@ where
         error.code.as_str(),
         "REMOTE_RESOURCE_NOT_FOUND" | "CLOUD_RESOURCE_NOT_FOUND"
     )
+}
+
+fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &str) -> String {
+    format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
 }
 
 fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
@@ -103,6 +116,84 @@ fn json_string_map(value: &serde_json::Value, field: &str) -> HashMap<String, St
         .flat_map(|object| object.iter())
         .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
         .collect()
+}
+
+async fn create_cloud_scheduler_job(
+    client: &CloudScheduler,
+    project_id: &str,
+    location: &str,
+    job_id: &str,
+    job: SchedulerJob,
+) -> Result<SchedulerJob> {
+    let job_name = cloud_scheduler_job_resource_name(project_id, location, job_id);
+    let mut job = job;
+    if job.name.is_empty() {
+        job.name = job_name.clone();
+    }
+
+    match client
+        .create_job()
+        .set_parent(format!("projects/{project_id}/locations/{location}"))
+        .set_job(job)
+        .send()
+        .await
+    {
+        Ok(job) => Ok(job),
+        Err(error) if gax_error_is_conflict(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceConflict {
+                resource_type: "Cloud Scheduler job".to_string(),
+                resource_name: job_name,
+                message: "create_job reported the job already exists".to_string(),
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Cloud Scheduler create_job request failed".to_string(),
+                resource_id: Some(job_id.to_string()),
+            })),
+    }
+}
+
+async fn delete_cloud_scheduler_job(client: &CloudScheduler, job_name: &str) -> Result<()> {
+    match client
+        .delete_job()
+        .set_name(job_name.to_string())
+        .send()
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if gax_error_is_not_found(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "Cloud Scheduler job".to_string(),
+                resource_name: job_name.to_string(),
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Cloud Scheduler delete_job request failed".to_string(),
+                resource_id: Some(job_name.to_string()),
+            })),
+    }
+}
+
+fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::NotFound)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::NOT_FOUND.as_u16())
+}
+
+fn gax_error_is_conflict(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::AlreadyExists)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::CONFLICT.as_u16())
 }
 
 /// Generates the Cloud Run service name from stack prefix and worker ID
@@ -1623,7 +1714,8 @@ impl GcpWorkerController {
 
         let scheduler_client = ctx
             .service_provider
-            .get_gcp_cloud_scheduler_client(gcp_config)?;
+            .get_gcp_cloud_scheduler_client(gcp_config)
+            .await?;
 
         let service_url = self.url.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1667,9 +1759,14 @@ impl GcpWorkerController {
                         ),
                 );
 
-            match scheduler_client
-                .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                .await
+            match create_cloud_scheduler_job(
+                &scheduler_client,
+                &gcp_config.project_id,
+                &gcp_config.region,
+                &job_id,
+                job,
+            )
+            .await
             {
                 Ok(_) => {}
                 Err(e) if is_remote_resource_conflict(&e) => {
@@ -3121,7 +3218,8 @@ impl GcpWorkerController {
             let service_account_email = self.get_service_account_email(ctx, &current_config)?;
             let scheduler_client = ctx
                 .service_provider
-                .get_gcp_cloud_scheduler_client(gcp_config)?;
+                .get_gcp_cloud_scheduler_client(gcp_config)
+                .await?;
 
             for (index, trigger) in current_config.triggers.iter().enumerate() {
                 if let alien_core::WorkerTrigger::Schedule { cron } = trigger {
@@ -3152,9 +3250,14 @@ impl GcpWorkerController {
                                 ),
                         );
 
-                    match scheduler_client
-                        .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                        .await
+                    match create_cloud_scheduler_job(
+                        &scheduler_client,
+                        &gcp_config.project_id,
+                        &gcp_config.region,
+                        &job_id,
+                        job,
+                    )
+                    .await
                     {
                         Ok(_) => {}
                         Err(e) if is_remote_resource_conflict(&e) => {
@@ -3719,10 +3822,11 @@ impl GcpWorkerController {
 
         let scheduler_client = ctx
             .service_provider
-            .get_gcp_cloud_scheduler_client(gcp_config)?;
+            .get_gcp_cloud_scheduler_client(gcp_config)
+            .await?;
 
         for job_name in &self.scheduler_job_names.clone() {
-            match scheduler_client.delete_job(job_name.clone()).await {
+            match delete_cloud_scheduler_job(&scheduler_client, job_name).await {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -5371,11 +5475,12 @@ impl GcpWorkerController {
 
         let scheduler_client = ctx
             .service_provider
-            .get_gcp_cloud_scheduler_client(gcp_config)?;
+            .get_gcp_cloud_scheduler_client(gcp_config)
+            .await?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for job_name in &self.scheduler_job_names.clone() {
-            match scheduler_client.delete_job(job_name.clone()).await {
+            match delete_cloud_scheduler_job(&scheduler_client, job_name).await {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -5453,18 +5558,46 @@ mod tests {
         ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
+    use google_cloud_gax::{options::RequestOptions, response::Response};
+    use google_cloud_scheduler_v1::{
+        client::CloudScheduler,
+        model::{
+            CreateJobRequest, DeleteJobRequest, HttpMethod as SchedulerHttpMethod, HttpTarget,
+            Job as SchedulerJob, OidcToken as SchedulerOidcToken,
+        },
+        stub::CloudScheduler as CloudSchedulerStub,
+    };
     use httpmock::prelude::*;
     use rstest::rstest;
 
     use super::{
-        get_cloudrun_service_name, get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
-        GCP_RESOURCE_NAME_MAX_LEN,
+        create_cloud_scheduler_job, delete_cloud_scheduler_job, get_cloudrun_service_name,
+        get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{MockPlatformServiceProvider, MockPubSubApi};
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+
+    mockall::mock! {
+        #[derive(Debug)]
+        CloudScheduler {}
+
+        impl CloudSchedulerStub for CloudScheduler {
+            async fn create_job(
+                &self,
+                request: CreateJobRequest,
+                options: RequestOptions,
+            ) -> google_cloud_scheduler_v1::Result<Response<SchedulerJob>>;
+
+            async fn delete_job(
+                &self,
+                request: DeleteJobRequest,
+                options: RequestOptions,
+            ) -> google_cloud_scheduler_v1::Result<Response<()>>;
+        }
+    }
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
@@ -5506,6 +5639,82 @@ mod tests {
         assert!(service_name
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'));
+    }
+
+    #[tokio::test]
+    async fn scheduler_helpers_use_sdk_native_cloud_scheduler_stub() {
+        let mut stub = MockCloudScheduler::new();
+        stub.expect_create_job()
+            .withf(|request, _| {
+                request.parent == "projects/test-project/locations/us-central1"
+                    && request.job.as_ref().is_some_and(|job| {
+                        job.name
+                            == "projects/test-project/locations/us-central1/jobs/test-worker-cron-0"
+                            && job.schedule == "*/5 * * * *"
+                            && job.time_zone == "UTC"
+                            && job.http_target().is_some_and(|target| {
+                                target.uri == "https://worker.example.test"
+                                    && target.http_method == SchedulerHttpMethod::Post
+                                    && target.oidc_token().is_some_and(|token| {
+                                        token.service_account_email
+                                            == "worker@test-project.iam.gserviceaccount.com"
+                                            && token.audience == "https://worker.example.test"
+                                    })
+                            })
+                    })
+            })
+            .once()
+            .returning(|request, _| {
+                Ok(Response::from(
+                    request.job.expect("create request should include job"),
+                ))
+            });
+        stub.expect_delete_job()
+            .withf(|request, _| {
+                request.name
+                    == "projects/test-project/locations/us-central1/jobs/test-worker-cron-0"
+            })
+            .once()
+            .returning(|_, _| Ok(Response::from(())));
+
+        let client = CloudScheduler::from_stub(stub);
+        let job = SchedulerJob::new()
+            .set_schedule("*/5 * * * *")
+            .set_time_zone("UTC")
+            .set_http_target(
+                HttpTarget::new()
+                    .set_uri("https://worker.example.test")
+                    .set_http_method(SchedulerHttpMethod::Post)
+                    .set_oidc_token(
+                        SchedulerOidcToken::new()
+                            .set_service_account_email(
+                                "worker@test-project.iam.gserviceaccount.com",
+                            )
+                            .set_audience("https://worker.example.test"),
+                    ),
+            );
+
+        let created = create_cloud_scheduler_job(
+            &client,
+            "test-project",
+            "us-central1",
+            "test-worker-cron-0",
+            job,
+        )
+        .await
+        .expect("scheduler job should be created");
+
+        assert_eq!(
+            created.name,
+            "projects/test-project/locations/us-central1/jobs/test-worker-cron-0"
+        );
+
+        delete_cloud_scheduler_job(
+            &client,
+            "projects/test-project/locations/us-central1/jobs/test-worker-cron-0",
+        )
+        .await
+        .expect("scheduler job should be deleted");
     }
 
     #[test]

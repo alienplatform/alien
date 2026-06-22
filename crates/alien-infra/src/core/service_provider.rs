@@ -88,10 +88,6 @@ pub use google_cloud_pubsub::model::{push_config::OidcToken, PushConfig, Subscri
 use google_cloud_resourcemanager_v3::client::Projects;
 pub use google_cloud_resourcemanager_v3::model::Project;
 use google_cloud_scheduler_v1::client::CloudScheduler;
-pub use google_cloud_scheduler_v1::model::{
-    HttpMethod as SchedulerHttpMethod, HttpTarget, Job as SchedulerJob,
-    OidcToken as SchedulerOidcToken,
-};
 use google_cloud_storage::{
     client::StorageControl,
     model::{Bucket, DeleteObjectRequest},
@@ -1313,155 +1309,6 @@ impl GcsApi for OfficialGcpGcsClient {
             Some(bucket_name),
         )
         .await
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait CloudSchedulerApi: Send + Sync + std::fmt::Debug {
-    async fn create_job(
-        &self,
-        location: String,
-        job_id: String,
-        job: SchedulerJob,
-    ) -> Result<SchedulerJob>;
-
-    async fn delete_job(&self, job_name: String) -> Result<()>;
-
-    async fn get_job(&self, job_name: String) -> Result<SchedulerJob>;
-}
-
-struct OfficialGcpCloudSchedulerClient {
-    config: GcpClientConfig,
-    client: OnceCell<CloudScheduler>,
-}
-
-impl std::fmt::Debug for OfficialGcpCloudSchedulerClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialGcpCloudSchedulerClient")
-            .field("project_id", &self.config.project_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialGcpCloudSchedulerClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            client: OnceCell::new(),
-        }
-    }
-
-    async fn client(&self) -> Result<CloudScheduler> {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                cloud_scheduler_client_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-}
-
-#[async_trait::async_trait]
-impl CloudSchedulerApi for OfficialGcpCloudSchedulerClient {
-    async fn create_job(
-        &self,
-        location: String,
-        job_id: String,
-        job: SchedulerJob,
-    ) -> Result<SchedulerJob> {
-        let job_name =
-            cloud_scheduler_job_resource_name(&self.config.project_id, &location, &job_id);
-        let mut job = job;
-        if job.name.is_empty() {
-            job.name = job_name.clone();
-        }
-
-        match self
-            .client()
-            .await?
-            .create_job()
-            .set_parent(format!(
-                "projects/{}/locations/{location}",
-                self.config.project_id
-            ))
-            .set_job(job)
-            .send()
-            .await
-        {
-            Ok(job) => Ok(job),
-            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: "Cloud Scheduler job".to_string(),
-                    resource_name: job_name,
-                    message: "create_job reported the job already exists".to_string(),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Cloud Scheduler create_job request failed".to_string(),
-                        resource_id: Some(job_id),
-                    }))
-            }
-        }
-    }
-
-    async fn delete_job(&self, job_name: String) -> Result<()> {
-        match self
-            .client()
-            .await?
-            .delete_job()
-            .set_name(job_name.clone())
-            .send()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Cloud Scheduler job".to_string(),
-                    resource_name: job_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Cloud Scheduler delete_job request failed".to_string(),
-                        resource_id: Some(job_name),
-                    }))
-            }
-        }
-    }
-
-    async fn get_job(&self, job_name: String) -> Result<SchedulerJob> {
-        match self
-            .client()
-            .await?
-            .get_job()
-            .set_name(job_name.clone())
-            .send()
-            .await
-        {
-            Ok(job) => Ok(job),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Cloud Scheduler job".to_string(),
-                    resource_name: job_name,
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Cloud Scheduler get_job request failed".to_string(),
-                        resource_id: Some(job_name),
-                    }))
-            }
-        }
     }
 }
 
@@ -4465,10 +4312,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin>;
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
-    fn get_gcp_cloud_scheduler_client(
+    async fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
-    ) -> Result<Arc<dyn CloudSchedulerApi>>;
+    ) -> Result<CloudScheduler>;
     // Azure clients
     fn get_azure_authorization_client(
         &self,
@@ -4785,13 +4632,11 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         Ok(Arc::new(OfficialGcpComputeClient::new(config.clone())))
     }
 
-    fn get_gcp_cloud_scheduler_client(
+    async fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
-    ) -> Result<Arc<dyn CloudSchedulerApi>> {
-        Ok(Arc::new(OfficialGcpCloudSchedulerClient::new(
-            config.clone(),
-        )))
+    ) -> Result<CloudScheduler> {
+        cloud_scheduler_client_from_alien_config(config).await
     }
 
     // Azure implementations
@@ -5365,10 +5210,6 @@ fn artifact_registry_repository_resource_name(
     repository_id: &str,
 ) -> String {
     format!("projects/{project_id}/locations/{location}/repositories/{repository_id}")
-}
-
-fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &str) -> String {
-    format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
 }
 
 fn service_account_resource_name(project_id: &str, service_account_name: &str) -> String {
