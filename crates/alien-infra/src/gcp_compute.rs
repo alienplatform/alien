@@ -16,30 +16,10 @@ use tokio::sync::OnceCell;
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 
-pub use google_cloud_compute_v1::model::{
-    address::AddressType,
-    backend::BalancingMode,
-    backend_service::{
-        LoadBalancingScheme as BackendServiceLoadBalancingScheme,
-        Protocol as BackendServiceProtocol,
-    },
-    firewall::{Allowed as FirewallAllowed, Direction as FirewallDirection},
-    forwarding_rule::{
-        IPProtocol as ForwardingRuleProtocol,
-        LoadBalancingScheme as ForwardingRuleLoadBalancingScheme,
-    },
-    network_endpoint_group::NetworkEndpointType,
-    network_routing_config::RoutingMode,
-    operation::Status as OperationStatus,
-    router_nat::NatIpAllocateOption,
-    router_nat::SourceSubnetworkIpRangesToNat,
-    router_nat_subnetwork_to_nat::SourceIpRangesToNat,
-    ssl_certificate::Type as SslCertificateType,
-    Address, Backend, BackendService, Firewall, ForwardingRule, Network, NetworkEndpointGroup,
-    NetworkEndpointGroupCloudRun, NetworkRoutingConfig, Operation, Router, RouterNat,
-    RouterNatSubnetworkToNat, SslCertificate,
-    SslCertificateSelfManagedSslCertificate as SslCertificateSelfManaged, Subnetwork,
-    TargetHttpsProxy, UrlMap,
+use google_cloud_compute_v1::model::{
+    operation::Status as OperationStatus, Address, BackendService, Firewall, ForwardingRule,
+    Network, NetworkEndpointGroup, Operation, Router, SslCertificate, Subnetwork, TargetHttpsProxy,
+    UrlMap,
 };
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]

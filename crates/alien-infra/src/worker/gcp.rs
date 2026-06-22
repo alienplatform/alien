@@ -6,13 +6,6 @@ use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::gcp_compute::{
-    Address, AddressType, Backend, BackendService, BackendServiceLoadBalancingScheme,
-    BackendServiceProtocol, BalancingMode, ForwardingRule, ForwardingRuleLoadBalancingScheme,
-    ForwardingRuleProtocol, NetworkEndpointGroup, NetworkEndpointGroupCloudRun,
-    NetworkEndpointType, Operation as ComputeOperation, SslCertificate, SslCertificateSelfManaged,
-    SslCertificateType, TargetHttpsProxy, UrlMap,
-};
 use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
@@ -27,6 +20,23 @@ use alien_error::{
 };
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_compute_v1::model::{
+    address::AddressType,
+    backend::BalancingMode,
+    backend_service::{
+        LoadBalancingScheme as BackendServiceLoadBalancingScheme,
+        Protocol as BackendServiceProtocol,
+    },
+    forwarding_rule::{
+        IPProtocol as ForwardingRuleProtocol,
+        LoadBalancingScheme as ForwardingRuleLoadBalancingScheme,
+    },
+    network_endpoint_group::NetworkEndpointType,
+    ssl_certificate::Type as SslCertificateType,
+    Address, Backend, BackendService, ForwardingRule, NetworkEndpointGroup,
+    NetworkEndpointGroupCloudRun, Operation as ComputeOperation, SslCertificate,
+    SslCertificateSelfManagedSslCertificate as SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
+};
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::client::IAMPolicy;
 use google_cloud_iam_v1::model::{Binding as GcpBinding, Policy};
@@ -6000,10 +6010,13 @@ mod tests {
     use std::sync::Arc;
 
     use crate::core::MockGcpIamApi;
-    use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
+    use crate::gcp_compute::MockGcpComputeApi;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
         ResourceStatus, Worker, WorkerOutputs,
+    };
+    use google_cloud_compute_v1::model::{
+        operation::Status as OperationStatus, Address, Operation,
     };
     use google_cloud_gax::{options::RequestOptions, response::Response};
     use google_cloud_iam_v1::model::Policy;

@@ -9,11 +9,6 @@
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::gcp_compute::{
-    Firewall, FirewallAllowed, FirewallDirection, NatIpAllocateOption, Network as GcpNetwork,
-    NetworkRoutingConfig, Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode,
-    SourceIpRangesToNat, SourceSubnetworkIpRangesToNat, Subnetwork,
-};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
@@ -23,6 +18,14 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
+use google_cloud_compute_v1::model::{
+    firewall::{Allowed as FirewallAllowed, Direction as FirewallDirection},
+    network_routing_config::RoutingMode,
+    router_nat::{NatIpAllocateOption, SourceSubnetworkIpRangesToNat},
+    router_nat_subnetwork_to_nat::SourceIpRangesToNat,
+    Firewall, Network as GcpNetwork, NetworkRoutingConfig, Router, RouterNat,
+    RouterNatSubnetworkToNat, Subnetwork,
+};
 use tracing::{debug, info};
 
 // =============================================================================================
