@@ -44,9 +44,7 @@ pub use azure_mgmt_authorization::package_2022_04_01::models::{
     RoleDefinitionProperties,
 };
 pub use azure_mgmt_containerregistry::package_2023_11_preview::models::Registry;
-pub use azure_mgmt_keyvault::package_preview_2022_02::models::{
-    Vault as AzureKeyVault, VaultCreateOrUpdateParameters as AzureKeyVaultCreateOrUpdateParameters,
-};
+use azure_mgmt_keyvault::package_preview_2022_02::models::{Vault, VaultCreateOrUpdateParameters};
 pub use azure_mgmt_msi::package_2023_01_31::models::{FederatedIdentityCredential, Identity};
 pub use azure_mgmt_network::package_2024_03::models::{
     AddressSpace, NatGateway, NetworkSecurityGroup, PublicIpAddress, Subnet, VirtualNetwork,
@@ -4277,16 +4275,12 @@ pub trait AzureKeyVaultManagementApi: Send + Sync + std::fmt::Debug {
         &self,
         resource_group_name: String,
         vault_name: String,
-        parameters: AzureKeyVaultCreateOrUpdateParameters,
-    ) -> Result<AzureKeyVault>;
+        parameters: VaultCreateOrUpdateParameters,
+    ) -> Result<Vault>;
 
     async fn delete_vault(&self, resource_group_name: String, vault_name: String) -> Result<()>;
 
-    async fn get_vault(
-        &self,
-        resource_group_name: String,
-        vault_name: String,
-    ) -> Result<AzureKeyVault>;
+    async fn get_vault(&self, resource_group_name: String, vault_name: String) -> Result<Vault>;
 }
 
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
@@ -5213,8 +5207,8 @@ impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
         &self,
         resource_group_name: String,
         vault_name: String,
-        parameters: AzureKeyVaultCreateOrUpdateParameters,
-    ) -> Result<AzureKeyVault> {
+        parameters: VaultCreateOrUpdateParameters,
+    ) -> Result<Vault> {
         let body = serde_json::to_string(&parameters)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
@@ -5248,11 +5242,7 @@ impl AzureKeyVaultManagementApi for OfficialAzureKeyVaultManagementClient {
         Ok(())
     }
 
-    async fn get_vault(
-        &self,
-        resource_group_name: String,
-        vault_name: String,
-    ) -> Result<AzureKeyVault> {
+    async fn get_vault(&self, resource_group_name: String, vault_name: String) -> Result<Vault> {
         let response = self
             .request(
                 Method::GET,

@@ -4,10 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{
-    AzureKeyVault, AzureKeyVaultCreateOrUpdateParameters, AzureKeyVaultManagementApi,
-    ResourceControllerContext,
-};
+use crate::core::{AzureKeyVaultManagementApi, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -16,7 +13,7 @@ use alien_core::{
 };
 use azure_mgmt_keyvault::package_preview_2022_02::models::{
     sku::{Family as AzureKeyVaultSkuFamily, Name as AzureKeyVaultSkuName},
-    Sku, VaultProperties,
+    Sku, VaultCreateOrUpdateParameters, VaultProperties,
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -327,7 +324,7 @@ fn emit_azure_key_vault_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     resource_group_name: &str,
-    vault: AzureKeyVault,
+    vault: azure_mgmt_keyvault::package_preview_2022_02::models::Vault,
 ) {
     let provisioning_state = vault
         .properties
@@ -454,7 +451,7 @@ impl AzureVaultController {
         vault_properties.soft_delete_retention_in_days = Some(7);
 
         let mut vault_params =
-            AzureKeyVaultCreateOrUpdateParameters::new(location.to_string(), vault_properties);
+            VaultCreateOrUpdateParameters::new(location.to_string(), vault_properties);
         vault_params.tags = Some(json!({
             "ManagedBy": "Alien",
             "Environment": "Production",
