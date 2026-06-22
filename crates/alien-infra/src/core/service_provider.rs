@@ -904,234 +904,133 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 }
 
-async fn service_usage_client_from_alien_config(config: &GcpClientConfig) -> Result<ServiceUsage> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = ServiceUsage::builder().with_credentials(credentials);
+macro_rules! official_gcp_client_constructor {
+    (
+        $fn_name:ident,
+        $client:path,
+        $builder:expr,
+        $service_name:literal,
+        $endpoint:expr,
+        $display_name:literal
+    ) => {
+        async fn $fn_name(config: &GcpClientConfig) -> Result<$client> {
+            let credentials = gcp_credentials_from_alien_config(config)?;
+            let mut builder = $builder().with_credentials(credentials);
 
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("serviceusage"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
+            if let Some(endpoint_override) = gcp_service_endpoint(config, $service_name) {
+                builder = builder.with_endpoint($endpoint(endpoint_override));
+            }
 
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Service Usage client".to_string(),
-            resource_id: None,
-        })
+            builder.build().await.into_alien_error().context(
+                crate::error::ErrorData::CloudPlatformError {
+                    message: format!("Failed to build official GCP {} client", $display_name),
+                    resource_id: None,
+                },
+            )
+        }
+    };
 }
 
-async fn iam_admin_client_from_alien_config(config: &GcpClientConfig) -> Result<Iam> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = Iam::builder().with_credentials(credentials);
+official_gcp_client_constructor!(
+    service_usage_client_from_alien_config,
+    ServiceUsage,
+    ServiceUsage::builder,
+    "serviceusage",
+    gcp_endpoint,
+    "Service Usage"
+);
 
-    if let Some(endpoint) = config
+official_gcp_client_constructor!(
+    iam_admin_client_from_alien_config,
+    Iam,
+    Iam::builder,
+    "iam",
+    gcp_endpoint,
+    "IAM Admin"
+);
+
+official_gcp_client_constructor!(
+    pubsub_topic_admin_from_alien_config,
+    TopicAdmin,
+    TopicAdmin::builder,
+    "pubsub",
+    pubsub_admin_endpoint,
+    "Pub/Sub TopicAdmin"
+);
+
+official_gcp_client_constructor!(
+    pubsub_subscription_admin_from_alien_config,
+    SubscriptionAdmin,
+    SubscriptionAdmin::builder,
+    "pubsub",
+    pubsub_admin_endpoint,
+    "Pub/Sub SubscriptionAdmin"
+);
+
+official_gcp_client_constructor!(
+    pubsub_iam_policy_from_alien_config,
+    IAMPolicy,
+    IAMPolicy::builder,
+    "pubsub",
+    pubsub_admin_endpoint,
+    "Pub/Sub IAMPolicy"
+);
+
+official_gcp_client_constructor!(
+    gcs_storage_control_from_alien_config,
+    StorageControl,
+    StorageControl::builder,
+    "storage",
+    gcs_control_endpoint,
+    "Cloud Storage"
+);
+
+official_gcp_client_constructor!(
+    firestore_admin_client_from_alien_config,
+    FirestoreAdmin,
+    FirestoreAdmin::builder,
+    "firestore",
+    gcp_endpoint,
+    "Firestore Admin"
+);
+
+official_gcp_client_constructor!(
+    artifact_registry_client_from_alien_config,
+    ArtifactRegistry,
+    ArtifactRegistry::builder,
+    "artifactregistry",
+    gcp_endpoint,
+    "Artifact Registry"
+);
+
+official_gcp_client_constructor!(
+    cloud_scheduler_client_from_alien_config,
+    CloudScheduler,
+    CloudScheduler::builder,
+    "cloudscheduler",
+    gcp_endpoint,
+    "Cloud Scheduler"
+);
+
+official_gcp_client_constructor!(
+    resource_manager_projects_client_from_alien_config,
+    Projects,
+    Projects::builder,
+    "resourcemanager",
+    gcp_endpoint,
+    "Resource Manager Projects"
+);
+
+fn gcp_service_endpoint<'a>(config: &'a GcpClientConfig, service_name: &str) -> Option<&'a str> {
+    config
         .service_overrides
         .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("iam"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP IAM Admin client".to_string(),
-            resource_id: None,
-        })
+        .and_then(|overrides| overrides.endpoints.get(service_name))
+        .map(String::as_str)
 }
 
-async fn pubsub_topic_admin_from_alien_config(config: &GcpClientConfig) -> Result<TopicAdmin> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = TopicAdmin::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("pubsub"))
-    {
-        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Pub/Sub TopicAdmin client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn pubsub_subscription_admin_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<SubscriptionAdmin> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = SubscriptionAdmin::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("pubsub"))
-    {
-        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Pub/Sub SubscriptionAdmin client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn pubsub_iam_policy_from_alien_config(config: &GcpClientConfig) -> Result<IAMPolicy> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = IAMPolicy::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("pubsub"))
-    {
-        builder = builder.with_endpoint(pubsub_admin_endpoint(endpoint));
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Pub/Sub IAMPolicy client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn gcs_storage_control_from_alien_config(config: &GcpClientConfig) -> Result<StorageControl> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = StorageControl::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("storage"))
-    {
-        builder = builder.with_endpoint(gcs_control_endpoint(endpoint));
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Cloud Storage client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn firestore_admin_client_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<FirestoreAdmin> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = FirestoreAdmin::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("firestore"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Firestore Admin client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn artifact_registry_client_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<ArtifactRegistry> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = ArtifactRegistry::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("artifactregistry"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Artifact Registry client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn cloud_scheduler_client_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<CloudScheduler> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = CloudScheduler::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("cloudscheduler"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Cloud Scheduler client".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn resource_manager_projects_client_from_alien_config(
-    config: &GcpClientConfig,
-) -> Result<Projects> {
-    let credentials = gcp_credentials_from_alien_config(config)?;
-    let mut builder = Projects::builder().with_credentials(credentials);
-
-    if let Some(endpoint) = config
-        .service_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.endpoints.get("resourcemanager"))
-    {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    builder
-        .build()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::CloudPlatformError {
-            message: "Failed to build official GCP Resource Manager Projects client".to_string(),
-            resource_id: None,
-        })
+fn gcp_endpoint(endpoint: &str) -> String {
+    endpoint.to_string()
 }
 
 fn pubsub_admin_endpoint(endpoint: &str) -> String {
