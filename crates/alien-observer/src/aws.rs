@@ -9,20 +9,22 @@ use alien_core::{
     AwsCodeBuildHeartbeatData, AwsDynamoDbKvHeartbeatData, AwsLambdaWorkerHeartbeatData,
     AwsS3StorageHeartbeatData, AwsSqsQueueHeartbeatData, AwsVpcNetworkHeartbeatData,
     BuildHeartbeatData, BuildHeartbeatStatus, HeartbeatBackend, HeartbeatCollectionIssue,
-    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, HeartbeatSource, KvHeartbeatData,
-    KvHeartbeatStatus, NetworkHeartbeatData, NetworkHeartbeatStatus, ObservedHealth, Platform,
-    ProviderLifecycleState, QueueHeartbeatData, QueueHeartbeatStatus, RawHeartbeatSnippet,
-    RawHeartbeatSnippetFormat, ResourceHeartbeat, ResourceHeartbeatData, ResourceType,
-    StorageHeartbeatData, StorageHeartbeatStatus, WorkerHeartbeatData, WorkloadHeartbeatStatus,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY,
-    DEFAULT_ALIEN_LABEL_DOMAIN,
+    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, KvHeartbeatData, KvHeartbeatStatus,
+    NetworkHeartbeatData, NetworkHeartbeatStatus, ObservedHealth, Platform, ProviderLifecycleState,
+    QueueHeartbeatData, QueueHeartbeatStatus, RawHeartbeatSnippet, RawHeartbeatSnippetFormat,
+    ResourceHeartbeatData, ResourceType, StorageHeartbeatData, StorageHeartbeatStatus,
+    WorkerHeartbeatData, WorkloadHeartbeatStatus, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
 use tracing::warn;
 
-use crate::{ObserveScope, Observer, Result};
+use crate::{
+    observed_resource_sample, ObserveReport, ObserveScope, ObservedResourceSampleInput, Observer,
+    Result,
+};
 
 const MAX_GET_RESOURCES_PAGES: usize = 20;
 
@@ -75,7 +77,7 @@ impl AwsObserver {
         }
     }
 
-    async fn discover_tagged_resources(&self) -> Result<Vec<ResourceTagMapping>> {
+    async fn discover_tagged_resources(&self) -> Result<InventoryDiscovery<ResourceTagMapping>> {
         let mut resources = Vec::new();
         let mut pagination_token = None;
 
@@ -95,53 +97,75 @@ impl AwsObserver {
                 Ok(response) => response,
                 Err(error) => {
                     warn!(error = %error, "AWS tag inventory observe pass failed");
-                    return Ok(resources);
+                    return Ok(InventoryDiscovery {
+                        resources,
+                        complete: false,
+                    });
                 }
             };
 
             resources.extend(response.resource_tag_mapping_list);
             pagination_token = response.pagination_token.filter(|token| !token.is_empty());
             if pagination_token.is_none() {
-                break;
+                return Ok(InventoryDiscovery {
+                    resources,
+                    complete: true,
+                });
             }
         }
 
-        Ok(resources)
+        Ok(InventoryDiscovery {
+            resources,
+            complete: false,
+        })
     }
 
-    fn heartbeat_for_mapping(
+    fn observed_resource_for_mapping(
         &self,
         mapping: ResourceTagMapping,
         cloudwatch_issue: Option<&HeartbeatCollectionIssue>,
-    ) -> Option<ResourceHeartbeat> {
+    ) -> Option<alien_core::ObservedResourceSample> {
         let arn = AwsArn::parse(&mapping.resource_arn)?;
         let tags = tags_to_map(&mapping.tags);
         let alien_resource_id = alien_resource_id_from_tags(&self.label_domain, &tags);
-        if alien_resource_id.is_some() {
-            return None;
-        }
         let raw = raw_snippet(&mapping.resource_arn, &tags);
         let issue = cloudwatch_issue.cloned();
-        let observed_at = Utc::now();
         let data = resource_data_for_arn(
             &arn,
             &self.context.region,
             &self.context.account_id,
             issue.clone(),
         )?;
+        let resource_type_hint = resource_type_for_data(&data);
 
-        Some(ResourceHeartbeat {
-            deployment_id: Some(self.context.deployment_id.clone()),
-            resource_id: aws_raw_identity(&mapping.resource_arn),
-            source: HeartbeatSource::Observed,
+        let mut attributes = BTreeMap::new();
+        attributes.insert("service".to_string(), json!(arn.service));
+        attributes.insert("accountId".to_string(), json!(arn.account_id));
+        attributes.insert("region".to_string(), json!(arn.region));
+
+        Some(observed_resource_sample(ObservedResourceSampleInput {
+            deployment_id: self.context.deployment_id.clone(),
+            raw_identity: aws_raw_identity(&mapping.resource_arn),
+            provider_kind: format!("aws:{}", arn.service),
+            display_name: arn.resource_name(),
+            namespace: None,
+            region: arn
+                .region
+                .map(str::to_string)
+                .or(Some(self.context.region.clone())),
+            scope: Some(aws_inventory_scope(
+                &self.context.account_id,
+                &self.context.region,
+            )),
+            resource_type_hint: Some(resource_type_hint),
             alien_resource_id,
-            resource_type: resource_type_for_data(&data),
             controller_platform: Platform::Aws,
             backend: HeartbeatBackend::Aws,
-            observed_at,
+            labels: tags,
+            attributes,
             data,
             raw: vec![raw],
-        })
+        }))
     }
 }
 
@@ -151,19 +175,45 @@ impl Observer for AwsObserver {
         Platform::Aws
     }
 
-    async fn discover(&self, _scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
+    async fn discover(&self, _scope: &ObserveScope) -> Result<ObserveReport> {
         let cloudwatch_issue = self.cloudwatch_issue().await;
-        let resources = self.discover_tagged_resources().await?;
-
-        Ok(resources
+        let discovery = self.discover_tagged_resources().await?;
+        let resources = discovery
+            .resources
             .into_iter()
-            .filter_map(|mapping| self.heartbeat_for_mapping(mapping, cloudwatch_issue.as_ref()))
-            .collect())
+            .filter_map(|mapping| {
+                self.observed_resource_for_mapping(mapping, cloudwatch_issue.as_ref())
+            })
+            .collect();
+
+        Ok(ObserveReport {
+            inventory_batches: vec![alien_core::ObservedInventoryBatch {
+                source_kind: "manager-observer".to_string(),
+                inventory_scope: aws_inventory_scope(
+                    &self.context.account_id,
+                    &self.context.region,
+                ),
+                controller_platform: Platform::Aws,
+                backend: HeartbeatBackend::Aws,
+                observed_at: Utc::now(),
+                complete: discovery.complete,
+                resources,
+            }],
+        })
     }
+}
+
+struct InventoryDiscovery<T> {
+    resources: Vec<T>,
+    complete: bool,
 }
 
 pub fn aws_raw_identity(arn: &str) -> String {
     arn.to_string()
+}
+
+pub fn aws_inventory_scope(account_id: &str, region: &str) -> String {
+    format!("aws:resourcegroupstagging:{account_id}:{region}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

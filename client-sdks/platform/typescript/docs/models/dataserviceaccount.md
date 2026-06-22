@@ -27,8 +27,8 @@ let value: DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "warning",
+          reason: "forbidden",
+          severity: "info",
           source: "<value>",
         },
       ],

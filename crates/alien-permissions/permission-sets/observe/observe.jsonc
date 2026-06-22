@@ -1,0 +1,72 @@
+{
+  "id": "observe/observe",
+  "description": "Account-wide read access for cloud resource discovery and metrics (observe mode)",
+  "platforms": {
+    "aws": [
+      {
+        "label": "discover-resources",
+        "description": "Discover tagged resources across the account (required for inventory).",
+        "grant": {
+          "actions": ["tag:GetResources", "tag:GetTagKeys", "tag:GetTagValues"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "read-metrics",
+        "description": "Read CloudWatch metrics for resource health.",
+        "grant": {
+          "actions": [
+            "cloudwatch:GetMetricData",
+            "cloudwatch:ListMetrics",
+            "cloudwatch:GetMetricStatistics"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "discover-and-metrics",
+        "description": "Cloud Asset Inventory search + Cloud Monitoring read at project scope.",
+        "grant": {
+          "permissions": [
+            "cloudasset.assets.searchAllResources",
+            "monitoring.timeSeries.list",
+            "monitoring.metricDescriptors.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "discover-and-metrics",
+        "description": "Resource Graph + Azure Monitor read at subscription scope.",
+        "grant": {
+          "actions": [
+            "Microsoft.ResourceGraph/resources/read",
+            "Microsoft.Insights/metrics/read",
+            "Microsoft.Insights/metricDefinitions/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -186,8 +186,11 @@ impl KubernetesContainerController {
                             ),
                             resource_id: Some(config.id.clone()),
                         })?;
-                    if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
-                    {
+                    if !self.is_managed_workload(
+                        ctx,
+                        existing.metadata.labels.as_ref(),
+                        &container_name,
+                    ) {
                         return Err(err.context(ErrorData::CloudPlatformError {
                             message: format!(
                                 "Refusing to adopt unmanaged statefulset '{}'.",
@@ -241,8 +244,11 @@ impl KubernetesContainerController {
                             ),
                             resource_id: Some(config.id.clone()),
                         })?;
-                    if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
-                    {
+                    if !self.is_managed_workload(
+                        ctx,
+                        existing.metadata.labels.as_ref(),
+                        &container_name,
+                    ) {
                         return Err(err.context(ErrorData::CloudPlatformError {
                             message: format!(
                                 "Refusing to adopt unmanaged deployment '{}'.",
@@ -1687,12 +1693,22 @@ impl KubernetesContainerController {
 
     fn is_managed_workload(
         &self,
+        ctx: &ResourceControllerContext<'_>,
         labels: Option<&BTreeMap<String, String>>,
         container_name: &str,
     ) -> bool {
-        let managed_by_key = branded_tag_key(DEFAULT_ALIEN_LABEL_DOMAIN, ALIEN_MANAGED_BY_TAG_KEY);
+        let label_domain = ctx
+            .deployment_config
+            .label_domain
+            .as_deref()
+            .unwrap_or(DEFAULT_ALIEN_LABEL_DOMAIN);
+        let managed_by_key = branded_tag_key(label_domain, ALIEN_MANAGED_BY_TAG_KEY);
+        let default_managed_by_key =
+            branded_tag_key(DEFAULT_ALIEN_LABEL_DOMAIN, ALIEN_MANAGED_BY_TAG_KEY);
         labels.is_some_and(|labels| {
             labels.get(&managed_by_key).map(String::as_str) == Some(ALIEN_MANAGED_BY_TAG_VALUE)
+                || labels.get(&default_managed_by_key).map(String::as_str)
+                    == Some(ALIEN_MANAGED_BY_TAG_VALUE)
                 || (labels.get("managed-by").map(String::as_str) == Some("runtime")
                     && labels.get("component").map(String::as_str) == Some("container")
                     && labels.get("app").map(String::as_str) == Some(container_name))

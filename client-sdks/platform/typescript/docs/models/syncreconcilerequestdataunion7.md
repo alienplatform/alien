@@ -18,15 +18,15 @@ const value: models.DataAwsDynamoDb = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
+    health: "degraded",
     lifecycle: "scaling",
-    partial: true,
-    stale: false,
+    partial: false,
+    stale: true,
   },
   backend: "awsDynamoDb",
 };
@@ -58,8 +58,8 @@ const value: models.DataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],

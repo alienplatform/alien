@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use alien_core::{
-    ClientConfig, DeploymentConfig, KubernetesClientConfig, Platform, ResourceHeartbeat,
-};
+use alien_core::{ClientConfig, DeploymentConfig, KubernetesClientConfig, Platform};
 use alien_error::Context;
 use alien_observer::{
     AwsObserveContext, AwsObserver, AzureObserveContext, AzureObserver, GcpObserveContext,
-    GcpObserver, KubernetesObserveContext, KubernetesObserver, ObserveScope, Observer,
+    GcpObserver, KubernetesObserveContext, KubernetesObserver, ObserveReport, ObserveScope,
+    Observer,
 };
 use tracing::debug;
 
@@ -18,7 +17,7 @@ pub async fn run_observe_pass(
     service_provider: &Arc<dyn alien_infra::PlatformServiceProvider>,
     deployment_id: &str,
     _config: &DeploymentConfig,
-) -> Result<Vec<ResourceHeartbeat>> {
+) -> Result<ObserveReport> {
     match platform {
         Platform::Aws => {
             return run_aws_observe_pass(client_config, deployment_id)
@@ -42,12 +41,12 @@ pub async fn run_observe_pass(
                 });
         }
         Platform::Kubernetes => {}
-        _ => return Ok(vec![]),
+        _ => return Ok(ObserveReport::default()),
     }
 
     let Some(kubernetes_config) = client_config.kubernetes_config() else {
         debug!("Skipping observe pass because client config is not Kubernetes");
-        return Ok(vec![]);
+        return Ok(ObserveReport::default());
     };
 
     let deployment_client = service_provider
@@ -98,10 +97,10 @@ pub async fn run_observe_pass(
 async fn run_aws_observe_pass(
     client_config: &ClientConfig,
     deployment_id: &str,
-) -> Result<Vec<ResourceHeartbeat>> {
+) -> Result<ObserveReport> {
     let Some(aws_config) = client_config.aws_config() else {
         debug!("Skipping observe pass because client config is not AWS");
-        return Ok(vec![]);
+        return Ok(ObserveReport::default());
     };
 
     let credentials = alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
@@ -142,10 +141,10 @@ async fn run_aws_observe_pass(
 async fn run_gcp_observe_pass(
     client_config: &ClientConfig,
     deployment_id: &str,
-) -> Result<Vec<ResourceHeartbeat>> {
+) -> Result<ObserveReport> {
     let Some(gcp_config) = client_config.gcp_config() else {
         debug!("Skipping observe pass because client config is not GCP");
-        return Ok(vec![]);
+        return Ok(ObserveReport::default());
     };
 
     let http_client = reqwest::Client::new();
@@ -181,10 +180,10 @@ async fn run_gcp_observe_pass(
 async fn run_azure_observe_pass(
     client_config: &ClientConfig,
     deployment_id: &str,
-) -> Result<Vec<ResourceHeartbeat>> {
+) -> Result<ObserveReport> {
     let Some(azure_config) = client_config.azure_config() else {
         debug!("Skipping observe pass because client config is not Azure");
-        return Ok(vec![]);
+        return Ok(ObserveReport::default());
     };
 
     let http_client = reqwest::Client::new();

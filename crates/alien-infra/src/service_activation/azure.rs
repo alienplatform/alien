@@ -374,8 +374,6 @@ fn emit_azure_service_activation_heartbeat(
         resource_type: ServiceActivation::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ServiceActivation(
             ServiceActivationHeartbeatData::AzureResourceProvider(

@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeploymentConfig, DeploymentState, ReleaseInfo, ResourceHeartbeat};
+use crate::{
+    DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
+};
 
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,9 +18,20 @@ pub struct SyncRequest {
     /// Current deployment state as seen by the agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
-    /// Resource heartbeats emitted by the Operator's deployment step.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Managed Alien resource status samples emitted by the Operator's deployment step.
+    #[serde(
+        default,
+        rename = "resourceHeartbeats",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub heartbeats: Vec<ResourceHeartbeat>,
+    /// Observed raw-resource inventory batches successfully read by the Operator.
+    #[serde(
+        default,
+        rename = "observedInventoryBatches",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
 }
 
 /// Response from the manager to the agent sync request.
@@ -63,13 +76,14 @@ mod tests {
             deployment_id: "dep_abc123".to_string(),
             current_state: None,
             heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
         };
 
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["deploymentId"], "dep_abc123");
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
-        assert!(json.get("heartbeats").is_none());
+        assert!(json.get("resourceHeartbeats").is_none());
     }
 
     #[test]
@@ -79,6 +93,7 @@ mod tests {
         assert_eq!(req.deployment_id, "dep_xyz");
         assert!(req.current_state.is_none());
         assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
     }
 
     #[test]
@@ -125,7 +140,7 @@ mod tests {
     fn test_sync_request_heartbeats_roundtrip() {
         let json = serde_json::json!({
             "deploymentId": "dep_1",
-            "heartbeats": [{
+            "resourceHeartbeats": [{
                 "deploymentId": "dep_1",
                 "resourceId": "api",
                 "resourceType": "container",
@@ -166,7 +181,7 @@ mod tests {
         assert_eq!(req.heartbeats[0].resource_id, "api");
 
         let serialized = serde_json::to_value(&req).unwrap();
-        assert_eq!(serialized["heartbeats"][0]["resourceId"], "api");
+        assert_eq!(serialized["resourceHeartbeats"][0]["resourceId"], "api");
     }
 
     #[test]

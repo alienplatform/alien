@@ -14,7 +14,7 @@ let value: DataKubernetesSecret = {
       {
         message: "<value>",
         reason: "forbidden",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -29,10 +29,10 @@ let value: DataKubernetesSecret = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `namespace`                                                | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `prefix`                                                   | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `secretMetadataListed`                                     | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus34](../models/heartbeatstatus34.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"kubernetesSecret"*                                       | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `namespace`                                                                | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `prefix`                                                                   | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `secretMetadataListed`                                                     | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus34](../models/resourceheartbeatstatus34.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"kubernetesSecret"*                                                       | :heavy_check_mark:                                                         | N/A                                                                        |

@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.DataSource7`
+### `models.SyncReconcileRequestSource7`
 
 ```typescript
-const value: models.DataSource7 = {};
+const value: models.SyncReconcileRequestSource7 = {};
 ```
 
 ### `any`

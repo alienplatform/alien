@@ -350,6 +350,11 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
+        .maybe_label_domain(
+            embedded_config
+                .as_ref()
+                .and_then(|config| config.label_domain.clone()),
+        )
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)

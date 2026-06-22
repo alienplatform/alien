@@ -228,6 +228,7 @@ async fn checkpoint_setup_teardown_state(
             false,
             suggested_delay_ms,
             heartbeats,
+            Vec::new(),
         )
         .await
         .context(ErrorData::StackExecutionFailed {

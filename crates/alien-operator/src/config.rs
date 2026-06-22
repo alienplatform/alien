@@ -78,6 +78,9 @@ pub struct OperatorConfig {
     /// Kubernetes namespace (Kubernetes platform only)
     pub namespace: Option<String>,
 
+    /// DNS-style domain used for branded Kubernetes resource labels.
+    pub label_domain: Option<String>,
+
     /// Public endpoint URLs for exposed resources in pull-model deployments.
     pub public_endpoints: Option<PublicEndpointUrls>,
 

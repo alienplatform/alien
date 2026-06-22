@@ -1402,12 +1402,18 @@
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
             },
-            "description": "Resource heartbeats emitted by pull-mode deployment steps."
+            "description": "Managed resource status samples emitted by pull-mode deployment steps."
           }
         }
       },
@@ -1761,7 +1767,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3161,7 +3166,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -5780,7 +5784,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -6421,13 +6424,6 @@
           "info",
           "warning",
           "error"
-        ]
-      },
-      "HeartbeatSource": {
-        "type": "string",
-        "enum": [
-          "managed",
-          "observed"
         ]
       },
       "HeartbeatsMode": {
@@ -8219,7 +8215,6 @@
         "type": "object",
         "required": [
           "status",
-          "daemonName",
           "runtimeId",
           "commandSupported",
           "imagePathPresent",
@@ -9164,6 +9159,144 @@
           "unhealthy"
         ]
       },
+      "ObservedInventoryBatch": {
+        "type": "object",
+        "required": [
+          "sourceKind",
+          "inventoryScope",
+          "controllerPlatform",
+          "backend",
+          "observedAt",
+          "complete",
+          "resources"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/HeartbeatBackend",
+            "description": "Backend whose observer produced this snapshot."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether this batch is a complete replacement for the scope. Complete\nbatches tombstone previously observed rows in the same scope when they\nare absent from `resources`."
+          },
+          "controllerPlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform whose observer produced this snapshot."
+          },
+          "inventoryScope": {
+            "type": "string",
+            "description": "Stable scope for the provider list operation that produced this batch."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the inventory scope was observed."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedResourceSample"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "description": "Writer/source for this inventory pass, such as `operator` or\n`manager-observer`."
+          }
+        }
+      },
+      "ObservedResourceSample": {
+        "type": "object",
+        "required": [
+          "rawIdentity",
+          "providerKind",
+          "displayName",
+          "health",
+          "lifecycle",
+          "partial",
+          "providerStale"
+        ],
+        "properties": {
+          "alienResourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            }
+          },
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ObservedCounts",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "providerKind": {
+            "type": "string",
+            "description": "Provider-native kind, such as `apps/v1/Deployment`,\n`AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure\nresource type."
+          },
+          "providerStale": {
+            "type": "boolean"
+          },
+          "raw": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawHeartbeatSnippet"
+            }
+          },
+          "rawIdentity": {
+            "type": "string",
+            "description": "Provider-native stable identity: Kubernetes object identity, cloud ARN,\nGCP full resource name, Azure resource id, etc."
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceTypeHint": {
+            "$ref": "#/components/schemas/ResourceType",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -9487,7 +9620,13 @@
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
@@ -9725,10 +9864,6 @@
           "raw"
         ],
         "properties": {
-          "alienResourceId": {
-            "type": "string",
-            "nullable": true
-          },
           "backend": {
             "$ref": "#/components/schemas/HeartbeatBackend"
           },
@@ -9754,13 +9889,10 @@
           },
           "resourceId": {
             "type": "string",
-            "description": "For managed heartbeats this is the Alien resource id. For observed heartbeats this is the\nraw provider identity, such as a Kubernetes object identity."
+            "description": "Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"
-          },
-          "source": {
-            "$ref": "#/components/schemas/HeartbeatSource"
           }
         }
       },

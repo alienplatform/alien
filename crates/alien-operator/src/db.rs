@@ -8,7 +8,9 @@
 //!
 //! Uses Turso with AEGIS-256 encryption for data at rest.
 
-use alien_core::{DeploymentConfig, DeploymentState, ReleaseInfo, ResourceHeartbeat};
+use alien_core::{
+    DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
+};
 use alien_error::{Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -401,6 +403,75 @@ impl OperatorDb {
         .into_alien_error()
         .context(ErrorData::DatabaseError {
             message: "Failed to set pending_heartbeats".to_string(),
+        })?;
+
+        Ok(())
+    }
+
+    /// Get the latest observed inventory snapshots emitted by deployment steps.
+    pub async fn get_pending_observed_inventory_batches(
+        &self,
+    ) -> Result<Vec<ObservedInventoryBatch>> {
+        let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'pending_observed_inventory_batches'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query pending_observed_inventory_batches".to_string(),
+            })?;
+
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch pending_observed_inventory_batches row".to_string(),
+            })? {
+            Some(row) => {
+                let json: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read pending_observed_inventory_batches value"
+                                .to_string(),
+                        })?;
+                serde_json::from_str(&json)
+                    .into_alien_error()
+                    .context(ErrorData::DatabaseError {
+                        message: "Failed to parse pending_observed_inventory_batches".to_string(),
+                    })
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Set the latest non-empty observed inventory snapshots emitted by deployment steps.
+    pub async fn set_pending_observed_inventory_batches(
+        &self,
+        snapshots: &[ObservedInventoryBatch],
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+
+        let json = serde_json::to_string(snapshots)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize pending_observed_inventory_batches".to_string(),
+            })?;
+
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('pending_observed_inventory_batches', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (json,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set pending_observed_inventory_batches".to_string(),
         })?;
 
         Ok(())

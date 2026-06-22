@@ -150,7 +150,7 @@ async fn run_step_loop_inner(
     if !state.has_desired() {
         let service_provider = service_provider
             .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
-        let heartbeats = run_observe_pass(
+        let observe_report = run_observe_pass(
             state.platform,
             client_config,
             &service_provider,
@@ -159,12 +159,20 @@ async fn run_step_loop_inner(
         )
         .await?;
 
-        if !heartbeats.is_empty() {
+        if !observe_report.inventory_batches.is_empty() {
             let mut checkpoint_attempt = 1usize;
             let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
             loop {
                 match transport
-                    .reconcile_step(deployment_id, state, config, true, None, heartbeats.clone())
+                    .reconcile_step(
+                        deployment_id,
+                        state,
+                        config,
+                        true,
+                        None,
+                        Vec::new(),
+                        observe_report.inventory_batches.clone(),
+                    )
                     .await
                 {
                     Ok(reconciled) => {
@@ -251,7 +259,7 @@ async fn run_step_loop_inner(
                 let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
                 loop {
                     match transport
-                        .reconcile_step(deployment_id, state, config, false, None, vec![])
+                        .reconcile_step(deployment_id, state, config, false, None, vec![], vec![])
                         .await
                     {
                         Ok(reconciled) => {
@@ -296,7 +304,8 @@ async fn run_step_loop_inner(
         // Capture step metadata before overwriting state.
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
-        let mut heartbeats = step_result.heartbeats.clone();
+        let heartbeats = step_result.heartbeats.clone();
+        let mut observed_inventory_batches = step_result.observed_inventory_batches.clone();
 
         *state = step_result.state;
 
@@ -304,16 +313,15 @@ async fn run_step_loop_inner(
             let observe_service_provider = service_provider.clone().unwrap_or_else(|| {
                 Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
             });
-            heartbeats.extend(
-                run_observe_pass(
-                    state.platform,
-                    client_config,
-                    &observe_service_provider,
-                    deployment_id,
-                    config,
-                )
-                .await?,
-            );
+            let observe_report = run_observe_pass(
+                state.platform,
+                client_config,
+                &observe_service_provider,
+                deployment_id,
+                config,
+            )
+            .await?;
+            observed_inventory_batches.extend(observe_report.inventory_batches);
         }
 
         // Checkpoint after every step. This is a durability barrier: once a
@@ -332,6 +340,7 @@ async fn run_step_loop_inner(
                     update_heartbeat,
                     suggested_delay_ms,
                     heartbeats.clone(),
+                    observed_inventory_batches.clone(),
                 )
                 .await
             {
@@ -481,6 +490,7 @@ mod tests {
             _update_heartbeat: bool,
             _suggested_delay_ms: Option<u64>,
             _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
         ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
             self.checkpointed_statuses
                 .lock()
@@ -567,6 +577,7 @@ mod tests {
             },
             external_bindings: alien_core::ExternalBindings::default(),
             base_platform: None,
+            label_domain: None,
             compute_backend: None,
             allow_frozen_changes: false,
             domain_metadata: None,

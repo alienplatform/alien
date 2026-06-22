@@ -446,6 +446,7 @@ impl DeploymentLoop {
                                 update_heartbeat: false,
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
+                                observed_inventory_batches: Vec::new(),
                             },
                         )
                         .await?;
@@ -570,6 +571,7 @@ impl DeploymentLoop {
             base_platform: provided_config
                 .and_then(|config| config.base_platform)
                 .or(deployment.base_platform),
+            label_domain: provided_config.and_then(|config| config.label_domain.clone()),
             public_endpoints: provided_config.and_then(|config| config.public_endpoints.clone()),
             domain_metadata: provided_config.and_then(|config| config.domain_metadata.clone()),
             monitoring,

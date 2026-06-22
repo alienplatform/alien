@@ -16,7 +16,8 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 
 use alien_core::{
     sync::TargetDeployment, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceHeartbeat,
+    EnvironmentVariable, EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform,
+    ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::AlienError;
 
@@ -80,8 +81,10 @@ pub struct ReconcileRequest {
     pub update_heartbeat: bool,
     #[serde(default)]
     pub suggested_delay_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, rename = "resourceHeartbeats")]
     pub heartbeats: Vec<ResourceHeartbeat>,
+    #[serde(default, rename = "observedInventoryBatches")]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,9 +117,11 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
-    /// Resource heartbeats emitted by pull-mode deployment steps.
-    #[serde(default)]
+    /// Managed resource status samples emitted by pull-mode deployment steps.
+    #[serde(default, rename = "resourceHeartbeats")]
     pub heartbeats: Vec<ResourceHeartbeat>,
+    #[serde(default, rename = "observedInventoryBatches")]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
 }
 
 #[derive(Debug, Serialize)]
@@ -386,6 +391,7 @@ async fn reconcile(
                 update_heartbeat: req.update_heartbeat,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
+                observed_inventory_batches: req.observed_inventory_batches,
             },
         )
         .await
@@ -517,6 +523,7 @@ mod tests {
         .expect("reconcile request without heartbeats should remain compatible");
 
         assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
         assert!(req.update_heartbeat);
     }
 
@@ -527,7 +534,7 @@ mod tests {
             "session": "session_test",
             "state": { "status": "running" },
             "updateHeartbeat": true,
-            "heartbeats": [{
+            "resourceHeartbeats": [{
                 "deploymentId": "dep_test",
                 "resourceId": "api",
                 "resourceType": "container",
@@ -586,6 +593,7 @@ mod tests {
         .expect("agent sync request without heartbeats should remain compatible");
 
         assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
     }
 
     #[test]
@@ -593,7 +601,7 @@ mod tests {
         let req: AgentSyncRequest = serde_json::from_value(json!({
             "deploymentId": "dep_test",
             "currentState": null,
-            "heartbeats": [{
+            "resourceHeartbeats": [{
                 "deploymentId": "dep_test",
                 "resourceId": "api",
                 "resourceType": "container",
@@ -1014,6 +1022,7 @@ async fn agent_sync(
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
                                 heartbeats: req.heartbeats.clone(),
+                                observed_inventory_batches: req.observed_inventory_batches.clone(),
                                 suggested_delay_ms: None,
                             },
                         )
@@ -1179,7 +1188,7 @@ async fn agent_sync(
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
-                if !req.heartbeats.is_empty() {
+                if !req.heartbeats.is_empty() || !req.observed_inventory_batches.is_empty() {
                     if let Err(e) = state
                         .deployment_store
                         .reconcile(
@@ -1190,6 +1199,7 @@ async fn agent_sync(
                                 state: deployment_state.clone(),
                                 update_heartbeat: true,
                                 heartbeats: req.heartbeats.clone(),
+                                observed_inventory_batches: req.observed_inventory_batches.clone(),
                                 suggested_delay_ms: None,
                             },
                         )

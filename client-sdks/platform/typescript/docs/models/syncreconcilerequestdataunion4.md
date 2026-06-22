@@ -17,7 +17,6 @@ const value: models.DataAws1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 896332,
   events: [
     {
@@ -33,17 +32,17 @@ const value: models.DataAws1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "collection-failed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unhealthy",
+    lifecycle: "deleted",
     partial: false,
     stale: false,
   },
-  unavailableInstances: 702316,
+  unavailableInstances: 873077,
   backend: "aws",
 };
 ```
@@ -56,7 +55,6 @@ const value: models.DataGcp1 = {
   capacityGroup: "<value>",
   commandSupported: false,
   daemonInstances: [],
-  daemonName: "<value>",
   desiredMachines: 144012,
   events: [
     {
@@ -73,16 +71,16 @@ const value: models.DataGcp1 = {
       {
         message: "<value>",
         reason: "api-unavailable",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
+    health: "degraded",
     lifecycle: "running",
     partial: false,
     stale: true,
   },
-  unavailableInstances: 673342,
+  unavailableInstances: 530018,
   backend: "gcp",
 };
 ```
@@ -101,7 +99,6 @@ const value: models.DataAzure1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 583805,
   events: [],
   healthyInstances: 986297,
@@ -112,17 +109,17 @@ const value: models.DataAzure1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "running",
-    partial: false,
-    stale: false,
+    lifecycle: "stopped",
+    partial: true,
+    stale: true,
   },
-  unavailableInstances: 614597,
+  unavailableInstances: 624401,
   backend: "azure",
 };
 ```
@@ -158,7 +155,6 @@ const value: models.DataKubernetes3 = {
 ```typescript
 const value: models.DataLocal4 = {
   commandSupported: true,
-  daemonName: "<value>",
   events: [
     {
       kind: "<value>",

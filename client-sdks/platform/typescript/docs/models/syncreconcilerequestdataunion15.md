@@ -14,8 +14,8 @@ const value: models.DataStorage = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "error",
+          reason: "collection-failed",
+          severity: "warning",
           source: "<value>",
         },
       ],
@@ -49,8 +49,8 @@ const value: models.DataWorker = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "not-installed",
+          severity: "warning",
           source: "<value>",
         },
       ],
@@ -81,15 +81,15 @@ const value: models.DataContainer = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "error",
+          reason: "not-installed",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "creating",
+      health: "degraded",
+      lifecycle: "failed",
       partial: false,
-      stale: false,
+      stale: true,
     },
     backend: "horizonPlatform",
   },
@@ -106,7 +106,6 @@ const value: models.DataDaemon = {
     capacityGroup: "<value>",
     commandSupported: true,
     daemonInstances: [],
-    daemonName: "<value>",
     desiredMachines: 665477,
     events: [
       {
@@ -123,11 +122,11 @@ const value: models.DataDaemon = {
         {
           message: "<value>",
           reason: "api-unavailable",
-          severity: "warning",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
+      health: "degraded",
       lifecycle: "running",
       partial: false,
       stale: true,
@@ -152,14 +151,14 @@ const value: models.DataComputeCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "info",
+          reason: "forbidden",
+          severity: "error",
           source: "<value>",
         },
       ],
       health: "unknown",
-      lifecycle: "stopped",
-      partial: true,
+      lifecycle: "running",
+      partial: false,
       stale: true,
     },
     backend: "local",
@@ -186,7 +185,7 @@ const value: models.DataKubernetesCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
+          reason: "api-unavailable",
           severity: "warning",
           source: "<value>",
         },
@@ -242,8 +241,8 @@ const value: models.DataKv = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "not-installed",
+          severity: "warning",
           source: "<value>",
         },
       ],
@@ -308,8 +307,8 @@ const value: models.DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "warning",
+          reason: "forbidden",
+          severity: "info",
           source: "<value>",
         },
       ],
@@ -353,15 +352,15 @@ const value: models.DataRemoteStackManagement = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "info",
+          reason: "api-unavailable",
+          severity: "warning",
           source: "<value>",
         },
       ],
-      health: "degraded",
+      health: "unknown",
       lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "awsIamRole",
   },
@@ -430,7 +429,7 @@ const value: models.DataServiceActivation = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
+          reason: "not-installed",
           severity: "error",
           source: "<value>",
         },
@@ -457,7 +456,7 @@ const value: models.DataAzureResourceGroup = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "timed-out",
+          reason: "not-installed",
           severity: "info",
           source: "<value>",
         },

@@ -8977,6 +8977,16 @@ export type TargetConfig = {
       | SyncReconcileResponseExternalBindingsKubernetesSecret
       | SyncReconcileResponseExternalBindingsLocalVault;
   } | undefined;
+  /**
+   * DNS-style label domain used for Kubernetes resource ownership labels.
+   *
+   * @remarks
+   *
+   * Defaults to `alien.dev` when absent. Whitelabeled Operator builds set this
+   * so generated workloads and optional log collectors share the same label
+   * namespace.
+   */
+  labelDomain?: string | null | undefined;
   managementConfig?:
     | SyncReconcileResponseManagementConfigAzure
     | SyncReconcileResponseManagementConfigAws
@@ -25336,6 +25346,7 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
         ]),
       ]),
     ).optional(),
+    labelDomain: z.nullable(z.string()).optional(),
     managementConfig: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),

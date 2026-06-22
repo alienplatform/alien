@@ -169,6 +169,7 @@ pub async fn step(
                     suggested_delay_ms: None,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                 }
             } else {
                 let mut retry_state = current;
@@ -258,6 +259,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
         DeploymentStatus::RefreshFailed => {
@@ -277,6 +279,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
         DeploymentStatus::Error => {
@@ -286,6 +289,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
     };

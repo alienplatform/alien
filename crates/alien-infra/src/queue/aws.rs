@@ -429,8 +429,6 @@ fn emit_aws_sqs_queue_heartbeat(
         resource_type: Queue::RESOURCE_TYPE,
         controller_platform: Platform::Aws,
         backend: HeartbeatBackend::Aws,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Queue(QueueHeartbeatData::AwsSqs(AwsSqsQueueHeartbeatData {
             status: QueueHeartbeatStatus {

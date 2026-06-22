@@ -14,7 +14,7 @@ let value: DataServiceActivation = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
+          reason: "not-installed",
           severity: "error",
           source: "<value>",
         },

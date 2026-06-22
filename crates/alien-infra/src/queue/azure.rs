@@ -305,8 +305,6 @@ fn emit_azure_service_bus_queue_heartbeat(
         resource_type: Queue::RESOURCE_TYPE,
         controller_platform: Platform::Azure,
         backend: HeartbeatBackend::Azure,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Queue(QueueHeartbeatData::AzureServiceBus(
             AzureServiceBusQueueHeartbeatData {

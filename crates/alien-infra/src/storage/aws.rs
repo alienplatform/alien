@@ -983,8 +983,6 @@ fn emit_aws_s3_storage_heartbeat(
         resource_type: Storage::RESOURCE_TYPE,
         controller_platform: Platform::Aws,
         backend: HeartbeatBackend::Aws,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::Storage(StorageHeartbeatData::AwsS3(
             AwsS3StorageHeartbeatData {

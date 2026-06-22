@@ -52,6 +52,13 @@ pub struct DeploymentConfig {
     /// runtime deployment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<crate::Platform>,
+    /// DNS-style label domain used for Kubernetes resource ownership labels.
+    ///
+    /// Defaults to `alien.dev` when absent. Whitelabeled Operator builds set this
+    /// so generated workloads and optional log collectors share the same label
+    /// namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_domain: Option<String>,
     /// Public endpoint URLs for exposed resources (optional override).
     ///
     /// Use this only when a caller already knows the public URL. Managed public

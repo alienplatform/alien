@@ -1,0 +1,33 @@
+---
+source: crates/alien-permissions/tests/aws_runtime.rs
+expression: result
+---
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DiscoverResources",
+      "Effect": "Allow",
+      "Action": [
+        "tag:GetResources",
+        "tag:GetTagKeys",
+        "tag:GetTagValues"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "ReadMetrics",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricStatistics"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}

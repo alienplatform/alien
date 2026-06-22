@@ -16,9 +16,9 @@ use crate::db::OperatorDb;
 use crate::OperatorState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
-    KubernetesClientConfig, Platform, ResourceHeartbeat, ENV_ALIEN_COMMANDS_POLLING_ENABLED,
-    ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_DEPLOYMENT_NAME,
+    KubernetesClientConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
+    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -52,6 +52,7 @@ impl DeploymentLoopTransport for OperatorTransport {
         _update_heartbeat: bool,
         _suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
+        observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
         // Persist state to local DB after each step
         self.db
@@ -62,6 +63,12 @@ impl DeploymentLoopTransport for OperatorTransport {
         if !heartbeats.is_empty() {
             self.db
                 .set_pending_heartbeats(&heartbeats)
+                .await
+                .map_err(|e| e.into_generic())?;
+        }
+        if !observed_inventory_batches.is_empty() {
+            self.db
+                .set_pending_observed_inventory_batches(&observed_inventory_batches)
                 .await
                 .map_err(|e| e.into_generic())?;
         }
@@ -291,6 +298,9 @@ async fn enrich_config(
     }
     if config.base_platform.is_none() {
         config.base_platform = operator_config.base_platform;
+    }
+    if config.label_domain.is_none() {
+        config.label_domain = operator_config.label_domain.clone();
     }
     if config.deployment_name.is_none() {
         config.deployment_name = operator_config.agent_name.clone();

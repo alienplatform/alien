@@ -785,8 +785,6 @@ fn emit_gcp_service_account_heartbeat(
         resource_type: ServiceAccount::RESOURCE_TYPE,
         controller_platform: Platform::Gcp,
         backend: HeartbeatBackend::Gcp,
-        source: Default::default(),
-        alien_resource_id: None,
         observed_at: Utc::now(),
         data: ResourceHeartbeatData::ServiceAccount(
             ServiceAccountHeartbeatData::GcpServiceAccount(GcpServiceAccountHeartbeatData {

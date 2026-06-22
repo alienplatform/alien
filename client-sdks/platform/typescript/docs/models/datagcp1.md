@@ -10,7 +10,6 @@ let value: DataGcp1 = {
   capacityGroup: "<value>",
   commandSupported: false,
   daemonInstances: [],
-  daemonName: "<value>",
   desiredMachines: 144012,
   events: [
     {
@@ -27,16 +26,16 @@ let value: DataGcp1 = {
       {
         message: "<value>",
         reason: "api-unavailable",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
+    health: "degraded",
     lifecycle: "running",
     partial: false,
     stale: true,
   },
-  unavailableInstances: 673342,
+  unavailableInstances: 530018,
   backend: "gcp",
 };
 ```
@@ -49,7 +48,7 @@ let value: DataGcp1 = {
 | `capacityGroup`                                                                | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `commandSupported`                                                             | *boolean*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |
 | `daemonInstances`                                                              | [models.DaemonInstance2](../models/daemoninstance2.md)[]                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `daemonName`                                                                   | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
+| `daemonName`                                                                   | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `desiredMachines`                                                              | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `events`                                                                       | [models.SyncReconcileRequestEvent7](../models/syncreconcilerequestevent7.md)[] | :heavy_check_mark:                                                             | N/A                                                                            |
 | `healthyInstances`                                                             | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
@@ -58,6 +57,6 @@ let value: DataGcp1 = {
 | `horizonStatusMessage`                                                         | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `horizonStatusReason`                                                          | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `latestUpdateTimestamp`                                                        | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus14](../models/heartbeatstatus14.md)                     | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus14](../models/resourceheartbeatstatus14.md)     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `unavailableInstances`                                                         | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"gcp"*                                                                        | :heavy_check_mark:                                                             | N/A                                                                            |

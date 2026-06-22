@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
-    branded_tag_key, HeartbeatBackend, HeartbeatSource, KubernetesWorkloadKind, Platform,
-    ResourceHeartbeat, ResourceType, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
-    ALIEN_RESOURCE_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
+    branded_tag_key, HeartbeatBackend, KubernetesWorkloadKind, Platform, ResourceType,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY,
+    DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use alien_k8s_clients::{
     label_selector, optional_kubernetes_read, DeploymentApi, EventApi, KubernetesWorkload,
@@ -17,7 +17,10 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::List;
 use tracing::warn;
 
-use crate::{ObserveScope, Observer, Result};
+use crate::{
+    observed_resource_sample, ObserveReport, ObserveScope, ObservedResourceSampleInput, Observer,
+    Result,
+};
 
 #[derive(Clone)]
 pub struct KubernetesObserveContext {
@@ -51,7 +54,7 @@ impl KubernetesObserver {
         }
     }
 
-    async fn observe_deployments(&self, scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
+    async fn observe_deployments(&self, scope: &ObserveScope) -> Result<ObserveReport> {
         let deployments = list_or_empty(
             "Deployment",
             scope,
@@ -63,16 +66,22 @@ impl KubernetesObserver {
         )
         .await?;
 
-        let mut heartbeats = Vec::new();
-        for deployment in deployments.items {
-            if let Some(heartbeat) = self.deployment_heartbeat(scope, deployment).await? {
-                heartbeats.push(heartbeat);
+        let mut resources = Vec::new();
+        for deployment in deployments.list.items {
+            if let Some(resource) = self.deployment_resource(scope, deployment).await? {
+                resources.push(resource);
             }
         }
-        Ok(heartbeats)
+        Ok(report_for_kind(
+            scope,
+            "Deployment",
+            HeartbeatBackend::Kubernetes,
+            resources,
+            deployments.complete,
+        ))
     }
 
-    async fn observe_statefulsets(&self, scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
+    async fn observe_statefulsets(&self, scope: &ObserveScope) -> Result<ObserveReport> {
         let statefulsets = list_or_empty(
             "StatefulSet",
             scope,
@@ -84,16 +93,22 @@ impl KubernetesObserver {
         )
         .await?;
 
-        let mut heartbeats = Vec::new();
-        for statefulset in statefulsets.items {
-            if let Some(heartbeat) = self.statefulset_heartbeat(scope, statefulset).await? {
-                heartbeats.push(heartbeat);
+        let mut resources = Vec::new();
+        for statefulset in statefulsets.list.items {
+            if let Some(resource) = self.statefulset_resource(scope, statefulset).await? {
+                resources.push(resource);
             }
         }
-        Ok(heartbeats)
+        Ok(report_for_kind(
+            scope,
+            "StatefulSet",
+            HeartbeatBackend::Kubernetes,
+            resources,
+            statefulsets.complete,
+        ))
     }
 
-    async fn observe_daemonsets(&self, scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
+    async fn observe_daemonsets(&self, scope: &ObserveScope) -> Result<ObserveReport> {
         let daemonsets = list_or_empty(
             "DaemonSet",
             scope,
@@ -105,20 +120,26 @@ impl KubernetesObserver {
         )
         .await?;
 
-        let mut heartbeats = Vec::new();
-        for daemonset in daemonsets.items {
-            if let Some(heartbeat) = self.daemonset_heartbeat(scope, daemonset).await? {
-                heartbeats.push(heartbeat);
+        let mut resources = Vec::new();
+        for daemonset in daemonsets.list.items {
+            if let Some(resource) = self.daemonset_resource(scope, daemonset).await? {
+                resources.push(resource);
             }
         }
-        Ok(heartbeats)
+        Ok(report_for_kind(
+            scope,
+            "DaemonSet",
+            HeartbeatBackend::Kubernetes,
+            resources,
+            daemonsets.complete,
+        ))
     }
 
-    async fn deployment_heartbeat(
+    async fn deployment_resource(
         &self,
         scope: &ObserveScope,
         deployment: Deployment,
-    ) -> Result<Option<ResourceHeartbeat>> {
+    ) -> Result<Option<alien_core::ObservedResourceSample>> {
         let Some(name) = deployment.metadata.name.clone() else {
             return Ok(None);
         };
@@ -129,7 +150,7 @@ impl KubernetesObserver {
             .and_then(|spec| spec.selector.match_labels.clone())
             .unwrap_or_default();
 
-        self.workload_heartbeat(
+        self.workload_resource(
             scope,
             &name,
             labels.as_ref(),
@@ -142,11 +163,11 @@ impl KubernetesObserver {
         .await
     }
 
-    async fn statefulset_heartbeat(
+    async fn statefulset_resource(
         &self,
         scope: &ObserveScope,
         statefulset: StatefulSet,
-    ) -> Result<Option<ResourceHeartbeat>> {
+    ) -> Result<Option<alien_core::ObservedResourceSample>> {
         let Some(name) = statefulset.metadata.name.clone() else {
             return Ok(None);
         };
@@ -157,7 +178,7 @@ impl KubernetesObserver {
             .and_then(|spec| spec.selector.match_labels.clone())
             .unwrap_or_default();
 
-        self.workload_heartbeat(
+        self.workload_resource(
             scope,
             &name,
             labels.as_ref(),
@@ -170,11 +191,11 @@ impl KubernetesObserver {
         .await
     }
 
-    async fn daemonset_heartbeat(
+    async fn daemonset_resource(
         &self,
         scope: &ObserveScope,
         daemonset: DaemonSet,
-    ) -> Result<Option<ResourceHeartbeat>> {
+    ) -> Result<Option<alien_core::ObservedResourceSample>> {
         let Some(name) = daemonset.metadata.name.clone() else {
             return Ok(None);
         };
@@ -185,7 +206,7 @@ impl KubernetesObserver {
             .and_then(|spec| spec.selector.match_labels.clone())
             .unwrap_or_default();
 
-        self.workload_heartbeat(
+        self.workload_resource(
             scope,
             &name,
             labels.as_ref(),
@@ -198,7 +219,7 @@ impl KubernetesObserver {
         .await
     }
 
-    async fn workload_heartbeat(
+    async fn workload_resource(
         &self,
         scope: &ObserveScope,
         name: &str,
@@ -208,7 +229,7 @@ impl KubernetesObserver {
         data_kind: KubernetesWorkloadDataKind,
         command_supported: bool,
         workload: KubernetesWorkload,
-    ) -> Result<Option<ResourceHeartbeat>> {
+    ) -> Result<Option<alien_core::ObservedResourceSample>> {
         let raw_id = raw_identity(workload_kind, &scope.namespace, name);
         let data = match alien_k8s_clients::read_kubernetes_workload(
             &self.context.pod_client,
@@ -240,18 +261,28 @@ impl KubernetesObserver {
             Err(error) => return Err(error),
         };
 
-        Ok(Some(ResourceHeartbeat {
-            deployment_id: Some(self.context.deployment_id.clone()),
-            resource_id: raw_id,
-            source: HeartbeatSource::Observed,
-            alien_resource_id: alien_resource_id_from_labels(&self.label_domain, labels),
-            resource_type: resource_type_for_workload(workload_kind),
-            controller_platform: Platform::Kubernetes,
-            backend: HeartbeatBackend::Kubernetes,
-            observed_at: chrono::Utc::now(),
-            data,
-            raw: vec![],
-        }))
+        Ok(Some(observed_resource_sample(
+            ObservedResourceSampleInput {
+                deployment_id: self.context.deployment_id.clone(),
+                raw_identity: raw_id,
+                provider_kind: format!("apps/v1/{}", workload_kind_name(workload_kind)),
+                display_name: name.to_string(),
+                namespace: Some(scope.namespace.clone()),
+                region: None,
+                scope: Some(kubernetes_inventory_scope(
+                    workload_kind_name(workload_kind),
+                    &scope.namespace,
+                )),
+                resource_type_hint: Some(resource_type_for_workload(workload_kind)),
+                alien_resource_id: alien_resource_id_from_labels(&self.label_domain, labels),
+                controller_platform: Platform::Kubernetes,
+                backend: HeartbeatBackend::Kubernetes,
+                labels: labels.cloned().unwrap_or_default(),
+                attributes: BTreeMap::new(),
+                data,
+                raw: vec![],
+            },
+        )))
     }
 }
 
@@ -261,15 +292,24 @@ impl Observer for KubernetesObserver {
         Platform::Kubernetes
     }
 
-    async fn discover(&self, scope: &ObserveScope) -> Result<Vec<ResourceHeartbeat>> {
-        let mut heartbeats = self.observe_deployments(scope).await?;
-        heartbeats.extend(self.observe_statefulsets(scope).await?);
-        heartbeats.extend(self.observe_daemonsets(scope).await?);
-        Ok(heartbeats)
+    async fn discover(&self, scope: &ObserveScope) -> Result<ObserveReport> {
+        let mut report = self.observe_deployments(scope).await?;
+        report.extend(self.observe_statefulsets(scope).await?);
+        report.extend(self.observe_daemonsets(scope).await?);
+        Ok(report)
     }
 }
 
-async fn list_or_empty<T, F>(kind: &'static str, scope: &ObserveScope, read: F) -> Result<List<T>>
+struct KubernetesListResult<T: k8s_openapi::ListableResource> {
+    list: List<T>,
+    complete: bool,
+}
+
+async fn list_or_empty<T, F>(
+    kind: &'static str,
+    scope: &ObserveScope,
+    read: F,
+) -> Result<KubernetesListResult<T>>
 where
     T: k8s_openapi::ListableResource,
     F: std::future::Future<Output = Result<List<T>>>,
@@ -294,14 +334,47 @@ where
         );
     }
 
-    Ok(result.value.unwrap_or_else(|| List {
-        metadata: Default::default(),
-        items: Vec::new(),
-    }))
+    Ok(KubernetesListResult {
+        complete: result.status.available,
+        list: result.value.unwrap_or_else(|| List {
+            metadata: Default::default(),
+            items: Vec::new(),
+        }),
+    })
+}
+
+impl ObserveReport {
+    fn extend(&mut self, other: ObserveReport) {
+        self.inventory_batches.extend(other.inventory_batches);
+    }
+}
+
+fn report_for_kind(
+    scope: &ObserveScope,
+    kind: &'static str,
+    backend: HeartbeatBackend,
+    resources: Vec<alien_core::ObservedResourceSample>,
+    complete: bool,
+) -> ObserveReport {
+    ObserveReport {
+        inventory_batches: vec![alien_core::ObservedInventoryBatch {
+            source_kind: "operator".to_string(),
+            inventory_scope: kubernetes_inventory_scope(kind, &scope.namespace),
+            controller_platform: Platform::Kubernetes,
+            backend,
+            observed_at: chrono::Utc::now(),
+            complete,
+            resources,
+        }],
+    }
 }
 
 pub fn raw_identity(kind: KubernetesWorkloadKind, namespace: &str, name: &str) -> String {
     format!("apps/v1:{}:{namespace}:{name}", workload_kind_name(kind))
+}
+
+pub fn kubernetes_inventory_scope(kind: &str, namespace: &str) -> String {
+    format!("kubernetes:apps/v1:{kind}:{namespace}")
 }
 
 pub fn alien_resource_id_from_labels(
