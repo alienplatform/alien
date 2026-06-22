@@ -1,8 +1,7 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    azure_storage,
-    core::ResourceControllerContext,
+    core::{map_azure_core_021_sdk_error, ResourceControllerContext},
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
@@ -99,15 +98,23 @@ impl AzureStorageController {
             .get_azure_blob_container_client(azure_config)?;
 
         // Fail fast on any error - executor handles retries
-        azure_storage::create_blob_container(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
-            &storage_account_name,
+        let result = client
+            .blob_containers_client()
+            .create(
+                resource_group_name.clone(),
+                storage_account_name.clone(),
+                container_name.clone(),
+                container_body,
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "blob container create",
+            "Azure Blob container",
             &container_name,
-            &container_body,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create Azure Storage Container '{}'",
@@ -202,36 +209,61 @@ impl AzureStorageController {
                 .get_azure_storage_accounts_client(azure_config)?;
 
             // Check if container still exists
-            let container = azure_storage::get_blob_container(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
-                &storage_account_name,
+            let result = client
+                .blob_containers_client()
+                .get(
+                    resource_group_name.clone(),
+                    storage_account_name.clone(),
+                    container_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            let container = map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "blob container get",
+                "Azure Blob container",
                 container_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to check Azure Storage Container during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-            let storage_account = azure_storage::get_storage_account_properties(
-                &storage_accounts_client,
-                &azure_config.subscription_id,
-                &resource_group_name,
+            let result = storage_accounts_client
+                .storage_accounts_client()
+                .get_properties(
+                    resource_group_name.clone(),
+                    storage_account_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            let storage_account = map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "account get properties",
+                "Azure Storage account",
                 &storage_account_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Azure Storage account during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-            let blob_service = azure_storage::get_blob_service_properties(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
+            let result = client
+                .blob_services_client()
+                .get_service_properties(
+                    resource_group_name.clone(),
+                    storage_account_name.clone(),
+                    azure_config.subscription_id.clone(),
+                    "default".to_string(),
+                )
+                .await;
+            let blob_service = map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "blob service get properties",
+                "Azure Blob service",
                 &storage_account_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Azure Blob service during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -306,15 +338,23 @@ impl AzureStorageController {
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
 
-            azure_storage::update_blob_container(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
-                &storage_account_name,
+            let result = client
+                .blob_containers_client()
+                .update(
+                    resource_group_name.clone(),
+                    storage_account_name.clone(),
+                    container_name.clone(),
+                    container_body,
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "blob container update",
+                "Azure Blob container",
                 container_name,
-                &container_body,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to update Azure Storage Container '{}': public_read change",
@@ -367,15 +407,24 @@ impl AzureStorageController {
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
 
-            match azure_storage::delete_blob_container(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
-                &storage_account_name,
+            let result = client
+                .blob_containers_client()
+                .delete(
+                    resource_group_name.clone(),
+                    storage_account_name.clone(),
+                    container_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            match map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "blob container delete",
+                "Azure Blob container",
                 container_name,
-            )
-            .await
-            {
+            ) {
                 Ok(_) => {
                     info!(
                         "Successfully deleted Azure Storage Container '{}'",

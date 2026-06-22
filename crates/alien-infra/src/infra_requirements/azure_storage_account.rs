@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_storage;
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureStorageAccount, AzureStorageAccountEndpoints,
@@ -61,14 +60,24 @@ impl AzureStorageAccountController {
             .get_azure_storage_accounts_client(azure_config)?;
         let params = self.build_storage_account_params(azure_config, ctx);
 
-        azure_storage::create_storage_account(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .storage_accounts_client()
+            .create(
+                resource_group_name.clone(),
+                account_name.clone(),
+                params,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account create",
+            "Azure Storage account",
             &account_name,
-            &params,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to create Azure Storage Account '{}'.", account_name),
             resource_id: Some(config.id.clone()),
@@ -108,14 +117,21 @@ impl AzureStorageAccountController {
             .service_provider
             .get_azure_storage_accounts_client(azure_config)?;
 
-        match azure_storage::get_storage_account_properties(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .storage_accounts_client()
+            .get_properties(
+                resource_group_name.clone(),
+                account_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account get properties",
+            "Azure Storage account",
             account_name,
-        )
-        .await
-        {
+        ) {
             Ok(account_info) => {
                 // Extract properties once to avoid multiple moves
                 let properties = account_info.properties.clone();
@@ -258,13 +274,21 @@ impl AzureStorageAccountController {
                 .service_provider
                 .get_azure_storage_accounts_client(azure_config)?;
 
-            let storage_account = azure_storage::get_storage_account_properties(
-                &client,
-                &azure_config.subscription_id,
-                &resource_group_name,
+            let result = client
+                .storage_accounts_client()
+                .get_properties(
+                    resource_group_name.clone(),
+                    account_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            let storage_account = map_azure_core_021_sdk_error(
+                "Azure Storage",
+                result,
+                "account get properties",
+                "Azure Storage account",
                 account_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to get storage account properties for '{}'",
@@ -327,14 +351,23 @@ impl AzureStorageAccountController {
             .service_provider
             .get_azure_storage_accounts_client(azure_config)?;
 
-        match azure_storage::delete_storage_account(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .storage_accounts_client()
+            .delete(
+                resource_group_name.clone(),
+                account_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        match map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account delete",
+            "Azure Storage account",
             account_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 info!(account_name=%account_name, "Storage account deletion initiated");
                 Ok(HandlerAction::Continue {
@@ -385,14 +418,21 @@ impl AzureStorageAccountController {
             .service_provider
             .get_azure_storage_accounts_client(azure_config)?;
 
-        match azure_storage::get_storage_account_properties(
-            &client,
-            &azure_config.subscription_id,
-            &resource_group_name,
+        let result = client
+            .storage_accounts_client()
+            .get_properties(
+                resource_group_name.clone(),
+                account_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "account get properties",
+            "Azure Storage account",
             account_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!(account_name=%account_name, "Storage account still exists, continuing to wait");
                 Ok(HandlerAction::Continue {

@@ -1,9 +1,8 @@
 use std::fmt::Debug;
 use tracing::info;
 
-use crate::azure_storage;
 use crate::azure_utils::get_resource_group_name;
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureStorageAccountOutputs, AzureTableKvHeartbeatData, HeartbeatBackend,
@@ -93,14 +92,23 @@ impl AzureKvController {
             .get_azure_table_management_client(azure_config)?;
 
         // Create the table using the management client
-        azure_storage::create_table(
-            &management_client,
-            &azure_config.subscription_id,
-            &resource_group_name,
-            &storage_account_outputs.account_name,
+        let result = management_client
+            .table_client()
+            .create(
+                resource_group_name.clone(),
+                storage_account_outputs.account_name.clone(),
+                azure_config.subscription_id.clone(),
+                table_name.clone(),
+            )
+            .await
+            .map(|_| ());
+        map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table create",
+            "Azure Table",
             &table_name,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
                 "Failed to create Azure Table Storage table '{}'",
@@ -203,28 +211,46 @@ impl AzureKvController {
         })?;
 
         // Heartbeat check: verify table still exists by reading signed identifier metadata
-        match azure_storage::get_table_signed_identifier_count(
-            &management_client,
-            &azure_config.subscription_id,
-            &resource_group_name,
-            &storage_outputs.account_name,
+        let result = management_client
+            .table_client()
+            .get(
+                resource_group_name.clone(),
+                storage_outputs.account_name.clone(),
+                azure_config.subscription_id.clone(),
+                table_name.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table get",
+            "Azure Table",
             table_name,
-        )
-        .await
-        {
-            Ok(signed_identifier_count) => {
+        ) {
+            Ok(table) => {
+                let signed_identifier_count = table
+                    .properties
+                    .map(|properties| properties.signed_identifiers.len())
+                    .unwrap_or_default();
                 let storage_client = ctx
                     .service_provider
                     .get_azure_storage_accounts_client(azure_config)?;
-                let (storage_account, storage_account_issue) =
-                    match azure_storage::get_storage_account_properties(
-                        &storage_client,
-                        &azure_config.subscription_id,
-                        &resource_group_name,
+                let (storage_account, storage_account_issue) = {
+                    let result = storage_client
+                        .storage_accounts_client()
+                        .get_properties(
+                            resource_group_name.clone(),
+                            storage_outputs.account_name.clone(),
+                            azure_config.subscription_id.clone(),
+                        )
+                        .await;
+                    match map_azure_core_021_sdk_error(
+                        "Azure Storage",
+                        result,
+                        "account get properties",
+                        "Azure Storage account",
                         &storage_outputs.account_name,
-                    )
-                    .await
-                    {
+                    ) {
                         Ok(account) => (Some(account), None),
                         Err(e) => (
                             None,
@@ -238,7 +264,8 @@ impl AzureKvController {
                                 ),
                             }),
                         ),
-                    };
+                    }
+                };
 
                 emit_azure_table_kv_heartbeat(
                     ctx,
@@ -311,15 +338,28 @@ impl AzureKvController {
             .service_provider
             .get_azure_table_management_client(azure_config)?;
 
-        match azure_storage::delete_table(
-            &management_client,
-            &azure_config.subscription_id,
-            &resource_group_name,
-            &self.storage_account_outputs.as_ref().unwrap().account_name,
+        let result = management_client
+            .table_client()
+            .delete(
+                resource_group_name.clone(),
+                self.storage_account_outputs
+                    .as_ref()
+                    .unwrap()
+                    .account_name
+                    .clone(),
+                azure_config.subscription_id.clone(),
+                table_name.clone(),
+            )
+            .send()
+            .await
+            .map(|_| ());
+        match map_azure_core_021_sdk_error(
+            "Azure Storage",
+            result,
+            "table delete",
+            "Azure Table",
             table_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 info!(table_name=%table_name, "Azure Table Storage table deleted successfully");
                 self.clear_state();
@@ -525,4 +565,96 @@ fn azure_model_value<T: Serialize>(value: &T) -> Option<String> {
             serde_json::Value::Null => None,
             value => Some(value.to_string()),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::{azure_credential_from_config, AzureCore021Credential};
+    use alien_core::{AzureClientConfig, AzureCredentials};
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context, Method, Policy, PolicyResult, Request,
+        Response, StatusCode, TransportOptions,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct CreateTableTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for CreateTableTransport {
+        async fn send(
+            &self,
+            _ctx: &Context,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(request.method(), &Method::Put);
+            assert_eq!(
+                request.url().path(),
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.Storage/storageAccounts/teststorage/tableServices/default/tables/testtable"
+            );
+            assert_eq!(request.url().query(), Some("api-version=2023-05-01"));
+            match request.body() {
+                Body::Bytes(bytes) => assert!(
+                    bytes.is_empty(),
+                    "table create should not add a request body"
+                ),
+                #[cfg(not(target_arch = "wasm32"))]
+                Body::SeekableStream(_) => panic!("table create should use an empty body"),
+            }
+
+            let response = json!({
+                "properties": {
+                    "tableName": "testtable",
+                    "signedIdentifiers": []
+                }
+            });
+            Ok(Response::new(
+                StatusCode::Ok,
+                Headers::new(),
+                Box::pin(BytesStream::new(response.to_string())),
+            ))
+        }
+    }
+
+    fn storage_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_mgmt_storage::package_2023_05::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_mgmt_storage::package_2023_05::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Storage client should build")
+    }
+
+    #[tokio::test]
+    async fn table_create_uses_generated_client_request() {
+        let client = storage_client_with_transport(CreateTableTransport);
+
+        client
+            .table_client()
+            .create(
+                "test-rg".to_string(),
+                "teststorage".to_string(),
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "testtable".to_string(),
+            )
+            .await
+            .expect("table should be created");
+    }
 }

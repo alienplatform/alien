@@ -3,8 +3,6 @@ pub use core::*;
 
 mod azure_container_apps;
 
-mod azure_storage;
-
 mod gcp_compute;
 
 mod gcp_iam_admin;
