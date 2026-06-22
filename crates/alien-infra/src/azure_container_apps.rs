@@ -293,6 +293,31 @@ pub(crate) async fn delete_dapr_component(
     .await
 }
 
+pub(crate) async fn delete_container_app(
+    client: &azure_app_2024_08::Client,
+    config: &AzureClientConfig,
+    resource_group_name: &str,
+    container_app_name: &str,
+) -> CloudClientResult<OperationResult<()>> {
+    let result = client
+        .container_apps_client()
+        .delete(
+            config.subscription_id.clone(),
+            resource_group_name.to_string(),
+            container_app_name.to_string(),
+        )
+        .send()
+        .await;
+    map_azure_core_021_delete_lro_response(
+        "Azure Container Apps",
+        result,
+        "container app delete",
+        "Azure Container App",
+        container_app_name,
+    )
+    .await
+}
+
 pub struct OfficialAzureContainerAppsClient {
     config: AzureClientConfig,
     credential: Arc<dyn azure_core_021::auth::TokenCredential>,
@@ -412,19 +437,6 @@ impl OfficialAzureContainerAppsClient {
         .await
     }
 
-    pub async fn delete_container_app(
-        &self,
-        resource_group_name: &str,
-        container_app_name: &str,
-    ) -> CloudClientResult<OperationResult<()>> {
-        self.delete_lro(
-            self.container_app_url(resource_group_name, container_app_name),
-            "Azure Container App",
-            container_app_name,
-        )
-        .await
-    }
-
     async fn put_lro<T>(
         &self,
         url: String,
@@ -481,33 +493,6 @@ impl OfficialAzureContainerAppsClient {
             resource_type,
             resource_name,
         )
-    }
-
-    async fn delete_lro(
-        &self,
-        url: String,
-        resource_type: &str,
-        resource_name: &str,
-    ) -> CloudClientResult<OperationResult<()>> {
-        let response = self
-            .request(
-                azure_core_021::Method::Delete,
-                url,
-                None,
-                resource_type,
-                resource_name,
-            )
-            .await?;
-        if response.status == azure_core_021::StatusCode::Accepted {
-            return Ok(OperationResult::LongRunning(
-                long_running_operation_from_azure_core_021_headers(
-                    &response.headers,
-                    resource_type,
-                    resource_name,
-                )?,
-            ));
-        }
-        Ok(OperationResult::Completed(()))
     }
 }
 

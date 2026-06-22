@@ -2908,11 +2908,15 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
+            .get_azure_container_apps_management_client(azure_cfg)?;
 
-        match client
-            .delete_container_app(&resource_group_name, &container_app_name)
-            .await
+        match azure_container_apps::delete_container_app(
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            &container_app_name,
+        )
+        .await
         {
             Ok(OperationResult::Completed(_)) => {
                 info!(name=%container_app_name, "Container app deleted immediately");
@@ -4752,11 +4756,8 @@ mod tests {
 
     fn setup_mock_client_for_best_effort_deletion(
         app_name: &str,
-        app_missing: bool,
     ) -> Arc<OfficialAzureContainerAppsClient> {
-        container_apps_client_with_transport(
-            ContainerAppsTransport::new(app_name, true).delete_missing(app_missing),
-        )
+        container_apps_client_with_transport(ContainerAppsTransport::new(app_name, true))
     }
 
     #[derive(Debug)]
@@ -4821,7 +4822,17 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct AppManagementTransport;
+    struct AppManagementTransport {
+        container_app_delete_missing: bool,
+    }
+
+    impl AppManagementTransport {
+        fn new(container_app_delete_missing: bool) -> Self {
+            Self {
+                container_app_delete_missing,
+            }
+        }
+    }
 
     #[async_trait::async_trait]
     impl Policy for AppManagementTransport {
@@ -4898,6 +4909,32 @@ mod tests {
                         ));
                     }
                     method => panic!("unexpected Azure Container Apps Dapr method: {method:?}"),
+                }
+            }
+
+            if path.contains("/providers/Microsoft.App/containerApps/") {
+                match request.method() {
+                    &Method::Delete => {
+                        assert_eq!(
+                            request.url().query(),
+                            Some("api-version=2024-08-02-preview")
+                        );
+                        if self.container_app_delete_missing {
+                            return Ok(Response::new(
+                                StatusCode::NotFound,
+                                Headers::new(),
+                                Box::pin(BytesStream::new("{}")),
+                            ));
+                        }
+                        return Ok(Response::new(
+                            StatusCode::NoContent,
+                            Headers::new(),
+                            Box::pin(BytesStream::new("{}")),
+                        ));
+                    }
+                    method => {
+                        panic!("unexpected Azure Container Apps generated app method: {method:?}")
+                    }
                 }
             }
 
@@ -5241,13 +5278,23 @@ mod tests {
         container_apps_client: Arc<OfficialAzureContainerAppsClient>,
         mock_lro: Option<AzureLongRunningOperationClient>,
     ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_delete_missing(container_apps_client, mock_lro, false)
+    }
+
+    fn setup_mock_service_provider_with_delete_missing(
+        container_apps_client: Arc<OfficialAzureContainerAppsClient>,
+        mock_lro: Option<AzureLongRunningOperationClient>,
+        container_app_delete_missing: bool,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_azure_container_apps_client()
             .returning(move |_| Ok(container_apps_client.clone()));
 
-        let app_management_client = app_management_client_with_transport(AppManagementTransport);
+        let app_management_client = app_management_client_with_transport(
+            AppManagementTransport::new(container_app_delete_missing),
+        );
         mock_provider
             .expect_get_azure_container_apps_management_client()
             .returning(move |_| Ok(app_management_client.clone()));
@@ -5641,9 +5688,9 @@ mod tests {
         #[case] app_missing: bool,
     ) {
         let app_name = format!("test-{}", worker.id);
-        let mock_container_apps =
-            setup_mock_client_for_best_effort_deletion(&app_name, app_missing);
-        let mock_provider = setup_mock_service_provider(mock_container_apps, None);
+        let mock_container_apps = setup_mock_client_for_best_effort_deletion(&app_name);
+        let mock_provider =
+            setup_mock_service_provider_with_delete_missing(mock_container_apps, None, app_missing);
 
         // Start with a ready controller
         let mut ready_controller = AzureWorkerController::mock_ready(&app_name);
