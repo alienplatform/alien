@@ -1,8 +1,7 @@
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::azure_resources;
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureResourceProviderActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -46,13 +45,19 @@ impl AzureServiceActivationController {
         );
 
         // Check if the provider is already registered (reading before command is allowed)
-        let already_registered = match azure_resources::get_provider(
-            &client,
-            &azure_config.subscription_id,
+        let already_registered = match map_azure_core_021_sdk_error(
+            "Azure Resources",
+            client
+                .providers_client()
+                .get(
+                    config.service_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await,
+            "provider get",
+            "Azure Resource Provider",
             &config.service_name,
-        )
-        .await
-        {
+        ) {
             Ok(provider) => {
                 if let Some(registration_state) = provider.registration_state {
                     registration_state.to_lowercase() == "registered"
@@ -125,13 +130,19 @@ impl AzureServiceActivationController {
         }
 
         // Provider is not registered, proceed to register it
-        match azure_resources::register_provider(
-            &client,
-            &azure_config.subscription_id,
+        match map_azure_core_021_sdk_error(
+            "Azure Resources",
+            client
+                .providers_client()
+                .register(
+                    config.service_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await,
+            "provider register",
+            "Azure Resource Provider",
             &config.service_name,
-        )
-        .await
-        {
+        ) {
             Ok(provider) => {
                 info!(
                     service_id = %config.id,
@@ -193,13 +204,19 @@ impl AzureServiceActivationController {
         }
 
         // Check the actual provider registration status
-        match azure_resources::get_provider(
-            &client,
-            &azure_config.subscription_id,
+        match map_azure_core_021_sdk_error(
+            "Azure Resources",
+            client
+                .providers_client()
+                .get(
+                    config.service_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await,
+            "provider get",
+            "Azure Resource Provider",
             &config.service_name,
-        )
-        .await
-        {
+        ) {
             Ok(provider) => {
                 if let Some(registration_state) = provider.registration_state {
                     if registration_state.to_lowercase() == "registered" {
@@ -264,13 +281,20 @@ impl AzureServiceActivationController {
                 .service_provider
                 .get_azure_resources_client(azure_config)?;
 
-            let provider =
-                azure_resources::get_provider(&client, &azure_config.subscription_id, service_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to get Azure provider '{}'", service_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+            let provider = map_azure_core_021_sdk_error(
+                "Azure Resources",
+                client
+                    .providers_client()
+                    .get(service_name.clone(), azure_config.subscription_id.clone())
+                    .await,
+                "provider get",
+                "Azure Resource Provider",
+                service_name,
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to get Azure provider '{}'", service_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
             emit_azure_service_activation_heartbeat(ctx, &config.id, service_name, &provider);
 

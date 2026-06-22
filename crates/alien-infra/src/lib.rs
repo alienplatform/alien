@@ -11,8 +11,6 @@ mod azure_msi;
 
 mod azure_network;
 
-mod azure_resources;
-
 mod azure_servicebus;
 
 mod azure_storage;
