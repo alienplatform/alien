@@ -84,7 +84,6 @@ use google_cloud_iam_v1::client::IAMPolicy;
 pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_longrunning::model::Operation;
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
-pub use google_cloud_pubsub::model::{push_config::OidcToken, PushConfig, Subscription, Topic};
 use google_cloud_resourcemanager_v3::client::Projects;
 pub use google_cloud_resourcemanager_v3::model::Project;
 use google_cloud_scheduler_v1::client::CloudScheduler;
@@ -541,311 +540,6 @@ impl GcpIamApi for IamClient {
                 resource_id: Some(role_name),
             },
         )
-    }
-}
-
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
-#[async_trait::async_trait]
-pub trait PubSubApi: Send + Sync + std::fmt::Debug {
-    async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic>;
-    async fn get_topic(&self, topic_id: String) -> Result<Topic>;
-    async fn delete_topic(&self, topic_id: String) -> Result<()>;
-    async fn set_topic_iam_policy(&self, topic_id: String, iam_policy: Policy) -> Result<Policy>;
-
-    async fn create_subscription(
-        &self,
-        subscription_id: String,
-        subscription: Subscription,
-    ) -> Result<Subscription>;
-    async fn get_subscription(&self, subscription_id: String) -> Result<Subscription>;
-    async fn delete_subscription(&self, subscription_id: String) -> Result<()>;
-    async fn set_subscription_iam_policy(
-        &self,
-        subscription_id: String,
-        iam_policy: Policy,
-    ) -> Result<Policy>;
-}
-
-struct OfficialGcpPubSubClient {
-    config: GcpClientConfig,
-    topic_admin: OnceCell<TopicAdmin>,
-    subscription_admin: OnceCell<SubscriptionAdmin>,
-    iam_policy: OnceCell<IAMPolicy>,
-}
-
-impl std::fmt::Debug for OfficialGcpPubSubClient {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("OfficialGcpPubSubClient")
-            .field("project_id", &self.config.project_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl OfficialGcpPubSubClient {
-    fn new(config: GcpClientConfig) -> Self {
-        Self {
-            config,
-            topic_admin: OnceCell::new(),
-            subscription_admin: OnceCell::new(),
-            iam_policy: OnceCell::new(),
-        }
-    }
-
-    async fn topic_admin(&self) -> Result<TopicAdmin> {
-        let client = self
-            .topic_admin
-            .get_or_try_init(|| async { pubsub_topic_admin_from_alien_config(&self.config).await })
-            .await?;
-        Ok(client.clone())
-    }
-
-    async fn subscription_admin(&self) -> Result<SubscriptionAdmin> {
-        let client = self
-            .subscription_admin
-            .get_or_try_init(|| async {
-                pubsub_subscription_admin_from_alien_config(&self.config).await
-            })
-            .await?;
-        Ok(client.clone())
-    }
-
-    async fn iam_policy(&self) -> Result<IAMPolicy> {
-        let client = self
-            .iam_policy
-            .get_or_try_init(|| async { pubsub_iam_policy_from_alien_config(&self.config).await })
-            .await?;
-        Ok(client.clone())
-    }
-
-    fn topic_name(&self, topic_id: &str) -> String {
-        if topic_id.starts_with("projects/") {
-            topic_id.to_string()
-        } else {
-            format!("projects/{}/topics/{topic_id}", self.config.project_id)
-        }
-    }
-
-    fn subscription_name(&self, subscription_id: &str) -> String {
-        if subscription_id.starts_with("projects/") {
-            subscription_id.to_string()
-        } else {
-            format!(
-                "projects/{}/subscriptions/{subscription_id}",
-                self.config.project_id
-            )
-        }
-    }
-
-    async fn set_iam_policy(&self, resource: String, policy: Policy) -> Result<Policy> {
-        self.iam_policy()
-            .await?
-            .set_iam_policy()
-            .set_resource(resource.clone())
-            .set_policy(policy)
-            .send()
-            .await
-            .into_alien_error()
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Pub/Sub set_iam_policy request failed".to_string(),
-                resource_id: Some(resource),
-            })
-    }
-}
-
-#[async_trait::async_trait]
-impl PubSubApi for OfficialGcpPubSubClient {
-    async fn create_topic(&self, topic_id: String, topic: Topic) -> Result<Topic> {
-        let mut topic = topic;
-        if topic.name.is_empty() {
-            topic.name = self.topic_name(&topic_id);
-        }
-
-        match self
-            .topic_admin()
-            .await?
-            .create_topic()
-            .with_request(topic)
-            .send()
-            .await
-        {
-            Ok(topic) => Ok(topic),
-            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: "Pub/Sub topic".to_string(),
-                    resource_name: self.topic_name(&topic_id),
-                    message: "create_topic reported the topic already exists".to_string(),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub create_topic request failed".to_string(),
-                        resource_id: Some(topic_id),
-                    }))
-            }
-        }
-    }
-
-    async fn get_topic(&self, topic_id: String) -> Result<Topic> {
-        match self
-            .topic_admin()
-            .await?
-            .get_topic()
-            .set_topic(self.topic_name(&topic_id))
-            .send()
-            .await
-        {
-            Ok(topic) => Ok(topic),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Pub/Sub topic".to_string(),
-                    resource_name: self.topic_name(&topic_id),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub get_topic request failed".to_string(),
-                        resource_id: Some(topic_id),
-                    }))
-            }
-        }
-    }
-
-    async fn delete_topic(&self, topic_id: String) -> Result<()> {
-        match self
-            .topic_admin()
-            .await?
-            .delete_topic()
-            .set_topic(self.topic_name(&topic_id))
-            .send()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Pub/Sub topic".to_string(),
-                    resource_name: self.topic_name(&topic_id),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub delete_topic request failed".to_string(),
-                        resource_id: Some(topic_id),
-                    }))
-            }
-        }
-    }
-
-    async fn set_topic_iam_policy(&self, topic_id: String, iam_policy: Policy) -> Result<Policy> {
-        self.set_iam_policy(self.topic_name(&topic_id), iam_policy)
-            .await
-    }
-
-    async fn create_subscription(
-        &self,
-        subscription_id: String,
-        subscription: Subscription,
-    ) -> Result<Subscription> {
-        let mut subscription = subscription;
-        if subscription.name.is_empty() {
-            subscription.name = self.subscription_name(&subscription_id);
-        }
-
-        match self
-            .subscription_admin()
-            .await?
-            .create_subscription()
-            .with_request(subscription)
-            .send()
-            .await
-        {
-            Ok(subscription) => Ok(subscription),
-            Err(error) if gax_error_is_conflict(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceConflict {
-                    resource_type: "Pub/Sub subscription".to_string(),
-                    resource_name: self.subscription_name(&subscription_id),
-                    message: "create_subscription reported the subscription already exists"
-                        .to_string(),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub create_subscription request failed".to_string(),
-                        resource_id: Some(subscription_id),
-                    }))
-            }
-        }
-    }
-
-    async fn get_subscription(&self, subscription_id: String) -> Result<Subscription> {
-        match self
-            .subscription_admin()
-            .await?
-            .get_subscription()
-            .set_subscription(self.subscription_name(&subscription_id))
-            .send()
-            .await
-        {
-            Ok(subscription) => Ok(subscription),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Pub/Sub subscription".to_string(),
-                    resource_name: self.subscription_name(&subscription_id),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub get_subscription request failed".to_string(),
-                        resource_id: Some(subscription_id),
-                    }))
-            }
-        }
-    }
-
-    async fn delete_subscription(&self, subscription_id: String) -> Result<()> {
-        match self
-            .subscription_admin()
-            .await?
-            .delete_subscription()
-            .set_subscription(self.subscription_name(&subscription_id))
-            .send()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) if gax_error_is_not_found(&error) => Err(AlienError::new(
-                crate::error::ErrorData::CloudResourceNotFound {
-                    resource_type: "Pub/Sub subscription".to_string(),
-                    resource_name: self.subscription_name(&subscription_id),
-                },
-            )),
-            Err(error) => {
-                Err(error
-                    .into_alien_error()
-                    .context(crate::error::ErrorData::CloudPlatformError {
-                        message: "Pub/Sub delete_subscription request failed".to_string(),
-                        resource_id: Some(subscription_id),
-                    }))
-            }
-        }
-    }
-
-    async fn set_subscription_iam_policy(
-        &self,
-        subscription_id: String,
-        iam_policy: Policy,
-    ) -> Result<Policy> {
-        self.set_iam_policy(self.subscription_name(&subscription_id), iam_policy)
-            .await
     }
 }
 
@@ -4310,7 +4004,16 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ArtifactRegistryApi>>;
     async fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<FirestoreAdmin>;
-    fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
+    async fn get_gcp_pubsub_topic_admin_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<TopicAdmin>;
+    async fn get_gcp_pubsub_subscription_admin_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<SubscriptionAdmin>;
+    async fn get_gcp_pubsub_iam_policy_client(&self, config: &GcpClientConfig)
+        -> Result<IAMPolicy>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
     async fn get_gcp_cloud_scheduler_client(
         &self,
@@ -4624,8 +4327,25 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         firestore_admin_client_from_alien_config(config).await
     }
 
-    fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>> {
-        Ok(Arc::new(OfficialGcpPubSubClient::new(config.clone())))
+    async fn get_gcp_pubsub_topic_admin_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<TopicAdmin> {
+        pubsub_topic_admin_from_alien_config(config).await
+    }
+
+    async fn get_gcp_pubsub_subscription_admin_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<SubscriptionAdmin> {
+        pubsub_subscription_admin_from_alien_config(config).await
+    }
+
+    async fn get_gcp_pubsub_iam_policy_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<IAMPolicy> {
+        pubsub_iam_policy_from_alien_config(config).await
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {

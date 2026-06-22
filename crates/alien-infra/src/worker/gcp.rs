@@ -3,8 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, OidcToken, Policy,
-    PushConfig, ResourcePermissionsHelper, Subscription, Topic,
+    Binding as GcpBinding, EnvironmentVariableBuilder, Expr as GcpExpr, Policy,
+    ResourcePermissionsHelper,
 };
 
 use crate::core::ResourceControllerContext;
@@ -37,6 +37,11 @@ use alien_error::{
 use alien_macros::controller;
 use chrono::Utc;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
+use google_cloud_iam_v1::client::IAMPolicy;
+use google_cloud_pubsub::{
+    client::{SubscriptionAdmin, TopicAdmin},
+    model::{push_config::OidcToken, PushConfig, Subscription, Topic},
+};
 use google_cloud_scheduler_v1::{
     client::CloudScheduler,
     model::{
@@ -72,6 +77,22 @@ where
 
 fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &str) -> String {
     format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
+}
+
+fn pubsub_topic_resource_name(project_id: &str, topic_id: &str) -> String {
+    if topic_id.starts_with("projects/") {
+        topic_id.to_string()
+    } else {
+        format!("projects/{project_id}/topics/{topic_id}")
+    }
+}
+
+fn pubsub_subscription_resource_name(project_id: &str, subscription_id: &str) -> String {
+    if subscription_id.starts_with("projects/") {
+        subscription_id.to_string()
+    } else {
+        format!("projects/{project_id}/subscriptions/{subscription_id}")
+    }
 }
 
 fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
@@ -153,6 +174,141 @@ async fn create_cloud_scheduler_job(
                 resource_id: Some(job_id.to_string()),
             })),
     }
+}
+
+async fn create_pubsub_topic(
+    client: &TopicAdmin,
+    project_id: &str,
+    topic_id: &str,
+    topic: Topic,
+) -> Result<Topic> {
+    let resource_name = pubsub_topic_resource_name(project_id, topic_id);
+    let mut topic = topic;
+    if topic.name.is_empty() {
+        topic.name = resource_name.clone();
+    }
+
+    match client.create_topic().with_request(topic).send().await {
+        Ok(topic) => Ok(topic),
+        Err(error) if gax_error_is_conflict(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceConflict {
+                resource_type: "Pub/Sub topic".to_string(),
+                resource_name,
+                message: "create_topic reported the topic already exists".to_string(),
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Pub/Sub create_topic request failed".to_string(),
+                resource_id: Some(topic_id.to_string()),
+            })),
+    }
+}
+
+async fn delete_pubsub_topic(client: &TopicAdmin, project_id: &str, topic_id: &str) -> Result<()> {
+    let resource_name = pubsub_topic_resource_name(project_id, topic_id);
+    match client
+        .delete_topic()
+        .set_topic(resource_name.clone())
+        .send()
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if gax_error_is_not_found(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "Pub/Sub topic".to_string(),
+                resource_name,
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Pub/Sub delete_topic request failed".to_string(),
+                resource_id: Some(topic_id.to_string()),
+            })),
+    }
+}
+
+async fn create_pubsub_subscription(
+    client: &SubscriptionAdmin,
+    project_id: &str,
+    subscription_id: &str,
+    subscription: Subscription,
+) -> Result<Subscription> {
+    let resource_name = pubsub_subscription_resource_name(project_id, subscription_id);
+    let mut subscription = subscription;
+    if subscription.name.is_empty() {
+        subscription.name = resource_name.clone();
+    }
+
+    match client
+        .create_subscription()
+        .with_request(subscription)
+        .send()
+        .await
+    {
+        Ok(subscription) => Ok(subscription),
+        Err(error) if gax_error_is_conflict(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceConflict {
+                resource_type: "Pub/Sub subscription".to_string(),
+                resource_name,
+                message: "create_subscription reported the subscription already exists".to_string(),
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Pub/Sub create_subscription request failed".to_string(),
+                resource_id: Some(subscription_id.to_string()),
+            })),
+    }
+}
+
+async fn delete_pubsub_subscription(
+    client: &SubscriptionAdmin,
+    project_id: &str,
+    subscription_id: &str,
+) -> Result<()> {
+    let resource_name = pubsub_subscription_resource_name(project_id, subscription_id);
+    match client
+        .delete_subscription()
+        .set_subscription(resource_name.clone())
+        .send()
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if gax_error_is_not_found(&error) => {
+            Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                resource_type: "Pub/Sub subscription".to_string(),
+                resource_name,
+            }))
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Pub/Sub delete_subscription request failed".to_string(),
+                resource_id: Some(subscription_id.to_string()),
+            })),
+    }
+}
+
+async fn set_pubsub_iam_policy(
+    client: &IAMPolicy,
+    resource_name: String,
+    policy: Policy,
+) -> Result<Policy> {
+    client
+        .set_iam_policy()
+        .set_resource(resource_name.clone())
+        .set_policy(policy)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Pub/Sub set_iam_policy request failed".to_string(),
+            resource_id: Some(resource_name),
+        })
 }
 
 async fn delete_cloud_scheduler_job(client: &CloudScheduler, job_name: &str) -> Result<()> {
@@ -1824,7 +1980,14 @@ impl GcpWorkerController {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let topic_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_topic_admin_client(gcp_config)
+            .await?;
+        let subscription_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_subscription_admin_client(gcp_config)
+            .await?;
 
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1847,9 +2010,13 @@ impl GcpWorkerController {
                 "Creating commands Pub/Sub topic"
             );
 
-            match pubsub_client
-                .create_topic(topic_short_name.clone(), Topic::default())
-                .await
+            match create_pubsub_topic(
+                &topic_admin,
+                &gcp_config.project_id,
+                &topic_short_name,
+                Topic::default(),
+            )
+            .await
             {
                 Ok(_) => {
                     self.commands_topic_name = Some(topic_short_name.clone());
@@ -1951,9 +2118,13 @@ impl GcpWorkerController {
                 "Creating commands Pub/Sub push subscription"
             );
 
-            match pubsub_client
-                .create_subscription(subscription_name.clone(), subscription)
-                .await
+            match create_pubsub_subscription(
+                &subscription_admin,
+                &gcp_config.project_id,
+                &subscription_name,
+                subscription,
+            )
+            .await
             {
                 Ok(_) => {
                     self.commands_subscription_name = Some(subscription_name.clone());
@@ -3871,7 +4042,14 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let topic_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_topic_admin_client(gcp_config)
+            .await?;
+        let subscription_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_subscription_admin_client(gcp_config)
+            .await?;
         let derived_topic_name = cfg
             .commands_enabled
             .then(|| {
@@ -3896,9 +4074,12 @@ impl GcpWorkerController {
             .or(derived_subscription_name)
         {
             info!(subscription=%subscription_name, "Deleting commands push subscription");
-            match pubsub_client
-                .delete_subscription(subscription_name.clone())
-                .await
+            match delete_pubsub_subscription(
+                &subscription_admin,
+                &gcp_config.project_id,
+                &subscription_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(subscription=%subscription_name, "Commands push subscription deleted");
@@ -3916,7 +4097,7 @@ impl GcpWorkerController {
         // Delete commands topic (best-effort)
         if let Some(topic_name) = self.commands_topic_name.take().or(derived_topic_name) {
             info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
-            match pubsub_client.delete_topic(topic_name.clone()).await {
+            match delete_pubsub_topic(&topic_admin, &gcp_config.project_id, &topic_name).await {
                 Ok(_) => {
                     info!(topic=%topic_name, "Commands Pub/Sub topic deleted");
                 }
@@ -4266,17 +4447,23 @@ impl GcpWorkerController {
         let iam_policy = Policy::new().set_version(3).set_bindings(all_bindings);
         let bindings_count = iam_policy.bindings.len();
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
-        pubsub_client
-            .set_topic_iam_policy(topic_name.to_string(), iam_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to apply management command permissions to Pub/Sub topic '{}'",
-                    topic_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let iam_policy_client = ctx
+            .service_provider
+            .get_gcp_pubsub_iam_policy_client(gcp_config)
+            .await?;
+        set_pubsub_iam_policy(
+            &iam_policy_client,
+            pubsub_topic_resource_name(&gcp_config.project_id, topic_name),
+            iam_policy,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to apply management command permissions to Pub/Sub topic '{}'",
+                topic_name
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         info!(
             worker = %config.id,
@@ -4943,7 +5130,10 @@ impl GcpWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<()> {
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let subscription_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_subscription_admin_client(gcp_config)
+            .await?;
 
         // Get queue controller to access the topic name
         let queue_controller =
@@ -5025,9 +5215,13 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription"
         );
 
-        match pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
-            .await
+        match create_pubsub_subscription(
+            &subscription_admin,
+            &gcp_config.project_id,
+            &subscription_name,
+            subscription,
+        )
+        .await
         {
             Ok(_) => {}
             Err(e) if is_remote_resource_conflict(&e) => {
@@ -5071,13 +5265,19 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let subscription_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_subscription_admin_client(gcp_config)
+            .await?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for subscription_name in &self.push_subscriptions.clone() {
-            match pubsub_client
-                .delete_subscription(subscription_name.clone())
-                .await
+            match delete_pubsub_subscription(
+                &subscription_admin,
+                &gcp_config.project_id,
+                subscription_name,
+            )
+            .await
             {
                 Ok(_) => {
                     info!(
@@ -5144,7 +5344,18 @@ impl GcpWorkerController {
         storage_ref: &alien_core::ResourceRef,
         events: &[String],
     ) -> Result<()> {
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let topic_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_topic_admin_client(gcp_config)
+            .await?;
+        let subscription_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_subscription_admin_client(gcp_config)
+            .await?;
+        let iam_policy_client = ctx
+            .service_provider
+            .get_gcp_pubsub_iam_policy_client(gcp_config)
+            .await?;
         let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
         // Get bucket name from the storage controller dependency
@@ -5174,9 +5385,13 @@ impl GcpWorkerController {
             "Creating Pub/Sub topic for storage notifications"
         );
 
-        match pubsub_client
-            .create_topic(topic_short_name.clone(), Topic::default())
-            .await
+        match create_pubsub_topic(
+            &topic_admin,
+            &gcp_config.project_id,
+            &topic_short_name,
+            Topic::default(),
+        )
+        .await
         {
             Ok(_) => {}
             Err(e) if is_remote_resource_conflict(&e) => {
@@ -5222,16 +5437,19 @@ impl GcpWorkerController {
             .set_role("roles/pubsub.publisher")
             .set_members([gcs_service_agent])]);
 
-        pubsub_client
-            .set_topic_iam_policy(topic_short_name.clone(), iam_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to set IAM policy on storage notification topic '{}'",
-                    topic_short_name
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        set_pubsub_iam_policy(
+            &iam_policy_client,
+            pubsub_topic_resource_name(&gcp_config.project_id, &topic_short_name),
+            iam_policy,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to set IAM policy on storage notification topic '{}'",
+                topic_short_name
+            ),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         // 3. Create GCS notification on the bucket pointing to the topic
         let gcs_event_type_names: Vec<String> = events
@@ -5348,9 +5566,13 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription for storage trigger"
         );
 
-        match pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
-            .await
+        match create_pubsub_subscription(
+            &subscription_admin,
+            &gcp_config.project_id,
+            &subscription_name,
+            subscription,
+        )
+        .await
         {
             Ok(_) => {}
             Err(e) if is_remote_resource_conflict(&e) => {
@@ -5436,11 +5658,14 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let topic_admin = ctx
+            .service_provider
+            .get_gcp_pubsub_topic_admin_client(gcp_config)
+            .await?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for topic_name in &self.storage_notification_topics.clone() {
-            match pubsub_client.delete_topic(topic_name.clone()).await {
+            match delete_pubsub_topic(&topic_admin, &gcp_config.project_id, topic_name).await {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -5575,10 +5800,18 @@ mod tests {
         get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::{MockPlatformServiceProvider, MockPubSubApi};
+    use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+    use google_cloud_iam_v1::client::IAMPolicy as PubsubIamPolicyClient;
+    use google_cloud_iam_v1::stub::IAMPolicy as PubsubIamPolicyStub;
+    use google_cloud_pubsub::{
+        client::{SubscriptionAdmin as PubsubSubscriptionAdmin, TopicAdmin as PubsubTopicAdmin},
+        stub::{
+            SubscriptionAdmin as PubsubSubscriptionAdminStub, TopicAdmin as PubsubTopicAdminStub,
+        },
+    };
 
     mockall::mock! {
         #[derive(Debug)]
@@ -5598,6 +5831,21 @@ mod tests {
             ) -> google_cloud_scheduler_v1::Result<Response<()>>;
         }
     }
+
+    #[derive(Debug)]
+    struct UnimplementedPubsubTopicAdmin;
+
+    impl PubsubTopicAdminStub for UnimplementedPubsubTopicAdmin {}
+
+    #[derive(Debug)]
+    struct UnimplementedPubsubSubscriptionAdmin;
+
+    impl PubsubSubscriptionAdminStub for UnimplementedPubsubSubscriptionAdmin {}
+
+    #[derive(Debug)]
+    struct UnimplementedPubsubIamPolicy;
+
+    impl PubsubIamPolicyStub for UnimplementedPubsubIamPolicy {}
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
@@ -6030,11 +6278,23 @@ mod tests {
             .expect_get_gcp_iam_client()
             .returning(move |_| Ok(mock_iam.clone()));
 
-        // Mock PubSub client for commands infrastructure cleanup
-        let mock_pubsub = Arc::new(MockPubSubApi::new());
         mock_provider
-            .expect_get_gcp_pubsub_client()
-            .returning(move |_| Ok(mock_pubsub.clone()));
+            .expect_get_gcp_pubsub_topic_admin_client()
+            .returning(|_| Ok(PubsubTopicAdmin::from_stub(UnimplementedPubsubTopicAdmin)));
+        mock_provider
+            .expect_get_gcp_pubsub_subscription_admin_client()
+            .returning(|_| {
+                Ok(PubsubSubscriptionAdmin::from_stub(
+                    UnimplementedPubsubSubscriptionAdmin,
+                ))
+            });
+        mock_provider
+            .expect_get_gcp_pubsub_iam_policy_client()
+            .returning(|_| {
+                Ok(PubsubIamPolicyClient::from_stub(
+                    UnimplementedPubsubIamPolicy,
+                ))
+            });
 
         Arc::new(mock_provider)
     }
