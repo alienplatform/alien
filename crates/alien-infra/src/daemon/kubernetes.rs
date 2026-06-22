@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
@@ -83,15 +83,17 @@ impl KubernetesDaemonController {
             )
             .await?;
 
-        create(
-            kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), &namespace),
-            &daemonset,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create daemonset '{}'.", daemon_set_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        kube::Api::<DaemonSet>::namespaced(workload_client.as_ref().clone(), &namespace)
+            .create(&kube::api::PostParams::default(), &daemonset)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create daemonset '{}'.", daemon_set_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         self.daemon_set_name = Some(daemon_set_name.clone());
         self.namespace = Some(namespace.clone());

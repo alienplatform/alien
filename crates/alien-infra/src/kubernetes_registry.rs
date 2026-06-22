@@ -6,7 +6,6 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::create;
 
 pub(crate) async fn ensure_registry_pull_secret(
     secrets_client: &std::sync::Arc<kube::Client>,
@@ -50,12 +49,13 @@ pub(crate) async fn ensure_registry_pull_secret(
         ..Default::default()
     };
 
-    match create(
-        kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-        &secret,
-    )
-    .await
-    {
+    match kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+        .create(&kube::api::PostParams::default(), &secret)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) => {
             let err = format!("{e}");

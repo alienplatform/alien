@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -111,15 +111,18 @@ impl KubernetesWorkerController {
             )
             .await?;
 
-        let _created_deployment = create(
-            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &namespace),
-            &deployment,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create deployment '{}'.", function_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let _created_deployment =
+            kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &namespace)
+                .create(&kube::api::PostParams::default(), &deployment)
+                .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: "Kubernetes create operation failed".to_string(),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create deployment '{}'.", function_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.deployment_name = Some(function_name.clone());
         self.namespace = Some(namespace.clone());

@@ -35,7 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -1623,12 +1623,13 @@ async fn upsert_service(
     mut service: Service,
     resource_id: &str,
 ) -> Result<()> {
-    match create(
-        kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace),
-        &service,
-    )
-    .await
-    {
+    match kube::Api::<Service>::namespaced(client.as_ref().clone(), namespace)
+        .create(&kube::api::PostParams::default(), &service)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
             let existing = get(
@@ -1698,12 +1699,13 @@ async fn upsert_tls_secret(
         ..Default::default()
     };
 
-    match create(
-        kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace),
-        &secret,
-    )
-    .await
-    {
+    match kube::Api::<Secret>::namespaced(client.as_ref().clone(), namespace)
+        .create(&kube::api::PostParams::default(), &secret)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
             let existing = get(
@@ -1743,12 +1745,13 @@ async fn upsert_ingress(
     mut ingress: K8sIngress,
     resource_id: &str,
 ) -> Result<()> {
-    match create(
-        kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace),
-        &ingress,
-    )
-    .await
-    {
+    match kube::Api::<K8sIngress>::namespaced(client.as_ref().clone(), namespace)
+        .create(&kube::api::PostParams::default(), &ingress)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
             let existing = get(

@@ -3,12 +3,12 @@ use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use kube::{
-    api::{Api, ListParams, PostParams},
+    api::{Api, ListParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
 use secrecy::SecretString;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -419,18 +419,6 @@ pub(crate) fn list_params(
         params = params.fields(&field_selector);
     }
     params
-}
-
-pub(crate) async fn create<K>(api: Api<K>, value: &K) -> Result<K>
-where
-    K: Clone + Debug + DeserializeOwned + Serialize,
-{
-    api.create(&PostParams::default(), value)
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Kubernetes create operation failed".to_string(),
-        })
 }
 
 pub(crate) async fn get<K>(api: Api<K>, name: &str) -> Result<K>

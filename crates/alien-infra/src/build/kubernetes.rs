@@ -6,7 +6,7 @@ use crate::core::{
     kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
@@ -70,15 +70,17 @@ impl KubernetesBuildController {
             .build_job(config, &job_name, &namespace, &service_account_name, ctx)
             .await?;
 
-        let _created_job = create(
-            kube::Api::<Job>::namespaced(job_client.as_ref().clone(), &namespace),
-            &job,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create build job '{}'.", job_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let _created_job = kube::Api::<Job>::namespaced(job_client.as_ref().clone(), &namespace)
+            .create(&kube::api::PostParams::default(), &job)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create build job '{}'.", job_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         self.job_name = Some(job_name.clone());
         self.namespace = Some(namespace.clone());
@@ -407,15 +409,17 @@ impl KubernetesBuildController {
             .build_job(config, &job_name, namespace, &service_account_name, ctx)
             .await?;
 
-        create(
-            kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace),
-            &job,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create updated build job '{}'.", job_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        kube::Api::<Job>::namespaced(job_client.as_ref().clone(), namespace)
+            .create(&kube::api::PostParams::default(), &job)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            })
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create updated build job '{}'.", job_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         self.job_name = Some(job_name.clone());
 

@@ -7,7 +7,7 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
@@ -166,15 +166,16 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match create(
-                kube::Api::<StatefulSet>::namespaced(
-                    deployment_client.as_ref().clone(),
-                    &namespace,
-                ),
-                &statefulset,
+            match kube::Api::<StatefulSet>::namespaced(
+                deployment_client.as_ref().clone(),
+                &namespace,
             )
+            .create(&kube::api::PostParams::default(), &statefulset)
             .await
-            {
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            }) {
                 Ok(_) => {
                     info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
                 }
@@ -231,12 +232,16 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match create(
-                kube::Api::<Deployment>::namespaced(deployment_client.as_ref().clone(), &namespace),
-                &deployment,
+            match kube::Api::<Deployment>::namespaced(
+                deployment_client.as_ref().clone(),
+                &namespace,
             )
+            .create(&kube::api::PostParams::default(), &deployment)
             .await
-            {
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            }) {
                 Ok(_) => {
                     info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
                 }
@@ -1271,12 +1276,13 @@ impl KubernetesContainerController {
             return Ok(());
         };
 
-        match create(
-            kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace),
-            &service,
-        )
-        .await
-        {
+        match kube::Api::<Service>::namespaced(service_client.as_ref().clone(), namespace)
+            .create(&kube::api::PostParams::default(), &service)
+            .await
+            .into_alien_error()
+            .context(CloudClientErrorData::HttpRequestFailed {
+                message: "Kubernetes create operation failed".to_string(),
+            }) {
             Ok(_) => Ok(()),
             Err(e) if is_already_exists(&e) => {
                 let existing = get(

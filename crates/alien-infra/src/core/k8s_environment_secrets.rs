@@ -9,7 +9,7 @@ use k8s_openapi::ByteString;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{create, get};
+use crate::kubernetes_client::get;
 
 #[derive(Debug, Clone)]
 pub struct KubernetesEnvSecretPlan {
@@ -112,12 +112,13 @@ pub async fn reconcile_environment_secret(
         .get_kubernetes_client(kubernetes_config)
         .await?;
 
-    match create(
-        kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace),
-        &secret,
-    )
-    .await
-    {
+    match kube::Api::<Secret>::namespaced(secrets_client.as_ref().clone(), namespace)
+        .create(&kube::api::PostParams::default(), &secret)
+        .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => {}
         Err(e) => {
             let err = format!("{e}");
