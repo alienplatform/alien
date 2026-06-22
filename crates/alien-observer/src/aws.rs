@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn alien_labeled_cloud_resources_are_skipped() {
+    fn alien_labeled_cloud_resources_are_linked() {
         let observer = AwsObserver::new(AwsObserveContext {
             deployment_id: "dep_1".to_string(),
             account_id: "111111111111".to_string(),
@@ -672,7 +672,15 @@ mod tests {
             compliance_details: None,
         };
 
-        assert!(observer.heartbeat_for_mapping(mapping, None).is_none());
+        let sample = observer
+            .observed_resource_for_mapping(mapping, None)
+            .expect("expected observed AWS resource sample");
+
+        assert_eq!(sample.alien_resource_id.as_deref(), Some("worker.api"));
+        assert_eq!(
+            sample.raw_identity,
+            "arn:aws:lambda:us-east-1:111111111111:function:api"
+        );
     }
 
     #[derive(Debug)]

@@ -953,6 +953,7 @@ async fn initialize_deployment(
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         scope: None,
         permission: None,
+        setup_method: None,
     };
 
     let response = client

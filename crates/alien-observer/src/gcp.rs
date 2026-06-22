@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn alien_labeled_cloud_resources_are_skipped() {
+    fn alien_labeled_cloud_resources_are_linked() {
         let observer = GcpObserver::new(GcpObserveContext {
             deployment_id: "dep_1".to_string(),
             project_id: "example".to_string(),
@@ -677,7 +677,15 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(observer.heartbeat_for_resource(resource, None).is_none());
+        let sample = observer
+            .observed_resource_for_resource(resource, None)
+            .expect("expected observed GCP resource sample");
+
+        assert_eq!(sample.alien_resource_id.as_deref(), Some("worker.api"));
+        assert_eq!(
+            sample.raw_identity,
+            "//run.googleapis.com/projects/example/locations/us-central1/services/api"
+        );
     }
 
     #[derive(Debug)]
