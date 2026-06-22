@@ -3,13 +3,12 @@ use alien_core::KubernetesClientConfig;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 use kube::{
-    api::{Api, DeleteParams, DynamicObject, ListParams, PostParams},
+    api::{Api, DeleteParams, ListParams, PostParams},
     config::{AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig},
     Client, Config,
 };
 use secrecy::SecretString;
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,22 +421,6 @@ pub(crate) fn list_params(
     params
 }
 
-pub(crate) fn dynamic_value(value: Value) -> Result<DynamicObject> {
-    serde_json::from_value(value)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to deserialize Kubernetes dynamic object".to_string(),
-        })
-}
-
-pub(crate) fn value_from_dynamic(object: DynamicObject) -> Result<Value> {
-    serde_json::to_value(object)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to serialize Kubernetes dynamic object".to_string(),
-        })
-}
-
 pub(crate) async fn create<K>(api: Api<K>, value: &K) -> Result<K>
 where
     K: Clone + Debug + DeserializeOwned + Serialize,
@@ -485,24 +468,4 @@ where
         .context(ErrorData::HttpRequestFailed {
             message: format!("Kubernetes delete operation failed for '{name}'"),
         })
-}
-
-pub(crate) async fn create_dynamic(api: Api<DynamicObject>, value: &Value) -> Result<Value> {
-    let object = dynamic_value(value.clone())?;
-    let created = create(api, &object).await?;
-    value_from_dynamic(created)
-}
-
-pub(crate) async fn get_dynamic(api: Api<DynamicObject>, name: &str) -> Result<Value> {
-    value_from_dynamic(get(api, name).await?)
-}
-
-pub(crate) async fn replace_dynamic(
-    api: Api<DynamicObject>,
-    name: &str,
-    value: &Value,
-) -> Result<Value> {
-    let object = dynamic_value(value.clone())?;
-    let replaced = replace(api, name, &object).await?;
-    value_from_dynamic(replaced)
 }

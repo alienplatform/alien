@@ -35,9 +35,7 @@ use tracing::info;
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::kubernetes_client::{
-    create, create_dynamic, delete, get, get_dynamic, replace, replace_dynamic,
-};
+use crate::kubernetes_client::{create, delete, get, replace};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 
@@ -96,6 +94,23 @@ fn azure_health_check_policy_api(
     };
     kube::Api::namespaced_with(client.as_ref().clone(), namespace, &resource)
 }
+
+fn dynamic_object_from_value(value: &Value) -> alien_client_core::Result<kube::api::DynamicObject> {
+    serde_json::from_value(value.clone())
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Failed to deserialize Kubernetes dynamic object".to_string(),
+        })
+}
+
+fn value_from_dynamic_object(object: kube::api::DynamicObject) -> alien_client_core::Result<Value> {
+    serde_json::to_value(object).into_alien_error().context(
+        CloudClientErrorData::HttpRequestFailed {
+            message: "Failed to serialize Kubernetes dynamic object".to_string(),
+        },
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KubernetesPublicEndpointState {
@@ -1731,18 +1746,47 @@ async fn upsert_gateway(
     mut gateway: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match create_dynamic(gateway_api(client, namespace), &gateway).await {
+    let gateway_object =
+        dynamic_object_from_value(&gateway).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare Gateway '{}'", name),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    match gateway_api(client, namespace)
+        .create(&kube::api::PostParams::default(), &gateway_object)
+        .await
+        .map(|_| ())
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get_dynamic(gateway_api(client, namespace), name)
+            let existing = gateway_api(client, namespace)
+                .get(name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .and_then(value_from_dynamic_object)
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get Gateway '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut gateway, &existing);
-            replace_dynamic(gateway_api(client, namespace), name, &gateway)
+            let gateway_object =
+                dynamic_object_from_value(&gateway).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare Gateway '{}' for update", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            gateway_api(client, namespace)
+                .replace(name, &kube::api::PostParams::default(), &gateway_object)
                 .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update Gateway '{}'", name),
                     resource_id: Some(resource_id.to_string()),
@@ -1763,18 +1807,47 @@ async fn upsert_http_route(
     mut route: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match create_dynamic(http_route_api(client, namespace), &route).await {
+    let route_object =
+        dynamic_object_from_value(&route).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare HTTPRoute '{}'", name),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    match http_route_api(client, namespace)
+        .create(&kube::api::PostParams::default(), &route_object)
+        .await
+        .map(|_| ())
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get_dynamic(http_route_api(client, namespace), name)
+            let existing = http_route_api(client, namespace)
+                .get(name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .and_then(value_from_dynamic_object)
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get HTTPRoute '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut route, &existing);
-            replace_dynamic(http_route_api(client, namespace), name, &route)
+            let route_object =
+                dynamic_object_from_value(&route).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare HTTPRoute '{}' for update", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            http_route_api(client, namespace)
+                .replace(name, &kube::api::PostParams::default(), &route_object)
                 .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update HTTPRoute '{}'", name),
                     resource_id: Some(resource_id.to_string()),
@@ -1795,11 +1868,29 @@ async fn upsert_gke_health_check_policy(
     mut policy: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match create_dynamic(gke_health_check_policy_api(client, namespace), &policy).await {
+    let policy_object =
+        dynamic_object_from_value(&policy).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare GKE HealthCheckPolicy '{}'", name),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    match gke_health_check_policy_api(client, namespace)
+        .create(&kube::api::PostParams::default(), &policy_object)
+        .await
+        .map(|_| ())
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get_dynamic(gke_health_check_policy_api(client, namespace), name)
+            let existing = gke_health_check_policy_api(client, namespace)
+                .get(name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .and_then(value_from_dynamic_object)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to get GKE HealthCheckPolicy '{}' before update",
@@ -1808,16 +1899,26 @@ async fn upsert_gke_health_check_policy(
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut policy, &existing);
-            replace_dynamic(
-                gke_health_check_policy_api(client, namespace),
-                name,
-                &policy,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update GKE HealthCheckPolicy '{}'", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            let policy_object =
+                dynamic_object_from_value(&policy).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to prepare GKE HealthCheckPolicy '{}' for update",
+                        name
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            gke_health_check_policy_api(client, namespace)
+                .replace(name, &kube::api::PostParams::default(), &policy_object)
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update GKE HealthCheckPolicy '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1834,11 +1935,29 @@ async fn upsert_azure_health_check_policy(
     mut policy: Value,
     resource_id: &str,
 ) -> Result<()> {
-    match create_dynamic(azure_health_check_policy_api(client, namespace), &policy).await {
+    let policy_object =
+        dynamic_object_from_value(&policy).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare Azure HealthCheckPolicy '{}'", name),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    match azure_health_check_policy_api(client, namespace)
+        .create(&kube::api::PostParams::default(), &policy_object)
+        .await
+        .map(|_| ())
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: "Kubernetes create operation failed".to_string(),
+        }) {
         Ok(_) => Ok(()),
         Err(e) if is_already_exists(&e) => {
-            let existing = get_dynamic(azure_health_check_policy_api(client, namespace), name)
+            let existing = azure_health_check_policy_api(client, namespace)
+                .get(name)
                 .await
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes get operation failed for '{name}'"),
+                })
+                .and_then(value_from_dynamic_object)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to get Azure HealthCheckPolicy '{}' before update",
@@ -1847,16 +1966,26 @@ async fn upsert_azure_health_check_policy(
                     resource_id: Some(resource_id.to_string()),
                 })?;
             copy_resource_version(&mut policy, &existing);
-            replace_dynamic(
-                azure_health_check_policy_api(client, namespace),
-                name,
-                &policy,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update Azure HealthCheckPolicy '{}'", name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+            let policy_object =
+                dynamic_object_from_value(&policy).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to prepare Azure HealthCheckPolicy '{}' for update",
+                        name
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            azure_health_check_policy_api(client, namespace)
+                .replace(name, &kube::api::PostParams::default(), &policy_object)
+                .await
+                .map(|_| ())
+                .into_alien_error()
+                .context(CloudClientErrorData::HttpRequestFailed {
+                    message: format!("Kubernetes replace operation failed for '{name}'"),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update Azure HealthCheckPolicy '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
             Ok(())
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -1911,8 +2040,14 @@ async fn observe_gateway_endpoint(
     namespace: &str,
     name: &str,
 ) -> Result<Option<LoadBalancerEndpoint>> {
-    let gateway = get_dynamic(gateway_api(client, namespace), name)
+    let gateway = gateway_api(client, namespace)
+        .get(name)
         .await
+        .into_alien_error()
+        .context(CloudClientErrorData::HttpRequestFailed {
+            message: format!("Kubernetes get operation failed for '{name}'"),
+        })
+        .and_then(value_from_dynamic_object)
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to get Gateway '{}'", name),
             resource_id: None,
