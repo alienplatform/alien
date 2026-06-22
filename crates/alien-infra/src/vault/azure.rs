@@ -3,8 +3,7 @@ use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::azure_keyvault;
-use crate::core::ResourceControllerContext;
+use crate::core::{map_azure_core_021_sdk_error, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     AzureClientConfig, AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
@@ -197,13 +196,23 @@ impl AzureVaultController {
         if let (Some(vault_name), Some(resource_group_name), Some(_vault_uri)) =
             (&self.vault_name, &self.resource_group_name, &self.vault_uri)
         {
-            azure_keyvault::delete_vault(
-                &client,
-                &azure_config.subscription_id,
-                resource_group_name,
+            let result = client
+                .vaults_client()
+                .delete(
+                    resource_group_name.to_string(),
+                    vault_name.to_string(),
+                    azure_config.subscription_id.clone(),
+                )
+                .send()
+                .await
+                .map(|_| ());
+            map_azure_core_021_sdk_error(
+                "Azure Key Vault",
+                result,
+                "vault delete",
+                "Azure Key Vault",
                 vault_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to delete Azure Key Vault '{}'", vault_name),
                 resource_id: Some(vault_name.clone()),
@@ -243,13 +252,21 @@ impl AzureVaultController {
         if let (Some(vault_name), Some(resource_group_name)) =
             (&self.vault_name, &self.resource_group_name)
         {
-            let vault = azure_keyvault::get_vault(
-                &client,
-                &azure_config.subscription_id,
-                resource_group_name,
+            let result = client
+                .vaults_client()
+                .get(
+                    resource_group_name.to_string(),
+                    vault_name.to_string(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            let vault = map_azure_core_021_sdk_error(
+                "Azure Key Vault",
+                result,
+                "vault get",
+                "Azure Key Vault",
                 vault_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get Azure Key Vault '{}'", vault_name),
                 resource_id: Some(config.id.clone()),
@@ -307,6 +324,126 @@ impl AzureVaultController {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{azure_credential_from_config, AzureCore021Credential};
+    use alien_core::AzureCredentials;
+    use azure_core_021::{
+        headers::Headers, Body, BytesStream, Context as AzureCoreContext, Method, Policy,
+        PolicyResult, Request, Response, StatusCode, TransportOptions,
+    };
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct CreateVaultTransport;
+
+    #[async_trait::async_trait]
+    impl Policy for CreateVaultTransport {
+        async fn send(
+            &self,
+            _ctx: &AzureCoreContext,
+            request: &mut Request,
+            next: &[Arc<dyn Policy>],
+        ) -> PolicyResult {
+            assert!(next.is_empty());
+            assert_eq!(request.method(), &Method::Put);
+            assert_eq!(
+                request.url().path(),
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.KeyVault/vaults/test-vault"
+            );
+            assert_eq!(
+                request.url().query(),
+                Some("api-version=2022-02-01-preview")
+            );
+            match request.body() {
+                Body::Bytes(bytes) => {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(bytes).expect("request body should be JSON");
+                    assert_eq!(body["location"], "eastus");
+                    assert_eq!(
+                        body["properties"]["tenantId"],
+                        "11111111-1111-1111-1111-111111111111"
+                    );
+                    assert_eq!(body["properties"]["enableRbacAuthorization"], true);
+                    assert_eq!(body["properties"]["enableSoftDelete"], true);
+                    assert_eq!(body["properties"]["softDeleteRetentionInDays"], 7);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                Body::SeekableStream(_) => panic!("vault request should use JSON bytes"),
+            }
+
+            let response = json!({
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.KeyVault/vaults/test-vault",
+                "name": "test-vault",
+                "type": "Microsoft.KeyVault/vaults",
+                "location": "eastus",
+                "properties": {
+                    "tenantId": "11111111-1111-1111-1111-111111111111",
+                    "sku": { "family": "A", "name": "standard" },
+                    "accessPolicies": [],
+                    "vaultUri": "https://test-vault.vault.azure.net/",
+                    "provisioningState": "Succeeded"
+                }
+            });
+            Ok(Response::new(
+                StatusCode::Ok,
+                Headers::new(),
+                Box::pin(BytesStream::new(response.to_string())),
+            ))
+        }
+    }
+
+    fn keyvault_client_with_transport(
+        transport: impl Policy + 'static,
+    ) -> azure_mgmt_keyvault::package_preview_2022_02::Client {
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+        let credential = Arc::new(AzureCore021Credential::new(
+            azure_credential_from_config(&config).expect("test credential should build"),
+        ));
+
+        azure_mgmt_keyvault::package_preview_2022_02::Client::builder(credential)
+            .endpoint(azure_core_021::Url::parse("https://management.azure.com").unwrap())
+            .transport(TransportOptions::new_custom_policy(Arc::new(transport)))
+            .build()
+            .expect("Azure Key Vault client should build")
+    }
+
+    #[tokio::test]
+    async fn create_azure_key_vault_uses_generated_client_request() {
+        let client = keyvault_client_with_transport(CreateVaultTransport);
+        let controller = AzureVaultController {
+            state: AzureVaultState::CreateStart,
+            vault_name: Some("test-vault".to_string()),
+            resource_group_name: Some("test-rg".to_string()),
+            vault_uri: None,
+            _internal_stay_count: None,
+        };
+        let config = AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        };
+
+        controller
+            .create_azure_key_vault(&config, &client)
+            .await
+            .expect("vault should be created");
     }
 }
 
@@ -450,14 +587,22 @@ impl AzureVaultController {
             "Creating Azure Key Vault with parameters"
         );
 
-        azure_keyvault::create_or_update_vault(
-            client,
-            &azure_config.subscription_id,
-            resource_group_name,
+        let result = client
+            .vaults_client()
+            .create_or_update(
+                resource_group_name.to_string(),
+                vault_name.to_string(),
+                vault_params,
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Key Vault",
+            result,
+            "vault create or update",
+            "Azure Key Vault",
             vault_name,
-            vault_params,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Azure Key Vault creation failed for vault '{}'", vault_name),
             resource_id: Some(vault_name.clone()),
