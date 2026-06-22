@@ -9,12 +9,6 @@ use crate::core::{
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::gcp_cloudrun::{
-    ConditionState, Container, ContainerPort, EnvVar,
-    ExecutionEnvironment as CloudRunExecutionEnvironment, Ingress as CloudRunIngress,
-    NetworkInterface, OperationResult, ResourceRequirements, RevisionScaling, RevisionTemplate,
-    Service, TrafficTarget, TrafficTargetAllocationType, VpcAccess, VpcEgress,
-};
 use crate::gcp_compute::{
     Address, AddressType, Backend, BackendService, BackendServiceLoadBalancingScheme,
     BackendServiceProtocol, BalancingMode, ForwardingRule, ForwardingRuleLoadBalancingScheme,
@@ -23,7 +17,7 @@ use crate::gcp_compute::{
     SslCertificateType, TargetHttpsProxy, UrlMap,
 };
 use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
-use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpClientConfig, GcpCloudRunWorkerHeartbeatData,
@@ -38,9 +32,19 @@ use alien_macros::controller;
 use chrono::Utc;
 use google_cloud_gax::error::rpc::Code as GaxRpcCode;
 use google_cloud_iam_v1::client::IAMPolicy;
+use google_cloud_longrunning::model::{operation::Result as OperationResult, Operation};
 use google_cloud_pubsub::{
     client::{SubscriptionAdmin, TopicAdmin},
     model::{push_config::OidcToken, PushConfig, Subscription, Topic},
+};
+use google_cloud_run_v2::{
+    client::Services as CloudRunServices,
+    model::{
+        condition::State as ConditionState, vpc_access::NetworkInterface, vpc_access::VpcEgress,
+        Container, ContainerPort, EnvVar, ExecutionEnvironment as CloudRunExecutionEnvironment,
+        IngressTraffic as CloudRunIngress, ResourceRequirements, RevisionScaling, RevisionTemplate,
+        Service, TrafficTarget, TrafficTargetAllocationType, VpcAccess,
+    },
 };
 use google_cloud_scheduler_v1::{
     client::CloudScheduler,
@@ -77,6 +81,229 @@ where
 
 fn cloud_scheduler_job_resource_name(project_id: &str, location: &str, job_id: &str) -> String {
     format!("projects/{project_id}/locations/{location}/jobs/{job_id}")
+}
+
+fn cloud_run_service_resource_name(project_id: &str, location: &str, service_name: &str) -> String {
+    format!("projects/{project_id}/locations/{location}/services/{service_name}")
+}
+
+fn cloud_run_location_resource_name(project_id: &str, location: &str) -> String {
+    format!("projects/{project_id}/locations/{location}")
+}
+
+async fn create_cloud_run_service(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_id: &str,
+    service: Service,
+    validate_only: Option<bool>,
+) -> CloudClientResult<Operation> {
+    let mut request = client
+        .create_service()
+        .set_parent(cloud_run_location_resource_name(
+            &config.project_id,
+            &config.region,
+        ))
+        .set_service_id(service_id.to_string())
+        .set_service(service);
+
+    if let Some(validate_only) = validate_only {
+        request = request.set_validate_only(validate_only);
+    }
+
+    request
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_id))
+}
+
+async fn delete_cloud_run_service(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_name: &str,
+    validate_only: Option<bool>,
+    etag: Option<String>,
+) -> CloudClientResult<Operation> {
+    let mut request = client
+        .delete_service()
+        .set_name(cloud_run_service_resource_name(
+            &config.project_id,
+            &config.region,
+            service_name,
+        ));
+
+    if let Some(validate_only) = validate_only {
+        request = request.set_validate_only(validate_only);
+    }
+    if let Some(etag) = etag {
+        request = request.set_etag(etag);
+    }
+
+    request
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_name))
+}
+
+async fn get_cloud_run_service(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_name: &str,
+) -> CloudClientResult<Service> {
+    client
+        .get_service()
+        .set_name(cloud_run_service_resource_name(
+            &config.project_id,
+            &config.region,
+            service_name,
+        ))
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_name))
+}
+
+async fn update_cloud_run_service(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_name: &str,
+    mut service: Service,
+    update_mask: Option<String>,
+    validate_only: Option<bool>,
+    allow_missing: Option<bool>,
+) -> CloudClientResult<Operation> {
+    if service.name.is_empty() {
+        service.name =
+            cloud_run_service_resource_name(&config.project_id, &config.region, service_name);
+    }
+
+    let mut request = client.update_service().set_service(service);
+
+    if let Some(update_mask) = update_mask {
+        request = request.set_update_mask(field_mask_from_comma_separated(update_mask));
+    }
+    if let Some(validate_only) = validate_only {
+        request = request.set_validate_only(validate_only);
+    }
+    if let Some(allow_missing) = allow_missing {
+        request = request.set_allow_missing(allow_missing);
+    }
+
+    request
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_name))
+}
+
+async fn get_cloud_run_service_iam_policy(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_name: &str,
+) -> CloudClientResult<Policy> {
+    client
+        .get_iam_policy()
+        .set_resource(cloud_run_service_resource_name(
+            &config.project_id,
+            &config.region,
+            service_name,
+        ))
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_name))
+}
+
+async fn set_cloud_run_service_iam_policy(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    service_name: &str,
+    iam_policy: Policy,
+) -> CloudClientResult<Policy> {
+    client
+        .set_iam_policy()
+        .with_request(
+            google_cloud_iam_v1::model::SetIamPolicyRequest::new()
+                .set_resource(cloud_run_service_resource_name(
+                    &config.project_id,
+                    &config.region,
+                    service_name,
+                ))
+                .set_policy(iam_policy),
+        )
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Service", service_name))
+}
+
+async fn get_cloud_run_operation(
+    client: &CloudRunServices,
+    config: &GcpClientConfig,
+    operation_name: &str,
+) -> CloudClientResult<Operation> {
+    let name = if operation_name.contains('/') {
+        operation_name.to_string()
+    } else {
+        format!(
+            "projects/{}/locations/{}/operations/{}",
+            config.project_id, config.region, operation_name
+        )
+    };
+
+    client
+        .get_operation()
+        .set_name(name)
+        .send()
+        .await
+        .map_err(|error| cloud_run_error(error, "Operation", operation_name))
+}
+
+fn field_mask_from_comma_separated(update_mask: String) -> wkt::FieldMask {
+    wkt::FieldMask::default().set_paths(
+        update_mask
+            .split(',')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(ToString::to_string),
+    )
+}
+
+fn cloud_run_error(
+    error: google_cloud_gax::error::Error,
+    resource_type: &str,
+    resource_name: &str,
+) -> AlienError<CloudClientErrorData> {
+    if gax_error_is_not_found(&error) {
+        return AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: resource_type.to_string(),
+            resource_name: resource_name.to_string(),
+        });
+    }
+
+    if gax_error_is_conflict(&error) {
+        return AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: resource_type.to_string(),
+            resource_name: resource_name.to_string(),
+            message: error.to_string(),
+        });
+    }
+
+    if gax_error_is_permission_denied(&error) {
+        return AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: resource_type.to_string(),
+            resource_name: resource_name.to_string(),
+        });
+    }
+
+    AlienError::new(CloudClientErrorData::GenericError {
+        message: error.to_string(),
+    })
+}
+
+fn gax_error_is_permission_denied(error: &google_cloud_gax::error::Error) -> bool {
+    error
+        .status()
+        .is_some_and(|status| status.code == GaxRpcCode::PermissionDenied)
+        || error
+            .http_status_code()
+            .is_some_and(|code| code == http::StatusCode::FORBIDDEN.as_u16())
 }
 
 fn pubsub_topic_resource_name(project_id: &str, topic_id: &str) -> String {
@@ -729,15 +956,11 @@ impl GcpWorkerController {
             .await?;
 
         // Create the service
-        let operation = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .create_service(
-                gcp_config.region.clone(),
-                service_name.to_string(),
-                service,
-                None,
-            )
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let operation = create_cloud_run_service(&client, gcp_config, &service_name, service, None)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to create Cloud Run service".to_string(),
@@ -786,10 +1009,11 @@ impl GcpWorkerController {
 
         debug!(operation=%operation_name, "Checking operation status");
 
-        let operation = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_operation(gcp_config.region.clone(), operation_id.to_string())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let operation = get_cloud_run_operation(&client, gcp_config, operation_id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run operation status".to_string(),
@@ -842,10 +1066,11 @@ impl GcpWorkerController {
         })?;
 
         // Get the created service to extract the URL and verify readiness
-        let service = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_service(gcp_config.region.clone(), service_name.clone())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let service = get_cloud_run_service(&client, gcp_config, service_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run service after creation".to_string(),
@@ -2238,7 +2463,10 @@ impl GcpWorkerController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2248,8 +2476,7 @@ impl GcpWorkerController {
         })?;
 
         // Heartbeat check: verify service still exists and is in correct state
-        let service = client
-            .get_service(gcp_config.region.clone(), service_name.clone())
+        let service = get_cloud_run_service(&client, gcp_config, service_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run service during heartbeat check".to_string(),
@@ -2521,10 +2748,11 @@ impl GcpWorkerController {
         info!(name=%service_name, "Starting Cloud Run service update");
 
         // Get current service to preserve etag
-        let current_service = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_service(gcp_config.region.clone(), service_name.clone())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let current_service = get_cloud_run_service(&client, gcp_config, service_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run service for update".to_string(),
@@ -2539,22 +2767,20 @@ impl GcpWorkerController {
         updated_service.etag = current_service.etag;
 
         // Patch the service
-        let operation = ctx
-            .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .patch_service(
-                gcp_config.region.clone(),
-                service_name.clone(),
-                updated_service,
-                None, // update_mask - let the API figure it out
-                None, // validate_only
-                None, // allow_missing
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to patch Cloud Run service".to_string(),
-                resource_id: Some(ctx.desired_config.id().to_string()),
-            })?;
+        let operation = update_cloud_run_service(
+            &client,
+            gcp_config,
+            service_name,
+            updated_service,
+            None, // update_mask - let the API figure it out
+            None, // validate_only
+            None, // allow_missing
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to patch Cloud Run service".to_string(),
+            resource_id: Some(ctx.desired_config.id().to_string()),
+        })?;
 
         if operation.name.is_empty() {
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2597,10 +2823,11 @@ impl GcpWorkerController {
 
         debug!(operation=%operation_name, "Checking update operation status");
 
-        let operation = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_operation(gcp_config.region.clone(), operation_id.to_string())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let operation = get_cloud_run_operation(&client, gcp_config, operation_id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run operation status".to_string(),
@@ -2654,10 +2881,11 @@ impl GcpWorkerController {
         })?;
 
         // Get the updated service
-        let service = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_service(gcp_config.region.clone(), service_name.clone())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let service = get_cloud_run_service(&client, gcp_config, service_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run service after update".to_string(),
@@ -4137,12 +4365,11 @@ impl GcpWorkerController {
         info!(name=%service_name, "Deleting Cloud Run service");
 
         // Try to delete the service, handling the case where it's already missing
-        match ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .delete_service(gcp_config.region.clone(), service_name.clone(), None, None)
-            .await
-        {
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        match delete_cloud_run_service(&client, gcp_config, service_name, None, None).await {
             Ok(operation) => {
                 // Service exists and deletion was initiated
                 if operation.name.is_empty() {
@@ -4214,10 +4441,11 @@ impl GcpWorkerController {
 
         debug!(operation=%operation_name, "Checking delete operation status");
 
-        let operation = ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_operation(gcp_config.region.clone(), operation_id.to_string())
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        let operation = get_cloud_run_operation(&client, gcp_config, operation_id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Cloud Run operation status".to_string(),
@@ -4271,12 +4499,11 @@ impl GcpWorkerController {
         })?;
 
         // Try to get the service - if it's gone, we're done
-        match ctx
+        let client = ctx
             .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
-            .get_service(gcp_config.region.clone(), service_name.clone())
-            .await
-        {
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
+        match get_cloud_run_service(&client, gcp_config, service_name).await {
             Err(e)
                 if matches!(
                     e.error,
@@ -4830,11 +5057,13 @@ impl GcpWorkerController {
     ) -> Result<()> {
         let config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_cloudrun_client(gcp_config)
+            .await?;
 
         // Get existing IAM policy to preserve any existing bindings
-        let mut policy = client
-            .get_service_iam_policy(gcp_config.region.clone(), service_name.to_string())
+        let mut policy = get_cloud_run_service_iam_policy(&client, gcp_config, service_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get IAM policy for Cloud Run service '{}' before applying bindings. Refusing to proceed to avoid overwriting existing bindings.", service_name),
@@ -4885,8 +5114,7 @@ impl GcpWorkerController {
         }
 
         // Step 4: Apply the consolidated policy in one operation
-        client
-            .set_service_iam_policy(gcp_config.region.clone(), service_name.to_string(), policy)
+        set_cloud_run_service_iam_policy(&client, gcp_config, service_name, policy)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -5773,17 +6001,21 @@ mod tests {
     use std::sync::Arc;
 
     use crate::core::{MockGcpIamApi, Policy};
-    use crate::gcp_cloudrun::{
-        Condition, ConditionState, MockCloudRunApi, Operation as LongRunningOperation, Service,
-    };
     use crate::gcp_compute::{Address, MockGcpComputeApi, Operation, OperationStatus};
-    use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
         ResourceStatus, Worker, WorkerOutputs,
     };
-    use alien_error::AlienError;
     use google_cloud_gax::{options::RequestOptions, response::Response};
+    use google_cloud_longrunning::model::Operation as LongRunningOperation;
+    use google_cloud_run_v2::{
+        client::Services as CloudRunServices,
+        model::{
+            condition::State as ConditionState, Condition, CreateServiceRequest,
+            DeleteServiceRequest, GetServiceRequest, Service, UpdateServiceRequest,
+        },
+        stub::Services as CloudRunServicesStub,
+    };
     use google_cloud_scheduler_v1::{
         client::CloudScheduler,
         model::{
@@ -6095,161 +6327,271 @@ mod tests {
         Policy::new().set_version(1)
     }
 
+    #[derive(Debug, Clone)]
+    enum CloudRunCreateValidation {
+        None,
+        Memory(String),
+        Env(HashMap<String, String>),
+    }
+
+    #[derive(Debug, Default)]
+    struct FakeCloudRunState {
+        create_calls: usize,
+        get_operation_calls: usize,
+        get_service_calls: usize,
+        get_iam_policy_calls: usize,
+        set_iam_policy_calls: usize,
+        update_calls: usize,
+        delete_calls: usize,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeCloudRunServices {
+        service_name: String,
+        service_url: Option<String>,
+        service_missing_on_delete: bool,
+        validate_create: CloudRunCreateValidation,
+        state: Arc<std::sync::Mutex<FakeCloudRunState>>,
+    }
+
+    impl FakeCloudRunServices {
+        fn new(service_name: &str) -> Self {
+            Self {
+                service_name: service_name.to_string(),
+                service_url: None,
+                service_missing_on_delete: false,
+                validate_create: CloudRunCreateValidation::None,
+                state: Arc::new(std::sync::Mutex::new(FakeCloudRunState::default())),
+            }
+        }
+
+        fn with_url(mut self, url: &str) -> Self {
+            self.service_url = Some(url.to_string());
+            self
+        }
+
+        fn with_missing_service_on_delete(mut self) -> Self {
+            self.service_missing_on_delete = true;
+            self
+        }
+
+        fn validate_memory(mut self, memory: &str) -> Self {
+            self.validate_create = CloudRunCreateValidation::Memory(memory.to_string());
+            self
+        }
+
+        fn validate_env(
+            mut self,
+            expected: impl IntoIterator<Item = (&'static str, &'static str)>,
+        ) -> Self {
+            self.validate_create = CloudRunCreateValidation::Env(
+                expected
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+            );
+            self
+        }
+
+        fn client(&self) -> CloudRunServices {
+            CloudRunServices::from_stub(self.clone())
+        }
+
+        fn counters(&self) -> Arc<std::sync::Mutex<FakeCloudRunState>> {
+            Arc::clone(&self.state)
+        }
+
+        fn assert_create_request(&self, request: &CreateServiceRequest) {
+            assert_eq!(
+                request.parent,
+                "projects/test-project/locations/us-central1"
+            );
+            assert_eq!(request.service_id, self.service_name);
+            let service = request
+                .service
+                .as_ref()
+                .expect("create request should include service");
+
+            match &self.validate_create {
+                CloudRunCreateValidation::None => {}
+                CloudRunCreateValidation::Memory(expected_memory) => {
+                    let actual_memory = service
+                        .template
+                        .as_ref()
+                        .and_then(|template| template.containers.first())
+                        .and_then(|container| container.resources.as_ref())
+                        .and_then(|resources| resources.limits.get("memory"));
+                    assert_eq!(actual_memory, Some(expected_memory));
+                }
+                CloudRunCreateValidation::Env(expected) => {
+                    let actual = service
+                        .template
+                        .as_ref()
+                        .and_then(|template| template.containers.first())
+                        .map(|container| {
+                            container
+                                .env
+                                .iter()
+                                .filter_map(|env| {
+                                    env.value().map(|value| (env.name.clone(), value.clone()))
+                                })
+                                .collect::<HashMap<_, _>>()
+                        })
+                        .unwrap_or_default();
+
+                    for (key, value) in expected {
+                        assert_eq!(actual.get(key), Some(value));
+                    }
+                }
+            }
+        }
+
+        fn assert_service_name(&self, name: &str) {
+            assert_eq!(
+                name,
+                format!(
+                    "projects/test-project/locations/us-central1/services/{}",
+                    self.service_name
+                )
+            );
+        }
+    }
+
+    impl CloudRunServicesStub for FakeCloudRunServices {
+        async fn create_service(
+            &self,
+            request: CreateServiceRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<LongRunningOperation>> {
+            self.assert_create_request(&request);
+            self.state.lock().unwrap().create_calls += 1;
+            Ok(Response::from(create_successful_operation_response(
+                &format!("create-{}", self.service_name),
+            )))
+        }
+
+        async fn get_service(
+            &self,
+            request: GetServiceRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<Service>> {
+            self.assert_service_name(&request.name);
+            let mut state = self.state.lock().unwrap();
+            state.get_service_calls += 1;
+            if state.delete_calls > 0 {
+                return Err(not_found_gax_error());
+            }
+            drop(state);
+
+            let mut service = create_successful_service_response(&self.service_name);
+            if let Some(url) = &self.service_url {
+                service.uri = url.clone();
+                service.urls = vec![url.clone()];
+            }
+            Ok(Response::from(service))
+        }
+
+        async fn update_service(
+            &self,
+            request: UpdateServiceRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<LongRunningOperation>> {
+            let service = request
+                .service
+                .as_ref()
+                .expect("update request should include service");
+            self.assert_service_name(&service.name);
+            self.state.lock().unwrap().update_calls += 1;
+            Ok(Response::from(create_successful_operation_response(
+                &format!("update-{}", self.service_name),
+            )))
+        }
+
+        async fn delete_service(
+            &self,
+            request: DeleteServiceRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<LongRunningOperation>> {
+            self.assert_service_name(&request.name);
+            self.state.lock().unwrap().delete_calls += 1;
+            if self.service_missing_on_delete {
+                return Err(not_found_gax_error());
+            }
+            Ok(Response::from(create_successful_operation_response(
+                &format!("delete-{}", self.service_name),
+            )))
+        }
+
+        async fn get_iam_policy(
+            &self,
+            request: google_cloud_iam_v1::model::GetIamPolicyRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<Policy>> {
+            self.assert_service_name(&request.resource);
+            self.state.lock().unwrap().get_iam_policy_calls += 1;
+            Ok(Response::from(create_empty_iam_policy()))
+        }
+
+        async fn set_iam_policy(
+            &self,
+            request: google_cloud_iam_v1::model::SetIamPolicyRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<Policy>> {
+            self.assert_service_name(&request.resource);
+            let policy = request
+                .policy
+                .expect("set IAM policy request should include policy");
+            self.state.lock().unwrap().set_iam_policy_calls += 1;
+            Ok(Response::from(policy))
+        }
+
+        async fn get_operation(
+            &self,
+            request: google_cloud_longrunning::model::GetOperationRequest,
+            _options: RequestOptions,
+        ) -> google_cloud_run_v2::Result<Response<LongRunningOperation>> {
+            assert!(request
+                .name
+                .starts_with("projects/test-project/locations/us-central1/operations/"));
+            self.state.lock().unwrap().get_operation_calls += 1;
+            Ok(Response::from(create_completed_operation_response(
+                request.name.split('/').last().unwrap_or("operation"),
+            )))
+        }
+    }
+
+    fn not_found_gax_error() -> google_cloud_gax::error::Error {
+        google_cloud_gax::error::Error::service(
+            google_cloud_gax::error::rpc::Status::default()
+                .set_code(google_cloud_gax::error::rpc::Code::NotFound)
+                .set_message("service not found"),
+        )
+    }
+
     fn setup_mock_client_for_creation_and_update(
         function_name: &str,
         _has_public_access: bool,
-    ) -> Arc<MockCloudRunApi> {
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock successful service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        // Mock operation status checks - first pending, then completed
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(&operation_name_for_get))
-        });
-
-        // Mock service retrieval after creation
-        let function_name_for_get = function_name.to_string();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)));
-
-        // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock successful updates
-        let function_name_for_update = function_name.to_string();
-        let update_operation_name = format!("update-{}", function_name_for_update);
-        mock_cloudrun
-            .expect_patch_service()
-            .returning(move |_, _, _, _, _, _| {
-                Ok(create_successful_operation_response(&update_operation_name))
-            });
-
-        Arc::new(mock_cloudrun)
+    ) -> FakeCloudRunServices {
+        FakeCloudRunServices::new(function_name)
     }
 
     fn setup_mock_client_for_creation_and_deletion(
         function_name: &str,
         _has_public_access: bool,
-    ) -> Arc<MockCloudRunApi> {
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock successful service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        // Mock operation status checks for creation
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1); // Only for creation flow
-
-        // Mock service retrieval after creation
-        let function_name_for_get = function_name.to_string();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
-            .times(1); // Only for creation flow
-
-        // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock successful service deletion
-        let function_name_for_delete = function_name.to_string();
-        let delete_operation_name = format!("delete-{}", function_name_for_delete);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        // Mock operation status checks for deletion
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        // Mock service not found during deletion check
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        Arc::new(mock_cloudrun)
+    ) -> FakeCloudRunServices {
+        FakeCloudRunServices::new(function_name)
     }
 
     fn setup_mock_client_for_best_effort_deletion(
-        _function_name: &str,
+        function_name: &str,
         service_missing: bool,
-    ) -> Arc<MockCloudRunApi> {
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock service deletion (might fail if service missing)
+    ) -> FakeCloudRunServices {
+        let fake = FakeCloudRunServices::new(function_name);
         if service_missing {
-            mock_cloudrun
-                .expect_delete_service()
-                .returning(|_, _, _, _| {
-                    Err(AlienError::new(
-                        CloudClientErrorData::RemoteResourceNotFound {
-                            resource_type: "Service".to_string(),
-                            resource_name: "test-service".to_string(),
-                        },
-                    ))
-                });
+            fake.with_missing_service_on_delete()
         } else {
-            let delete_operation_name = "delete-test".to_string();
-            let delete_operation_name_for_get = delete_operation_name.clone();
-            mock_cloudrun
-                .expect_delete_service()
-                .returning(move |_, _, _, _| {
-                    Ok(create_successful_operation_response(&delete_operation_name))
-                });
-
-            mock_cloudrun.expect_get_operation().returning(move |_, _| {
-                Ok(create_completed_operation_response(
-                    &delete_operation_name_for_get,
-                ))
-            });
+            fake
         }
-
-        // Always return not found for final status check
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        Arc::new(mock_cloudrun)
     }
 
     fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockGcpIamApi> {
@@ -6257,14 +6599,15 @@ mod tests {
     }
 
     fn setup_mock_service_provider(
-        mock_cloudrun: Arc<MockCloudRunApi>,
+        mock_cloudrun: FakeCloudRunServices,
         mock_compute: Option<Arc<MockGcpComputeApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
+        let cloudrun_client = mock_cloudrun.client();
 
         mock_provider
             .expect_get_gcp_cloudrun_client()
-            .returning(move |_| Ok(mock_cloudrun.clone()));
+            .returning(move |_| Ok(cloudrun_client.clone()));
 
         if let Some(compute) = mock_compute {
             mock_provider
@@ -6361,122 +6704,16 @@ mod tests {
         function_name: &str,
         _has_public_access: bool,
         mock_url: &str,
-    ) -> Arc<MockCloudRunApi> {
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock successful service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        // Mock operation status checks
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(&operation_name_for_get))
-        });
-
-        // Mock service retrieval after creation - use mock URL
-        let mock_url = mock_url.to_string();
-        let function_name_for_get = function_name.to_string();
-        mock_cloudrun.expect_get_service().returning(move |_, _| {
-            let mut service = create_successful_service_response(&function_name_for_get);
-            service.uri = mock_url.clone();
-            service.urls = vec![mock_url.clone()];
-            Ok(service)
-        });
-
-        // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock successful updates
-        let function_name_for_update = function_name.to_string();
-        let update_operation_name = format!("update-{}", function_name_for_update);
-        mock_cloudrun
-            .expect_patch_service()
-            .returning(move |_, _, _, _, _, _| {
-                Ok(create_successful_operation_response(&update_operation_name))
-            });
-
-        Arc::new(mock_cloudrun)
+    ) -> FakeCloudRunServices {
+        FakeCloudRunServices::new(function_name).with_url(mock_url)
     }
 
     fn setup_mock_client_for_creation_and_deletion_with_mock_url(
         function_name: &str,
         _has_public_access: bool,
         mock_url: &str,
-    ) -> Arc<MockCloudRunApi> {
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock successful service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        // Mock operation status checks for creation
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1); // Only for creation flow
-
-        // Mock service retrieval after creation - use mock URL
-        let mock_url = mock_url.to_string();
-        let function_name_for_get = function_name.to_string();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| {
-                let mut service = create_successful_service_response(&function_name_for_get);
-                service.uri = mock_url.clone();
-                service.urls = vec![mock_url.clone()];
-                Ok(service)
-            })
-            .times(1); // Only for creation flow
-
-        // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock successful service deletion
-        let function_name_for_delete = function_name.to_string();
-        let delete_operation_name = format!("delete-{}", function_name_for_delete);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        // Mock operation status checks for deletion
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        // Mock service not found during deletion check
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        Arc::new(mock_cloudrun)
+    ) -> FakeCloudRunServices {
+        FakeCloudRunServices::new(function_name).with_url(mock_url)
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
@@ -6665,69 +6902,11 @@ mod tests {
     async fn test_public_function_sets_iam_policy() {
         let worker = function_public_ingress();
         let function_name = format!("test-{}", worker.id);
-
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1);
-
-        let function_name_for_get = function_name.clone();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
-            .times(1);
-
-        // Validate IAM policy operations are called for resource-scoped permissions
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .withf(|location, service_name| {
-                location == "us-central1" && service_name.starts_with("test-")
-            })
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .withf(|location, service_name, _policy| {
-                location == "us-central1" && service_name.starts_with("test-")
-            })
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock deletion
-        let delete_operation_name = format!("delete-{}", function_name);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
+        let cloudrun = FakeCloudRunServices::new(&function_name);
+        let counters = cloudrun.counters();
 
         let compute_mock = create_ssl_compute_mock_for_creation_and_deletion();
-        let mock_provider =
-            setup_mock_service_provider(Arc::new(mock_cloudrun), Some(compute_mock));
+        let mock_provider = setup_mock_service_provider(cloudrun, Some(compute_mock));
         let domain_metadata = create_test_domain_metadata(&worker.id);
 
         let mut executor = SingleControllerExecutor::builder()
@@ -6748,6 +6927,9 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.url.is_some());
+        let counters = counters.lock().unwrap();
+        assert_eq!(counters.get_iam_policy_calls, 1);
+        assert_eq!(counters.set_iam_policy_calls, 1);
     }
 
     /// Test that verifies private workers handle resource-scoped permissions correctly
@@ -6755,61 +6937,9 @@ mod tests {
     async fn test_private_function_skips_iam_policy() {
         let worker = function_private_ingress();
         let function_name = format!("test-{}", worker.id);
-
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Mock service creation
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1);
-
-        let function_name_for_get = function_name.clone();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
-            .times(1);
-
-        // IAM policy operations are now called for all workers (for resource-scoped permissions)
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock deletion
-        let delete_operation_name = format!("delete-{}", function_name);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let cloudrun = FakeCloudRunServices::new(&function_name);
+        let counters = cloudrun.counters();
+        let mock_provider = setup_mock_service_provider(cloudrun, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -6828,6 +6958,9 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.url.is_some());
+        let counters = counters.lock().unwrap();
+        assert_eq!(counters.get_iam_policy_calls, 1);
+        assert_eq!(counters.set_iam_policy_calls, 1);
     }
 
     /// Test that verifies correct service configuration parameters
@@ -6835,76 +6968,8 @@ mod tests {
     async fn test_service_configuration_validation() {
         let worker = function_custom_config();
         let function_name = format!("test-{}", worker.id);
-
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Validate service creation request has correct parameters
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .withf(|_, _, service, _| {
-                // Check if the service has the expected configuration
-                if let Some(template) = &service.template {
-                    let containers = &template.containers;
-                    if let Some(container) = containers.first() {
-                        // Check memory configuration
-                        if let Some(resources) = &container.resources {
-                            if let Some(memory) = resources.limits.get("memory") {
-                                return memory == "512Mi";
-                            }
-                        }
-                    }
-                }
-                false
-            })
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1);
-
-        let function_name_for_get = function_name.clone();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
-            .times(1);
-
-        // Mock IAM policy operations for resource-scoped permissions
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock deletion
-        let delete_operation_name = format!("delete-{}", function_name);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let cloudrun = FakeCloudRunServices::new(&function_name).validate_memory("512Mi");
+        let mock_provider = setup_mock_service_provider(cloudrun, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
@@ -6925,79 +6990,12 @@ mod tests {
     async fn test_environment_variable_handling() {
         let worker = function_with_env_vars();
         let function_name = format!("test-{}", worker.id);
-
-        let mut mock_cloudrun = MockCloudRunApi::new();
-
-        // Validate service creation request has environment variables
-        let operation_name = format!("create-{}", function_name);
-        let operation_name_for_get = operation_name.clone();
-        mock_cloudrun
-            .expect_create_service()
-            .withf(|_, _, service, _| {
-                if let Some(template) = &service.template {
-                    let containers = &template.containers;
-                    if let Some(container) = containers.first() {
-                        // Check environment variables
-                        let env_vars: HashMap<String, String> = container
-                            .env
-                            .iter()
-                            .filter_map(|env| env.value().map(|v| (env.name.clone(), v.clone())))
-                            .collect();
-
-                        return env_vars.get("APP_ENV") == Some(&"production".to_string())
-                            && env_vars.get("LOG_LEVEL") == Some(&"debug".to_string())
-                            && env_vars.get("DB_NAME") == Some(&"myapp".to_string());
-                    }
-                }
-                false
-            })
-            .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
-
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(move |_, _| Ok(create_completed_operation_response(&operation_name_for_get)))
-            .times(1);
-
-        let function_name_for_get = function_name.clone();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
-            .times(1);
-
-        // Mock IAM policy operations for resource-scoped permissions
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        // Mock deletion
-        let delete_operation_name = format!("delete-{}", function_name);
-        let delete_operation_name_for_get = delete_operation_name.clone();
-        mock_cloudrun
-            .expect_delete_service()
-            .returning(move |_, _, _, _| {
-                Ok(create_successful_operation_response(&delete_operation_name))
-            });
-
-        mock_cloudrun.expect_get_operation().returning(move |_, _| {
-            Ok(create_completed_operation_response(
-                &delete_operation_name_for_get,
-            ))
-        });
-
-        mock_cloudrun.expect_get_service().returning(|_, _| {
-            Err(AlienError::new(
-                CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Service".to_string(),
-                    resource_name: "test-service".to_string(),
-                },
-            ))
-        });
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let cloudrun = FakeCloudRunServices::new(&function_name).validate_env([
+            ("APP_ENV", "production"),
+            ("LOG_LEVEL", "debug"),
+            ("DB_NAME", "myapp"),
+        ]);
+        let mock_provider = setup_mock_service_provider(cloudrun, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)

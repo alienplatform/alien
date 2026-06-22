@@ -11,7 +11,7 @@ use crate::azure_container_apps::{
     OfficialAzureLongRunningOperationClient,
 };
 use crate::error::Result;
-use crate::gcp_cloudrun::{CloudRunApi, OfficialGcpCloudRunClient};
+use crate::gcp_cloudrun::cloud_run_services_from_alien_config;
 use crate::gcp_compute::{GcpComputeApi, OfficialGcpComputeClient};
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_client::{
@@ -80,6 +80,7 @@ use google_cloud_iam_v1::client::IAMPolicy;
 pub use google_cloud_iam_v1::model::{Binding, GetPolicyOptions, Policy};
 use google_cloud_pubsub::client::{SubscriptionAdmin, TopicAdmin};
 use google_cloud_resourcemanager_v3::client::Projects;
+use google_cloud_run_v2::client::Services;
 use google_cloud_scheduler_v1::client::CloudScheduler;
 use google_cloud_storage::{
     client::StorageControl,
@@ -3622,7 +3623,7 @@ pub trait PlatformServiceProvider: Send + Sync {
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
-    fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>>;
+    async fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Services>;
     async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects>;
     async fn get_gcp_service_usage_client(&self, config: &GcpClientConfig) -> Result<ServiceUsage>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
@@ -3920,8 +3921,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         Ok(Arc::new(IamClient::new(config.clone())))
     }
 
-    fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>> {
-        Ok(Arc::new(OfficialGcpCloudRunClient::new(config.clone())))
+    async fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Services> {
+        cloud_run_services_from_alien_config(config).await
     }
 
     async fn get_gcp_resource_manager_client(&self, config: &GcpClientConfig) -> Result<Projects> {
