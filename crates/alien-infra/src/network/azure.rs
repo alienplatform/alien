@@ -7,8 +7,10 @@
 //! - Public IP addresses for NAT
 //! - Network Security Groups (NSGs) for traffic control
 
-use crate::azure_network;
-use crate::core::{OperationResult, ResourceControllerContext};
+use crate::core::{
+    map_azure_core_021_delete_lro_response, map_azure_core_021_lro_response,
+    map_azure_core_021_sdk_error, OperationResult, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use alien_core::{
@@ -352,13 +354,21 @@ impl AzureNetworkController {
                     .service_provider
                     .get_azure_network_client(azure_config)?;
 
-                let vnet = match azure_network::get_virtual_network(
-                    &network_client,
-                    azure_config,
-                    &resource_group,
+                let result = network_client
+                    .virtual_networks_client()
+                    .get(
+                        resource_group.clone(),
+                        vnet_name.clone(),
+                        azure_config.subscription_id.clone(),
+                    )
+                    .await;
+                let vnet = match map_azure_core_021_sdk_error(
+                    "Azure Network",
+                    result,
+                    "virtual network get",
+                    "Azure virtual network",
                     &vnet_name,
                 )
-                .await
                 .context(ErrorData::InfrastructureError {
                     message: format!("BYO-VNet '{}' not found", vnet_name),
                     operation: Some("verify_byo_vnet".to_string()),
@@ -450,12 +460,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_virtual_network(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .virtual_networks_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                vnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "virtual network create or update",
+            "Azure virtual network",
             &vnet_name,
-            &vnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -497,13 +518,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let vnet = azure_network::get_virtual_network(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .virtual_networks_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let vnet = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "virtual network get",
+            "Azure virtual network",
             &vnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check VNet creation status".to_string(),
             operation: Some("get_virtual_network".to_string()),
@@ -550,13 +579,24 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                public_subnet_name.clone(),
+                subnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
+            "Azure subnet",
             &public_subnet_name,
-            &subnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -598,14 +638,22 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = azure_network::get_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                public_subnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
             &public_subnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check public subnet creation status".to_string(),
             operation: Some("get_subnet".to_string()),
@@ -651,13 +699,24 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                subnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
+            "Azure subnet",
             &private_subnet_name,
-            &subnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -699,14 +758,22 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = azure_network::get_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
             &private_subnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check private subnet creation status".to_string(),
             operation: Some("get_subnet".to_string()),
@@ -752,13 +819,24 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                subnet_name.clone(),
+                subnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
+            "Azure subnet",
             &subnet_name,
-            &subnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -803,14 +881,22 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = azure_network::get_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                subnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
             &subnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check Application Gateway subnet creation status".to_string(),
             operation: Some("get_subnet".to_string()),
@@ -859,12 +945,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_public_ip_address(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .public_ip_addresses_client()
+            .create_or_update(
+                resource_group.clone(),
+                public_ip_name.clone(),
+                public_ip,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "public IP address create or update",
+            "Azure public IP address",
             &public_ip_name,
-            &public_ip,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -908,13 +1005,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let public_ip = azure_network::get_public_ip_address(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .public_ip_addresses_client()
+            .get(
+                resource_group.clone(),
+                public_ip_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let public_ip = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "public IP address get",
+            "Azure public IP address",
             &public_ip_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check public IP creation status".to_string(),
             operation: Some("get_public_ip_address".to_string()),
@@ -967,12 +1072,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_nat_gateway(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .nat_gateways_client()
+            .create_or_update(
+                resource_group.clone(),
+                nat_gateway_name.clone(),
+                nat_gateway,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "NAT gateway create or update",
+            "Azure NAT gateway",
             &nat_gateway_name,
-            &nat_gateway,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -1016,13 +1132,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let nat_gateway = azure_network::get_nat_gateway(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .nat_gateways_client()
+            .get(
+                resource_group.clone(),
+                nat_gateway_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let nat_gateway = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "NAT gateway get",
+            "Azure NAT gateway",
             &nat_gateway_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check NAT Gateway creation status".to_string(),
             operation: Some("get_nat_gateway".to_string()),
@@ -1072,13 +1196,24 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                subnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
+            "Azure subnet",
             &private_subnet_name,
-            &subnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -1121,14 +1256,22 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let subnet = azure_network::get_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let subnet = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
             &private_subnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check NAT association status".to_string(),
             operation: Some("get_subnet".to_string()),
@@ -1195,12 +1338,23 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_network_security_group(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .network_security_groups_client()
+            .create_or_update(
+                resource_group.clone(),
+                nsg_name.clone(),
+                nsg,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "network security group create or update",
+            "Azure network security group",
             &nsg_name,
-            &nsg,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -1245,13 +1399,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let nsg = azure_network::get_network_security_group(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .network_security_groups_client()
+            .get(
+                resource_group.clone(),
+                nsg_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let nsg = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "network security group get",
+            "Azure network security group",
             &nsg_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check NSG creation status".to_string(),
             operation: Some("get_network_security_group".to_string()),
@@ -1294,13 +1456,21 @@ impl AzureNetworkController {
                 .service_provider
                 .get_azure_network_client(azure_config)?;
 
-            let _ = azure_network::get_virtual_network(
-                &network_client,
-                azure_config,
-                resource_group,
+            let result = network_client
+                .virtual_networks_client()
+                .get(
+                    resource_group.clone(),
+                    vnet_name.clone(),
+                    azure_config.subscription_id.clone(),
+                )
+                .await;
+            map_azure_core_021_sdk_error(
+                "Azure Network",
+                result,
+                "virtual network get",
+                "Azure virtual network",
                 vnet_name,
             )
-            .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to verify VNet during heartbeat".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -1407,10 +1577,20 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = azure_network::delete_network_security_group(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .network_security_groups_client()
+            .delete(
+                resource_group.clone(),
+                nsg_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "network security group delete",
+            "Azure network security group",
             &nsg_name,
         )
         .await
@@ -1460,14 +1640,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match azure_network::get_network_security_group(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .network_security_groups_client()
+            .get(
+                resource_group.clone(),
+                nsg_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "network security group get",
+            "Azure network security group",
             &nsg_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!("NSG deletion still in progress");
                 Ok(HandlerAction::Stay {
@@ -1524,13 +1711,24 @@ impl AzureNetworkController {
             ..Default::default()
         };
 
-        let result = azure_network::create_or_update_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .create_or_update(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                subnet,
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_lro_response(
+            "Azure Network",
+            result,
+            "subnet create or update",
+            "Azure subnet",
             &private_subnet_name,
-            &subnet,
+            |response| response.into_body(),
         )
         .await
         .context(ErrorData::InfrastructureError {
@@ -1573,14 +1771,22 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let subnet = azure_network::get_subnet(
-            &network_client,
-            azure_config,
-            &resource_group,
-            &vnet_name,
+        let result = network_client
+            .subnets_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                private_subnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        let subnet = map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "subnet get",
+            "Azure subnet",
             &private_subnet_name,
         )
-        .await
         .context(ErrorData::InfrastructureError {
             message: "Failed to check NAT dissociation status".to_string(),
             operation: Some("get_subnet".to_string()),
@@ -1623,10 +1829,20 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = azure_network::delete_nat_gateway(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .nat_gateways_client()
+            .delete(
+                resource_group.clone(),
+                nat_gateway_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "NAT gateway delete",
+            "Azure NAT gateway",
             &nat_gateway_name,
         )
         .await
@@ -1669,14 +1885,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match azure_network::get_nat_gateway(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .nat_gateways_client()
+            .get(
+                resource_group.clone(),
+                nat_gateway_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "NAT gateway get",
+            "Azure NAT gateway",
             &nat_gateway_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!("NAT Gateway deletion still in progress");
                 Ok(HandlerAction::Stay {
@@ -1723,10 +1946,20 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = azure_network::delete_public_ip_address(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .public_ip_addresses_client()
+            .delete(
+                resource_group.clone(),
+                public_ip_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "public IP address delete",
+            "Azure public IP address",
             &public_ip_name,
         )
         .await
@@ -1769,14 +2002,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match azure_network::get_public_ip_address(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .public_ip_addresses_client()
+            .get(
+                resource_group.clone(),
+                public_ip_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "public IP address get",
+            "Azure public IP address",
             &public_ip_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!("Public IP deletion still in progress");
                 Ok(HandlerAction::Stay {
@@ -1815,10 +2055,20 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let result = azure_network::delete_virtual_network(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .virtual_networks_client()
+            .delete(
+                resource_group.clone(),
+                vnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .send()
+            .await;
+        let result = map_azure_core_021_delete_lro_response(
+            "Azure Network",
+            result,
+            "virtual network delete",
+            "Azure virtual network",
             &vnet_name,
         )
         .await
@@ -1860,14 +2110,21 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        match azure_network::get_virtual_network(
-            &network_client,
-            azure_config,
-            &resource_group,
+        let result = network_client
+            .virtual_networks_client()
+            .get(
+                resource_group.clone(),
+                vnet_name.clone(),
+                azure_config.subscription_id.clone(),
+            )
+            .await;
+        match map_azure_core_021_sdk_error(
+            "Azure Network",
+            result,
+            "virtual network get",
+            "Azure virtual network",
             &vnet_name,
-        )
-        .await
-        {
+        ) {
             Ok(_) => {
                 debug!("VNet deletion still in progress");
                 Ok(HandlerAction::Stay {
