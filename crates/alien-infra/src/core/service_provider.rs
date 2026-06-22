@@ -59,11 +59,10 @@ pub use azure_mgmt_servicebus::package_2024_01::models::{
     SbNamespace, SbNamespaceProperties as AzureServiceBusNamespaceProperties, SbQueue,
     SbQueueProperties, TrackedResource as AzureServiceBusTrackedResource,
 };
+use azure_mgmt_storage::package_2023_05::models::{BlobContainer, BlobServiceProperties};
 pub use azure_mgmt_storage::package_2023_05::models::{
-    BlobContainer as AzureBlobContainer, BlobServiceProperties as AzureBlobServiceProperties,
-    ContainerProperties as AzureBlobContainerProperties, Endpoints,
-    Resource as AzureStorageResource, StorageAccount, StorageAccountCreateParameters,
-    StorageAccountProperties, StorageAccountPropertiesCreateParameters, Table, TableProperties,
+    Endpoints, StorageAccount, StorageAccountCreateParameters, StorageAccountProperties,
+    StorageAccountPropertiesCreateParameters, Table, TableProperties,
 };
 use bon::Builder;
 use google_cloud_api_serviceusage_v1::{client::ServiceUsage, model::Service};
@@ -3965,7 +3964,7 @@ impl AzureTableManagementApi for OfficialAzureTableManagementClient {
         table_name: &str,
     ) -> Result<()> {
         let table = Table {
-            resource: AzureStorageResource {
+            resource: azure_mgmt_storage::package_2023_05::models::Resource {
                 id: None,
                 name: Some(table_name.to_string()),
                 type_: None,
@@ -4812,21 +4811,21 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-        blob_container: &AzureBlobContainer,
-    ) -> Result<AzureBlobContainer>;
+        blob_container: &BlobContainer,
+    ) -> Result<BlobContainer>;
 
     async fn get_blob_container(
         &self,
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-    ) -> Result<AzureBlobContainer>;
+    ) -> Result<BlobContainer>;
 
     async fn get_blob_service_properties(
         &self,
         resource_group_name: &str,
         storage_account_name: &str,
-    ) -> Result<AzureBlobServiceProperties>;
+    ) -> Result<BlobServiceProperties>;
 
     async fn delete_blob_container(
         &self,
@@ -4840,8 +4839,8 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-        blob_container: &AzureBlobContainer,
-    ) -> Result<AzureBlobContainer>;
+        blob_container: &BlobContainer,
+    ) -> Result<BlobContainer>;
 }
 
 struct OfficialAzureBlobContainerClient {
@@ -4974,8 +4973,8 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-        blob_container: &AzureBlobContainer,
-    ) -> Result<AzureBlobContainer> {
+        blob_container: &BlobContainer,
+    ) -> Result<BlobContainer> {
         let body = serde_json::to_string(blob_container)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {
@@ -5008,7 +5007,7 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-    ) -> Result<AzureBlobContainer> {
+    ) -> Result<BlobContainer> {
         let response = self
             .request(
                 Method::GET,
@@ -5032,7 +5031,7 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         &self,
         resource_group_name: &str,
         storage_account_name: &str,
-    ) -> Result<AzureBlobServiceProperties> {
+    ) -> Result<BlobServiceProperties> {
         let response = self
             .request(
                 Method::GET,
@@ -5074,8 +5073,8 @@ impl BlobContainerApi for OfficialAzureBlobContainerClient {
         resource_group_name: &str,
         storage_account_name: &str,
         container_name: &str,
-        blob_container: &AzureBlobContainer,
-    ) -> Result<AzureBlobContainer> {
+        blob_container: &BlobContainer,
+    ) -> Result<BlobContainer> {
         let body = serde_json::to_string(blob_container)
             .into_alien_error()
             .context(crate::error::ErrorData::CloudPlatformError {

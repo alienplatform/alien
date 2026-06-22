@@ -1,10 +1,7 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    core::{
-        AzureBlobContainer, AzureBlobContainerProperties, AzureBlobServiceProperties,
-        ResourceControllerContext, StorageAccount,
-    },
+    core::{ResourceControllerContext, StorageAccount},
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
@@ -15,7 +12,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
-use azure_mgmt_storage::package_2023_05::models::container_properties::PublicAccess as AzureBlobContainerPublicAccess;
+use azure_mgmt_storage::package_2023_05::models::{
+    container_properties::PublicAccess, BlobContainer, BlobServiceProperties, ContainerProperties,
+};
 use chrono::Utc;
 use serde::Serialize;
 use std::{fmt::Debug, time::Duration};
@@ -77,16 +76,16 @@ impl AzureStorageController {
         self.storage_account_name = Some(storage_account_name.clone());
 
         // Build container configuration
-        let properties = AzureBlobContainerProperties {
+        let properties = ContainerProperties {
             public_access: if config.public_read {
-                Some(AzureBlobContainerPublicAccess::Blob)
+                Some(PublicAccess::Blob)
             } else {
-                Some(AzureBlobContainerPublicAccess::None)
+                Some(PublicAccess::None)
             },
             ..Default::default()
         };
 
-        let container_body = AzureBlobContainer {
+        let container_body = BlobContainer {
             properties: Some(properties),
             ..Default::default()
         };
@@ -273,15 +272,15 @@ impl AzureStorageController {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let storage_account_name = azure_utils::get_storage_account_name(ctx.state)?;
 
-            let properties = AzureBlobContainerProperties {
+            let properties = ContainerProperties {
                 public_access: if config.public_read {
-                    Some(AzureBlobContainerPublicAccess::Blob)
+                    Some(PublicAccess::Blob)
                 } else {
-                    Some(AzureBlobContainerPublicAccess::None)
+                    Some(PublicAccess::None)
                 },
                 ..Default::default()
             };
-            let container_body = AzureBlobContainer {
+            let container_body = BlobContainer {
                 properties: Some(properties),
                 ..Default::default()
             };
@@ -441,9 +440,9 @@ fn emit_azure_storage_heartbeat(
     resource_id: &str,
     resource_group_name: &str,
     storage_account_name: &str,
-    container: AzureBlobContainer,
+    container: BlobContainer,
     storage_account: StorageAccount,
-    blob_service: AzureBlobServiceProperties,
+    blob_service: BlobServiceProperties,
 ) {
     let container_name = container
         .azure_entity_resource
@@ -609,28 +608,29 @@ mod tests {
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        AzureBlobContainer, AzureBlobContainerProperties, AzureStorageResource,
         MockBlobContainerApi, MockPlatformServiceProvider, PlatformServiceProvider,
     };
     use crate::error::ErrorData;
     use crate::storage::{fixtures::*, AzureStorageController};
-    use azure_mgmt_storage::package_2023_05::models::container_properties::PublicAccess as AzureBlobContainerPublicAccess;
+    use azure_mgmt_storage::package_2023_05::models::{
+        container_properties::PublicAccess, BlobContainer, ContainerProperties, Resource,
+    };
 
     // ─────────────── MOCK SETUP HELPERS ────────────────────────
 
-    fn create_successful_container_response(container_name: &str) -> AzureBlobContainer {
-        AzureBlobContainer {
+    fn create_successful_container_response(container_name: &str) -> BlobContainer {
+        BlobContainer {
             azure_entity_resource:
                 azure_mgmt_storage::package_2023_05::models::AzureEntityResource {
-                    resource: AzureStorageResource {
+                    resource: Resource {
                         id: None,
                         name: Some(container_name.to_string()),
                         type_: None,
                     },
                     etag: None,
                 },
-            properties: Some(AzureBlobContainerProperties {
-                public_access: Some(AzureBlobContainerPublicAccess::None),
+            properties: Some(ContainerProperties {
+                public_access: Some(PublicAccess::None),
                 ..Default::default()
             }),
         }
@@ -933,7 +933,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == &AzureBlobContainerPublicAccess::Blob
+                        public_access == &PublicAccess::Blob
                     } else {
                         false
                     }
@@ -944,7 +944,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
+                    properties.public_access = Some(PublicAccess::Blob);
                 }
                 Ok(response)
             });
@@ -978,7 +978,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == &AzureBlobContainerPublicAccess::None
+                        public_access == &PublicAccess::None
                     } else {
                         false
                     }
@@ -1021,7 +1021,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == &AzureBlobContainerPublicAccess::Blob
+                        public_access == &PublicAccess::Blob
                     } else {
                         false
                     }
@@ -1032,7 +1032,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
+                    properties.public_access = Some(PublicAccess::Blob);
                 }
                 Ok(response)
             });
@@ -1118,7 +1118,7 @@ mod tests {
             .withf(|_, _, _, blob_container| {
                 if let Some(properties) = &blob_container.properties {
                     if let Some(public_access) = &properties.public_access {
-                        public_access == &AzureBlobContainerPublicAccess::Blob
+                        public_access == &PublicAccess::Blob
                     } else {
                         false
                     }
@@ -1129,7 +1129,7 @@ mod tests {
             .returning(|_, _, container_name, _| {
                 let mut response = create_successful_container_response(container_name);
                 if let Some(properties) = &mut response.properties {
-                    properties.public_access = Some(AzureBlobContainerPublicAccess::Blob);
+                    properties.public_access = Some(PublicAccess::Blob);
                 }
                 Ok(response)
             });
