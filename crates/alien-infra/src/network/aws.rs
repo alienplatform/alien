@@ -42,7 +42,6 @@ use aws_sdk_ec2::{
         create_route_table::{CreateRouteTableInput, CreateRouteTableOutput},
         create_security_group::{CreateSecurityGroupInput, CreateSecurityGroupOutput},
         create_subnet::{CreateSubnetInput, CreateSubnetOutput},
-        create_vpc::{CreateVpcInput, CreateVpcOutput},
         delete_nat_gateway::{DeleteNatGatewayInput, DeleteNatGatewayOutput},
         describe_availability_zones::{
             DescribeAvailabilityZonesInput, DescribeAvailabilityZonesOutput,
@@ -213,32 +212,6 @@ async fn describe_ec2_vpcs(
         "DescribeVpcs",
         "VPC",
         "*",
-    )
-}
-
-async fn create_ec2_vpc(client: &Ec2Client, request: CreateVpcInput) -> Result<CreateVpcOutput> {
-    let cidr_block = request.cidr_block().unwrap_or("<unknown>").to_string();
-    ec2_result(
-        client
-            .create_vpc()
-            .set_cidr_block(request.cidr_block)
-            .set_ipv6_pool(request.ipv6_pool)
-            .set_ipv6_cidr_block(request.ipv6_cidr_block)
-            .set_ipv4_ipam_pool_id(request.ipv4_ipam_pool_id)
-            .set_ipv4_netmask_length(request.ipv4_netmask_length)
-            .set_ipv6_ipam_pool_id(request.ipv6_ipam_pool_id)
-            .set_ipv6_netmask_length(request.ipv6_netmask_length)
-            .set_ipv6_cidr_block_network_border_group(request.ipv6_cidr_block_network_border_group)
-            .set_vpc_encryption_control(request.vpc_encryption_control)
-            .set_tag_specifications(request.tag_specifications)
-            .set_dry_run(request.dry_run)
-            .set_instance_tenancy(request.instance_tenancy)
-            .set_amazon_provided_ipv6_cidr_block(request.amazon_provided_ipv6_cidr_block)
-            .send()
-            .await,
-        "CreateVpc",
-        "VPC",
-        &cidr_block,
     )
 }
 
@@ -1186,26 +1159,25 @@ impl AwsNetworkController {
         info!(cidr = %vpc_cidr, "Creating VPC");
 
         // Create the VPC
-        let create_vpc_request = CreateVpcInput::builder()
-            .cidr_block(vpc_cidr.clone())
-            .set_tag_specifications(Some(self.create_tags(
-                ctx.resource_prefix,
-                &config.id,
-                "vpc",
-            )))
-            .build()
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to build CreateVpc request".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        let create_response = create_ec2_vpc(&client, create_vpc_request).await.context(
-            ErrorData::CloudPlatformError {
-                message: "Failed to create VPC".to_string(),
-                resource_id: Some(config.id.clone()),
-            },
-        )?;
+        let create_response = ec2_result(
+            client
+                .create_vpc()
+                .cidr_block(vpc_cidr.clone())
+                .set_tag_specifications(Some(self.create_tags(
+                    ctx.resource_prefix,
+                    &config.id,
+                    "vpc",
+                )))
+                .send()
+                .await,
+            "CreateVpc",
+            "VPC",
+            &vpc_cidr,
+        )
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create VPC".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let vpc_id = create_response
             .vpc()
