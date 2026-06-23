@@ -444,30 +444,6 @@ async fn create_pubsub_topic(
     }
 }
 
-async fn delete_pubsub_topic(client: &TopicAdmin, project_id: &str, topic_id: &str) -> Result<()> {
-    let resource_name = pubsub_topic_resource_name(project_id, topic_id);
-    match client
-        .delete_topic()
-        .set_topic(resource_name.clone())
-        .send()
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(error) if gax_error_is_not_found(&error) => {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "Pub/Sub topic".to_string(),
-                resource_name,
-            }))
-        }
-        Err(error) => Err(error
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Pub/Sub delete_topic request failed".to_string(),
-                resource_id: Some(topic_id.to_string()),
-            })),
-    }
-}
-
 async fn create_pubsub_subscription(
     client: &SubscriptionAdmin,
     project_id: &str,
@@ -4489,14 +4465,21 @@ impl GcpWorkerController {
         // Delete commands topic (best-effort)
         if let Some(topic_name) = self.commands_topic_name.take().or(derived_topic_name) {
             info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
-            match delete_pubsub_topic(&topic_admin, &gcp_config.project_id, &topic_name).await {
+            let topic_resource_name =
+                pubsub_topic_resource_name(&gcp_config.project_id, &topic_name);
+            match topic_admin
+                .delete_topic()
+                .set_topic(topic_resource_name)
+                .send()
+                .await
+            {
                 Ok(_) => {
                     info!(topic=%topic_name, "Commands Pub/Sub topic deleted");
                 }
-                Err(e) => {
+                Err(error) => {
                     warn!(
                         topic=%topic_name,
-                        error=%e,
+                        error=%error,
                         "Failed to delete commands Pub/Sub topic (may already be deleted)"
                     );
                 }
@@ -6062,7 +6045,14 @@ impl GcpWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for topic_name in &self.storage_notification_topics.clone() {
-            match delete_pubsub_topic(&topic_admin, &gcp_config.project_id, topic_name).await {
+            let topic_resource_name =
+                pubsub_topic_resource_name(&gcp_config.project_id, topic_name);
+            match topic_admin
+                .delete_topic()
+                .set_topic(topic_resource_name)
+                .send()
+                .await
+            {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -6070,11 +6060,11 @@ impl GcpWorkerController {
                         "Storage notification topic deleted successfully"
                     );
                 }
-                Err(e) => {
+                Err(error) => {
                     warn!(
                         worker=%worker_config.id,
                         topic=%topic_name,
-                        error=%e,
+                        error=%error,
                         "Failed to delete storage notification topic (best-effort, continuing)"
                     );
                 }

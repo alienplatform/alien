@@ -246,12 +246,37 @@ impl GcpQueueController {
                 resource_id: Some(q.id.clone()),
             })
         })?;
-        let topic_metadata = get_pubsub_topic(&topic_admin, &cfg.project_id, topic)
+        let topic_resource_name = pubsub_topic_resource_name(&cfg.project_id, topic);
+        let topic_metadata = match topic_admin
+            .get_topic()
+            .set_topic(topic_resource_name.clone())
+            .send()
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get Pub/Sub topic '{}'", topic),
-                resource_id: Some(q.id.clone()),
-            })?;
+        {
+            Ok(topic) => topic,
+            Err(error) if gax_error_is_not_found(&error) => {
+                return Err(AlienError::new(ErrorData::CloudResourceNotFound {
+                    resource_type: "Pub/Sub topic".to_string(),
+                    resource_name: topic_resource_name,
+                }))
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get Pub/Sub topic '{}'", topic),
+                    resource_id: Some(q.id.clone()),
+                });
+            }
+            Err(error) => {
+                return Err(error
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Pub/Sub get_topic request failed".to_string(),
+                        resource_id: Some(topic.to_string()),
+                    }))
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get Pub/Sub topic '{}'", topic),
+                    resource_id: Some(q.id.clone()),
+                });
+            }
+        };
         let subscription_metadata = if let Some(subscription) = &self.subscription_name {
             Some(
                 get_pubsub_subscription(&subscription_admin, &cfg.project_id, subscription)
@@ -329,13 +354,25 @@ impl GcpQueueController {
             }
         }
         if let Some(topic) = &self.topic_name {
-            match delete_pubsub_topic(&topic_admin, &cfg.project_id, topic).await {
+            let topic_resource_name = pubsub_topic_resource_name(&cfg.project_id, topic);
+            match topic_admin
+                .delete_topic()
+                .set_topic(topic_resource_name.clone())
+                .send()
+                .await
+            {
                 Ok(()) => info!(topic = %topic, "Pub/Sub topic deleted"),
-                Err(e) if is_remote_resource_not_found(&e) => {
+                Err(error) if gax_error_is_not_found(&error) => {
                     info!(topic = %topic, "Pub/Sub topic already deleted");
                 }
-                Err(e) => {
-                    return Err(e).context(ErrorData::CloudPlatformError {
+                Err(error) => {
+                    return Err(error
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Pub/Sub delete_topic request failed".to_string(),
+                            resource_id: Some(topic_resource_name),
+                        }))
+                    .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete Pub/Sub topic '{}'", topic),
                         resource_id: None,
                     });
@@ -435,54 +472,6 @@ async fn create_pubsub_topic(
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
                 message: "Pub/Sub create_topic request failed".to_string(),
-                resource_id: Some(topic_id.to_string()),
-            })),
-    }
-}
-
-async fn get_pubsub_topic(client: &TopicAdmin, project_id: &str, topic_id: &str) -> Result<Topic> {
-    let resource_name = pubsub_topic_resource_name(project_id, topic_id);
-    match client
-        .get_topic()
-        .set_topic(resource_name.clone())
-        .send()
-        .await
-    {
-        Ok(topic) => Ok(topic),
-        Err(error) if gax_error_is_not_found(&error) => {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "Pub/Sub topic".to_string(),
-                resource_name,
-            }))
-        }
-        Err(error) => Err(error
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Pub/Sub get_topic request failed".to_string(),
-                resource_id: Some(topic_id.to_string()),
-            })),
-    }
-}
-
-async fn delete_pubsub_topic(client: &TopicAdmin, project_id: &str, topic_id: &str) -> Result<()> {
-    let resource_name = pubsub_topic_resource_name(project_id, topic_id);
-    match client
-        .delete_topic()
-        .set_topic(resource_name.clone())
-        .send()
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(error) if gax_error_is_not_found(&error) => {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "Pub/Sub topic".to_string(),
-                resource_name,
-            }))
-        }
-        Err(error) => Err(error
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Pub/Sub delete_topic request failed".to_string(),
                 resource_id: Some(topic_id.to_string()),
             })),
     }
