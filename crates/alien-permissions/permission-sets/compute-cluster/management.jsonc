@@ -99,7 +99,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "setup",
-                "aws:ResourceTag/${resourceTag}": "compute"
+                "aws:ResourceTag/resource-type": "compute-cluster"
               }
             }
           },
@@ -109,7 +109,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "setup",
-                "aws:ResourceTag/${resourceTag}": "compute"
+                "aws:ResourceTag/resource-type": "compute-cluster"
               }
             }
           }
