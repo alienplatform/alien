@@ -47,11 +47,21 @@ impl CompileTimeCheck for WorkerMemoryCheck {
                     }
                 }
                 Platform::Gcp => {
-                    // GCP Cloud Run: 128–32768 MB
+                    // GCP Cloud Run: 128–32768 MB absolute range, but the
+                    // gen2 execution environment (which we deploy onto for
+                    // Direct VPC + extended startup features) refuses
+                    // anything below 512 MiB. Fail fast here rather than at
+                    // deploy time with an opaque GCP API error.
+                    const CLOUD_RUN_GEN2_MIN_MEMORY_MB: u32 = 512;
                     if memory_mb < 128 || memory_mb > 32768 {
                         result.add_error(format!(
                             "Worker '{}': memory_mb {} is out of range for GCP Cloud Run (128–32768 MB)",
                             id, memory_mb
+                        ));
+                    } else if memory_mb < CLOUD_RUN_GEN2_MIN_MEMORY_MB {
+                        result.add_error(format!(
+                            "Worker '{}': memory_mb {} is below the GCP Cloud Run gen2 minimum of {} MiB",
+                            id, memory_mb, CLOUD_RUN_GEN2_MIN_MEMORY_MB
                         ));
                     }
                 }
@@ -150,11 +160,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_gcp_invalid_memory() {
+    async fn test_gcp_invalid_memory_out_of_range() {
         let check = WorkerMemoryCheck;
         let stack = make_stack_with_function(64);
         let result = check.check(&stack, Platform::Gcp).await.unwrap();
         assert!(!result.success);
+        assert!(result.errors[0].contains("out of range"));
+    }
+
+    #[tokio::test]
+    async fn test_gcp_below_gen2_minimum_errors() {
+        // 256 MiB is inside the abstract Cloud Run range but below the
+        // gen2 floor — the deploy would fail later with an opaque
+        // "Total memory < 512 Mi is not supported with gen2" GCP error.
+        let check = WorkerMemoryCheck;
+        let stack = make_stack_with_function(256);
+        let result = check.check(&stack, Platform::Gcp).await.unwrap();
+        assert!(!result.success);
+        assert!(
+            result.errors[0].contains("gen2 minimum"),
+            "expected gen2 minimum error, got {:?}",
+            result.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gcp_at_gen2_minimum_succeeds() {
+        let check = WorkerMemoryCheck;
+        let stack = make_stack_with_function(512);
+        let result = check.check(&stack, Platform::Gcp).await.unwrap();
+        assert!(result.success);
     }
 
     #[tokio::test]
