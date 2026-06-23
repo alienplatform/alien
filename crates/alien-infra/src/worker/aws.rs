@@ -640,21 +640,6 @@ async fn reimport_acm_certificate(
     Ok(())
 }
 
-async fn delete_acm_certificate(client: &AcmClient, certificate_arn: &str) -> Result<()> {
-    acm_result(
-        client
-            .delete_certificate()
-            .certificate_arn(certificate_arn)
-            .send()
-            .await,
-        "DeleteCertificate",
-        "Certificate",
-        certificate_arn,
-    )?;
-
-    Ok(())
-}
-
 fn acm_result<T, E>(
     result: std::result::Result<T, AcmSdkError<E>>,
     operation: &str,
@@ -892,35 +877,6 @@ async fn delete_api_gateway_mapping(
     Ok(())
 }
 
-async fn delete_api_gateway_domain_name(
-    client: &ApiGatewayV2Client,
-    domain_name: &str,
-) -> Result<()> {
-    api_gateway_v2_result(
-        client
-            .delete_domain_name()
-            .domain_name(domain_name)
-            .send()
-            .await,
-        "DeleteDomainName",
-        "ApiGatewayDomainName",
-        domain_name,
-    )?;
-
-    Ok(())
-}
-
-async fn delete_api_gateway_api(client: &ApiGatewayV2Client, api_id: &str) -> Result<()> {
-    api_gateway_v2_result(
-        client.delete_api().api_id(api_id).send().await,
-        "DeleteApi",
-        "ApiGatewayApi",
-        api_id,
-    )?;
-
-    Ok(())
-}
-
 fn api_gateway_v2_result<T, E>(
     result: std::result::Result<T, ApiGatewayV2SdkError<E>>,
     operation: &str,
@@ -1047,17 +1003,6 @@ async fn remove_eventbridge_targets(
         "RemoveTargets",
         rule_name,
     )
-}
-
-async fn delete_eventbridge_rule(client: &EventBridgeClient, rule_name: &str) -> Result<()> {
-    eventbridge_result(
-        client.delete_rule().name(rule_name).send().await,
-        "DeleteRule",
-        "EventBridgeRule",
-        rule_name,
-    )?;
-
-    Ok(())
 }
 
 fn ensure_no_eventbridge_target_failures(
@@ -3991,7 +3936,16 @@ impl AwsWorkerController {
                             "Failed to remove targets from old EventBridge rule (best-effort)"
                         );
                     }
-                    if let Err(e) = delete_eventbridge_rule(&eventbridge_client, rule_name).await {
+                    if let Err(e) = eventbridge_result(
+                        eventbridge_client
+                            .delete_rule()
+                            .name(rule_name)
+                            .send()
+                            .await,
+                        "DeleteRule",
+                        "EventBridgeRule",
+                        rule_name,
+                    ) {
                         warn!(
                             worker=%current_config.id,
                             rule=%rule_name,
@@ -4338,8 +4292,17 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match delete_api_gateway_domain_name(&client, domain_name).await {
-                Ok(()) => {
+            match api_gateway_v2_result(
+                client
+                    .delete_domain_name()
+                    .domain_name(domain_name)
+                    .send()
+                    .await,
+                "DeleteDomainName",
+                "ApiGatewayDomainName",
+                domain_name,
+            ) {
+                Ok(_) => {
                     info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
                 }
                 Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
@@ -4361,8 +4324,13 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match delete_api_gateway_api(&client, api_id).await {
-                Ok(()) => {
+            match api_gateway_v2_result(
+                client.delete_api().api_id(api_id).send().await,
+                "DeleteApi",
+                "ApiGatewayApi",
+                api_id,
+            ) {
+                Ok(_) => {
                     info!(worker=%worker_config.id, api_id=%api_id, "API Gateway deleted")
                 }
                 Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
@@ -4526,7 +4494,16 @@ impl AwsWorkerController {
                 }
 
                 // Delete the rule
-                if let Err(e) = delete_eventbridge_rule(&eventbridge_client, rule_name).await {
+                if let Err(e) = eventbridge_result(
+                    eventbridge_client
+                        .delete_rule()
+                        .name(rule_name)
+                        .send()
+                        .await,
+                    "DeleteRule",
+                    "EventBridgeRule",
+                    rule_name,
+                ) {
                     warn!(
                         worker=%worker_config.id,
                         rule=%rule_name,
@@ -4835,8 +4812,17 @@ impl AwsWorkerController {
         if let Some(certificate_arn) = self.certificate_arn.as_ref() {
             let aws_cfg = ctx.get_aws_config()?;
             let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-            match delete_acm_certificate(&acm_client, certificate_arn).await {
-                Ok(()) => info!(worker=%worker_config.id, "ACM certificate deleted"),
+            match acm_result(
+                acm_client
+                    .delete_certificate()
+                    .certificate_arn(certificate_arn)
+                    .send()
+                    .await,
+                "DeleteCertificate",
+                "Certificate",
+                certificate_arn,
+            ) {
+                Ok(_) => info!(worker=%worker_config.id, "ACM certificate deleted"),
                 Err(e) if matches!(e.error, Some(ErrorData::CloudResourceNotFound { .. })) => {
                     info!(worker=%worker_config.id, "ACM certificate already gone");
                 }
