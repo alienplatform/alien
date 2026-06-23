@@ -91,6 +91,7 @@ dependencies = [
  "alien-client-config",
  "alien-commands",
  "alien-core",
+ "alien-debug-session",
  "alien-deployment",
  "alien-error",
  "alien-infra",

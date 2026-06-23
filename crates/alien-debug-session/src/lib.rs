@@ -475,3 +475,105 @@ az login --service-principal \
   --output none
 az account set --subscription "$AZURE_SUBSCRIPTION_ID"
 "#;
+
+/// Derive `(service, signing_region)` from an AWS API URL host.
+///
+/// Handles the common shapes:
+///
+/// - `<service>.<region>.amazonaws.com`     → (service, region)
+/// - `<service>.amazonaws.com`              → (service, fallback_region)  (global svcs)
+/// - `<bucket>.s3.<region>.amazonaws.com`   → ("s3", region)
+/// - `<bucket>.s3.amazonaws.com`            → ("s3", fallback_region)
+///
+/// Falls back to `fallback_region` when the host doesn't carry one (global
+/// services, VPC endpoints, localstack, etc).
+///
+/// Takes `&str` (not `reqwest::Url`) so this crate stays HTTP-client-agnostic
+/// and can be used by both the manager's push proxy and the agent's pull
+/// forward without divergence.
+pub fn extract_aws_service_and_region(host: &str, fallback_region: &str) -> (&'static str, String) {
+    let labels: Vec<&str> = host.split('.').collect();
+
+    // Find the .amazonaws.com suffix; everything before is the service prefix.
+    let Some(amz_idx) = labels.iter().rposition(|l| *l == "amazonaws") else {
+        // Custom endpoint (vpc endpoint, localstack, etc.) — fall back to
+        // best-effort static service inference; signing will still work as
+        // long as the service name matches what the caller intended.
+        return ("execute-api", fallback_region.to_string());
+    };
+
+    // Walk leftward from amazonaws. Possible shapes (right to left):
+    //   ... <service>                                 amazonaws com
+    //   ... <service> <region>                        amazonaws com
+    //   ... <bucket> <service> <region>               amazonaws com  (s3-style)
+    let (service, region) = match &labels[..amz_idx] {
+        [_bucket_or_subdomain @ .., service, region]
+            if region.contains('-') && service.len() <= 8 =>
+        {
+            (*service, region.to_string())
+        }
+        [_subdomain @ .., service] => (*service, fallback_region.to_string()),
+        _ => ("execute-api", fallback_region.to_string()),
+    };
+
+    let static_service: &'static str = match service {
+        "sts" => "sts",
+        "iam" => "iam",
+        "ec2" => "ec2",
+        "lambda" => "lambda",
+        "s3" => "s3",
+        "dynamodb" => "dynamodb",
+        "sqs" => "sqs",
+        "sns" => "sns",
+        "ecr" => "ecr",
+        "eks" => "eks",
+        "ecs" => "ecs",
+        "cloudformation" => "cloudformation",
+        "cloudwatch" => "monitoring",
+        "logs" => "logs",
+        "ssm" => "ssm",
+        "secretsmanager" => "secretsmanager",
+        "kms" => "kms",
+        "events" | "eventbridge" => "events",
+        "apigateway" => "apigateway",
+        "execute-api" => "execute-api",
+        _ => "execute-api", // safe default — won't match a real service but
+                            // keeps the signing call from panicking.
+    };
+
+    (static_service, region)
+}
+
+#[cfg(test)]
+mod aws_endpoint_parsing_tests {
+    use super::extract_aws_service_and_region;
+
+    #[test]
+    fn regional_service() {
+        let (s, r) = extract_aws_service_and_region("sts.us-east-1.amazonaws.com", "eu-west-1");
+        assert_eq!(s, "sts");
+        assert_eq!(r, "us-east-1");
+    }
+
+    #[test]
+    fn global_service_uses_fallback_region() {
+        let (s, r) = extract_aws_service_and_region("iam.amazonaws.com", "eu-west-1");
+        assert_eq!(s, "iam");
+        assert_eq!(r, "eu-west-1");
+    }
+
+    #[test]
+    fn s3_virtual_hosted_bucket() {
+        let (s, r) =
+            extract_aws_service_and_region("my-bucket.s3.us-west-2.amazonaws.com", "us-east-1");
+        assert_eq!(s, "s3");
+        assert_eq!(r, "us-west-2");
+    }
+
+    #[test]
+    fn non_amazonaws_host_falls_back() {
+        let (s, r) = extract_aws_service_and_region("sts.localhost", "us-east-1");
+        assert_eq!(s, "execute-api");
+        assert_eq!(r, "us-east-1");
+    }
+}

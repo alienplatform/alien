@@ -23,8 +23,7 @@
 //! - No support yet for `kubectl logs -f`, `exec`, `port-forward`, `cp` —
 //!   those require HTTP upgrade negotiation through the tunnel. Phase 2.
 
-use std::path::Path as StdPath;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use aws_credential_types::provider::ProvideCredentials;
@@ -41,20 +40,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::AgentState;
 
-/// How often the loop checks the manager for pending debug sessions when
-/// idle. Cheap GET; 5s is responsive enough for an interactive workflow
-/// (`alien debug` waits at most this long before the agent picks up).
-// Pending-session poll cadence. Used to be 5s; tightened to 1s because the
-// CLI's perceived `alien debug` startup latency is bounded by how long it
-// takes the agent to notice a freshly-created (or re-attachable) session.
-// One outbound poll per second per operator is negligible load on the
-// manager and shaves up to ~5s off every cold or post-WS-reset invocation.
+/// How often the loop polls the manager for pending debug sessions. Bounds
+/// the latency of `alien debug` startup — that command waits at most this
+/// long before the agent picks up a freshly-created (or reattachable)
+/// session. One outbound GET per second per operator is negligible load.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Standard in-cluster paths Kubernetes projects into every pod.
 const SA_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const SA_CA_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
-const SA_NAMESPACE_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -366,7 +360,10 @@ async fn forward_to_aws(frame: TunnelRequestFrame) -> TunnelResponseFrame {
     // back to extracting it from the URL host (`<svc>.<region>.amazonaws.com`).
     let resolved_region = aws_config.region().map(|r| r.as_ref().to_string());
     let (service, signing_region) =
-        extract_aws_service_and_region(&url, resolved_region.as_deref().unwrap_or("us-east-1"));
+        alien_debug_session::extract_aws_service_and_region(
+            url.host_str().unwrap_or(""),
+            resolved_region.as_deref().unwrap_or("us-east-1"),
+        );
 
     // SigV4 is exquisitely sensitive to any header that's in the SignedHeaders
     // list but whose value differs on the wire vs. what we hashed. To remove
@@ -483,50 +480,6 @@ fn aws_sigv4_sign(
         headers.insert(n, v);
     }
     Ok(())
-}
-
-/// Derive `(service, region)` from an AWS endpoint URL host.
-fn extract_aws_service_and_region(url: &reqwest::Url, fallback_region: &str) -> (&'static str, String) {
-    let host = url.host_str().unwrap_or("");
-    let labels: Vec<&str> = host.split('.').collect();
-    let amz_idx = labels.iter().rposition(|l| *l == "amazonaws");
-    let Some(amz_idx) = amz_idx else {
-        return ("execute-api", fallback_region.to_string());
-    };
-    let pre_amz: Vec<&str> = labels[..amz_idx].iter().copied().collect();
-    let (service, region) = match pre_amz.as_slice() {
-        [_bucket_or_subdomain @ .., service, region]
-            if region.contains('-') && service.len() <= 8 =>
-        {
-            (*service, region.to_string())
-        }
-        [_subdomain @ .., service] => (*service, fallback_region.to_string()),
-        _ => ("execute-api", fallback_region.to_string()),
-    };
-    let static_service: &'static str = match service {
-        "sts" => "sts",
-        "iam" => "iam",
-        "ec2" => "ec2",
-        "lambda" => "lambda",
-        "s3" => "s3",
-        "dynamodb" => "dynamodb",
-        "sqs" => "sqs",
-        "sns" => "sns",
-        "ecr" => "ecr",
-        "eks" => "eks",
-        "ecs" => "ecs",
-        "cloudformation" => "cloudformation",
-        "cloudwatch" => "monitoring",
-        "logs" => "logs",
-        "ssm" => "ssm",
-        "secretsmanager" => "secretsmanager",
-        "kms" => "kms",
-        "events" | "eventbridge" => "events",
-        "apigateway" => "apigateway",
-        "execute-api" => "execute-api",
-        _ => "execute-api",
-    };
-    (static_service, region)
 }
 
 /// Forward a cloud-API request frame to a GCP endpoint, signed with the
@@ -694,7 +647,7 @@ async fn send_cloud_request(
     headers: reqwest::header::HeaderMap,
     body: Vec<u8>,
 ) -> TunnelResponseFrame {
-    let resp = match reqwest::Client::new()
+    let resp = match cloud_outbound_client()
         .request(method, url)
         .headers(headers)
         .body(body)
@@ -739,7 +692,7 @@ async fn exchange_gcp_sts(projected_jwt: &str, audience: &str) -> Result<String,
         ("subject_token_type", "urn:ietf:params:oauth:token-type:jwt"),
         ("subject_token", projected_jwt),
     ];
-    let resp = reqwest::Client::new()
+    let resp = cloud_outbound_client()
         .post("https://sts.googleapis.com/v1/token")
         .form(&form)
         .send()
@@ -777,7 +730,7 @@ async fn exchange_azure_aad(
         ("grant_type", "client_credentials"),
     ];
     let url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
-    let resp = reqwest::Client::new()
+    let resp = cloud_outbound_client()
         .post(&url)
         .form(&form)
         .send()
@@ -907,11 +860,32 @@ fn build_manager_http_client() -> Result<reqwest::Client, String> {
 /// `Accept-Encoding` defaults so the request that hits the wire has the
 /// exact header set we signed — nothing more, nothing less.
 fn build_aws_outbound_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .http1_only()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+    static AWS_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    AWS_CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .http1_only()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
+}
+
+/// Shared HTTP client for the generic (non-SigV4) cloud-forward path used by
+/// GCP / Azure, plus the WI / AAD token-exchange calls. Reusing a single
+/// `reqwest::Client` across requests preserves the connection pool — without
+/// this each forwarded frame would pay TLS-handshake latency.
+fn cloud_outbound_client() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
 }
 
 fn build_apiserver_client() -> Result<reqwest::Client, String> {
@@ -930,15 +904,6 @@ fn load_sa_token() -> Result<String, String> {
     let raw = std::fs::read_to_string(SA_TOKEN_PATH)
         .map_err(|e| format!("read SA token at {SA_TOKEN_PATH}: {e}"))?;
     Ok(raw.trim().to_string())
-}
-
-/// Read the pod's projected namespace (kept for future use when the agent
-/// wants to surface the default-namespace hint back to the manager).
-#[allow(dead_code)]
-fn pod_namespace() -> Option<String> {
-    std::fs::read_to_string(SA_NAMESPACE_PATH)
-        .ok()
-        .map(|s| s.trim().to_string())
 }
 
 fn http_to_ws_url(url: &str) -> Result<String, String> {
@@ -966,14 +931,3 @@ fn urlencoding(input: &str) -> String {
         .collect()
 }
 
-// Silence unused-path warnings on platforms where this isn't conditionally
-// compiled — the loop is platform-agnostic but `pod_namespace` is currently
-// only reachable through a future hook.
-#[allow(dead_code)]
-fn _absolute_paths_marker() -> (&'static StdPath, &'static StdPath, &'static StdPath) {
-    (
-        StdPath::new(SA_TOKEN_PATH),
-        StdPath::new(SA_CA_PATH),
-        StdPath::new(SA_NAMESPACE_PATH),
-    )
-}
