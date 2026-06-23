@@ -475,6 +475,85 @@ const GCP_GCLOUD_SERVICES: &[&str] = &[
     "serviceusage",
 ];
 
+/// Isolate gcloud from the user's local login state so the request identity
+/// is *only* whatever the manager re-signs with.
+///
+/// Without this, gcloud reads `~/.config/gcloud/credentials.db` and attaches
+/// the user's personal OAuth token; the manager strips the Authorization
+/// header server-side, but gcloud may still pick up `core/account` and
+/// `core/project` from local config and embed them in URL paths. The cleanest
+/// fix is to point `CLOUDSDK_CONFIG` at an empty per-session dir and seed it
+/// with a stub `active_config` whose only account is a clearly-fake address.
+///
+/// Returns the env vars to inject into the child process. The caller must
+/// keep `config_dir` alive for the child's lifetime.
+pub fn build_gcp_isolation_env(
+    config_dir: &std::path::Path,
+    project_id: Option<&str>,
+) -> Result<BTreeMap<String, String>> {
+    use std::fs;
+
+    let configurations = config_dir.join("configurations");
+    fs::create_dir_all(&configurations)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create gcloud isolation config dir".to_string(),
+            url: None,
+        })?;
+
+    // gcloud requires *some* account field, but the manager re-signs every
+    // request so this value is never used to mint a token. Use the IETF
+    // reserved `example.invalid` TLD (RFC 2606) so it can never collide with
+    // a real address.
+    let mut config_default = String::from(
+        "[core]\naccount = unused@example.invalid\ndisable_usage_reporting = true\n",
+    );
+    if let Some(project) = project_id {
+        config_default.push_str(&format!("project = {project}\n"));
+    }
+    fs::write(configurations.join("config_default"), config_default)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to write gcloud isolation config_default".to_string(),
+            url: None,
+        })?;
+    fs::write(config_dir.join("active_config"), "default")
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to write gcloud isolation active_config".to_string(),
+            url: None,
+        })?;
+
+    // Seed a placeholder access token. gcloud's client-side credential check
+    // refuses to send a request when the active account has no usable creds;
+    // we don't actually need this token to be valid because the manager
+    // strips and replaces Authorization with the impersonated bearer.
+    let access_token_path = config_dir.join("placeholder_access_token");
+    fs::write(&access_token_path, "alien-debug-placeholder-token")
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to write gcloud isolation access token".to_string(),
+            url: None,
+        })?;
+
+    let mut env = BTreeMap::new();
+    env.insert(
+        "CLOUDSDK_CONFIG".to_string(),
+        config_dir.display().to_string(),
+    );
+    env.insert(
+        "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE".to_string(),
+        access_token_path.display().to_string(),
+    );
+    // Force ADC off — gcloud / google SDKs will not look for
+    // `application_default_credentials.json` when this points at /dev/null.
+    env.insert(
+        "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+        "/dev/null".to_string(),
+    );
+    Ok(env)
+}
+
 /// Build the env vars that route `gcloud` (and Google Cloud SDKs) through a
 /// loopback at `endpoint_url`. Shared between pull-mode (in-cluster WI) and
 /// push-mode (manager-side impersonated creds) because the env-var contract

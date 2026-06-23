@@ -303,6 +303,10 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                     crate::commands::debug_tunnel::spawn_pull_gcp_loopback(&url, &tok)
                         .await?;
                 env.append(&mut e);
+                let gcloud_cfg = cred_dir.path().join("gcloud-config");
+                let mut isolation =
+                    crate::commands::debug_tunnel::build_gcp_isolation_env(&gcloud_cfg, None)?;
+                env.append(&mut isolation);
                 cloud_guards.push(g);
             }
             if let (Some(url), Some(tok)) = (pull.azure_endpoint_url, token.clone()) {
@@ -342,8 +346,17 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             // to point at loopback. Bytes the child process sends flow
             // through the WebSocket; the manager re-signs with the
             // impersonated identity and proxies to the real cloud endpoint.
-            let (env, guard) =
+            let (mut env, guard) =
                 crate::commands::debug_tunnel::spawn_push_tunnel(&tunnel).await?;
+            if tunnel.provider == "gcp" {
+                // Isolate gcloud from the user's local login state — the
+                // manager owns the identity; gcloud must not attach a
+                // personal OAuth token or default to a local project.
+                let gcloud_cfg = cred_dir.path().join("gcloud-config");
+                let mut isolation =
+                    crate::commands::debug_tunnel::build_gcp_isolation_env(&gcloud_cfg, None)?;
+                env.append(&mut isolation);
+            }
             (env, None, Some(guard))
         }
     };
