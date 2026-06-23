@@ -447,18 +447,53 @@ pub async fn spawn_pull_gcp_loopback(
 ) -> Result<(BTreeMap<String, String>, PushTunnelGuard)> {
     let (endpoint_url, guard) =
         spawn_generic_cloud_loopback(gcp_proxy_base, client_token, "googleapis.com").await?;
+    Ok((build_gcp_loopback_env(&endpoint_url), guard))
+}
+
+/// gcloud service identifiers exposed via per-service endpoint-override env
+/// vars. Pulled from the gcloud component manifest for services a debugger
+/// is likely to touch — extend as needed.
+const GCP_GCLOUD_SERVICES: &[&str] = &[
+    "run",
+    "secretmanager",
+    "iam",
+    "iamcredentials",
+    "cloudresourcemanager",
+    "compute",
+    "container",
+    "storage",
+    "pubsub",
+    "logging",
+    "monitoring",
+    "artifactregistry",
+    "cloudbuild",
+    "serviceusage",
+];
+
+/// Build the env vars that route `gcloud` (and Google Cloud SDKs) through a
+/// loopback at `endpoint_url`. Shared between pull-mode (in-cluster WI) and
+/// push-mode (manager-side impersonated creds) because the env-var contract
+/// is identical from gcloud's perspective.
+///
+/// Sets `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` per-service with a
+/// `/<service>/` path prefix so the loopback can reconstruct the real
+/// `<service>.googleapis.com` host before forwarding. Deliberately does NOT
+/// touch `CLOUDSDK_CORE_UNIVERSE_DOMAIN` — the user's local gcloud account is
+/// bound to `googleapis.com` and gcloud refuses cross-universe mismatches.
+fn build_gcp_loopback_env(endpoint_url: &str) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    // gcloud / gsutil don't honor a single global env knob for endpoint;
-    // these two cover the common per-service paths (compute, storage, etc.).
-    env.insert("GOOGLE_CLOUD_API_ENDPOINT".to_string(), endpoint_url.clone());
-    env.insert(
-        "CLOUDSDK_CORE_UNIVERSE_DOMAIN".to_string(),
-        endpoint_url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .to_string(),
-    );
-    Ok((env, guard))
+    env.insert("GOOGLE_CLOUD_API_ENDPOINT".to_string(), endpoint_url.to_string());
+    let trimmed = endpoint_url.trim_end_matches('/');
+    for svc in GCP_GCLOUD_SERVICES {
+        env.insert(
+            format!(
+                "CLOUDSDK_API_ENDPOINT_OVERRIDES_{}",
+                svc.to_ascii_uppercase().replace('-', "_")
+            ),
+            format!("{}/{}/", trimmed, svc),
+        );
+    }
+    env
 }
 
 /// Pull-mode Azure loopback. Same pattern. Engineer's `az` / Azure SDK
@@ -500,14 +535,35 @@ async fn spawn_generic_cloud_loopback(
             Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response(),
         };
 
-        // Recover the intended host. We honor `X-Alien-Target-Host` if the
-        // cloud SDK or a user-set header carries it; otherwise default.
-        let host = parts
+        // Recover the intended host. Resolution order:
+        //
+        // 1. Explicit `X-Alien-Target-Host` header (raw curl tests / SDKs
+        //    that set it).
+        // 2. `/<service>/...` path prefix, when the user's `gcloud` (or
+        //    googleapis SDK) was configured by the CLI loopback to route
+        //    a specific service through us. The first path segment is the
+        //    service id, which we map to `<service>.googleapis.com`.
+        // 3. The provider's default host (e.g. `googleapis.com` for GCP) —
+        //    works for sub-domain-prefixed APIs that aren't service-routed.
+        let raw_path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+        let (host, path_and_query) = if let Some(h) = parts
             .headers
             .get("x-alien-target-host")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or(state.default_host);
-        let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+        {
+            (h.to_string(), raw_path_and_query.to_string())
+        } else if let Some((service, rest)) = split_service_from_path(raw_path_and_query) {
+            (
+                format!("{service}.googleapis.com"),
+                if rest.is_empty() {
+                    "/".to_string()
+                } else {
+                    rest
+                },
+            )
+        } else {
+            (state.default_host.to_string(), raw_path_and_query.to_string())
+        };
         let target_url = format!("https://{host}{path_and_query}");
 
         let url = format!("{}/passthrough", state.proxy_base.trim_end_matches('/'));
@@ -617,18 +673,7 @@ fn build_provider_env(provider: &str, endpoint_url: &str) -> BTreeMap<String, St
             // region from the URL host anyway.
         }
         "gcp" => {
-            // gcloud honors `CLOUDSDK_API_ENDPOINT_OVERRIDES_*` per-service,
-            // not a single global. For Phase 2 we set the universe-domain
-            // override which catches the common service set; users who need
-            // per-service granularity can set additional vars themselves.
-            env.insert(
-                "CLOUDSDK_CORE_UNIVERSE_DOMAIN".to_string(),
-                strip_scheme(endpoint_url),
-            );
-            env.insert(
-                "GOOGLE_CLOUD_API_ENDPOINT".to_string(),
-                endpoint_url.to_string(),
-            );
+            env.extend(build_gcp_loopback_env(endpoint_url));
         }
         "azure" => {
             // `az` CLI honors `AZURE_RESOURCE_MANAGER_ENDPOINT` for ARM and
@@ -643,13 +688,6 @@ fn build_provider_env(provider: &str, endpoint_url: &str) -> BTreeMap<String, St
         _ => {}
     }
     env
-}
-
-/// Strip `http://` / `https://` for env vars that expect a bare host.
-fn strip_scheme(url: &str) -> String {
-    url.trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .to_string()
 }
 
 /// axum handler — every HTTP request from the child cloud-CLI flows through
@@ -779,6 +817,25 @@ fn aws_endpoint_host(service: &str, region: &str) -> String {
         // we prefer regional so the SigV4 signature's region matches.
         _ => format!("{service}.{region}.amazonaws.com"),
     }
+}
+
+/// If the request's path starts with `/<service>/...` where `<service>` is one
+/// of the gcloud service identifiers we configured via
+/// `CLOUDSDK_API_ENDPOINT_OVERRIDES_*`, returns `(service, remaining_path)` so
+/// the loopback can route to `<service>.googleapis.com`. Returns `None`
+/// otherwise — the caller falls back to the provider's default host.
+fn split_service_from_path(path_and_query: &str) -> Option<(&'static str, String)> {
+    // `path_and_query` starts with `/`. Strip leading slash, take up to the
+    // next slash (or end), match against our service allowlist.
+    let trimmed = path_and_query.strip_prefix('/')?;
+    let (first, rest) = trimmed
+        .split_once('/')
+        .map(|(s, r)| (s, format!("/{r}")))
+        .unwrap_or((trimmed, "/".to_string()));
+    GCP_GCLOUD_SERVICES
+        .iter()
+        .find(|s| **s == first)
+        .map(|s| (*s, rest))
 }
 
 fn http_to_ws_url(url: &str) -> std::result::Result<String, String> {

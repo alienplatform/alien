@@ -288,26 +288,26 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             // in-cluster cloud identity. Loopback guards live for the
             // child's run.
             let token = pull.cloud_proxy_token.clone();
-            let mut cloud_guards: Vec<crate::commands::debug_push_tunnel::PushTunnelGuard> =
+            let mut cloud_guards: Vec<crate::commands::debug_tunnel::PushTunnelGuard> =
                 Vec::new();
 
             if let (Some(url), Some(tok)) = (pull.aws_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_push_tunnel::spawn_pull_aws_loopback(&url, &tok)
+                    crate::commands::debug_tunnel::spawn_pull_aws_loopback(&url, &tok)
                         .await?;
                 env.append(&mut e);
                 cloud_guards.push(g);
             }
             if let (Some(url), Some(tok)) = (pull.gcp_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_push_tunnel::spawn_pull_gcp_loopback(&url, &tok)
+                    crate::commands::debug_tunnel::spawn_pull_gcp_loopback(&url, &tok)
                         .await?;
                 env.append(&mut e);
                 cloud_guards.push(g);
             }
             if let (Some(url), Some(tok)) = (pull.azure_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_push_tunnel::spawn_pull_azure_loopback(&url, &tok)
+                    crate::commands::debug_tunnel::spawn_pull_azure_loopback(&url, &tok)
                         .await?;
                 env.append(&mut e);
                 cloud_guards.push(g);
@@ -319,7 +319,7 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                 if cloud_guards.is_empty() {
                     None
                 } else {
-                    Some(crate::commands::debug_push_tunnel::PushTunnelGuard::merge(
+                    Some(crate::commands::debug_tunnel::PushTunnelGuard::merge(
                         cloud_guards,
                     ))
                 },
@@ -343,7 +343,7 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             // through the WebSocket; the manager re-signs with the
             // impersonated identity and proxies to the real cloud endpoint.
             let (env, guard) =
-                crate::commands::debug_push_tunnel::spawn_push_tunnel(&tunnel).await?;
+                crate::commands::debug_tunnel::spawn_push_tunnel(&tunnel).await?;
             (env, None, Some(guard))
         }
     };
