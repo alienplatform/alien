@@ -160,7 +160,7 @@ mod tests {
 
     fn release_info(id: &str) -> ReleaseInfo {
         ReleaseInfo {
-            release_id: id.to_string(),
+            release_id: Some(id.to_string()),
             version: None,
             description: None,
             stack: empty_stack(),

@@ -7,9 +7,8 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     HeartbeatBackend, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, LocalWorkerHeartbeatData,
     ObservedHealth, Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker, WorkerCode,
-    WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
+    ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker,
+    WorkerCode, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;

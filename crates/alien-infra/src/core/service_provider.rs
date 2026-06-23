@@ -51,9 +51,9 @@ use alien_azure_clients::{
 use alien_error::Context;
 use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
+    cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
-    cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
     container::{ContainerApi as GkeContainerApi, ContainerClient as GkeContainerClient},
@@ -574,7 +574,10 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
             })?;
-        Ok(Arc::new(RdsClient::new(reqwest::Client::new(), credentials)))
+        Ok(Arc::new(RdsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
     }
 
     async fn get_aws_autoscaling_client(

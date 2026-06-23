@@ -289,12 +289,12 @@ pub(super) fn rewrite_localhost_urls_for_container(
 
                     if needs_rewrite {
                         local.host = BindingValue::value("host.docker.internal".to_string());
-                        let new_json = serde_json::to_string(&binding)
-                            .into_alien_error()
-                            .context(ErrorData::ResourceControllerConfigError {
+                        let new_json = serde_json::to_string(&binding).into_alien_error().context(
+                            ErrorData::ResourceControllerConfigError {
                                 resource_id: binding_key.clone(),
                                 message: "Failed to serialize Postgres binding".to_string(),
-                            })?;
+                            },
+                        )?;
 
                         debug!(
                             resource = %binding_key,
@@ -336,8 +336,14 @@ mod tests {
 
         // Pre-rewrite: the full binding carries host 127.0.0.1 and the inline password.
         let before = env.get(&key).expect("binding env var present");
-        assert!(before.contains("127.0.0.1"), "host should start as 127.0.0.1");
-        assert!(before.contains("s3cr3t-pw"), "password must be present before the rewrite");
+        assert!(
+            before.contains("127.0.0.1"),
+            "host should start as 127.0.0.1"
+        );
+        assert!(
+            before.contains("s3cr3t-pw"),
+            "password must be present before the rewrite"
+        );
 
         rewrite_localhost_urls_for_container(&mut env).expect("rewrite should succeed");
 
@@ -349,7 +355,10 @@ mod tests {
         let BindingValue::Value(host) = &local.host else {
             panic!("host is a concrete value")
         };
-        assert_eq!(host, "host.docker.internal", "host rewritten to container-reachable address");
+        assert_eq!(
+            host, "host.docker.internal",
+            "host rewritten to container-reachable address"
+        );
         assert_eq!(local.password, "s3cr3t-pw", "password survives the rewrite");
         let BindingValue::Value(port) = &local.port else {
             panic!("port is a concrete value")

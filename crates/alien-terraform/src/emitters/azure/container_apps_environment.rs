@@ -94,7 +94,10 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
         // consumption environment on the /24 private subnet, proven to reach a private server.
         if let Some(infrastructure_subnet_id) = infrastructure_subnet_id(ctx) {
             env_body.push(attr("infrastructure_subnet_id", infrastructure_subnet_id));
-            env_body.push(attr("internal_load_balancer_enabled", Expression::Bool(false)));
+            env_body.push(attr(
+                "internal_load_balancer_enabled",
+                Expression::Bool(false),
+            ));
         }
 
         env_body.push(attr("tags", tags(ctx, "container-apps-environment")));

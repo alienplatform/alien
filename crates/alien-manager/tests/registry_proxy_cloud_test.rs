@@ -439,7 +439,7 @@ impl CloudProxyTest {
             status: DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(ReleaseInfo {
-                release_id: release.id.clone(),
+                release_id: Some(release.id.clone()),
                 version: None,
                 description: None,
                 stack,
@@ -463,6 +463,8 @@ impl CloudProxyTest {
                     heartbeats: vec![],
                     observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await

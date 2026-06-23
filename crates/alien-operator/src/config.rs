@@ -78,6 +78,21 @@ pub struct OperatorConfig {
     /// Kubernetes namespace (Kubernetes platform only)
     pub namespace: Option<String>,
 
+    /// Kubernetes label selector narrowing what the observe pass reports (e.g.
+    /// `app.kubernetes.io/part-of=my-app`), applied within whichever scope is in
+    /// effect. `None` reports everything in scope.
+    pub label_selector: Option<String>,
+
+    /// Cluster scope: observe every namespace instead of only `namespace`. Set
+    /// from the `OPERATOR_OBSERVE_ALL_NAMESPACES` env in the rendered manifest.
+    #[builder(default)]
+    pub observe_all_namespaces: bool,
+
+    /// Vendor-provided app/release version this environment is running. Reported as
+    /// a version-only `current_release` so the platform resolves a stackless release
+    /// (observe). `None` for greenfield, where the deploy loop sets the release id.
+    pub app_version: Option<String>,
+
     /// DNS-style domain used for branded Kubernetes resource labels.
     pub label_domain: Option<String>,
 

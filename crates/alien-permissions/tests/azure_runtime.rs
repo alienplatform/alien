@@ -214,7 +214,8 @@ fn test_azure_role_definition_rejects_empty_azure_list() {
     permission_set.platforms.azure = Some(Vec::new());
     let context = create_test_context();
 
-    let result = generator.generate_role_definition(&permission_set, BindingTarget::Stack, &context);
+    let result =
+        generator.generate_role_definition(&permission_set, BindingTarget::Stack, &context);
 
     let err = result.expect_err("an empty azure list has no custom role to generate");
     assert!(

@@ -10,8 +10,7 @@ use alien_core::{
     Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
     LocalDaemonHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
     Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs,
-    ResourceStatus, WorkloadHeartbeatStatus,
+    ResourceOutputs, ResourceStatus, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;

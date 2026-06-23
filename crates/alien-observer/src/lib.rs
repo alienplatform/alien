@@ -86,6 +86,8 @@ pub(crate) fn observed_resource_sample(
         JsonValue::String(backend_name(input.backend).to_string()),
     );
 
+    let version = observed_version_from_labels(&input.labels);
+
     ObservedResourceSample {
         deployment_id: Some(input.deployment_id),
         raw_identity: input.raw_identity,
@@ -95,6 +97,7 @@ pub(crate) fn observed_resource_sample(
         region: input.region,
         scope: input.scope,
         resource_type_hint: input.resource_type_hint,
+        version,
         alien_resource_id: input.alien_resource_id,
         health: status
             .get("health")
@@ -128,6 +131,22 @@ pub(crate) fn observed_resource_sample(
         attributes,
         raw: input.raw,
     }
+}
+
+fn observed_version_from_labels(labels: &BTreeMap<String, String>) -> Option<String> {
+    labels
+        .iter()
+        .find_map(|(key, value)| {
+            if key.ends_with(".dev/version") {
+                Some(value.trim())
+            } else {
+                None
+            }
+        })
+        .or_else(|| labels.get("app.kubernetes.io/version").map(String::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn counts_from_status_data(value: &JsonValue) -> Option<ObservedCounts> {

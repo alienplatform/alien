@@ -1271,7 +1271,7 @@ data:
         Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
         Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
         Path_Key          filename
-        Parser            cri
+        multiline.parser  docker, cri
         Tag               kube.*
         DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
         Mem_Buf_Limit     64MB
@@ -1358,6 +1358,9 @@ spec:
             - name: varlog
               mountPath: /var/log
               readOnly: true
+            - name: dockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
             - name: buffers
               mountPath: /buffers
           resources:
@@ -1370,6 +1373,13 @@ spec:
           hostPath:
             path: /var/log
             type: Directory
+        # Docker-runtime clusters symlink pod logs to /var/lib/docker/containers;
+        # mount it so fluent-bit can follow them. DirectoryOrCreate is harmless on
+        # containerd nodes where the path doesn't exist.
+        - name: dockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
         - name: buffers
           emptyDir: {}
 {{- end }}

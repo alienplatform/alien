@@ -5,6 +5,11 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$Outbound,
+  OperatorCapabilityReport$outboundSchema,
+} from "./operatorcapabilityreport.js";
 
 export const SyncReconcileRequestCurrentReleaseTypeStringList = {
   StringList: "stringList",
@@ -11627,6 +11632,10 @@ export type ObservedInventoryBatchResource = {
   region?: string | null | undefined;
   resourceTypeHint?: string | any | null | undefined;
   scope?: string | null | undefined;
+  /**
+   * Release/version identity observed from the provider resource, when available.
+   */
+  version?: string | null | undefined;
 };
 
 export type ObservedInventoryBatch = {
@@ -11696,6 +11705,14 @@ export type SyncReconcileRequest = {
    * Observed raw-resource inventory batches read during this step.
    */
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  /**
+   * Operator-reported runtime capabilities.
+   */
+  capabilities?: Array<OperatorCapabilityReport> | undefined;
+  /**
+   * Operator binary version reported by the runtime.
+   */
+  operatorVersion?: string | undefined;
 };
 
 /** @internal */
@@ -34680,6 +34697,7 @@ export type ObservedInventoryBatchResource$Outbound = {
   region?: string | null | undefined;
   resourceTypeHint?: string | any | null | undefined;
   scope?: string | null | undefined;
+  version?: string | null | undefined;
 };
 
 /** @internal */
@@ -34709,6 +34727,7 @@ export const ObservedInventoryBatchResource$outboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   resourceTypeHint: z.nullable(z.union([z.string(), z.any()])).optional(),
   scope: z.nullable(z.string()).optional(),
+  version: z.nullable(z.string()).optional(),
 });
 
 export function observedInventoryBatchResourceToJSON(
@@ -34765,6 +34784,8 @@ export type SyncReconcileRequest$Outbound = {
   suggestedDelayMs?: number | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
+  operatorVersion?: string | undefined;
 };
 
 /** @internal */
@@ -34782,6 +34803,8 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   observedInventoryBatches: z.array(
     z.lazy(() => ObservedInventoryBatch$outboundSchema),
   ).optional(),
+  capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
+  operatorVersion: z.string().optional(),
 });
 
 export function syncReconcileRequestToJSON(

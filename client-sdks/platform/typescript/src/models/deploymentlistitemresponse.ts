@@ -19,6 +19,10 @@ import {
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
 
 /**
  * Deployment status in the deployment lifecycle.
@@ -409,6 +413,14 @@ export type DeploymentListItemResponse = {
    */
   operatorPermission?: string | null | undefined;
   /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
+  /**
    * Timestamp of the last received heartbeat
    */
   lastHeartbeatAt?: Date | null | undefined;
@@ -700,6 +712,9 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   setupFingerprintVersion: z.nullable(z.int()).optional(),
   operatorScope: z.nullable(z.string()).optional(),
   operatorPermission: z.nullable(z.string()).optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
+  capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+    .optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

@@ -25,8 +25,7 @@ async function run() {
     workspace: "my-workspace",
     renderOperatorManifestRequest: {
       project: "my-project",
-      name: "my-app",
-      namespace: "<value>",
+      environmentName: "my-app",
       deploymentGroupToken: "<value>",
     },
   });
@@ -56,8 +55,7 @@ async function run() {
     workspace: "my-workspace",
     renderOperatorManifestRequest: {
       project: "my-project",
-      name: "my-app",
-      namespace: "<value>",
+      environmentName: "my-app",
       deploymentGroupToken: "<value>",
     },
   });

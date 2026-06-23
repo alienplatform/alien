@@ -148,12 +148,15 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
         Some(r) => r,
         None => return Ok(0),
     };
+    // A pushed target always carries an Alien release id (observe deployments never
+    // receive a target), so an empty fallback is unreachable in practice.
+    let target_release_id = target_release.release_id.as_deref().unwrap_or_default();
 
     // Check deployment approval status if required
     if state.config.requires_deployment_approval() {
         match state
             .db
-            .get_approval_status_for_release(&target_release.release_id)
+            .get_approval_status_for_release(target_release_id)
             .await?
         {
             Some(crate::db::ApprovalStatus::Pending) => {
@@ -176,7 +179,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
     }
 
     debug!(
-        release_id = %target_release.release_id,
+        release_id = %target_release_id,
         "Found target release to deploy"
     );
 
@@ -305,6 +308,10 @@ async fn enrich_config(
     if config.deployment_name.is_none() {
         config.deployment_name = operator_config.agent_name.clone();
     }
+    if config.observe_label_selector.is_none() {
+        config.observe_label_selector = operator_config.label_selector.clone();
+    }
+    config.observe_all_namespaces = operator_config.observe_all_namespaces;
 
     // Inject commands polling env vars only for K8s/Local containers.
     // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands

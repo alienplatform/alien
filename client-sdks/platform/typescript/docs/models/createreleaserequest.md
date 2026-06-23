@@ -6,7 +6,6 @@
 import { CreateReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: CreateReleaseRequest = {
-  project: "<value>",
   gitMetadata: {
     commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
     commitMessage:
@@ -20,6 +19,7 @@ let value: CreateReleaseRequest = {
     commitAuthorLogin: "johndoe",
     commitAuthorAvatarUrl: "https://github.com/johndoe.png",
   },
+  project: "<value>",
 };
 ```
 
@@ -27,7 +27,8 @@ let value: CreateReleaseRequest = {
 
 | Field                                                  | Type                                                   | Required                                               | Description                                            |
 | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
-| `project`                                              | *string*                                               | :heavy_check_mark:                                     | Project ID or name                                     |
+| `version`                                              | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |
 | `gitMetadata`                                          | [models.GitMetadata](../models/gitmetadata.md)         | :heavy_minus_sign:                                     | N/A                                                    |
 | `stack`                                                | [models.StackByPlatform](../models/stackbyplatform.md) | :heavy_minus_sign:                                     | N/A                                                    |
 | `rootDirectory`                                        | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |
+| `project`                                              | *string*                                               | :heavy_check_mark:                                     | Project ID or name                                     |

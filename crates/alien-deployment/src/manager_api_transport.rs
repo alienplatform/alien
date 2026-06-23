@@ -8,9 +8,7 @@
 //! | alien-cli        | `resolve_manager()` (discovers URL via platform)   |
 //! | alien-terraform  | `manager_url` from SyncAcquire response            |
 
-use alien_core::{
-    DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat,
-};
+use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;

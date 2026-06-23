@@ -59,6 +59,19 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SCOPE")]
     pub operator_scope: Option<String>,
 
+    #[arg(long, env = "OPERATOR_LABEL_SELECTOR")]
+    pub operator_label_selector: Option<String>,
+
+    /// Observe every namespace in the cluster (cluster scope) instead of only the
+    /// operator's own namespace.
+    #[arg(long, env = "OPERATOR_OBSERVE_ALL_NAMESPACES")]
+    pub operator_observe_all_namespaces: bool,
+
+    /// Vendor-provided app/release version this environment runs (observe). Reported
+    /// as a version-only current_release so the platform resolves a stackless release.
+    #[arg(long, env = "OPERATOR_RELEASE_VERSION")]
+    pub operator_release_version: Option<String>,
+
     #[arg(long, env = "OPERATOR_PERMISSION")]
     pub operator_permission: Option<String>,
 
@@ -362,6 +375,9 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
+        .maybe_label_selector(args.operator_label_selector)
+        .observe_all_namespaces(args.operator_observe_all_namespaces)
+        .maybe_app_version(args.operator_release_version)
         .maybe_label_domain(
             embedded_config
                 .as_ref()

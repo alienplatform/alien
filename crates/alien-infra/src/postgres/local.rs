@@ -61,26 +61,24 @@ impl LocalPostgresController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let binding =
-            manager
-                .get_binding(&config.id)
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to read binding for local Postgres '{}'", config.id),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let binding = manager
+            .get_binding(&config.id)
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read binding for local Postgres '{}'", config.id),
+                resource_id: Some(config.id.clone()),
+            })?;
         self.port = match &binding {
-            PostgresBinding::Local(b) => Some(
-                b.port
-                    .clone()
-                    .into_value(&config.id, "port")
-                    .context(ErrorData::ResourceConfigInvalid {
+            PostgresBinding::Local(b) => {
+                Some(b.port.clone().into_value(&config.id, "port").context(
+                    ErrorData::ResourceConfigInvalid {
                         message: format!(
                             "local Postgres '{}' port is not a concrete binding value",
                             config.id
                         ),
                         resource_id: Some(config.id.clone()),
-                    })?,
-            ),
+                    },
+                )?)
+            }
             _ => None,
         };
         self.database = Some(config.id.clone());
@@ -346,7 +344,9 @@ mod tests {
     use super::{LocalPostgresController, LocalPostgresState};
 
     fn local_postgres(version: &str) -> Postgres {
-        Postgres::new("db".to_string()).version(version.to_string()).build()
+        Postgres::new("db".to_string())
+            .version(version.to_string())
+            .build()
     }
 
     /// A Ready Local Postgres recorded at version 17 — the starting point for the day-2 update

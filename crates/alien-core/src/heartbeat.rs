@@ -64,6 +64,9 @@ pub struct ObservedResourceSample {
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_type_hint: Option<ResourceType>,
+    /// Release/version identity observed from the provider resource, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alien_resource_id: Option<String>,
     pub health: ObservedHealth,

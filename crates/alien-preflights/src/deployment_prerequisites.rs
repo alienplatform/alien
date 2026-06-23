@@ -392,6 +392,8 @@ mod tests {
             external_bindings: Default::default(),
             base_platform: None,
             label_domain: None,
+            observe_label_selector: None,
+            observe_all_namespaces: false,
             public_endpoints: None,
             domain_metadata: None,
             monitoring: None,

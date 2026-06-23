@@ -319,7 +319,7 @@ async fn setup() -> TestSetup {
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {
-                release_id: release.id.clone(),
+                release_id: Some(release.id.clone()),
                 version: None,
                 description: None,
                 stack: empty_stack("test-stack"),
@@ -343,6 +343,8 @@ async fn setup() -> TestSetup {
                     heartbeats: vec![],
                     observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await
@@ -792,7 +794,7 @@ async fn test_proxy_push_then_pull() {
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {
-                release_id: new_release.id.clone(),
+                release_id: Some(new_release.id.clone()),
                 version: None,
                 description: None,
                 stack: empty_stack("test-stack-proxy"),
@@ -816,6 +818,8 @@ async fn test_proxy_push_then_pull() {
                     heartbeats: vec![],
                     observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await

@@ -9,8 +9,10 @@
 
 use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
-use alien_core::sync::{SyncRequest, SyncResponse};
-use alien_core::{DeploymentStatus, ObservedInventoryBatch};
+use alien_core::{
+    sync::{OperatorCapabilityReport, OperatorCapabilityState, SyncRequest, SyncResponse},
+    DeploymentStatus, ObservedInventoryBatch, Platform,
+};
 use alien_deployment::run_observe_pass;
 use alien_error::{Context, IntoAlienError};
 use chrono::Utc;
@@ -108,7 +110,7 @@ async fn sync_with_manager(
     base_url: &str,
 ) -> crate::error::Result<bool> {
     // Get current deployment state from local database (or create default if not exists)
-    let deployment_state =
+    let mut deployment_state =
         state
             .db
             .get_deployment_state()
@@ -139,11 +141,35 @@ async fn sync_with_manager(
         observed_inventory_batches.extend(observe_running_deployment(state, &deployment_id).await?);
     }
 
+    // Observe deployments have no Alien-shipped release, so they report the app
+    // version as a version-only `current_release`; the platform resolves it to a
+    // stackless release and sets `currentReleaseId` — the same channel greenfield
+    // uses (where the deploy loop sets `current_release.release_id`). The version is
+    // the vendor-configured override if set, else the single version observed on the
+    // workloads (e.g. `app.kubernetes.io/version`), so it tracks upgrades.
+    if deployment_state.current_release.is_none() {
+        let app_version = state
+            .config
+            .app_version
+            .clone()
+            .or_else(|| single_observed_version(&observed_inventory_batches));
+        if let Some(version) = app_version {
+            deployment_state.current_release = Some(alien_core::ReleaseInfo {
+                release_id: None,
+                version: Some(version),
+                description: None,
+                stack: alien_core::Stack::new("observed".to_string()).build(),
+            });
+        }
+    }
+
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
         heartbeats,
         observed_inventory_batches,
+        capabilities: report_operator_capabilities(state),
+        operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
 
     // Call manager with deployment_id in request body.
@@ -262,10 +288,10 @@ async fn sync_with_manager(
             let current_release_id = deployment_state
                 .current_release
                 .as_ref()
-                .map(|release| release.release_id.clone());
+                .and_then(|release| release.release_id.clone());
             deployment_state.target_release = Some(target_deployment.release_info.clone());
             if deployment_state.status == alien_core::DeploymentStatus::Running
-                && current_release_id.as_deref() != Some(target_release_id.as_str())
+                && current_release_id != target_release_id
             {
                 deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
             }
@@ -293,7 +319,7 @@ async fn sync_with_manager(
                 state.db.create_approval(&approval).await?;
                 info!(
                     approval_id = %apr_id,
-                    release_id = %target_deployment.release_info.release_id,
+                    release_id = %target_deployment.release_info.release_id.as_deref().unwrap_or_default(),
                     "Created approval for new target release"
                 );
             }
@@ -324,6 +350,8 @@ async fn observe_running_deployment(
         &client_config,
         &service_provider,
         deployment_id,
+        state.config.label_selector.as_deref(),
+        state.config.observe_all_namespaces,
     )
     .await
     .map_err(|e| e.into_generic())
@@ -331,6 +359,74 @@ async fn observe_running_deployment(
         message: "Failed to run observe pass before sync".to_string(),
     })?;
     Ok(observe_report.inventory_batches)
+}
+
+/// Resolve a single app version from the observed inventory — the distinct,
+/// non-empty `version` read off the workloads (e.g. `app.kubernetes.io/version`).
+/// Returns it only when exactly one version is present; a multi-version environment
+/// reports none rather than guessing, so the deployment shows "no release" until a
+/// vendor pins one via `OPERATOR_RELEASE_VERSION` or `alien release`.
+fn single_observed_version(batches: &[ObservedInventoryBatch]) -> Option<String> {
+    let mut versions = std::collections::BTreeSet::new();
+    for batch in batches {
+        for sample in &batch.resources {
+            if let Some(version) = sample.version.as_deref() {
+                let version = version.trim();
+                if !version.is_empty() {
+                    versions.insert(version.to_string());
+                }
+            }
+        }
+    }
+    if versions.len() == 1 {
+        versions.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn report_operator_capabilities(state: &OperatorState) -> Vec<OperatorCapabilityReport> {
+    let mut capabilities = Vec::new();
+
+    let workload_state = if state.config.platform == Platform::Kubernetes {
+        OperatorCapabilityState::Granted
+    } else {
+        OperatorCapabilityState::Unavailable
+    };
+    capabilities.push(OperatorCapabilityReport {
+        key: "k8s-workloads".to_string(),
+        state: workload_state,
+        detail: state
+            .config
+            .namespace
+            .as_ref()
+            .map(|namespace| format!("namespace {namespace}")),
+    });
+
+    capabilities.push(OperatorCapabilityReport {
+        key: "cloud-observe".to_string(),
+        state: state
+            .config
+            .base_platform
+            .map(|_| OperatorCapabilityState::Granted)
+            .unwrap_or(OperatorCapabilityState::Unavailable),
+        detail: state
+            .config
+            .base_platform
+            .map(|platform| format!("base platform {platform:?}")),
+    });
+
+    capabilities.push(OperatorCapabilityReport {
+        key: "logs".to_string(),
+        state: if state.config.collector_token.is_some() {
+            OperatorCapabilityState::Granted
+        } else {
+            OperatorCapabilityState::Unavailable
+        },
+        detail: None,
+    });
+
+    capabilities
 }
 
 fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {

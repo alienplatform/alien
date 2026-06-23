@@ -55,8 +55,7 @@ const PGVECTOR_RELEASES_URL_ENV: &str = "ALIEN_PGVECTOR_RELEASES_URL";
 /// Default base URL for pgvector archives (Alien's release host). The installer requests
 /// `{base}/v{PGVECTOR_VERSION}/{os}-{arch}/pg{major}/{name}.zip` — a static per-(target × PG-major)
 /// object, so the path selects the build.
-const ALIEN_PGVECTOR_RELEASES_URL_DEFAULT: &str =
-    "https://releases.alien.dev/pgvector";
+const ALIEN_PGVECTOR_RELEASES_URL_DEFAULT: &str = "https://releases.alien.dev/pgvector";
 
 /// Registers the Alien-hosted pgvector repository exactly once for the whole process. The
 /// `postgresql_extensions` registry is a process-global singleton, so registering on every boot
@@ -203,11 +202,13 @@ impl LocalPostgresManager {
             Ok(()) => Ok(()),
             Err(error) => {
                 runtimes.insert(id.to_string(), postgres);
-                Err(error).into_alien_error().context(ErrorData::LocalProcessError {
-                    process_id: id.to_string(),
-                    operation: "stop".to_string(),
-                    reason: "Failed to stop local Postgres".to_string(),
-                })
+                Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::LocalProcessError {
+                        process_id: id.to_string(),
+                        operation: "stop".to_string(),
+                        reason: "Failed to stop local Postgres".to_string(),
+                    })
             }
         }
     }
@@ -414,11 +415,13 @@ impl LocalPostgresManager {
                 }));
             }
         }
-        let content = read.into_alien_error().context(ErrorData::LocalDirectoryError {
-            path: path.display().to_string(),
-            operation: "read".to_string(),
-            reason: "Failed to read Postgres metadata".to_string(),
-        })?;
+        let content = read
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: path.display().to_string(),
+                operation: "read".to_string(),
+                reason: "Failed to read Postgres metadata".to_string(),
+            })?;
         serde_json::from_str(&content)
             .into_alien_error()
             .context(ErrorData::LocalDirectoryError {
@@ -489,7 +492,9 @@ impl LocalPostgresManager {
             let metadata = match self.read_metadata(&id) {
                 Ok(metadata) => metadata,
                 // No metadata.json in this dir: nothing recoverable, skip quietly.
-                Err(error) if matches!(error.error, Some(ErrorData::ServiceResourceNotFound { .. })) => {
+                Err(error)
+                    if matches!(error.error, Some(ErrorData::ServiceResourceNotFound { .. })) =>
+                {
                     continue;
                 }
                 // Present but unreadable (permissions, corrupt JSON): a real DB would go dark
@@ -653,8 +658,11 @@ fn pgvector_target() -> postgresql_extensions::Result<(&'static str, &'static st
 fn register_pgvector_repository(resource_id: &str) -> Result<()> {
     REGISTER_PGVECTOR_REPOSITORY
         .get_or_init(|| {
-            registry::register(PGVECTOR_NAMESPACE, Box::new(|| Ok(Box::new(AlienPgvectorRepository))))
-                .map_err(|e| e.to_string())
+            registry::register(
+                PGVECTOR_NAMESPACE,
+                Box::new(|| Ok(Box::new(AlienPgvectorRepository))),
+            )
+            .map_err(|e| e.to_string())
         })
         .clone()
         .map_err(|reason| {
@@ -700,7 +708,10 @@ impl Repository for AlienPgvectorRepository {
         let (os, arch) = pgvector_target()?;
         // The embedded server reports a full version (e.g. "17.2.0"); the artifacts are
         // keyed by major, the only axis that changes pgvector's ABI.
-        let major = postgresql_version.split('.').next().unwrap_or(postgresql_version);
+        let major = postgresql_version
+            .split('.')
+            .next()
+            .unwrap_or(postgresql_version);
         let url = format!("{base}/v{PGVECTOR_VERSION}/{os}-{arch}/pg{major}/{name}.zip");
         let response = reqwest::get(&url)
             .await
@@ -815,8 +826,9 @@ async fn append_docker_bridge_hba_rule(data_dir: &Path, resource_id: &str) -> Re
     if existing.contains(DOCKER_BRIDGE_HBA_MARKER) {
         return Ok(());
     }
-    let updated =
-        format!("{existing}\n{DOCKER_BRIDGE_HBA_MARKER}\nhost all all 172.16.0.0/12 scram-sha-256\n");
+    let updated = format!(
+        "{existing}\n{DOCKER_BRIDGE_HBA_MARKER}\nhost all all 172.16.0.0/12 scram-sha-256\n"
+    );
     tokio::fs::write(&hba_path, updated)
         .await
         .into_alien_error()
@@ -836,14 +848,26 @@ mod tests {
     // outside 172.16.0.0/12, the range the pg_hba rule admits.
     #[test]
     fn docker_bridge_gateway_accepts_only_the_private_bridge_range() {
-        assert!(is_docker_bridge_gateway("172.17.0.1"), "default docker0 gateway");
+        assert!(
+            is_docker_bridge_gateway("172.17.0.1"),
+            "default docker0 gateway"
+        );
         assert!(is_docker_bridge_gateway("172.16.0.1"), "low end of /12");
-        assert!(is_docker_bridge_gateway("172.31.255.254"), "high end of /12");
+        assert!(
+            is_docker_bridge_gateway("172.31.255.254"),
+            "high end of /12"
+        );
 
         assert!(!is_docker_bridge_gateway("172.15.0.1"), "just below /12");
         assert!(!is_docker_bridge_gateway("172.32.0.1"), "just above /12");
-        assert!(!is_docker_bridge_gateway("10.0.0.1"), "private, but pg_hba would reject it");
-        assert!(!is_docker_bridge_gateway("192.168.0.1"), "private, but pg_hba would reject it");
+        assert!(
+            !is_docker_bridge_gateway("10.0.0.1"),
+            "private, but pg_hba would reject it"
+        );
+        assert!(
+            !is_docker_bridge_gateway("192.168.0.1"),
+            "private, but pg_hba would reject it"
+        );
         assert!(!is_docker_bridge_gateway("8.8.8.8"), "public");
         assert!(!is_docker_bridge_gateway("fd00::1"), "IPv6");
         assert!(!is_docker_bridge_gateway("not-an-ip"), "unparseable");
@@ -876,7 +900,10 @@ mod tests {
         )
         .expect("write metadata");
 
-        let binding = manager.try_get_binding(id).expect("ok").expect("some binding");
+        let binding = manager
+            .try_get_binding(id)
+            .expect("ok")
+            .expect("some binding");
         let env = alien_core::bindings::serialize_binding_as_env_var(id, &binding)
             .expect("serialize binding env");
         assert!(env.values().any(|v| v.contains("s3cr3t")));

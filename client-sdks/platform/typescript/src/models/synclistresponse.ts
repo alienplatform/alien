@@ -15,6 +15,10 @@ import {
   EnvironmentVariableConfig$inboundSchema,
 } from "./environmentvariableconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
 
 /**
  * Deployment status in the deployment lifecycle.
@@ -3371,6 +3375,14 @@ export type SyncListResponseDeployment = {
    * Display-only permission tier reported by the Operator manifest
    */
   operatorPermission?: string | null | undefined;
+  /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -7786,6 +7798,9 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   setupFingerprintVersion: z.nullable(z.int()).optional(),
   operatorScope: z.nullable(z.string()).optional(),
   operatorPermission: z.nullable(z.string()).optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
+  capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+    .optional(),
   retryRequested: z.boolean(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

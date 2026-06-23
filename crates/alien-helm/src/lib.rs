@@ -23,6 +23,6 @@ pub use emitter::{HelmEmitter, HelmFragment, InfrastructureValue, ServiceAccount
 pub use generator::{
     generate_helm_chart, generate_operator_manifest, render_manager_fetch_values, HelmChart,
     HelmOptions, ManagerFetchHelmValuesOptions, OperatorLogCollectorOptions,
-    OperatorManifestOptions, OperatorPermission, OperatorScope,
+    OperatorManifestOptions, OperatorOutputFormat, OperatorPermission, OperatorScope,
 };
 pub use registry::HelmRegistry;

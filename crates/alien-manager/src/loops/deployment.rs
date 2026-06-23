@@ -447,6 +447,8 @@ impl DeploymentLoop {
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
                                 observed_inventory_batches: Vec::new(),
+                                capabilities: Vec::new(),
+                                operator_version: None,
                             },
                         )
                         .await?;
@@ -478,7 +480,7 @@ impl DeploymentLoop {
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
-            release_id: target_release_id.clone(),
+            release_id: Some(target_release_id.clone()),
             version: None,
             description: None,
             stack: deployment_stack.clone(),
@@ -491,7 +493,7 @@ impl DeploymentLoop {
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: deployment_stack.clone(),
@@ -545,41 +547,56 @@ impl DeploymentLoop {
         )
         .await;
 
-        let stack_settings = deployment
-            .stack_settings
-            .clone()
-            .or_else(|| provided_config.map(|config| config.stack_settings.clone()))
-            .expect("stored deployment carries stack_settings");
-
-        let mut config = DeploymentConfig {
-            deployment_name: Some(deployment.name.clone()),
-            stack_settings: stack_settings.clone(),
-            management_config,
-            environment_variables,
-            allow_frozen_changes: provided_config
-                .map(|config| config.allow_frozen_changes)
-                .unwrap_or(false),
-            compute_backend: provided_config.and_then(|config| config.compute_backend.clone()),
-            external_bindings: deployment
+        let mut config = if let Some(mut config) = deployment.deployment_config.clone() {
+            if config.deployment_name.is_none() {
+                config.deployment_name = Some(deployment.name.clone());
+            }
+            if config.management_config.is_none() {
+                config.management_config = management_config;
+            }
+            if config.deployment_token.is_none() {
+                config.deployment_token = deployment.deployment_token.clone();
+            }
+            if config.base_platform.is_none() {
+                config.base_platform = deployment.base_platform;
+            }
+            if config.monitoring.is_none() {
+                config.monitoring = monitoring;
+            }
+            config.manager_url = Some(self.config.base_url());
+            config.native_image_host = native_image_host;
+            config
+        } else {
+            let stack_settings = deployment
                 .stack_settings
-                .as_ref()
-                .or_else(|| provided_config.map(|config| &config.stack_settings))
-                .expect("stored deployment carries stack_settings")
-                .external_bindings
                 .clone()
-                .unwrap_or_default(),
-            base_platform: provided_config
-                .and_then(|config| config.base_platform)
-                .or(deployment.base_platform),
-            label_domain: provided_config.and_then(|config| config.label_domain.clone()),
-            public_endpoints: provided_config.and_then(|config| config.public_endpoints.clone()),
-            domain_metadata: provided_config.and_then(|config| config.domain_metadata.clone()),
-            monitoring,
-            manager_url: Some(self.config.base_url()),
-            deployment_token: provided_config
-                .and_then(|config| config.deployment_token.clone())
-                .or_else(|| deployment.deployment_token.clone()),
-            native_image_host,
+                .expect("stored deployment carries stack_settings");
+
+            DeploymentConfig {
+                deployment_name: Some(deployment.name.clone()),
+                stack_settings: stack_settings.clone(),
+                management_config,
+                environment_variables,
+                allow_frozen_changes: false,
+                compute_backend: None,
+                external_bindings: deployment
+                    .stack_settings
+                    .as_ref()
+                    .expect("stored deployment carries stack_settings")
+                    .external_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                base_platform: deployment.base_platform,
+                label_domain: None,
+                observe_label_selector: None,
+                observe_all_namespaces: false,
+                public_endpoints: None,
+                domain_metadata: None,
+                monitoring,
+                manager_url: Some(self.config.base_url()),
+                deployment_token: deployment.deployment_token.clone(),
+                native_image_host,
+            }
         };
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
@@ -880,14 +897,14 @@ fn failed_state_for_credential_error(
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: stack.clone(),
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
-            release_id: target_release_id.to_string(),
+            release_id: Some(target_release_id.to_string()),
             version: None,
             description: None,
             stack: stack.clone(),
