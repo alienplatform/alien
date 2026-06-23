@@ -49,33 +49,6 @@ struct BucketMetadata {
     bucket_acl_present: Option<bool>,
 }
 
-async fn create_s3_bucket(client: &S3Client, bucket_name: &str) -> Result<()> {
-    let mut request = client.create_bucket().bucket(bucket_name);
-    let region = client
-        .config()
-        .region()
-        .map(|region| region.as_ref().to_string())
-        .unwrap_or_else(|| "us-east-1".to_string());
-
-    if region != "us-east-1" {
-        let configuration = CreateBucketConfiguration::builder()
-            .location_constraint(BucketLocationConstraint::from(region.as_str()))
-            .build();
-        request = request.create_bucket_configuration(configuration);
-    }
-
-    match request.send().await {
-        Ok(_) => Ok(()),
-        Err(err) if is_s3_create_bucket_already_owned(&err) => Ok(()),
-        Err(err) => Err(err
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: format!("S3 CreateBucket API failed for bucket '{bucket_name}'"),
-                resource_id: None,
-            })),
-    }
-}
-
 async fn put_s3_bucket_abac_tags(
     client: &S3Client,
     bucket_name: &str,
@@ -614,12 +587,35 @@ impl AwsStorageController {
 
         info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
 
-        create_s3_bucket(&client, &bucket_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create S3 bucket '{}'", bucket_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let mut create_bucket_request = client.create_bucket().bucket(&bucket_name);
+        let region = client
+            .config()
+            .region()
+            .map(|region| region.as_ref().to_string())
+            .unwrap_or_else(|| "us-east-1".to_string());
+
+        if region != "us-east-1" {
+            let create_bucket_configuration = CreateBucketConfiguration::builder()
+                .location_constraint(BucketLocationConstraint::from(region.as_str()))
+                .build();
+            create_bucket_request =
+                create_bucket_request.create_bucket_configuration(create_bucket_configuration);
+        }
+
+        match create_bucket_request.send().await {
+            Ok(_) => Ok(()),
+            Err(err) if is_s3_create_bucket_already_owned(&err) => Ok(()),
+            Err(err) => Err(err
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("S3 CreateBucket API failed for bucket '{bucket_name}'"),
+                    resource_id: None,
+                })),
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create S3 bucket '{}'", bucket_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         put_s3_bucket_abac_tags(
             &client,
