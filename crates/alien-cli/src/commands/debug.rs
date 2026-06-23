@@ -89,7 +89,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     // and registry eviction.
     let session = request_debug_session(&manager, &deployment_id).await?;
     let session = resolve_pending_session(&manager, session).await?;
-    exec_with_session(session, &args.cmd).await
+    exec_with_session(&args.deployment, session, &args.cmd).await
 }
 
 /// If the manager returned a `Pending` session (pull-mode kubernetes async
@@ -250,7 +250,11 @@ async fn request_debug_session(
 }
 
 /// Materialize files, build the env, and execute the user command (or a shell).
-async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Result<()> {
+async fn exec_with_session(
+    deployment_label: &str,
+    session: DebugSessionResponse,
+    cmd: &[String],
+) -> Result<()> {
     // The temp dir is kept alive for the lifetime of the child process via the
     // returned guard. Dropping it removes the credential files from disk.
     let cred_dir = TempDir::new()
@@ -261,6 +265,14 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             reason: "Failed to create temporary directory for debug credentials".to_string(),
         })?;
 
+    // Used to build the interactive-shell banner / prompt. Captured from the
+    // session shape because the response variant tells us push vs pull and
+    // which cloud the loopback was opened for.
+    let mut session_kind = SessionKind {
+        mode: SessionMode::Push,
+        provider: None,
+    };
+
     // `_push_tunnel_guard` keeps the loopback proxy + WebSocket alive for
     // the lifetime of this function. For non-PushTunnel sessions it's None.
     let (env, setup_script, _push_tunnel_guard) = match session {
@@ -269,6 +281,16 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             (env, push.setup_script, None)
         }
         DebugSessionResponse::Pull(pull) => {
+            session_kind.mode = SessionMode::Pull;
+            session_kind.provider = if pull.aws_endpoint_url.is_some() {
+                Some("aws")
+            } else if pull.gcp_endpoint_url.is_some() {
+                Some("gcp")
+            } else if pull.azure_endpoint_url.is_some() {
+                Some("azure")
+            } else {
+                None
+            };
             let kubeconfig_path = write_session_file(
                 cred_dir.path(),
                 "kubeconfig",
@@ -341,6 +363,13 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             }));
         }
         DebugSessionResponse::PushTunnel(tunnel) => {
+            session_kind.mode = SessionMode::Push;
+            session_kind.provider = Some(match tunnel.provider.as_str() {
+                "aws" => "aws",
+                "gcp" => "gcp",
+                "azure" => "azure",
+                _ => "cloud",
+            });
             // Push-mode tunnel: dial the manager's WebSocket, bring up a
             // local HTTP loopback proxy, set the cloud-CLI's endpoint env
             // to point at loopback. Bytes the child process sends flow
@@ -365,7 +394,7 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
         run_setup_script(&script, &env).await?;
     }
 
-    let status = spawn_child(cmd, &env).await?;
+    let status = spawn_child(deployment_label, &session_kind, &cred_dir, cmd, &env).await?;
 
     // The temp dir must outlive the child. Drop happens here, after wait.
     drop(cred_dir);
@@ -466,15 +495,42 @@ async fn run_setup_script(script: &str, env: &BTreeMap<String, String>) -> Resul
     Ok(())
 }
 
+/// Compact summary used to build the interactive-shell banner and prompt.
+struct SessionKind {
+    mode: SessionMode,
+    /// "aws" | "gcp" | "azure" | None.
+    provider: Option<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum SessionMode {
+    Push,
+    Pull,
+}
+
+impl SessionMode {
+    fn label(self) -> &'static str {
+        match self {
+            SessionMode::Push => "push",
+            SessionMode::Pull => "pull",
+        }
+    }
+}
+
 /// Spawn the user's command (or interactive shell) with the merged env.
 async fn spawn_child(
+    deployment_label: &str,
+    session_kind: &SessionKind,
+    cred_dir: &TempDir,
     cmd: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<std::process::ExitStatus> {
     let (program, args): (String, Vec<String>) = if cmd.is_empty() {
-        // Interactive shell fallback. Honor $SHELL; fall back to /bin/sh.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        (shell, Vec::new())
+        // No user command — drop into an interactive shell with a branded
+        // prompt + banner so it's obvious every command runs against the
+        // remote deployment. We honor $SHELL but only special-case bash/zsh
+        // for prompt customization; other shells get a vanilla session.
+        build_interactive_shell(deployment_label, session_kind, cred_dir)?
     } else {
         (cmd[0].clone(), cmd[1..].to_vec())
     };
@@ -503,5 +559,117 @@ async fn spawn_child(
             service: program,
             reason: "Failed to wait for debug command".to_string(),
         })
+}
+
+/// Build the program + args for an interactive debug shell, optionally
+/// writing a per-shell rc file into `cred_dir` so the prompt makes it
+/// obvious every command runs against the remote deployment.
+///
+/// Recognized shells:
+///   * `bash` — pass `--rcfile <path>` to a generated rc that sets PS1 and
+///     prints the banner. We deliberately don't re-source `~/.bashrc` so
+///     user aliases don't leak in and accidentally redirect commands.
+///   * `zsh` — set `ZDOTDIR=<cred_dir>` and write a `.zshrc` there.
+///   * anything else — fall through to a plain interactive shell with no
+///     prompt customization; print the banner before spawning so the user
+///     still sees the context.
+fn build_interactive_shell(
+    deployment_label: &str,
+    session_kind: &SessionKind,
+    cred_dir: &TempDir,
+) -> Result<(String, Vec<String>)> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sh");
+    let banner = render_banner(deployment_label, session_kind);
+    // Show only the deployment name in the prompt — strip any `<group>/`
+    // prefix so the line stays short.
+    let deployment_name = deployment_label
+        .rsplit('/')
+        .next()
+        .unwrap_or(deployment_label);
+    let prompt_tag = deployment_name.to_string();
+
+    match shell_name {
+        "bash" => {
+            let rc_path = cred_dir.path().join("bashrc");
+            let rc = format!(
+                "{banner}\nexport PS1='\\[\\e[36m\\]{tag}\\[\\e[0m\\] ❯ '\n",
+                banner = shell_echo_block(&banner),
+                tag = prompt_tag,
+            );
+            std::fs::write(&rc_path, rc)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: rc_path.display().to_string(),
+                    reason: "Failed to write bash rc for debug shell".to_string(),
+                })?;
+            Ok((
+                shell,
+                vec![
+                    "--rcfile".to_string(),
+                    rc_path.display().to_string(),
+                    "-i".to_string(),
+                ],
+            ))
+        }
+        "zsh" => {
+            let zshrc = cred_dir.path().join(".zshrc");
+            let rc = format!(
+                "{banner}\nexport PS1=$'%F{{cyan}}{tag}%f ❯ '\n",
+                banner = shell_echo_block(&banner),
+                tag = prompt_tag,
+            );
+            std::fs::write(&zshrc, rc)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: zshrc.display().to_string(),
+                    reason: "Failed to write zsh rc for debug shell".to_string(),
+                })?;
+            // ZDOTDIR redirects zsh's startup-file search to our cred_dir.
+            // Set it via the rc-file env path: callers thread ZDOTDIR
+            // through `env`, so we return the path as an env-side var here
+            // by also writing to a wrapper... simplest: just rely on the
+            // child env having ZDOTDIR set. We can't mutate the env map
+            // from this function, so push ZDOTDIR into the process env
+            // directly — only this child inherits it.
+            std::env::set_var("ZDOTDIR", cred_dir.path());
+            Ok((shell, vec!["-i".to_string()]))
+        }
+        _ => {
+            // Unknown shell: print the banner here, then exec a plain shell.
+            eprintln!("{}", banner);
+            Ok((shell, Vec::new()))
+        }
+    }
+}
+
+/// Render the multi-line shell banner shown when entering the interactive
+/// debug shell. Plain ASCII + ANSI colors; no emoji.
+fn render_banner(deployment_label: &str, session_kind: &SessionKind) -> String {
+    let provider = session_kind.provider.unwrap_or("none");
+    let mode = session_kind.mode.label();
+    format!(
+        "\x1b[36m●\x1b[0m alien · attached to \x1b[1m{deployment_label}\x1b[0m · {mode}-mode · provider={provider}\n\
+         \x1b[32m✓\x1b[0m session ready · type `exit` to end"
+    )
+}
+
+/// Wrap a multi-line string into a series of `printf` lines safe to embed
+/// in a shell rc file. Avoids quoting headaches with the banner's ANSI
+/// escapes by using `printf '%s\n'`.
+fn shell_echo_block(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            // Escape single quotes for printf '...'.
+            let escaped = line.replace('\'', r"'\''");
+            format!("printf '%s\\n' '{escaped}'")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
