@@ -363,19 +363,30 @@ async fn forward_to_aws(frame: TunnelRequestFrame) -> TunnelResponseFrame {
     let (service, signing_region) =
         extract_aws_service_and_region(&url, resolved_region.as_deref().unwrap_or("us-east-1"));
 
-    // Strip the loopback-side Authorization + Host + X-Amz-* placeholders;
-    // we'll add fresh SigV4 below.
+    // SigV4 is exquisitely sensitive to any header that's in the SignedHeaders
+    // list but whose value differs on the wire vs. what we hashed. To remove
+    // that whole class of bug, we only carry through `content-type` (which AWS
+    // requires for some payloads and which reqwest preserves verbatim) and
+    // let the SigV4 library add the rest (`host`, `x-amz-date`,
+    // `x-amz-content-sha256`, `x-amz-security-token`, `authorization`).
+    //
+    // Notable strips:
+    // - `host` / `authorization` / `x-amz-*`: re-issued by the signer.
+    // - `content-length`: reqwest computes it from the body; if our forwarded
+    //   value mismatched (e.g. body re-encoding through the WS), the wire
+    //   value would differ from the signed value → SignatureDoesNotMatch.
+    // - `user-agent`: AWS CLI's UA isn't needed for signature verification on
+    //   AWS's side; keeping it in the signed set just risks reqwest tweaking
+    //   the value at send time.
+    // - `accept-encoding` / `accept` / `expect`: reqwest sets its own.
+    // - `connection` / `upgrade` / `te` / `transfer-encoding`: hop-by-hop.
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in &frame.headers {
         let Ok(n) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else { continue };
         let Ok(v) = reqwest::header::HeaderValue::from_str(value) else { continue };
         let lower = n.as_str().to_ascii_lowercase();
-        if lower == "authorization"
-            || lower == "host"
-            || lower.starts_with("x-amz-")
-            || lower == "connection"
-            || lower == "upgrade"
-        {
+        // Allowlist: only forward `content-type` from the source request.
+        if lower != "content-type" {
             continue;
         }
         headers.insert(n, v);
@@ -386,7 +397,10 @@ async fn forward_to_aws(frame: TunnelRequestFrame) -> TunnelResponseFrame {
         return error_response(request_id, 500, format!("SigV4 sign: {e}"));
     }
 
-    let resp = match reqwest::Client::new()
+    // Use a long-lived HTTP/1.1 client so reqwest doesn't surprise us with
+    // HTTP/2 frame layouts that some signing edge-cases trip on. (Also: no
+    // default headers, so the signed set is exactly what hits the wire.)
+    let resp = match build_aws_outbound_client()
         .request(method, url)
         .headers(headers)
         .body(body)
@@ -880,6 +894,19 @@ fn build_manager_http_client() -> Result<reqwest::Client, String> {
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("build manager client: {e}"))
+}
+
+/// HTTP client used by the SigV4 forward path. Pinned to HTTP/1.1 (some AWS
+/// endpoints respond differently under HTTP/2's HPACK header compression with
+/// strict signing) and explicitly disables reqwest's gzip / brotli /
+/// `Accept-Encoding` defaults so the request that hits the wire has the
+/// exact header set we signed — nothing more, nothing less.
+fn build_aws_outbound_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .http1_only()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 fn build_apiserver_client() -> Result<reqwest::Client, String> {
