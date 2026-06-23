@@ -122,11 +122,6 @@ async fn resolve_pending_session(
     let max_interval = std::time::Duration::from_secs(5);
     let mut interval = min_interval;
 
-    eprintln!(
-        "[alien debug] waiting for cluster-side agent to dial back (session {}, deadline {})",
-        pending.session_id, pending.deadline
-    );
-
     loop {
         if chrono::Utc::now() >= deadline {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {

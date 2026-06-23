@@ -44,7 +44,12 @@ use crate::AgentState;
 /// How often the loop checks the manager for pending debug sessions when
 /// idle. Cheap GET; 5s is responsive enough for an interactive workflow
 /// (`alien debug` waits at most this long before the agent picks up).
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
+// Pending-session poll cadence. Used to be 5s; tightened to 1s because the
+// CLI's perceived `alien debug` startup latency is bounded by how long it
+// takes the agent to notice a freshly-created (or re-attachable) session.
+// One outbound poll per second per operator is negligible load on the
+// manager and shaves up to ~5s off every cold or post-WS-reset invocation.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Standard in-cluster paths Kubernetes projects into every pod.
 const SA_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
