@@ -39,6 +39,35 @@ const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
 const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 
+/// Cloud Run gen2 minimum memory. The execution-environment API rejects
+/// `services.create` with HTTP 400 for anything lower, so we floor the
+/// requested value here rather than passing the user-supplied number through
+/// verbatim. Gen1 supports < 512 Mi but lacks features we rely on (Direct VPC
+/// Egress, startup CPU boost), so we always target gen2 and accept the floor.
+const CLOUD_RUN_GEN2_MIN_MEMORY_MB: u32 = 512;
+
+/// Returns the effective memory the Cloud Run gen2 controller should send to
+/// GCP for a worker requesting `requested_mb`. Logs a warning when we bump
+/// the value so operators can see the discrepancy in their deploy logs.
+///
+/// Centralised so both the create path and the drift-detection path compute
+/// the same expected value — without this, the next reconcile would always
+/// see drift and trigger a no-op update.
+fn cloud_run_effective_memory_mb(worker_id: &str, requested_mb: u32) -> u32 {
+    if requested_mb < CLOUD_RUN_GEN2_MIN_MEMORY_MB {
+        warn!(
+            worker_id,
+            requested_mb,
+            floored_mb = CLOUD_RUN_GEN2_MIN_MEMORY_MB,
+            "Worker memory below Cloud Run gen2 minimum; bumping to {}Mi",
+            CLOUD_RUN_GEN2_MIN_MEMORY_MB,
+        );
+        CLOUD_RUN_GEN2_MIN_MEMORY_MB
+    } else {
+        requested_mb
+    }
+}
+
 fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
@@ -1985,7 +2014,13 @@ impl GcpWorkerController {
                 if let Some(resources) = &container.resources {
                     if let Some(limits) = &resources.limits {
                         if let Some(current_memory) = limits.get("memory") {
-                            let expected_memory = format!("{}Mi", worker_config.memory_mb);
+                            let expected_memory = format!(
+                                "{}Mi",
+                                cloud_run_effective_memory_mb(
+                                    &worker_config.id,
+                                    worker_config.memory_mb,
+                                ),
+                            );
                             if current_memory != &expected_memory {
                                 return Err(AlienError::new(ErrorData::ResourceDrift {
                                     resource_id: worker_config.id.clone(),
@@ -4376,9 +4411,11 @@ impl GcpWorkerController {
             })
             .collect();
 
-        // Build resource requirements
+        // Build resource requirements. Cloud Run gen2 requires
+        // `memory >= 512 Mi` (see `cloud_run_effective_memory_mb`).
+        let effective_memory_mb = cloud_run_effective_memory_mb(&cfg.id, cfg.memory_mb);
         let mut limits = HashMap::new();
-        limits.insert("memory".to_string(), format!("{}Mi", cfg.memory_mb));
+        limits.insert("memory".to_string(), format!("{}Mi", effective_memory_mb));
         // Cloud Run automatically allocates CPU based on memory
 
         let resources = ResourceRequirements {
