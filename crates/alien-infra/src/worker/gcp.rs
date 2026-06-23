@@ -525,29 +525,6 @@ async fn set_pubsub_iam_policy(
         })
 }
 
-async fn delete_cloud_scheduler_job(client: &CloudScheduler, job_name: &str) -> Result<()> {
-    match client
-        .delete_job()
-        .set_name(job_name.to_string())
-        .send()
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(error) if gax_error_is_not_found(&error) => {
-            Err(AlienError::new(ErrorData::CloudResourceNotFound {
-                resource_type: "Cloud Scheduler job".to_string(),
-                resource_name: job_name.to_string(),
-            }))
-        }
-        Err(error) => Err(error
-            .into_alien_error()
-            .context(ErrorData::CloudPlatformError {
-                message: "Cloud Scheduler delete_job request failed".to_string(),
-                resource_id: Some(job_name.to_string()),
-            })),
-    }
-}
-
 fn gax_error_is_not_found(error: &google_cloud_gax::error::Error) -> bool {
     error
         .status()
@@ -4365,7 +4342,12 @@ impl GcpWorkerController {
             .await?;
 
         for job_name in &self.scheduler_job_names.clone() {
-            match delete_cloud_scheduler_job(&scheduler_client, job_name).await {
+            match scheduler_client
+                .delete_job()
+                .set_name(job_name.clone())
+                .send()
+                .await
+            {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -4373,18 +4355,18 @@ impl GcpWorkerController {
                         "Cloud Scheduler job deleted successfully"
                     );
                 }
-                Err(e) if is_remote_resource_not_found(&e) => {
+                Err(error) if gax_error_is_not_found(&error) => {
                     info!(
                         worker=%worker_config.id,
                         job=%job_name,
                         "Cloud Scheduler job was already deleted (not found)"
                     );
                 }
-                Err(e) => {
+                Err(error) => {
                     warn!(
                         worker=%worker_config.id,
                         job=%job_name,
-                        error=%e,
+                        error=%error,
                         "Failed to delete Cloud Scheduler job (best-effort, continuing)"
                     );
                 }
@@ -6092,7 +6074,12 @@ impl GcpWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for job_name in &self.scheduler_job_names.clone() {
-            match delete_cloud_scheduler_job(&scheduler_client, job_name).await {
+            match scheduler_client
+                .delete_job()
+                .set_name(job_name.clone())
+                .send()
+                .await
+            {
                 Ok(_) => {
                     info!(
                         worker=%worker_config.id,
@@ -6202,8 +6189,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        create_cloud_scheduler_job, delete_cloud_scheduler_job, get_cloudrun_service_name,
-        get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
+        create_cloud_scheduler_job, get_cloudrun_service_name, get_gcp_worker_resource_name,
+        CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -6363,12 +6350,12 @@ mod tests {
             "projects/test-project/locations/us-central1/jobs/test-worker-cron-0"
         );
 
-        delete_cloud_scheduler_job(
-            &client,
-            "projects/test-project/locations/us-central1/jobs/test-worker-cron-0",
-        )
-        .await
-        .expect("scheduler job should be deleted");
+        client
+            .delete_job()
+            .set_name("projects/test-project/locations/us-central1/jobs/test-worker-cron-0")
+            .send()
+            .await
+            .expect("scheduler job should be deleted");
     }
 
     #[test]
