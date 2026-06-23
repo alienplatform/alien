@@ -80,6 +80,9 @@ rand_distr = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 axum = { workspace = true, features = ["tokio", "http2", "query"] }
+# Push-mode debug tunnel: loopback proxy dials the manager via WebSocket
+# and forwards cloud-CLI HTTP requests.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 git-url-parse = { version = "0.4.4" }

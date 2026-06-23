@@ -80,19 +80,13 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     let is_dev = ctx.is_dev();
     let deployment_id = resolve_deployment_id(&manager, &args.deployment, is_dev).await?;
 
-    let session = get_or_create_debug_session(&manager, &deployment_id).await?;
-    // Pull-mode kubernetes sessions tunnel through the operator's WebSocket;
-    // that tunnel is alive only for as long as the operator + manager processes
-    // it dialed against. Caching across invocations breaks the moment either
-    // restarts, leaving the CLI pointed at a dead tunnel (404/502). For
-    // push-mode the cache still helps (STS round-trip), so cache only ready
-    // Push sessions; resolved Pull sessions are re-created on every run.
+    // No CLI-side caching: every invocation mints a fresh session. The
+    // manager controls session lifetime, token rotation, and registry
+    // eviction — any client-side cache of server-side state is just a
+    // staleness bug waiting to happen, and the AWS/GCP/Azure cred mint is
+    // cheap enough that the latency saving isn't worth the failure mode.
+    let session = create_debug_session(&manager, &deployment_id).await?;
     let session = resolve_pending_session(&manager, session).await?;
-    if matches!(session, DebugSessionResponse::Push(_)) {
-        if let Err(e) = session_cache::save(&deployment_id, &session) {
-            tracing::debug!("Failed to cache resolved debug session: {e}");
-        }
-    }
     exec_with_session(session, &args.cmd).await
 }
 
@@ -189,28 +183,6 @@ async fn resolve_pending_session(
     }
 }
 
-/// Return a cached session for this deployment if one exists and isn't about
-/// to expire; otherwise mint a fresh one and persist it for next time.
-///
-/// `alien debug` is often run repeatedly in quick succession (one command,
-/// shell, next command). Re-minting on every call burns a STS / Iam
-/// `generateAccessToken` round-trip per invocation. Cache lifetime is bounded
-/// by the credential's own expiry — there's no way to use it past that.
-async fn get_or_create_debug_session(
-    manager: &ManagerContext,
-    deployment_id: &str,
-) -> Result<DebugSessionResponse> {
-    if let Some(cached) = session_cache::load(deployment_id) {
-        return Ok(cached);
-    }
-    let session = create_debug_session(manager, deployment_id).await?;
-    // Best-effort: cache failures must not break the command.
-    if let Err(e) = session_cache::save(deployment_id, &session) {
-        tracing::debug!("Failed to cache debug session: {e}");
-    }
-    Ok(session)
-}
-
 /// Dev-mode entry: wraps [`debug_task`] with `ExecutionMode::Dev`.
 pub async fn debug_task_dev(args: DebugArgs, port: u16) -> Result<()> {
     debug_task(args, ExecutionMode::Dev { port }).await
@@ -292,15 +264,12 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
             reason: "Failed to create temporary directory for debug credentials".to_string(),
         })?;
 
-    let (mode_label, env, setup_script, expires_at) = match session {
+    // `_push_tunnel_guard` keeps the loopback proxy + WebSocket alive for
+    // the lifetime of this function. For non-PushTunnel sessions it's None.
+    let (env, setup_script, _push_tunnel_guard) = match session {
         DebugSessionResponse::Push(push) => {
             let env = materialize_session(&cred_dir, push.env, push.files)?;
-            (
-                format!("push/{}", push.provider),
-                env,
-                push.setup_script,
-                push.expires_at,
-            )
+            (env, push.setup_script, None)
         }
         DebugSessionResponse::Pull(pull) => {
             let kubeconfig_path = write_session_file(
@@ -315,7 +284,49 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                 "KUBECONFIG".to_string(),
                 kubeconfig_path.display().to_string(),
             );
-            ("pull/kubernetes".to_string(), env, None, pull.expires_at)
+
+            // If the manager advertised cloud-proxy URLs, also spawn the
+            // matching local loopbacks so the user can run
+            // `alien debug … -- aws/gcloud/az …` against the operator's
+            // in-cluster cloud identity. Loopback guards live for the
+            // child's run.
+            let token = pull.cloud_proxy_token.clone();
+            let mut cloud_guards: Vec<crate::commands::debug_push_tunnel::PushTunnelGuard> =
+                Vec::new();
+
+            if let (Some(url), Some(tok)) = (pull.aws_endpoint_url, token.clone()) {
+                let (mut e, g) =
+                    crate::commands::debug_push_tunnel::spawn_pull_aws_loopback(&url, &tok)
+                        .await?;
+                env.append(&mut e);
+                cloud_guards.push(g);
+            }
+            if let (Some(url), Some(tok)) = (pull.gcp_endpoint_url, token.clone()) {
+                let (mut e, g) =
+                    crate::commands::debug_push_tunnel::spawn_pull_gcp_loopback(&url, &tok)
+                        .await?;
+                env.append(&mut e);
+                cloud_guards.push(g);
+            }
+            if let (Some(url), Some(tok)) = (pull.azure_endpoint_url, token.clone()) {
+                let (mut e, g) =
+                    crate::commands::debug_push_tunnel::spawn_pull_azure_loopback(&url, &tok)
+                        .await?;
+                env.append(&mut e);
+                cloud_guards.push(g);
+            }
+
+            (
+                env,
+                None,
+                if cloud_guards.is_empty() {
+                    None
+                } else {
+                    Some(crate::commands::debug_push_tunnel::PushTunnelGuard::merge(
+                        cloud_guards,
+                    ))
+                },
+            )
         }
         DebugSessionResponse::Pending(_) => {
             // `resolve_pending_session` runs before this point and is supposed
@@ -328,12 +339,17 @@ async fn exec_with_session(session: DebugSessionResponse, cmd: &[String]) -> Res
                 url: None,
             }));
         }
+        DebugSessionResponse::PushTunnel(tunnel) => {
+            // Push-mode tunnel: dial the manager's WebSocket, bring up a
+            // local HTTP loopback proxy, set the cloud-CLI's endpoint env
+            // to point at loopback. Bytes the child process sends flow
+            // through the WebSocket; the manager re-signs with the
+            // impersonated identity and proxies to the real cloud endpoint.
+            let (env, guard) =
+                crate::commands::debug_push_tunnel::spawn_push_tunnel(&tunnel).await?;
+            (env, None, Some(guard))
+        }
     };
-
-    match expires_at.as_deref() {
-        Some(exp) => eprintln!("[alien debug] {} session — expires {}", mode_label, exp),
-        None => eprintln!("[alien debug] {} session", mode_label),
-    }
 
     if let Some(script) = setup_script {
         run_setup_script(&script, &env).await?;
@@ -479,95 +495,3 @@ async fn spawn_child(
         })
 }
 
-/// On-disk cache of debug sessions, keyed by deployment ID.
-///
-/// Stored at `<config_dir>/alien/debug_sessions.json` with 0600 perms on
-/// Unix. The cache holds the same `DebugSessionResponse` the manager would
-/// have returned — we trust its `expires_at` and won't reuse an entry whose
-/// expiry is within `REFRESH_WINDOW` of now (avoids handing out creds that
-/// expire mid-command).
-///
-/// Reads and writes are best-effort: any failure falls back to minting a
-/// fresh session. The cache is a UX optimization, not a correctness path.
-mod session_cache {
-    use super::DebugSessionResponse;
-    use chrono::{DateTime, Duration, Utc};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    /// Skew margin: never reuse a session within this window of its expiry.
-    /// Picked at 60s to outlast clock drift + a typical command's runtime.
-    const REFRESH_WINDOW: Duration = Duration::seconds(60);
-
-    #[derive(serde::Serialize, serde::Deserialize, Default)]
-    struct Store {
-        #[serde(default)]
-        sessions: HashMap<String, DebugSessionResponse>,
-    }
-
-    fn cache_path() -> Option<PathBuf> {
-        Some(
-            dirs::config_dir()?
-                .join("alien")
-                .join("debug_sessions.json"),
-        )
-    }
-
-    fn read_store() -> Option<Store> {
-        let path = cache_path()?;
-        let contents = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&contents).ok()
-    }
-
-    fn write_store(store: &Store) -> std::io::Result<()> {
-        let path = cache_path().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "no user config dir available",
-            )
-        })?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(store)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        // Write to a sibling temp file, fix perms, then atomic rename. Keeps
-        // concurrent readers from seeing a partial file.
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-        }
-        std::fs::rename(&tmp, &path)?;
-        Ok(())
-    }
-
-    /// Return a cached session for `deployment_id` if one exists and won't
-    /// expire within `REFRESH_WINDOW`. Otherwise `None`.
-    pub fn load(deployment_id: &str) -> Option<DebugSessionResponse> {
-        let store = read_store()?;
-        let session = store.sessions.get(deployment_id)?.clone();
-        let expiry_str = session.expires_at()?;
-        let expiry = DateTime::parse_from_rfc3339(expiry_str).ok()?.with_timezone(&Utc);
-        if expiry - Utc::now() <= REFRESH_WINDOW {
-            return None;
-        }
-        Some(session)
-    }
-
-    /// Persist a freshly-minted session for `deployment_id`. Sessions without
-    /// an `expires_at` are not cached — we have no way to know when they go
-    /// stale.
-    pub fn save(deployment_id: &str, session: &DebugSessionResponse) -> std::io::Result<()> {
-        if session.expires_at().is_none() {
-            return Ok(());
-        }
-        let mut store = read_store().unwrap_or_default();
-        store
-            .sessions
-            .insert(deployment_id.to_string(), session.clone());
-        write_store(&store)
-    }
-}

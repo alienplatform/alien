@@ -80,6 +80,14 @@ pub enum DebugSessionResponse {
     /// resolve. The CLI long-polls `poll_url` until the session resolves to
     /// `Pull` (kubeconfig ready) or returns a 4xx/5xx with an error.
     Pending(PendingDebugSession),
+    /// Push-mode cloud session via a manager-hosted WebSocket tunnel. Credentials
+    /// stay on the manager; the CLI dials `tunnel_url`, spawns a local HTTP
+    /// proxy bound to `AWS_ENDPOINT_URL` (or GCP/Azure equivalents), and
+    /// every cloud-CLI request the child process emits is forwarded over the
+    /// tunnel where the manager re-signs with the impersonated identity and
+    /// proxies to the real cloud endpoint. Same security posture as pull-mode
+    /// Kubernetes — nothing exportable leaves the manager.
+    PushTunnel(PushTunnelDebugSession),
 }
 
 impl DebugSessionResponse {
@@ -91,8 +99,34 @@ impl DebugSessionResponse {
             Self::Push(p) => p.expires_at.as_deref(),
             Self::Pull(p) => p.expires_at.as_deref(),
             Self::Pending(_) => None,
+            Self::PushTunnel(p) => p.expires_at.as_deref(),
         }
     }
+}
+
+/// Manager-hosted push-mode tunnel session. The CLI dials `tunnel_url` over
+/// WebSocket, brings up a local HTTP proxy on a per-process port, sets
+/// `<PROVIDER>_ENDPOINT_URL` env to that port, then execs the user's command.
+/// The local proxy forwards every cloud-CLI HTTP request through the
+/// WebSocket; the manager re-signs and proxies to the real cloud endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushTunnelDebugSession {
+    /// Server-assigned session id (`ds_…`). Embedded in audit, in URLs, in
+    /// the tunnel handshake.
+    pub session_id: String,
+    /// `aws`, `gcp`, `azure`. Drives which `_ENDPOINT_URL` env var the CLI
+    /// sets and which signing flow the manager runs.
+    pub provider: String,
+    /// Absolute `wss://…/v1/debug/sessions/<sid>/push-tunnel` URL.
+    pub tunnel_url: String,
+    /// Bearer the CLI presents on the WebSocket upgrade and on subsequent
+    /// HTTP proxy requests; rotated server-side at session creation.
+    pub client_token: String,
+    /// RFC3339 expiry mirroring the underlying impersonated credential's TTL.
+    /// CLI should refuse to use the tunnel past this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +189,11 @@ pub struct PendingDebugSession {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullDebugSession {
+    /// Server-assigned session id. The CLI sends a DELETE to the manager on
+    /// exit so the agent's `serve_session` ends and subsequent `alien debug`
+    /// invocations don't wait for a 30-minute deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Kubeconfig YAML the CLI writes to a temp file and binds to
     /// `KUBECONFIG`.
     pub kubeconfig: String,
@@ -164,6 +203,25 @@ pub struct PullDebugSession {
     /// Extra files to materialize alongside the kubeconfig.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<DebugCredFile>,
+    /// When set, the CLI also spawns a local AWS loopback proxy and points
+    /// `AWS_ENDPOINT_URL` at it. Cloud-CLI requests get tunnelled to the
+    /// in-cluster operator, which signs with its IRSA identity and forwards
+    /// to the real AWS endpoint. Populated for pull-mode K8s deployments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_endpoint_url: Option<String>,
+    /// GCP equivalent — signed agent-side with the pod's GKE Workload
+    /// Identity token. The CLI's loopback sets `CLOUDSDK_API_ENDPOINT_*`
+    /// env vars to point gcloud / GCP SDKs at the loopback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp_endpoint_url: Option<String>,
+    /// Azure equivalent — signed agent-side with the pod's Workload Identity
+    /// federated token exchanged for an AAD bearer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure_endpoint_url: Option<String>,
+    /// Bearer the CLI's cloud loopbacks must present on requests to the
+    /// `*_endpoint_url`s. Same `client_token` as the kubeconfig auth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_proxy_token: Option<String>,
     /// RFC3339 expiry. None when the SA token doesn't expose one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,

@@ -105,6 +105,14 @@ const NOOP_INIT: InitHook = || {};
 /// hook; downstream binaries that wrap this entry point pass a hook that
 /// registers their additional controllers.
 pub fn cli_main_with_hook(init_hook: InitHook) {
+    // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
+    // (pulled by other deps) present in the tree can't auto-pick a provider
+    // and panics on first TLS use ("Could not automatically determine the
+    // process-level CryptoProvider"). Install one explicitly before any
+    // rustls-backed client (reqwest, tokio-tungstenite, aws-sdk) is touched.
+    // Ignoring `Err` makes this idempotent across re-invocations in tests.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = Args::parse();
 
     #[cfg(windows)]

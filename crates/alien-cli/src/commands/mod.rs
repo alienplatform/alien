@@ -1,6 +1,7 @@
 pub mod build;
 pub mod commands;
 pub mod debug;
+pub mod debug_push_tunnel;
 pub mod deploy;
 pub mod deployments;
 pub mod destroy;
