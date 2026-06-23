@@ -79,6 +79,10 @@ struct ProxyState {
     /// Awaiters keyed by `request_id`. The WS reader task pops each
     /// response and resolves the matching awaiter.
     pending: PendingMap,
+    /// Cloud provider this tunnel belongs to ("aws" | "gcp" | "azure").
+    /// Drives how the loopback reconstructs the real target URL from each
+    /// inbound child request.
+    provider: String,
 }
 
 /// Spin up the loopback proxy + WS tunnel for the given push-tunnel session,
@@ -162,6 +166,7 @@ pub async fn spawn_push_tunnel(
     let state = ProxyState {
         outbound: outbound_tx,
         pending: Arc::clone(&pending),
+        provider: tunnel.provider.clone(),
     };
     let app: Router = Router::new()
         .route("/{*path}", any(handle_loopback_request))
@@ -713,18 +718,43 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
         .path_and_query()
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
-    let inferred_host = parts
-        .headers
-        .get(reqwest::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(parse_aws_sigv4_credential)
-        .map(|(region, service)| aws_endpoint_host(&service, &region));
-    let full_url = match inferred_host {
-        Some(host) => format!("https://{host}{path_and_query}"),
-        // Fallback: assume STS in the deployment's default region. STS-only
-        // is enough for `sts get-caller-identity` smoke tests; richer
-        // service inference is the next iteration.
-        None => format!("https://sts.us-east-1.amazonaws.com{path_and_query}"),
+    // Provider-specific URL reconstruction. The tunnel was opened for one
+    // cloud, so we know exactly which scheme to use — no heuristic sniffing.
+    let full_url = match state.provider.as_str() {
+        "aws" => {
+            // aws CLI/SDK encode (region, service) into the SigV4 Credential
+            // field of the Authorization header. Fall back to STS so
+            // `aws sts get-caller-identity` smoke tests work when no other
+            // hint is present.
+            let host = parts
+                .headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_aws_sigv4_credential)
+                .map(|(region, service)| aws_endpoint_host(&service, &region))
+                .unwrap_or_else(|| "sts.us-east-1.amazonaws.com".to_string());
+            format!("https://{host}{path_and_query}")
+        }
+        "gcp" => {
+            // gcloud is configured via CLOUDSDK_API_ENDPOINT_OVERRIDES_* to
+            // hit `<loopback>/<service>/...`. Strip the prefix and route to
+            // `<service>.googleapis.com`.
+            let (service, rest) = split_service_from_path(&path_and_query).unwrap_or((
+                "compute",
+                path_and_query.clone(),
+            ));
+            format!("https://{service}.googleapis.com{rest}")
+        }
+        "azure" => {
+            format!("https://management.azure.com{path_and_query}")
+        }
+        other => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("unsupported tunnel provider: {other}"),
+            )
+                .into_response();
+        }
     };
 
     let header_pairs: Vec<(String, String)> = parts
