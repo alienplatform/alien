@@ -1076,7 +1076,23 @@ async fn validate_pull_access(
                 "Registry proxy pulls require a deployment token",
             ))
         }
-        Scope::Deployment { deployment_id, .. } => deployment_id.as_str(),
+        Scope::Deployment {
+            project_id,
+            deployment_id,
+        } => {
+            // A deployment token may always pull from its own project's
+            // artifact repository. Source-built resources (Worker/Container/
+            // Daemon) publish their images there under `{prefix}-{project_id}`,
+            // and those repos are not discoverable from the stack's `image`
+            // fields — so the per-release allow-list below would otherwise
+            // reject them (e.g. a source-built Daemon).
+            if state.registry_routing_table.project_id_for_repo(repo_name)
+                == Some(project_id.as_str())
+            {
+                return Ok(());
+            }
+            deployment_id.as_str()
+        }
     };
 
     // Check cache first.
@@ -1174,7 +1190,7 @@ async fn validate_pull_access(
 /// Extract the set of repo names from a release's stack.
 fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Worker, WorkerCode};
+    use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
 
     let mut repos = Vec::new();
 
@@ -1188,6 +1204,11 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
             match &container.code {
                 ContainerCode::Image { image } => Some(image.as_str()),
                 ContainerCode::Source { .. } => None,
+            }
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => Some(image.as_str()),
+                DaemonCode::Source { .. } => None,
             }
         } else {
             None
