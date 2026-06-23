@@ -52,11 +52,23 @@ impl GcpServiceActivationController {
         );
 
         // Check if the service is already enabled (reading before command is allowed)
-        let already_enabled = match get_gcp_service(&client, &config.service_name).await {
+        let already_enabled = match client
+            .get_service()
+            .set_name(config.service_name.clone())
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "ServiceUsage get_service request failed".to_string(),
+                resource_id: None,
+            }) {
             Ok(service) => service.state == State::Enabled,
-            Err(e) => {
-                let msg = format!("Failed to get GCP service '{}': {}", config.service_name, e);
-                return Err(e.context(ErrorData::CloudPlatformError {
+            Err(error) => {
+                let msg = format!(
+                    "Failed to get GCP service '{}': {}",
+                    config.service_name, error
+                );
+                return Err(error.context(ErrorData::CloudPlatformError {
                     message: msg,
                     resource_id: Some(config.id.clone()),
                 }));
@@ -240,7 +252,16 @@ impl GcpServiceActivationController {
         }
 
         // Check the actual service status
-        match get_gcp_service(&client, &config.service_name).await {
+        match client
+            .get_service()
+            .set_name(config.service_name.clone())
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "ServiceUsage get_service request failed".to_string(),
+                resource_id: None,
+            }) {
             Ok(service) => {
                 if service.state == State::Enabled {
                     info!(
@@ -262,9 +283,12 @@ impl GcpServiceActivationController {
                     );
                 }
             }
-            Err(e) => {
-                let msg = format!("Failed to get GCP service '{}': {}", config.service_name, e);
-                return Err(e.context(ErrorData::CloudPlatformError {
+            Err(error) => {
+                let msg = format!(
+                    "Failed to get GCP service '{}': {}",
+                    config.service_name, error
+                );
+                return Err(error.context(ErrorData::CloudPlatformError {
                     message: msg,
                     resource_id: Some(config.id.clone()),
                 }));
@@ -295,12 +319,20 @@ impl GcpServiceActivationController {
                 .get_gcp_service_usage_client(gcp_config)
                 .await?;
 
-            let service = get_gcp_service(&client, service_name).await.context(
-                ErrorData::CloudPlatformError {
+            let service = client
+                .get_service()
+                .set_name(service_name.clone())
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "ServiceUsage get_service request failed".to_string(),
+                    resource_id: None,
+                })
+                .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get GCP service '{}'", service_name),
                     resource_id: Some(config.id.clone()),
-                },
-            )?;
+                })?;
 
             emit_gcp_service_activation_heartbeat(
                 ctx,
@@ -599,19 +631,6 @@ async fn enable_gcp_service(client: &ServiceUsage, service_name: &str) -> Result
         .into_alien_error()
         .context(ErrorData::CloudPlatformError {
             message: "ServiceUsage enable_service request failed".to_string(),
-            resource_id: None,
-        })
-}
-
-async fn get_gcp_service(client: &ServiceUsage, service_name: &str) -> Result<Service> {
-    client
-        .get_service()
-        .set_name(service_name.to_string())
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "ServiceUsage get_service request failed".to_string(),
             resource_id: None,
         })
 }
