@@ -28,7 +28,7 @@ impl ResourceImporter for KubernetesClusterImporter {
             kubernetes_api_reachable: Some(true),
             namespace_ready: Some(true),
             rbac_ready: Some(true),
-            agent_ready: Some(false),
+            operator_ready: Some(false),
             cloud_metadata_ready: data.cloud_metadata_ready,
             azure_application_gateway_for_containers: data.azure_application_gateway_for_containers,
             cloud_operation_id: None,
@@ -62,9 +62,9 @@ impl ResourceImporter for KubernetesClusterImporter {
             aws_nodegroup_ready: None,
             aws_kube_proxy_addon_ready: None,
             aws_coredns_addon_ready: None,
-            agent_helm_installed: None,
-            agent_helm_release: None,
-            agent_helm_namespace: None,
+            operator_helm_installed: None,
+            operator_helm_release: None,
+            operator_helm_namespace: None,
             status_message: Some(
                 "Kubernetes setup handoff imported; cluster bootstrap completed by setup"
                     .to_string(),

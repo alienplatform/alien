@@ -22,7 +22,7 @@ export type GetResourceDeploymentDetailRequest = {
   deploymentId: string;
   resourceId: string;
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**
@@ -586,12 +586,12 @@ export type InvolvedObject9 = {
 
 export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type Source9 = {
+export type GetResourceDeploymentDetailSource9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = Source9 | any;
+export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
 
 export type Event12 = {
   count?: number | null | undefined;
@@ -602,7 +602,7 @@ export type Event12 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source9 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3022,12 +3022,12 @@ export type InvolvedObject8 = {
 
 export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type Source8 = {
+export type GetResourceDeploymentDetailSource8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = Source8 | any;
+export type SourceUnion8 = GetResourceDeploymentDetailSource8 | any;
 
 export type Event11 = {
   count?: number | null | undefined;
@@ -3038,7 +3038,7 @@ export type Event11 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source8 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4030,7 +4030,7 @@ export type DataStatus17 = {
 export type DataLocal4 = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4 | any | null | undefined;
-  daemonName: string;
+  daemonName?: string | undefined;
   events: Array<Event10>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -4070,12 +4070,12 @@ export type InvolvedObject7 = {
 
 export type InvolvedObjectUnion7 = InvolvedObject7 | any;
 
-export type Source7 = {
+export type GetResourceDeploymentDetailSource7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = Source7 | any;
+export type SourceUnion7 = GetResourceDeploymentDetailSource7 | any;
 
 export type Event9 = {
   count?: number | null | undefined;
@@ -4086,7 +4086,7 @@ export type Event9 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source7 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource7 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4332,12 +4332,12 @@ export type InvolvedObject6 = {
 
 export type InvolvedObjectUnion6 = InvolvedObject6 | any;
 
-export type Source6 = {
+export type GetResourceDeploymentDetailSource6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = Source6 | any;
+export type SourceUnion6 = GetResourceDeploymentDetailSource6 | any;
 
 export type Event8 = {
   count?: number | null | undefined;
@@ -4350,7 +4350,7 @@ export type Event8 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source6 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource6 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4415,7 +4415,7 @@ export type DataAzure1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<Event8>;
   healthyInstances: number;
@@ -4497,12 +4497,12 @@ export type InvolvedObject5 = {
 
 export type InvolvedObjectUnion5 = InvolvedObject5 | any;
 
-export type Source5 = {
+export type GetResourceDeploymentDetailSource5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = Source5 | any;
+export type SourceUnion5 = GetResourceDeploymentDetailSource5 | any;
 
 export type Event7 = {
   count?: number | null | undefined;
@@ -4515,7 +4515,7 @@ export type Event7 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source5 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource5 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4580,7 +4580,7 @@ export type DataGcp1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<Event7>;
   healthyInstances: number;
@@ -4662,12 +4662,12 @@ export type InvolvedObject4 = {
 
 export type InvolvedObjectUnion4 = InvolvedObject4 | any;
 
-export type Source4 = {
+export type GetResourceDeploymentDetailSource4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = Source4 | any;
+export type SourceUnion4 = GetResourceDeploymentDetailSource4 | any;
 
 export type Event6 = {
   count?: number | null | undefined;
@@ -4680,7 +4680,7 @@ export type Event6 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source4 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource4 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4745,7 +4745,7 @@ export type DataAws1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<Event6>;
   healthyInstances: number;
@@ -4989,12 +4989,12 @@ export type InvolvedObject3 = {
 
 export type InvolvedObjectUnion3 = InvolvedObject3 | any;
 
-export type Source3 = {
+export type GetResourceDeploymentDetailSource3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = Source3 | any;
+export type SourceUnion3 = GetResourceDeploymentDetailSource3 | any;
 
 export type Event4 = {
   count?: number | null | undefined;
@@ -5005,7 +5005,7 @@ export type Event4 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source3 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource3 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -5220,12 +5220,12 @@ export type InvolvedObject2 = {
 
 export type InvolvedObjectUnion2 = InvolvedObject2 | any;
 
-export type Source2 = {
+export type GetResourceDeploymentDetailSource2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = Source2 | any;
+export type SourceUnion2 = GetResourceDeploymentDetailSource2 | any;
 
 export type Event3 = {
   count?: number | null | undefined;
@@ -5238,7 +5238,7 @@ export type Event3 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source2 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource2 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -5619,12 +5619,12 @@ export type InvolvedObject1 = {
 
 export type InvolvedObjectUnion1 = InvolvedObject1 | any;
 
-export type Source1 = {
+export type GetResourceDeploymentDetailSource1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = Source1 | any;
+export type SourceUnion1 = GetResourceDeploymentDetailSource1 | any;
 
 export type Event1 = {
   count?: number | null | undefined;
@@ -5635,7 +5635,7 @@ export type Event1 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: Source1 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource1 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -6453,6 +6453,12 @@ export type Heartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
+  /**
+   * Alien resource id, such as the `alien.Container` or `alien.Storage`
+   *
+   * @remarks
+   * resource id from the stack.
+   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
@@ -7353,24 +7359,31 @@ export function involvedObjectUnion9FromJSON(
 }
 
 /** @internal */
-export const Source9$inboundSchema: z.ZodType<Source9, unknown> = z.object({
+export const GetResourceDeploymentDetailSource9$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource9,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source9FromJSON(
+export function getResourceDeploymentDetailSource9FromJSON(
   jsonString: string,
-): SafeParseResult<Source9, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource9, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source9' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource9' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion9$inboundSchema: z.ZodType<SourceUnion9, unknown> = z
-  .union([z.lazy(() => Source9$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource9$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion9FromJSON(
   jsonString: string,
@@ -7400,8 +7413,12 @@ export const Event12$inboundSchema: z.ZodType<Event12, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source9$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource9$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -10738,24 +10755,31 @@ export function involvedObjectUnion8FromJSON(
 }
 
 /** @internal */
-export const Source8$inboundSchema: z.ZodType<Source8, unknown> = z.object({
+export const GetResourceDeploymentDetailSource8$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource8,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source8FromJSON(
+export function getResourceDeploymentDetailSource8FromJSON(
   jsonString: string,
-): SafeParseResult<Source8, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source8' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource8' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
-  .union([z.lazy(() => Source8$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion8FromJSON(
   jsonString: string,
@@ -10785,8 +10809,12 @@ export const Event11$inboundSchema: z.ZodType<Event11, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source8$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -12767,7 +12795,7 @@ export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
     daemonInstance: z.nullable(
       z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]),
     ).optional(),
-    daemonName: z.string(),
+    daemonName: z.string().optional(),
     events: z.array(z.lazy(() => Event10$inboundSchema)),
     exitReason: z.nullable(z.string()).optional(),
     imagePathPresent: z.boolean(),
@@ -12866,24 +12894,31 @@ export function involvedObjectUnion7FromJSON(
 }
 
 /** @internal */
-export const Source7$inboundSchema: z.ZodType<Source7, unknown> = z.object({
+export const GetResourceDeploymentDetailSource7$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource7,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source7FromJSON(
+export function getResourceDeploymentDetailSource7FromJSON(
   jsonString: string,
-): SafeParseResult<Source7, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source7' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource7' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
-  .union([z.lazy(() => Source7$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion7FromJSON(
   jsonString: string,
@@ -12913,8 +12948,12 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source7$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -13418,24 +13457,31 @@ export function involvedObjectUnion6FromJSON(
 }
 
 /** @internal */
-export const Source6$inboundSchema: z.ZodType<Source6, unknown> = z.object({
+export const GetResourceDeploymentDetailSource6$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource6,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source6FromJSON(
+export function getResourceDeploymentDetailSource6FromJSON(
   jsonString: string,
-): SafeParseResult<Source6, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource6, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source6' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource6' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion6$inboundSchema: z.ZodType<SourceUnion6, unknown> = z
-  .union([z.lazy(() => Source6$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource6$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion6FromJSON(
   jsonString: string,
@@ -13467,8 +13513,12 @@ export const Event8$inboundSchema: z.ZodType<Event8, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source6$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource6$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -13551,7 +13601,7 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance3$inboundSchema)),
-    daemonName: z.string(),
+    daemonName: z.string().optional(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => Event8$inboundSchema)),
     healthyInstances: z.int(),
@@ -13734,24 +13784,31 @@ export function involvedObjectUnion5FromJSON(
 }
 
 /** @internal */
-export const Source5$inboundSchema: z.ZodType<Source5, unknown> = z.object({
+export const GetResourceDeploymentDetailSource5$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource5,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source5FromJSON(
+export function getResourceDeploymentDetailSource5FromJSON(
   jsonString: string,
-): SafeParseResult<Source5, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source5' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource5' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion5$inboundSchema: z.ZodType<SourceUnion5, unknown> = z
-  .union([z.lazy(() => Source5$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource5$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion5FromJSON(
   jsonString: string,
@@ -13783,8 +13840,12 @@ export const Event7$inboundSchema: z.ZodType<Event7, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source5$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource5$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -13866,7 +13927,7 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance2$inboundSchema)),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => Event7$inboundSchema)),
   healthyInstances: z.int(),
@@ -14049,24 +14110,31 @@ export function involvedObjectUnion4FromJSON(
 }
 
 /** @internal */
-export const Source4$inboundSchema: z.ZodType<Source4, unknown> = z.object({
+export const GetResourceDeploymentDetailSource4$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource4,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source4FromJSON(
+export function getResourceDeploymentDetailSource4FromJSON(
   jsonString: string,
-): SafeParseResult<Source4, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source4' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource4' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion4$inboundSchema: z.ZodType<SourceUnion4, unknown> = z
-  .union([z.lazy(() => Source4$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource4$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion4FromJSON(
   jsonString: string,
@@ -14098,8 +14166,12 @@ export const Event6$inboundSchema: z.ZodType<Event6, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source4$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -14181,7 +14253,7 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance1$inboundSchema)),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => Event6$inboundSchema)),
   healthyInstances: z.int(),
@@ -14680,24 +14752,31 @@ export function involvedObjectUnion3FromJSON(
 }
 
 /** @internal */
-export const Source3$inboundSchema: z.ZodType<Source3, unknown> = z.object({
+export const GetResourceDeploymentDetailSource3$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource3,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source3FromJSON(
+export function getResourceDeploymentDetailSource3FromJSON(
   jsonString: string,
-): SafeParseResult<Source3, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source3' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource3' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion3$inboundSchema: z.ZodType<SourceUnion3, unknown> = z
-  .union([z.lazy(() => Source3$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource3$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion3FromJSON(
   jsonString: string,
@@ -14727,8 +14806,12 @@ export const Event4$inboundSchema: z.ZodType<Event4, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source3$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -15154,24 +15237,31 @@ export function involvedObjectUnion2FromJSON(
 }
 
 /** @internal */
-export const Source2$inboundSchema: z.ZodType<Source2, unknown> = z.object({
+export const GetResourceDeploymentDetailSource2$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource2,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source2FromJSON(
+export function getResourceDeploymentDetailSource2FromJSON(
   jsonString: string,
-): SafeParseResult<Source2, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source2' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource2' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion2$inboundSchema: z.ZodType<SourceUnion2, unknown> = z
-  .union([z.lazy(() => Source2$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource2$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion2FromJSON(
   jsonString: string,
@@ -15203,8 +15293,12 @@ export const Event3$inboundSchema: z.ZodType<Event3, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source2$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
@@ -15937,24 +16031,31 @@ export function involvedObjectUnion1FromJSON(
 }
 
 /** @internal */
-export const Source1$inboundSchema: z.ZodType<Source1, unknown> = z.object({
+export const GetResourceDeploymentDetailSource1$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource1,
+  unknown
+> = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function source1FromJSON(
+export function getResourceDeploymentDetailSource1FromJSON(
   jsonString: string,
-): SafeParseResult<Source1, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Source1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Source1' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailSource1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource1' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion1$inboundSchema: z.ZodType<SourceUnion1, unknown> = z
-  .union([z.lazy(() => Source1$inboundSchema), z.any()]);
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource1$inboundSchema),
+    z.any(),
+  ]);
 
 export function sourceUnion1FromJSON(
   jsonString: string,
@@ -15984,8 +16085,12 @@ export const Event1$inboundSchema: z.ZodType<Event1, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
-  source: z.nullable(z.union([z.lazy(() => Source1$inboundSchema), z.any()]))
-    .optional(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 

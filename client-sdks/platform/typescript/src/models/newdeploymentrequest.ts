@@ -1236,6 +1236,14 @@ export type NewDeploymentRequest = {
   resourcePrefix?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  /**
+   * Display-only scope reported by the Operator manifest.
+   */
+  operatorScope?: string | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest.
+   */
+  operatorPermission?: string | undefined;
 };
 
 /** @internal */
@@ -3597,6 +3605,8 @@ export type NewDeploymentRequest$Outbound = {
   resourcePrefix?: string | undefined;
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  operatorScope?: string | undefined;
+  operatorPermission?: string | undefined;
 };
 
 /** @internal */
@@ -3628,6 +3638,8 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   resourcePrefix: z.string().optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
+  operatorScope: z.string().optional(),
+  operatorPermission: z.string().optional(),
 });
 
 export function newDeploymentRequestToJSON(

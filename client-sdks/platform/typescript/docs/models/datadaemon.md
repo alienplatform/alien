@@ -11,7 +11,6 @@ let value: DataDaemon = {
     capacityGroup: "<value>",
     commandSupported: true,
     daemonInstances: [],
-    daemonName: "<value>",
     desiredMachines: 665477,
     events: [
       {
@@ -28,11 +27,11 @@ let value: DataDaemon = {
         {
           message: "<value>",
           reason: "api-unavailable",
-          severity: "warning",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
+      health: "degraded",
       lifecycle: "running",
       partial: false,
       stale: true,

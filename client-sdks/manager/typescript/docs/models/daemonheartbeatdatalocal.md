@@ -7,16 +7,15 @@ import { DaemonHeartbeatDataLocal } from "@alienplatform/manager-api/models";
 
 let value: DaemonHeartbeatDataLocal = {
   commandSupported: true,
-  daemonName: "<value>",
   events: [],
   imagePathPresent: true,
   runtimeId: "<id>",
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
@@ -28,7 +27,7 @@ let value: DaemonHeartbeatDataLocal = {
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `commandSupported`                                                           | *boolean*                                                                    | :heavy_check_mark:                                                           | N/A                                                                          |
 | `daemonInstance`                                                             | [models.LocalRuntimeUnitStatus](../models/localruntimeunitstatus.md)         | :heavy_minus_sign:                                                           | N/A                                                                          |
-| `daemonName`                                                                 | *string*                                                                     | :heavy_check_mark:                                                           | N/A                                                                          |
+| `daemonName`                                                                 | *string*                                                                     | :heavy_minus_sign:                                                           | N/A                                                                          |
 | `events`                                                                     | [models.LocalRuntimeEventSnapshot](../models/localruntimeeventsnapshot.md)[] | :heavy_check_mark:                                                           | N/A                                                                          |
 | `exitReason`                                                                 | *string*                                                                     | :heavy_minus_sign:                                                           | N/A                                                                          |
 | `imagePathPresent`                                                           | *boolean*                                                                    | :heavy_check_mark:                                                           | N/A                                                                          |

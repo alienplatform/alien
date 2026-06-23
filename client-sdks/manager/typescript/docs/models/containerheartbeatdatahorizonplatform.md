@@ -21,9 +21,9 @@ let value: ContainerHeartbeatDataHorizonPlatform = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "horizonPlatform",
 };

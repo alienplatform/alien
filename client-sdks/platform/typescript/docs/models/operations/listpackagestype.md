@@ -7,11 +7,11 @@ Filter by package type
 ```typescript
 import { ListPackagesType } from "@alienplatform/platform-api/models/operations";
 
-let value: ListPackagesType = "agent-image";
+let value: ListPackagesType = "operator-image";
 ```
 
 ## Values
 
 ```typescript
-"cli" | "cloudformation" | "helm" | "agent-image" | "terraform"
+"cli" | "cloudformation" | "helm" | "operator-image" | "terraform"
 ```

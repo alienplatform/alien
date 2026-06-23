@@ -20,7 +20,7 @@ export type ListResourceOverviewArea = ClosedEnum<
 export type ListResourceOverviewRequest = {
   area: ListResourceOverviewArea;
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**
@@ -31,7 +31,7 @@ export type ListResourceOverviewRequest = {
   deploymentId?: string | undefined;
 };
 
-export type Resource = {
+export type ListResourceOverviewResource = {
   resourceType: string;
   resourceId: string;
   name: string;
@@ -55,7 +55,7 @@ export type Resource = {
  * Compute resource overview rows from latest heartbeats.
  */
 export type ListResourceOverviewResponse = {
-  resources: Array<Resource>;
+  resources: Array<ListResourceOverviewResource>;
 };
 
 /** @internal */
@@ -95,7 +95,10 @@ export function listResourceOverviewRequestToJSON(
 }
 
 /** @internal */
-export const Resource$inboundSchema: z.ZodType<Resource, unknown> = z.object({
+export const ListResourceOverviewResource$inboundSchema: z.ZodType<
+  ListResourceOverviewResource,
+  unknown
+> = z.object({
   resourceType: z.string(),
   resourceId: z.string(),
   name: z.string(),
@@ -115,13 +118,13 @@ export const Resource$inboundSchema: z.ZodType<Resource, unknown> = z.object({
   lastObservedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
-export function resourceFromJSON(
+export function listResourceOverviewResourceFromJSON(
   jsonString: string,
-): SafeParseResult<Resource, SDKValidationError> {
+): SafeParseResult<ListResourceOverviewResource, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Resource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Resource' from JSON`,
+    (x) => ListResourceOverviewResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ListResourceOverviewResource' from JSON`,
   );
 }
 
@@ -130,7 +133,7 @@ export const ListResourceOverviewResponse$inboundSchema: z.ZodType<
   ListResourceOverviewResponse,
   unknown
 > = z.object({
-  resources: z.array(z.lazy(() => Resource$inboundSchema)),
+  resources: z.array(z.lazy(() => ListResourceOverviewResource$inboundSchema)),
 });
 
 export function listResourceOverviewResponseFromJSON(

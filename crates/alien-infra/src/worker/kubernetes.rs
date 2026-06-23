@@ -3,8 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_runtime_pod_labels, reconcile_environment_secret, EnvironmentVariableBuilder,
-    KubernetesEnvSecretPlan, ResourceControllerContext,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -310,7 +311,7 @@ impl KubernetesWorkerController {
                     workload_name: deployment_name.clone(),
                     workload_kind: alien_core::KubernetesWorkloadKind::Deployment,
                     workload: KubernetesWorkload::Deployment(deployment),
-                    label_selector: label_selector(&labels)?,
+                    label_selector: label_selector(&labels),
                 },
             )
             .await?;
@@ -854,7 +855,8 @@ impl KubernetesWorkerController {
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
-        let labels = self.build_labels(function_name);
+        let selector_labels = self.build_labels(function_name);
+        let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
 
         // Determine the container image
@@ -1020,7 +1022,7 @@ impl KubernetesWorkerController {
             spec: Some(DeploymentSpec {
                 replicas: Some(1),
                 selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(selector_labels),
                     ..Default::default()
                 },
                 template: PodTemplateSpec {
@@ -1045,6 +1047,16 @@ impl KubernetesWorkerController {
         labels.insert("app".to_string(), function_name.to_string());
         labels.insert("managed-by".to_string(), "runtime".to_string());
         labels.insert("component".to_string(), "worker".to_string());
+        labels
+    }
+
+    fn workload_labels(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        mut labels: BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        labels.extend(kubernetes_branded_resource_labels(ctx, resource_id));
         labels
     }
 

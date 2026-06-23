@@ -27,6 +27,7 @@ let value: ListDeploymentsResponse = {
       workspaceId: "ws_It13CUaGEhLLAB87simX0",
       release: {
         id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        version: "<value>",
         gitMetadata: {
           commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
           commitMessage:
@@ -40,7 +41,7 @@ let value: ListDeploymentsResponse = {
           commitAuthorLogin: "johndoe",
           commitAuthorAvatarUrl: "https://github.com/johndoe.png",
         },
-        createdAt: new Date("2024-04-17T05:47:54.417Z"),
+        createdAt: new Date("2024-06-27T06:57:01.451Z"),
       },
       deploymentGroup: {
         id: "dg_r27ict8c7vcgsumpj90ackf7b",

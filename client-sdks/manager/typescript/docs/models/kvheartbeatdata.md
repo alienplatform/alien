@@ -13,7 +13,7 @@ const value: models.KvHeartbeatDataAwsDynamoDb = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -38,7 +38,7 @@ const value: models.KvHeartbeatDataGcpFirestore = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -60,7 +60,7 @@ const value: models.KvHeartbeatDataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -89,7 +89,7 @@ const value: models.KvHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },

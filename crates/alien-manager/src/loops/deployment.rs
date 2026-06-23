@@ -308,12 +308,12 @@ impl DeploymentLoop {
             .as_ref()
             .expect("stored deployment carries stack_settings");
 
-        // Pull-mode deployments are entirely driven by the alien-agent running in the
+        // Pull-mode deployments are entirely driven by the alien-operator running in the
         // target environment. The manager must not attempt to provision or deploy them.
         if stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
             debug!(
                 deployment_id = %deployment_id,
-                "Skipping pull-mode deployment — handled by alien-agent"
+                "Skipping pull-mode deployment — handled by alien-operator"
             );
             return Ok(());
         }
@@ -397,6 +397,9 @@ impl DeploymentLoop {
                                 update_heartbeat: false,
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
+                                observed_inventory_batches: Vec::new(),
+                                capabilities: Vec::new(),
+                                operator_version: None,
                             },
                         )
                         .await?;
@@ -428,7 +431,7 @@ impl DeploymentLoop {
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
-            release_id: target_release_id.clone(),
+            release_id: Some(target_release_id.clone()),
             version: None,
             description: None,
             stack: deployment_stack.clone(),
@@ -441,7 +444,7 @@ impl DeploymentLoop {
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: deployment_stack.clone(),
@@ -530,6 +533,9 @@ impl DeploymentLoop {
                     .clone()
                     .unwrap_or_default(),
                 base_platform: deployment.base_platform,
+                label_domain: None,
+                observe_label_selector: None,
+                observe_all_namespaces: false,
                 public_urls: None,
                 domain_metadata: None,
                 monitoring,
@@ -802,14 +808,14 @@ fn failed_state_for_credential_error(
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: stack.clone(),
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
-            release_id: target_release_id.to_string(),
+            release_id: Some(target_release_id.to_string()),
             version: None,
             description: None,
             stack: stack.clone(),

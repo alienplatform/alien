@@ -15,9 +15,19 @@ import {
   EnvironmentVariableConfig$inboundSchema,
 } from "./environmentvariableconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const DeploymentStatus = {
   Pending: "pending",
@@ -40,7 +50,13 @@ export const DeploymentStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type DeploymentStatus = ClosedEnum<typeof DeploymentStatus>;
 
@@ -2846,7 +2862,13 @@ export type Deployment = {
    */
   publicSubdomain?: string | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentStatus;
   /**
@@ -2933,6 +2955,22 @@ export type Deployment = {
    * Imported setup fingerprint algorithm version
    */
   setupFingerprintVersion?: number | null | undefined;
+  /**
+   * Display-only scope reported by the Operator manifest
+   */
+  operatorScope?: string | null | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest
+   */
+  operatorPermission?: string | null | undefined;
+  /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -6721,6 +6759,11 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     setupTarget: z.nullable(z.string()).optional(),
     setupFingerprint: z.nullable(z.string()).optional(),
     setupFingerprintVersion: z.nullable(z.int()).optional(),
+    operatorScope: z.nullable(z.string()).optional(),
+    operatorPermission: z.nullable(z.string()).optional(),
+    operatorVersion: z.nullable(z.string()).optional(),
+    capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+      .optional(),
     retryRequested: z.boolean(),
     lastHeartbeatAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),

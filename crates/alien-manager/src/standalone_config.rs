@@ -66,7 +66,7 @@ pub struct ServerConfig {
     /// Public base URL for this manager instance (used for command response
     /// URLs, deploy pages, etc.). Defaults to `http://localhost:{port}`.
     pub base_url: Option<String>,
-    /// Base URL for release binary downloads (alien-deploy, alien-agent).
+    /// Base URL for release binary downloads (alien-deploy, alien-operator).
     /// Defaults to `https://releases.alien.dev`.
     pub releases_url: Option<String>,
     #[serde(default = "default_deployment_interval")]

@@ -4,15 +4,33 @@
 
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
+import { safeParse } from "../../lib/schemas.js";
+import { Result as SafeParseResult } from "../../types/fp.js";
+import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
 export type CreateDeploymentRequest = {
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   newDeploymentRequest?: models.NewDeploymentRequest | undefined;
 };
+
+/**
+ * Existing deployment returned for idempotent deployment-group registration.
+ */
+export type CreateDeploymentResponseBody = {
+  deployment: models.Deployment;
+  /**
+   * Deployment token (only returned when using deployment group token)
+   */
+  token?: string | undefined;
+};
+
+export type CreateDeploymentResponse =
+  | CreateDeploymentResponseBody
+  | models.CreateDeploymentResponse;
 
 /** @internal */
 export type CreateDeploymentRequest$Outbound = {
@@ -38,5 +56,43 @@ export function createDeploymentRequestToJSON(
 ): string {
   return JSON.stringify(
     CreateDeploymentRequest$outboundSchema.parse(createDeploymentRequest),
+  );
+}
+
+/** @internal */
+export const CreateDeploymentResponseBody$inboundSchema: z.ZodType<
+  CreateDeploymentResponseBody,
+  unknown
+> = z.object({
+  deployment: models.Deployment$inboundSchema,
+  token: z.string().optional(),
+});
+
+export function createDeploymentResponseBodyFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateDeploymentResponseBody, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateDeploymentResponseBody$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateDeploymentResponseBody' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateDeploymentResponse$inboundSchema: z.ZodType<
+  CreateDeploymentResponse,
+  unknown
+> = z.union([
+  z.lazy(() => CreateDeploymentResponseBody$inboundSchema),
+  models.CreateDeploymentResponse$inboundSchema,
+]);
+
+export function createDeploymentResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateDeploymentResponse, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateDeploymentResponse$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateDeploymentResponse' from JSON`,
   );
 }

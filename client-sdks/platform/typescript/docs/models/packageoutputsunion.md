@@ -14,13 +14,13 @@ const value: models.OutputsCli = {
 };
 ```
 
-### `models.OutputsAgentImage`
+### `models.OutputsOperatorImage`
 
 ```typescript
-const value: models.OutputsAgentImage = {
+const value: models.OutputsOperatorImage = {
   digest: "<value>",
-  image: "https://loremflickr.com/2093/3847?lock=4569584363340966",
-  type: "agent-image",
+  image: "https://loremflickr.com/104/2323?lock=152100383342186",
+  type: "operator-image",
 };
 ```
 

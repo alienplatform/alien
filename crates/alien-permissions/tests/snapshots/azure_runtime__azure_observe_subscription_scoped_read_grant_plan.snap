@@ -1,0 +1,39 @@
+---
+source: crates/alien-permissions/tests/azure_runtime.rs
+expression: result
+---
+{
+  "customRoles": [
+    {
+      "key": "discover_and_metrics",
+      "roleDefinition": {
+        "Name": "Discover And Metrics",
+        "IsCustom": true,
+        "Description": "Used by Payment Processor. Resource Graph + Azure Monitor read at subscription scope. Resource prefix: my-stack.",
+        "Actions": [
+          "Microsoft.Insights/metricDefinitions/read",
+          "Microsoft.Insights/metrics/read",
+          "Microsoft.ResourceGraph/resources/read"
+        ],
+        "NotActions": [],
+        "DataActions": [],
+        "NotDataActions": [],
+        "AssignableScopes": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000"
+        ]
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "permissionSetId": "observe/observe",
+      "roleName": "Discover And Metrics",
+      "roleDefinition": {
+        "custom": {
+          "key": "discover_and_metrics"
+        }
+      },
+      "scope": "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

@@ -19,9 +19,9 @@ let value: ContainerHeartbeatDataKubernetes = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   workloadKind: "deployment",
   backend: "kubernetes",

@@ -18,6 +18,7 @@ members = [
   "crates/alien-gcp-clients", 
   "crates/alien-azure-clients",
   "crates/alien-k8s-clients",
+  "crates/alien-observer",
   "crates/alien-error",
   "crates/alien-error-derive",
   "crates/alien-permissions",
@@ -28,7 +29,7 @@ members = [
   "crates/alien-terraform",
   "crates/alien-helm",
   "crates/alien-manager",
-  "crates/alien-agent",
+  "crates/alien-operator",
   "crates/alien-deploy-cli",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
@@ -72,6 +73,7 @@ alien-aws-clients = { path = "crates/alien-aws-clients", version = "1.7.1" }
 alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "1.7.1" }
 alien-azure-clients = { path = "crates/alien-azure-clients", version = "1.7.1" }
 alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "1.7.1" }
+alien-observer = { path = "crates/alien-observer", version = "1.7.1" }
 alien-error = { path = "crates/alien-error", version = "1.7.1", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "1.7.1" }
 alien-permissions = { path = "crates/alien-permissions", version = "1.7.1" }

@@ -13,9 +13,7 @@ let value: DeploymentSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [
-      "google-oauth",
-    ],
+    allowedSetupMethods: [],
   },
   environmentVariables: [],
 };

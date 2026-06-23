@@ -31,7 +31,13 @@ export type DeploymentConnectionInfoResources = {
 };
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const DeploymentConnectionInfoStatus = {
   Pending: "pending",
@@ -54,7 +60,13 @@ export const DeploymentConnectionInfoStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type DeploymentConnectionInfoStatus = ClosedEnum<
   typeof DeploymentConnectionInfoStatus
@@ -67,7 +79,13 @@ export type DeploymentConnectionInfo = {
    */
   resources: { [k: string]: DeploymentConnectionInfoResources };
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentConnectionInfoStatus;
   platform: string;

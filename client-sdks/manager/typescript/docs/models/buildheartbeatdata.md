@@ -15,15 +15,15 @@ const value: models.BuildHeartbeatDataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "updating",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "awsCodeBuild",
 };
@@ -41,15 +41,15 @@ const value: models.BuildHeartbeatDataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "updating",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "gcpCloudBuild",
 };
@@ -66,15 +66,15 @@ const value: models.BuildHeartbeatDataAzureContainerApps = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "updating",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -97,15 +97,15 @@ const value: models.BuildHeartbeatDataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "updating",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "kubernetesJob",
 };

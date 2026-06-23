@@ -19,9 +19,9 @@ let value: WorkerHeartbeatDataKubernetes = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 374516,
   workloadKind: "daemonSet",

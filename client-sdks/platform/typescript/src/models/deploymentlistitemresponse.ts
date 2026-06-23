@@ -19,9 +19,19 @@ import {
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const DeploymentListItemResponseStatus = {
   Pending: "pending",
@@ -44,7 +54,13 @@ export const DeploymentListItemResponseStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type DeploymentListItemResponseStatus = ClosedEnum<
   typeof DeploymentListItemResponseStatus
@@ -315,7 +331,13 @@ export type DeploymentListItemResponse = {
   id: string;
   name: string;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentListItemResponseStatus;
   /**
@@ -382,6 +404,22 @@ export type DeploymentListItemResponse = {
    * Imported setup fingerprint version
    */
   setupFingerprintVersion?: number | null | undefined;
+  /**
+   * Display-only scope reported by the Operator manifest
+   */
+  operatorScope?: string | null | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest
+   */
+  operatorPermission?: string | null | undefined;
+  /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
    * Timestamp of the last received heartbeat
    */
@@ -672,6 +710,11 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),
   setupFingerprintVersion: z.nullable(z.int()).optional(),
+  operatorScope: z.nullable(z.string()).optional(),
+  operatorPermission: z.nullable(z.string()).optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
+  capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+    .optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

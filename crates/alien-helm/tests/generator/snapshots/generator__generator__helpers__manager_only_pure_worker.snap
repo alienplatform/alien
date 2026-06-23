@@ -1,6 +1,5 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
-assertion_line: 37
 expression: buf
 ---
 === Chart.yaml ===
@@ -117,6 +116,23 @@ runtime:
         repository: bitnami/kubectl
         tag: "1.32"
         pullPolicy: IfNotPresent
+
+logCollector:
+  enabled: false
+  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  scope:
+    deploymentLabelKey: "alien.dev/deployment"
+    deploymentLabelValue: ""
 
 heartbeat:
   collection:
@@ -400,6 +416,32 @@ ephemeralStorage:
       "properties": {
         "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
         "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "logCollector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "token": { "type": "string" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": { "type": "object" },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "deploymentLabelKey": { "type": "string" },
+            "deploymentLabelValue": { "type": "string" }
+          }
+        }
       }
     },
     "serviceAccounts": {
@@ -884,7 +926,7 @@ roleRef:
 === templates/secret.yaml ===
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -901,6 +943,9 @@ stringData:
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- end }}
+  {{- if .Values.logCollector.enabled }}
+  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
   {{- end }}
 {{- end }}
 
@@ -984,7 +1029,7 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: ALIEN_BASE_PLATFORM
+            - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
@@ -1023,6 +1068,8 @@ spec:
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: OPERATOR_SETUP_METHOD
+              value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             - name: SYNC_TOKEN_FILE
@@ -1043,6 +1090,10 @@ spec:
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
+            {{- if .Values.logCollector.enabled }}
+            - name: COLLECTOR_TOKEN_FILE
+              value: /etc/deployment/secrets/collector-token
+            {{- end }}
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}
@@ -1084,6 +1135,12 @@ spec:
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
+            {{- if .Values.logCollector.enabled }}
+            - name: collector-token
+              mountPath: /etc/deployment/secrets/collector-token
+              subPath: collector-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
             - name: tmp
               mountPath: /tmp
@@ -1116,6 +1173,15 @@ spec:
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
+        {{- if .Values.logCollector.enabled }}
+        - name: collector-token
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: collector-token
+                path: collector-token
+            defaultMode: 384
+        {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
         - name: tmp
           emptyDir:
@@ -1128,6 +1194,189 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+
+=== templates/whitelabeled-log-collector-serviceaccount.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+automountServiceAccountToken: true
+{{- end }}
+
+=== templates/whitelabeled-log-collector-role.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+
+=== templates/whitelabeled-log-collector-rolebinding.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+
+=== templates/whitelabeled-log-collector-configmap.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+data:
+  collector.conf: |
+    [SERVICE]
+        Flush        2
+        Log_Level    info
+        Parsers_File parsers.conf
+        storage.path /buffers
+        storage.sync normal
+        storage.backlog.mem_limit 64M
+
+    [INPUT]
+        Name              tail
+        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
+        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        Path_Key          filename
+        multiline.parser  docker, cri
+        Tag               kube.*
+        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        Mem_Buf_Limit     64MB
+        Skip_Long_Lines   On
+        Read_from_Head    On
+        Refresh_Interval  5
+        storage.type      filesystem
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           Off
+        Keep_Log            On
+        Labels              On
+        Annotations         Off
+
+    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
+    {{- end }}
+
+    [OUTPUT]
+        Name          http
+        Match         kube.*
+        Host          {{ include "deployment.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        Port          {{ .Values.runtime.api.port }}
+        URI           /internal/logs
+        Format        json
+        Json_Date_Key observed_at
+        Header        Authorization Bearer ${COLLECTOR_TOKEN}
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+{{- end }}
+
+=== templates/whitelabeled-log-collector-daemonset.yaml ===
+{{- if .Values.logCollector.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: whitelabeled-log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/component: whitelabeled-log-collector
+    spec:
+      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: collector
+          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          args:
+            - -c
+            - /collector/etc/collector.conf
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deployment.fullname" . }}
+                  key: collector-token
+          volumeMounts:
+            - name: config
+              mountPath: /collector/etc
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: dockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: buffers
+              mountPath: /buffers
+          resources:
+            {{- toYaml .Values.logCollector.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        # Docker-runtime clusters symlink pod logs to /var/lib/docker/containers;
+        # mount it so fluent-bit can follow them. DirectoryOrCreate is harmless on
+        # containerd nodes where the path doesn't exist.
+        - name: dockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        - name: buffers
+          emptyDir: {}
+{{- end }}
 
 === templates/pvc.yaml ===
 {{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
@@ -1149,7 +1398,7 @@ spec:
 {{- end }}
 
 === templates/service.yaml ===
-{{- if .Values.runtime.api.enabled }}
+{{- if or .Values.runtime.api.enabled .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Service
 metadata:

@@ -116,7 +116,6 @@ async function run() {
         commitAuthorLogin: "johndoe",
         commitAuthorAvatarUrl: "https://github.com/johndoe.png",
       },
-      stack: {},
       project: "<value>",
     },
   });
@@ -157,7 +156,6 @@ async function run() {
         commitAuthorLogin: "johndoe",
         commitAuthorAvatarUrl: "https://github.com/johndoe.png",
       },
-      stack: {},
       project: "<value>",
     },
   });

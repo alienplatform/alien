@@ -232,6 +232,8 @@ export type { NetworkHeartbeatStatus } from "./zod/network-heartbeat-status-sche
 export type { NetworkSettings } from "./zod/network-settings-schema.js";
 export type { ObservedCounts } from "./zod/observed-counts-schema.js";
 export type { ObservedHealth } from "./zod/observed-health-schema.js";
+export type { ObservedInventoryBatch } from "./zod/observed-inventory-batch-schema.js";
+export type { ObservedResourceSample } from "./zod/observed-resource-sample-schema.js";
 export type { PermissionGrant } from "./zod/permission-grant-schema.js";
 export type { PermissionProfile } from "./zod/permission-profile-schema.js";
 export type { PermissionSetReference } from "./zod/permission-set-reference-schema.js";
@@ -544,6 +546,8 @@ export { NetworkHeartbeatStatusSchema } from "./zod/network-heartbeat-status-sch
 export { NetworkSettingsSchema } from "./zod/network-settings-schema.js";
 export { ObservedCountsSchema } from "./zod/observed-counts-schema.js";
 export { ObservedHealthSchema } from "./zod/observed-health-schema.js";
+export { ObservedInventoryBatchSchema } from "./zod/observed-inventory-batch-schema.js";
+export { ObservedResourceSampleSchema } from "./zod/observed-resource-sample-schema.js";
 export { PermissionGrantSchema } from "./zod/permission-grant-schema.js";
 export { PermissionProfileSchema } from "./zod/permission-profile-schema.js";
 export { PermissionSetReferenceSchema } from "./zod/permission-set-reference-schema.js";

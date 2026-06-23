@@ -3108,7 +3108,13 @@ export type SyncReconcileResponseStackStateUnion =
   | any;
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const SyncReconcileResponseStatus = {
   Pending: "pending",
@@ -3131,7 +3137,13 @@ export const SyncReconcileResponseStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type SyncReconcileResponseStatus = ClosedEnum<
   typeof SyncReconcileResponseStatus
@@ -4445,7 +4457,13 @@ export type SyncReconcileResponseCurrent = {
     | undefined;
   stackState?: SyncReconcileResponseStackState | any | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: SyncReconcileResponseStatus;
   targetRelease?: SyncReconcileResponseTargetRelease | any | null | undefined;
@@ -6905,10 +6923,12 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, worker runtimes export captured application logs through the
- * given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
- * deployment code must sync them to a runtime-only secret and avoid putting
- * them into user application environment variables.
+ * When set, injected compute runtimes export captured application logs
+ * through the given endpoint via OTLP/HTTP; which resources are injected
+ * is platform-dependent. Workers and daemons read auth headers from a
+ * runtime-only secret — never from application environment variables.
+ * Containers have no runtime wrapper, so they get the endpoint and auth
+ * header as plain OTEL env vars for the application's own exporter.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
@@ -8080,6 +8100,16 @@ export type TargetConfig = {
       | SyncReconcileResponseExternalBindingsKubernetesSecret
       | SyncReconcileResponseExternalBindingsLocalVault;
   } | undefined;
+  /**
+   * DNS-style label domain used for Kubernetes resource ownership labels.
+   *
+   * @remarks
+   *
+   * Defaults to `alien.dev` when absent. Whitelabeled Operator builds set this
+   * so generated workloads and optional log collectors share the same label
+   * namespace.
+   */
+  labelDomain?: string | null | undefined;
   managementConfig?:
     | SyncReconcileResponseManagementConfigAzure
     | SyncReconcileResponseManagementConfigAws
@@ -8115,6 +8145,14 @@ export type TargetConfig = {
    * - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
    */
   nativeImageHost?: string | null | undefined;
+  /**
+   * Kubernetes label selector that narrows which raw resources the observe
+   *
+   * @remarks
+   * pass reports (e.g. `app.kubernetes.io/part-of=my-app`). `None` observes
+   * everything in the namespace. Ignored by cloud observers.
+   */
+  observeLabelSelector?: string | null | undefined;
   /**
    * Public URLs for exposed resources (optional override).
    *
@@ -23039,6 +23077,7 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
         ]),
       ]),
     ).optional(),
+    labelDomain: z.nullable(z.string()).optional(),
     managementConfig: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),
@@ -23058,6 +23097,7 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
       ]),
     ).optional(),
     nativeImageHost: z.nullable(z.string()).optional(),
+    observeLabelSelector: z.nullable(z.string()).optional(),
     publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
     stackSettings: z.lazy(() =>
       SyncReconcileResponseStackSettings$inboundSchema

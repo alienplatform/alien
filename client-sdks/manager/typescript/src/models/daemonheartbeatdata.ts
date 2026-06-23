@@ -57,7 +57,7 @@ import {
 export type DaemonHeartbeatDataLocal = {
   commandSupported: boolean;
   daemonInstance?: LocalRuntimeUnitStatus | null | undefined;
-  daemonName: string;
+  daemonName?: string | undefined;
   events: Array<LocalRuntimeEventSnapshot>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -88,7 +88,7 @@ export type DaemonHeartbeatDataAzure = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
@@ -107,7 +107,7 @@ export type DaemonHeartbeatDataGcp = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
@@ -126,7 +126,7 @@ export type DaemonHeartbeatDataAws = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
@@ -151,7 +151,7 @@ export type DaemonHeartbeatData =
 export type DaemonHeartbeatDataLocal$Outbound = {
   commandSupported: boolean;
   daemonInstance?: LocalRuntimeUnitStatus$Outbound | null | undefined;
-  daemonName: string;
+  daemonName?: string | undefined;
   events: Array<LocalRuntimeEventSnapshot$Outbound>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -169,7 +169,7 @@ export const DaemonHeartbeatDataLocal$outboundSchema: z.ZodType<
 > = z.object({
   commandSupported: z.boolean(),
   daemonInstance: z.nullable(LocalRuntimeUnitStatus$outboundSchema).optional(),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   events: z.array(LocalRuntimeEventSnapshot$outboundSchema),
   exitReason: z.nullable(z.string()).optional(),
   imagePathPresent: z.boolean(),
@@ -239,7 +239,7 @@ export type DaemonHeartbeatDataAzure$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
@@ -262,7 +262,7 @@ export const DaemonHeartbeatDataAzure$outboundSchema: z.ZodType<
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),
@@ -290,7 +290,7 @@ export type DaemonHeartbeatDataGcp$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
@@ -313,7 +313,7 @@ export const DaemonHeartbeatDataGcp$outboundSchema: z.ZodType<
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),
@@ -341,7 +341,7 @@ export type DaemonHeartbeatDataAws$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
@@ -364,7 +364,7 @@ export const DaemonHeartbeatDataAws$outboundSchema: z.ZodType<
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),

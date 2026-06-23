@@ -16,7 +16,7 @@ export const ListPackagesType = {
   Cli: "cli",
   Cloudformation: "cloudformation",
   Helm: "helm",
-  AgentImage: "agent-image",
+  OperatorImage: "operator-image",
   Terraform: "terraform",
 } as const;
 /**
@@ -41,7 +41,7 @@ export type ListPackagesStatus = ClosedEnum<typeof ListPackagesStatus>;
 
 export type ListPackagesRequest = {
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**

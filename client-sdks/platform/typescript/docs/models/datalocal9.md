@@ -12,14 +12,14 @@ let value: DataLocal9 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "collection-failed",
         severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopped",
-    partial: false,
+    health: "unhealthy",
+    lifecycle: "unknown",
+    partial: true,
     stale: true,
   },
   backend: "local",
@@ -28,9 +28,9 @@ let value: DataLocal9 = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `configured`                                               | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `identity`                                                 | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus39](../models/heartbeatstatus39.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"local"*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `configured`                                                               | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `identity`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus39](../models/resourceheartbeatstatus39.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"local"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |

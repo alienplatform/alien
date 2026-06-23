@@ -10,7 +10,13 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const ListDeploymentsStatus = {
   Pending: "pending",
@@ -33,7 +39,13 @@ export const ListDeploymentsStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type ListDeploymentsStatus = ClosedEnum<typeof ListDeploymentsStatus>;
 
@@ -76,7 +88,7 @@ export type ListDeploymentsRequest = {
    */
   managerId?: string | undefined;
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**

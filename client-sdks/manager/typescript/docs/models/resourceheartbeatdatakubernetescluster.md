@@ -14,9 +14,9 @@ let value: ResourceHeartbeatDataKubernetesCluster = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
+      lifecycle: "failed",
       partial: false,
-      stale: true,
+      stale: false,
     },
   },
   resourceType: "kubernetes-cluster",

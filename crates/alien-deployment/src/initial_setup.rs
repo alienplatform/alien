@@ -158,6 +158,7 @@ pub async fn handle_initial_setup(
             suggested_delay_ms: Some(10_000),
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Initial setup failed");
@@ -198,6 +199,7 @@ pub async fn handle_initial_setup(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else {
         // Still in progress — log which Frozen resources are not yet running.
@@ -217,6 +219,7 @@ pub async fn handle_initial_setup(
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
+            observed_inventory_batches: vec![],
         }
     };
 
@@ -290,6 +293,7 @@ pub async fn handle_initial_setup_failed(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         });
     }
 
@@ -322,5 +326,6 @@ pub async fn handle_initial_setup_failed(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }

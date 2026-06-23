@@ -3,9 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeploymentConfig, DeploymentState, EnvironmentInfo,
-    EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
-    StackSettings, StackState,
+    import::ImportSourceKind, sync::OperatorCapabilityReport, DeploymentConfig, DeploymentState,
+    EnvironmentInfo, EnvironmentVariable, ManagementConfig, ObservedInventoryBatch, Platform,
+    ResourceHeartbeat, RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -223,6 +223,9 @@ pub struct ReconcileData {
     pub update_heartbeat: bool,
     pub suggested_delay_ms: Option<u64>,
     pub heartbeats: Vec<ResourceHeartbeat>,
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    pub operator_version: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.

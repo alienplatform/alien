@@ -88,8 +88,8 @@ on:
         description: "Optional alien-base image to use when skipping image builds"
         type: string
         default: ""
-      agent_image_override:
-        description: "Optional alien-agent image to use when skipping image builds"
+      operator_image_override:
+        description: "Optional alien-operator image to use when skipping image builds"
         type: string
         default: ""
       skip_cleanup:
@@ -156,7 +156,7 @@ jobs:
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
       build_base_image: ${{ steps.set.outputs.build_base_image }}
-      build_agent_image: ${{ steps.set.outputs.build_agent_image }}
+      build_operator_image: ${{ steps.set.outputs.build_operator_image }}
       skip_cleanup: ${{ steps.set.outputs.skip_cleanup }}
       test_filter: ${{ steps.set.outputs.test_filter }}
       network_mode: ${{ steps.set.outputs.network_mode }}
@@ -191,7 +191,7 @@ jobs:
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "build_base_image=true" >> $GITHUB_OUTPUT
-            echo "build_agent_image=true" >> $GITHUB_OUTPUT
+            echo "build_operator_image=true" >> $GITHUB_OUTPUT
             echo "skip_cleanup=true" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
             echo "network_mode=none" >> $GITHUB_OUTPUT
@@ -218,7 +218,7 @@ jobs:
             NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
             BASE_IMAGE_OVERRIDE="${{ inputs.base_image_override }}"
-            AGENT_IMAGE_OVERRIDE="${{ inputs.agent_image_override }}"
+            OPERATOR_IMAGE_OVERRIDE="${{ inputs.operator_image_override }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
           else
@@ -235,7 +235,7 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            APP=comprehensive-rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; AGENT_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
+            APP=comprehensive-rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; OPERATOR_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
           BUILD_BASE_IMAGE=$BUILD_IMAGES
@@ -247,7 +247,7 @@ jobs:
           if [ -n "$BASE_IMAGE_OVERRIDE" ]; then
             BUILD_BASE_IMAGE=false
           fi
-          if [ -n "$AGENT_IMAGE_OVERRIDE" ]; then
+          if [ -n "$OPERATOR_IMAGE_OVERRIDE" ]; then
             BUILD_AGENT_IMAGE=false
           fi
           if [ "$BUILD_BASE_IMAGE" != "true" ] && [ "$BUILD_AGENT_IMAGE" != "true" ]; then
@@ -370,7 +370,7 @@ jobs:
             if [ "$PUSH_AWS_CLI" = "true" ]; then NEEDS_AARCH64=true; fi
           fi
           # Distribution tests run on ARM runners. K8s Terraform+Helm tests also
-          # consume the agent image, so keep both architectures available.
+          # consume the operator image, so keep both architectures available.
           if [ "$HAS_TERRAFORM" = "true" ]; then NEEDS_X86_64=true; NEEDS_AARCH64=true; fi
           if [ "$HAS_CLOUDFORMATION" = "true" ]; then NEEDS_AARCH64=true; fi
 
@@ -386,12 +386,12 @@ jobs:
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
           echo "build_base_image=$BUILD_BASE_IMAGE" >> $GITHUB_OUTPUT
-          echo "build_agent_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
+          echo "build_operator_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
           echo "skip_cleanup=$SKIP_CLEANUP" >> $GITHUB_OUTPUT
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
           echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
 
-  # ── Build alien-runtime + alien-agent for needed architectures ─────
+  # ── Build alien-runtime + alien-operator for needed architectures ─────
   # Combined into one cargo invocation per arch to share compilation of
   # common dependencies (tokio, reqwest, serde, platform clients, etc.).
 
@@ -415,14 +415,14 @@ jobs:
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-agent (x86_64)
+      - name: Build alien-runtime + alien-operator (x86_64)
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-runtime")
           fi
-          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-agent")
+          if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
@@ -434,10 +434,10 @@ jobs:
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
-        if: needs.compute-matrix.outputs.build_agent_image == 'true'
+        if: needs.compute-matrix.outputs.build_operator_image == 'true'
         with:
-          name: alien-agent-x86_64
-          path: target/x86_64-unknown-linux-musl/release/alien-agent
+          name: alien-operator-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-operator
           retention-days: 1
 
   build-aarch64:
@@ -460,14 +460,14 @@ jobs:
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-agent (aarch64)
+      - name: Build alien-runtime + alien-operator (aarch64)
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-runtime")
           fi
-          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-agent")
+          if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
@@ -479,10 +479,10 @@ jobs:
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
-        if: needs.compute-matrix.outputs.build_agent_image == 'true'
+        if: needs.compute-matrix.outputs.build_operator_image == 'true'
         with:
-          name: alien-agent-aarch64
-          path: target/aarch64-unknown-linux-musl/release/alien-agent
+          name: alien-operator-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-operator
           retention-days: 1
 
   # ── Build container images ─────────────────────────────────────────
@@ -553,37 +553,37 @@ jobs:
           tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
           provenance: false
 
-  build-agent-image:
+  build-operator-image:
     needs: [compute-matrix, build-x86_64, build-aarch64]
     if: |
       !cancelled() && !failure() &&
-      needs.compute-matrix.outputs.build_agent_image == 'true' &&
+      needs.compute-matrix.outputs.build_operator_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     outputs:
-      agent_image: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
+      operator_image: ghcr.io/alienplatform/alien-operator:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         if: needs.build-x86_64.result == 'success'
         with:
-          name: alien-agent-x86_64
+          name: alien-operator-x86_64
           path: target/x86_64-unknown-linux-musl/release/
 
       - uses: actions/download-artifact@v4
         if: needs.build-aarch64.result == 'success'
         with:
-          name: alien-agent-aarch64
+          name: alien-operator-aarch64
           path: target/aarch64-unknown-linux-musl/release/
 
       - name: Ensure binary dirs exist and make executable
         run: |
           mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
-          [ ! -f target/x86_64-unknown-linux-musl/release/alien-agent ] && touch target/x86_64-unknown-linux-musl/release/alien-agent
-          [ ! -f target/aarch64-unknown-linux-musl/release/alien-agent ] && touch target/aarch64-unknown-linux-musl/release/alien-agent
-          chmod +x target/*/release/alien-agent
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-operator ] && touch target/x86_64-unknown-linux-musl/release/alien-operator
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-operator ] && touch target/aarch64-unknown-linux-musl/release/alien-operator
+          chmod +x target/*/release/alien-operator
 
       - name: Compute Docker platforms
         id: platforms
@@ -606,15 +606,15 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - name: Build and push alien-agent
+      - name: Build and push alien-operator
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
-          file: docker/Dockerfile.alien-agent
+          file: docker/Dockerfile.alien-operator
           platforms: ${{ steps.platforms.outputs.platforms }}
           push: true
-          tags: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
+          tags: ghcr.io/alienplatform/alien-operator:${{ github.sha }}
           provenance: false
 
   # ── Terraform setup ─────────────────────────────────────────────────
@@ -1109,7 +1109,7 @@ jobs:
   # ── E2E Terraform distribution matrix ──────────────────────────────
 
   terraform-test:
-    needs: [compute-matrix, setup, build-base-image, build-agent-image]
+    needs: [compute-matrix, setup, build-base-image, build-operator-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_terraform == 'true'
@@ -1153,15 +1153,15 @@ jobs:
           echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
       - uses: docker/login-action@v3
-        if: needs.compute-matrix.outputs.build_agent_image == 'true'
+        if: needs.compute-matrix.outputs.build_operator_image == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull agent image
-        if: needs.compute-matrix.outputs.build_agent_image == 'true'
-        run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
+      - name: Pull operator image
+        if: needs.compute-matrix.outputs.build_operator_image == 'true'
+        run: docker pull ${{ needs.build-operator-image.outputs.operator_image }}
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -1262,7 +1262,7 @@ jobs:
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
-          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ inputs.agent_image_override || (needs.compute-matrix.outputs.build_agent_image == 'true' && needs.build-agent-image.outputs.agent_image || '') }}
+          ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE: ${{ inputs.operator_image_override || (needs.compute-matrix.outputs.build_operator_image == 'true' && needs.build-operator-image.outputs.operator_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
           ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}
           ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1274,7 +1274,7 @@ jobs:
           cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E local test matrix ──────────────────────────────────────────
-  # Installs alien-agent as an OS service via `alien-deploy up` on each
+  # Installs alien-operator as an OS service via `alien-deploy up` on each
   # OS (Linux, macOS, Windows), matching the real customer deployment flow.
 
   local-test:
@@ -1356,13 +1356,13 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      - name: Build alien-agent and alien-deploy (Unix)
+      - name: Build alien-operator and alien-deploy (Unix)
         if: runner.os != 'Windows'
-        run: depot cargo build -p alien-agent -p alien-deploy-cli
+        run: depot cargo build -p alien-operator -p alien-deploy-cli
 
-      - name: Build alien-agent and alien-deploy (Windows)
+      - name: Build alien-operator and alien-deploy (Windows)
         if: runner.os == 'Windows'
-        run: cargo build -p alien-agent -p alien-deploy-cli
+        run: cargo build -p alien-operator -p alien-deploy-cli
 
       - name: Mask sensitive values from .env.test (Unix)
         if: runner.os != 'Windows'
@@ -1392,7 +1392,7 @@ jobs:
       - name: Run E2E local test (Unix)
         if: runner.os != 'Windows'
         env:
-          ALIEN_AGENT_BINARY: target/debug/alien-agent
+          ALIEN_OPERATOR_BINARY: target/debug/alien-operator
           ALIEN_DEPLOY_BINARY: target/debug/alien-deploy
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_E2E_FOREGROUND: ${{ inputs.foreground_agent && '1' || '' }}
@@ -1403,7 +1403,7 @@ jobs:
       - name: Run E2E local test (Windows)
         if: runner.os == 'Windows'
         env:
-          ALIEN_AGENT_BINARY: target/debug/alien-agent.exe
+          ALIEN_OPERATOR_BINARY: target/debug/alien-operator.exe
           ALIEN_DEPLOY_BINARY: target/debug/alien-deploy.exe
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_E2E_FOREGROUND: ${{ inputs.foreground_agent && '1' || '' }}

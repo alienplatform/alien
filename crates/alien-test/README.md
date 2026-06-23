@@ -6,7 +6,7 @@ E2E test harness for cross-cloud deployment testing. Provides reusable building 
 
 ```bash
 # Build binaries
-cargo build -p alien-agent -p alien-deploy-cli
+cargo build -p alien-operator -p alien-deploy-cli
 
 # Build runtime base image (x86_64 for GCP/Azure, arm64 for AWS Lambda)
 docker buildx build -t alien-runtime:local --platform linux/amd64 \
@@ -21,7 +21,7 @@ set -a && source .env.test && set +a
 
 - **`TestManager`** — Starts a standalone alien-manager on a random port with temp SQLite. Provides authenticated SDK client.
 - **`TestDeployment`** — Wraps a deployment with `deploy()`, `wait_until_running()`, `invoke_command()`, `upgrade()`, `destroy()`.
-- **`TestAlienAgent`** — Manages agent lifecycle for pull-model tests (Docker, Helm, OS service).
+- **`TestAlienOperator`** — Manages operator lifecycle for pull-model tests (Docker, Helm, OS service).
 - **`TestConfig`** — Loads cloud credentials from `.env.test`, reports available platforms.
 - **`setup_target`** — Creates scoped IAM roles with auto-generated permissions for testing.
 
@@ -35,7 +35,7 @@ Tests use `TestContext` with two roles:
 | Platform | Model | Flow |
 |---|---|---|
 | AWS/GCP/Azure | Push | `alien-deploy deploy --platform <cloud>` |
-| AWS/GCP/Azure | Pull | Docker alien-agent container |
+| AWS/GCP/Azure | Pull | Docker alien-operator container |
 | K8s | Pull | `helm install` |
 | Local | Pull | `alien-deploy deploy --platform local` |
 

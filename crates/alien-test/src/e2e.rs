@@ -378,7 +378,7 @@ pub struct TestContext {
     /// Test app app.
     pub app: TestApp,
     /// Alien-agent handle (pull model only).
-    pub agent: Option<crate::agent::TestAlienAgent>,
+    pub agent: Option<crate::operator::TestAlienOperator>,
     /// Distribution artifacts that must be destroyed outside the native
     /// deployment state machine (Terraform state, CFN stack, Helm release).
     pub distribution_cleanups: Vec<crate::distribution::DistributionArtifactCleanup>,
@@ -394,11 +394,11 @@ impl TestContext {
         // 1. Dump agent logs for debugging, then stop the agent.
         if let Some(agent) = self.agent.take() {
             if let Some(ref cid) = agent.container_id {
-                let logs = crate::agent::docker_container_logs(cid).await;
+                let logs = crate::operator::docker_container_logs(cid).await;
                 tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
             }
             if agent.installed_as_service {
-                let logs = crate::agent::collect_service_logs().await;
+                let logs = crate::operator::collect_service_logs().await;
                 tracing::info!("Agent service logs:\n{}", logs);
             }
             agent.cleanup().await;
@@ -536,8 +536,8 @@ async fn start_generated_helm_agent(
     manager: &Arc<TestManager>,
     deployment: &TestDeployment,
     stack: &Stack,
-    agent_image: &str,
-) -> anyhow::Result<crate::agent::TestAlienAgent> {
+    operator_image: &str,
+) -> anyhow::Result<crate::operator::TestAlienOperator> {
     let chart_dir = tempfile::tempdir().context("failed to create generated Helm chart dir")?;
     let registry = alien_helm::HelmRegistry::built_in();
     let mut stack_settings = alien_core::StackSettings::default();
@@ -560,7 +560,7 @@ async fn start_generated_helm_agent(
         tokio::fs::write(path, contents).await?;
     }
 
-    let (repository, tag) = split_image_tag(agent_image)?;
+    let (repository, tag) = split_image_tag(operator_image)?;
     let mut runtime = serde_json::json!({
         "image": {
             "repository": repository,
@@ -568,7 +568,7 @@ async fn start_generated_helm_agent(
             "pullPolicy": "IfNotPresent",
         },
         "encryption": {
-            "key": crate::agent::generate_encryption_key(),
+            "key": crate::operator::generate_encryption_key(),
         }
     });
     if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
@@ -597,7 +597,7 @@ async fn start_generated_helm_agent(
     let values_path = chart_dir.path().join("values.e2e.yaml");
     tokio::fs::write(&values_path, to_helm_values_yaml(&values)?).await?;
 
-    crate::agent::TestAlienAgent::helm_install_with_values(
+    crate::operator::TestAlienOperator::helm_install_with_values(
         chart_dir.path(),
         &values_path,
         &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
@@ -608,7 +608,7 @@ async fn start_generated_helm_agent(
     )
     .await
     .map_err(|error| {
-        anyhow::anyhow!("Failed to start alien-agent via generated Helm chart: {error}")
+        anyhow::anyhow!("Failed to start alien-operator via generated Helm chart: {error}")
     })
 }
 
@@ -1056,19 +1056,19 @@ fn find_deploy_binary() -> anyhow::Result<std::path::PathBuf> {
     )
 }
 
-/// Resolve the alien-agent binary path for tests.
+/// Resolve the alien-operator binary path for tests.
 ///
-/// 1. ALIEN_AGENT_BINARY env var (explicit override)
-/// 2. Auto-detect from cargo build output (target/debug/alien-agent)
+/// 1. ALIEN_OPERATOR_BINARY env var (explicit override)
+/// 2. Auto-detect from cargo build output (target/debug/alien-operator)
 fn resolve_agent_binary() -> Option<std::path::PathBuf> {
     let binary_name = if cfg!(windows) {
-        "alien-agent.exe"
+        "alien-operator.exe"
     } else {
-        "alien-agent"
+        "alien-operator"
     };
 
     // Check explicit env var
-    if let Ok(path) = std::env::var("ALIEN_AGENT_BINARY") {
+    if let Ok(path) = std::env::var("ALIEN_OPERATOR_BINARY") {
         let p = std::path::PathBuf::from(&path);
         if p.is_absolute() && p.exists() {
             return Some(p);
@@ -1108,7 +1108,7 @@ fn workspace_root() -> Option<std::path::PathBuf> {
 ///
 /// This is the real customer flow: `alien-deploy deploy --token <dg_token> --platform <platform>`.
 /// For push model, it reads cloud credentials from the environment.
-/// For local pull, it installs alien-agent as an OS service.
+/// For local pull, it installs alien-operator as an OS service.
 pub async fn run_alien_deploy_up(
     manager: &Arc<TestManager>,
     dg_token: &str,
@@ -1132,7 +1132,7 @@ pub async fn run_alien_deploy_up(
 
     let mut cmd = if use_sudo {
         let mut c = tokio::process::Command::new("sudo");
-        // Preserve environment variables (cloud credentials, ALIEN_AGENT_BINARY, etc.)
+        // Preserve environment variables (cloud credentials, ALIEN_OPERATOR_BINARY, etc.)
         c.arg("--preserve-env");
         c.arg(deploy_binary.as_os_str());
         c
@@ -1171,12 +1171,12 @@ pub async fn run_alien_deploy_up(
         std::mem::forget(agent_data_dir);
     }
 
-    // Ensure the locally-built alien-agent binary is used instead of
+    // Ensure the locally-built alien-operator binary is used instead of
     // downloading from releases.alien.dev. Resolution order:
-    // 1. ALIEN_AGENT_BINARY env var (explicit override)
-    // 2. Auto-detect from cargo build output (target/debug/alien-agent)
-    if let Some(agent_path) = resolve_agent_binary() {
-        cmd.env("ALIEN_AGENT_BINARY", &agent_path);
+    // 1. ALIEN_OPERATOR_BINARY env var (explicit override)
+    // 2. Auto-detect from cargo build output (target/debug/alien-operator)
+    if let Some(operator_path) = resolve_agent_binary() {
+        cmd.env("ALIEN_OPERATOR_BINARY", &operator_path);
     }
 
     info!(
@@ -1316,7 +1316,7 @@ pub fn is_platform_available(
 ) -> bool {
     match platform {
         Platform::Local => {
-            // Local platform uses pull model only: alien-agent runs as a native
+            // Local platform uses pull model only: alien-operator runs as a native
             // OS process and pulls from a cloud artifact registry. Requires at
             // least one cloud platform configured for registry access.
             model == DeploymentModel::Pull
@@ -1332,7 +1332,7 @@ pub fn is_platform_available(
             // Cloud platforms support both push and pull models.
             //
             // Push: manager deploys using cross-account impersonation (RSM).
-            // Pull: alien-agent runs in the target environment and deploys
+            // Pull: alien-operator runs in the target environment and deploys
             //       directly using target credentials — no cross-account IAM.
             //
             // Both require management + target credentials to be configured.
@@ -1456,7 +1456,7 @@ pub async fn setup(
         // Developer side: build, push, release, create DG + DG token.
         let dev = developer_setup(&manager, platform, app).await?;
 
-        // Customer side: alien-deploy deploy installs alien-agent as OS service.
+        // Customer side: alien-deploy deploy installs alien-operator as OS service.
         let deployment =
             run_alien_deploy_up(&manager, &dev.dg_token, platform, &dev.group_id).await?;
         info!(
@@ -1475,7 +1475,9 @@ pub async fn setup(
             None
         } else {
             let deploy_binary = find_deploy_binary().ok();
-            Some(crate::agent::TestAlienAgent::from_service(deploy_binary))
+            Some(crate::operator::TestAlienOperator::from_service(
+                deploy_binary,
+            ))
         };
 
         (deployment, agent)
@@ -1485,7 +1487,7 @@ pub async fn setup(
         // Push model: test harness calls push_initial_setup() directly
         // with the admin token (alien-deploy deploy auth not yet supported).
         //
-        // K8s pull: helm install alien-agent chart.
+        // K8s pull: helm install alien-operator chart.
         if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
             anyhow::bail!(
                 "direct cloud pull is not supported by the e2e harness; use local pull or Terraform+Helm Kubernetes pull"
@@ -1523,13 +1525,13 @@ pub async fn setup(
 
         // Pull model: start the agent for supported pull flows.
         let agent = if model == DeploymentModel::Pull && platform == Platform::Kubernetes {
-            let agent_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
+            let operator_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
                 .ok()
                 .filter(|image| !image.is_empty())
-                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
             let agent =
-                start_generated_helm_agent(&manager, &deployment, &stack, &agent_image).await?;
+                start_generated_helm_agent(&manager, &deployment, &stack, &operator_image).await?;
             Some(agent)
         } else {
             None
@@ -1544,7 +1546,7 @@ pub async fn setup(
 
     // Wait for the deployment to be running (populates URL).
     // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
-    // For pull: the alien-agent drives this via sync + deployment loop.
+    // For pull: the alien-operator drives this via sync + deployment loop.
     let wait_result = deployment
         .wait_until_running(Duration::from_secs(600))
         .await
@@ -1552,12 +1554,12 @@ pub async fn setup(
 
     if let Err(err_msg) = wait_result {
         if let Some(ref cid) = agent_container_id {
-            let logs = crate::agent::docker_container_logs(cid).await;
+            let logs = crate::operator::docker_container_logs(cid).await;
             tracing::error!(container_id = %cid, "Agent container logs on timeout:\n{}", logs);
         }
         if let Some(ref agent) = agent {
             if agent.installed_as_service {
-                let logs = crate::agent::collect_service_logs().await;
+                let logs = crate::operator::collect_service_logs().await;
                 tracing::error!("Agent service logs on timeout:\n{}", logs);
             }
         }
@@ -1620,7 +1622,7 @@ pub async fn setup_distribution(
 /// the TestContext was never fully constructed.
 async fn cleanup_failed_setup(
     deployment: &mut TestDeployment,
-    agent: Option<crate::agent::TestAlienAgent>,
+    agent: Option<crate::operator::TestAlienOperator>,
     manager: &Arc<TestManager>,
     platform: Platform,
 ) {
@@ -1629,7 +1631,7 @@ async fn cleanup_failed_setup(
     // Stop the agent first
     if let Some(agent) = agent {
         if let Some(ref cid) = agent.container_id {
-            let logs = crate::agent::docker_container_logs(cid).await;
+            let logs = crate::operator::docker_container_logs(cid).await;
             tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
         }
         agent.cleanup().await;

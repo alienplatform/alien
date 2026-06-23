@@ -49,6 +49,7 @@ pub async fn handle_delete_pending(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
 
@@ -116,6 +117,7 @@ pub async fn handle_deleting(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Runtime cleanup failed");
@@ -130,6 +132,7 @@ pub async fn handle_deleting(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else {
         let mut next = current_cloned;
@@ -140,6 +143,7 @@ pub async fn handle_deleting(
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
+            observed_inventory_batches: vec![],
         }
     };
 
@@ -156,6 +160,7 @@ pub async fn handle_teardown_required(current: DeploymentState) -> Result<Deploy
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
 
@@ -179,6 +184,7 @@ pub async fn handle_delete_failed(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         });
     }
 
@@ -210,6 +216,7 @@ pub async fn handle_delete_failed(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
 

@@ -10,9 +10,9 @@ let value: WorkerHeartbeatDataGcpCloudRun = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   trafficCount: 570634,
   urls: [

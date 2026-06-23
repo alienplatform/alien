@@ -41,15 +41,15 @@ const value: models.DataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "gcpCloudBuild",
 };
@@ -66,15 +66,15 @@ const value: models.DataAzureContainerApps2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -92,8 +92,8 @@ const value: models.DataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],

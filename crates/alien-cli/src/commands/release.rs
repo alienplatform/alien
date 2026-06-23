@@ -61,6 +61,17 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub no_git: bool,
 
+    /// Declare a stackless release: record a version (and git metadata) without
+    /// building or pushing a stack. Use this to declare/enrich the release an
+    /// operate (BYOC) environment is running. Requires --version and platform mode.
+    #[arg(long)]
+    pub no_stack: bool,
+
+    /// Explicit release version (e.g. 1.4.0). Required with --no-stack; otherwise
+    /// the platform derives the version.
+    #[arg(long)]
+    pub version: Option<String>,
+
     /// Project ID or name to use for release (skips project linking)
     #[arg(long)]
     pub project: Option<String>,
@@ -125,6 +136,23 @@ type ReleaseResult = String;
 
 /// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
+    if args.no_stack {
+        let declared = release_declare(&args, &ctx).await?;
+        if args.json {
+            print_json(&ReleaseJsonOutput {
+                success: true,
+                release_id: Some(declared.release_id.clone()),
+                project: declared.project,
+                workspace: declared.workspace,
+                platforms: Vec::new(),
+            })?;
+        } else {
+            println!("{}", success_line("Release declared."));
+            println!("{} {}", dim_label("Release"), declared.release_id);
+        }
+        return Ok(());
+    }
+
     if args.json {
         let output = release_task_json(args, ctx).await?;
         print_json(&output)?;
@@ -401,7 +429,7 @@ async fn release_task_core(
 
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
         // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
-        // Local platform pushes to a cloud registry — the alien-agent pulls from it.
+        // Local platform pushes to a cloud registry — the alien-operator pulls from it.
         let pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
@@ -644,6 +672,144 @@ async fn create_platform_release(
     info!("Release created successfully!");
     info!("   ID: {}", release_id);
 
+    Ok(release_id)
+}
+
+/// Result of a stackless declare.
+struct DeclaredRelease {
+    release_id: String,
+    project: String,
+    workspace: String,
+}
+
+/// Declare a stackless release: record a `(project, version)` release with git
+/// metadata and no stack — no build, no push. Used to declare/enrich the release
+/// an operate (BYOC) environment runs. Platform mode only (the manager create path
+/// still requires a stack).
+async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<DeclaredRelease> {
+    let version = args
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "version".to_string(),
+                message: "--version is required when declaring a stackless release (--no-stack)"
+                    .to_string(),
+            })
+        })?
+        .to_string();
+
+    if ctx.is_standalone() || ctx.is_dev() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Declaring a stackless release (--no-stack) requires platform mode."
+                .to_string(),
+        }));
+    }
+
+    let workspace_name = ctx.resolve_workspace_with_bootstrap(false).await?;
+    let (_project_id, project_link) = ctx.resolve_project(args.project.as_deref(), false).await?;
+
+    let git_metadata = if args.no_git {
+        None
+    } else {
+        let current_dir = get_current_dir()?;
+        match collect_git_metadata(&current_dir) {
+            Ok(metadata) => Some(metadata),
+            Err(e) => {
+                info!("Warning: Failed to collect git metadata: {}", e);
+                None
+            }
+        }
+    };
+
+    #[cfg(feature = "platform")]
+    {
+        let release_id = declare_platform_release(
+            ctx,
+            &project_link.project_id,
+            &project_link.workspace,
+            &version,
+            git_metadata,
+        )
+        .await?;
+        Ok(DeclaredRelease {
+            release_id,
+            project: project_link.project_name,
+            workspace: workspace_name,
+        })
+    }
+    #[cfg(not(feature = "platform"))]
+    {
+        let _ = (git_metadata, version, project_link, workspace_name);
+        Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform mode requires the 'platform' feature".to_string(),
+        }))
+    }
+}
+
+/// Create/enrich a stackless release directly on the platform API (no stack).
+#[cfg(feature = "platform")]
+async fn declare_platform_release(
+    ctx: &ExecutionMode,
+    project_id: &str,
+    workspace: &str,
+    version: &str,
+    git_metadata: Option<GitMetadata>,
+) -> Result<String> {
+    use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
+
+    info!("Declaring stackless release on platform API...");
+
+    let http = ctx.auth_http().await?;
+    let platform_client = http.sdk_client();
+
+    let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace)
+        .map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace: {}", e),
+            })
+        })?;
+
+    let version_value = alien_platform_api::types::CreateReleaseRequestVersion::try_from(
+        version.to_string(),
+    )
+    .map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "version".to_string(),
+            message: format!("Invalid version: {}", e),
+        })
+    })?;
+
+    // No `.stack(...)` — a stackless release is a version identity only.
+    let body = alien_platform_api::types::CreateReleaseRequest::builder()
+        .project(project_id.to_string())
+        .version(Some(version_value))
+        .git_metadata(git_metadata);
+
+    let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("Failed to build release request: {}", e),
+            url: None,
+        })
+    })?;
+
+    let response = platform_client
+        .create_release()
+        .workspace(&workspace_param)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to declare release on platform API".to_string(),
+            url: None,
+        })?;
+
+    let release_id = response.id.to_string();
+    info!("Release declared: {}", release_id);
     Ok(release_id)
 }
 
@@ -1476,7 +1642,7 @@ mod tests {
     use alien_core::ResourceLifecycle;
 
     fn daemon_with_image(image: &str) -> Daemon {
-        Daemon::new("agent".to_string())
+        Daemon::new("operator".to_string())
             .permissions("execution".to_string())
             .code(DaemonCode::Image {
                 image: image.to_string(),
@@ -1487,7 +1653,7 @@ mod tests {
     #[test]
     fn push_cache_applies_and_collects_for_daemons() {
         let local_dir = tempfile::tempdir().unwrap();
-        let artifact_dir = local_dir.path().join("agent-a1b2c3d4");
+        let artifact_dir = local_dir.path().join("operator-a1b2c3d4");
         std::fs::create_dir_all(&artifact_dir).unwrap();
         let local_path = artifact_dir.to_string_lossy().into_owned();
 
@@ -1496,8 +1662,8 @@ mod tests {
             .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
             .build();
         let cache = HashMap::from([(
-            "agent-a1b2c3d4".to_string(),
-            "registry.example.com/agent:tag".to_string(),
+            "operator-a1b2c3d4".to_string(),
+            "registry.example.com/operator:tag".to_string(),
         )]);
         let hits = apply_push_cache(&mut stack, &cache);
         assert_eq!(hits, 1, "daemon local path should hit the cache");
@@ -1508,7 +1674,7 @@ mod tests {
         assert_eq!(
             daemon.code,
             DaemonCode::Image {
-                image: "registry.example.com/agent:tag".to_string()
+                image: "registry.example.com/operator:tag".to_string()
             }
         );
 
@@ -1518,15 +1684,15 @@ mod tests {
             .build();
         let pushed = Stack::new("cache-test".to_string())
             .add(
-                daemon_with_image("registry.example.com/agent:pushed"),
+                daemon_with_image("registry.example.com/operator:pushed"),
                 ResourceLifecycle::Live,
             )
             .build();
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected);
         assert_eq!(
-            collected.get("agent-a1b2c3d4").map(String::as_str),
-            Some("registry.example.com/agent:pushed")
+            collected.get("operator-a1b2c3d4").map(String::as_str),
+            Some("registry.example.com/operator:pushed")
         );
     }
 

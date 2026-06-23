@@ -24,6 +24,7 @@
 
 use crate::{
     loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
+    observe::run_observe_pass,
     step,
     transport::DeploymentLoopTransport,
     Result,
@@ -146,6 +147,70 @@ async fn run_step_loop_inner(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    if !state.has_desired() {
+        let service_provider = service_provider
+            .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+        let observe_report = run_observe_pass(
+            state.platform,
+            client_config,
+            &service_provider,
+            deployment_id,
+            config.observe_label_selector.as_deref(),
+            config.observe_all_namespaces,
+        )
+        .await?;
+
+        if !observe_report.inventory_batches.is_empty() {
+            let mut checkpoint_attempt = 1usize;
+            let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
+            loop {
+                match transport
+                    .reconcile_step(
+                        deployment_id,
+                        state,
+                        config,
+                        true,
+                        None,
+                        Vec::new(),
+                        observe_report.inventory_batches.clone(),
+                    )
+                    .await
+                {
+                    Ok(reconciled) => {
+                        if let Some(updated_state) = reconciled.state {
+                            *state = updated_state;
+                        }
+                        if let Some(updated_config) = reconciled.config {
+                            *config = updated_config;
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            deployment_id = %deployment_id,
+                            attempt = checkpoint_attempt,
+                            retry_after_ms = checkpoint_delay.as_millis() as u64,
+                            error = %e,
+                            "Failed to checkpoint observe-only deployment; retrying before returning"
+                        );
+                        tokio::time::sleep(checkpoint_delay).await;
+                        checkpoint_attempt += 1;
+                        checkpoint_delay = (checkpoint_delay * 2).min(CHECKPOINT_RETRY_MAX_DELAY);
+                    }
+                }
+            }
+        }
+
+        return Ok(RunnerResult {
+            loop_result: LoopResult {
+                stop_reason: LoopStopReason::NoWork,
+                outcome: LoopOutcome::Neutral,
+                final_status: state.status,
+            },
+            steps_executed: 0,
+        });
+    }
+
     for step_count in 1..=policy.max_steps {
         // Pre-step terminal check
         if !should_step_retryable_failure(state) {
@@ -195,7 +260,7 @@ async fn run_step_loop_inner(
                 let mut checkpoint_delay = CHECKPOINT_RETRY_INITIAL_DELAY;
                 loop {
                     match transport
-                        .reconcile_step(deployment_id, state, config, false, None, vec![])
+                        .reconcile_step(deployment_id, state, config, false, None, vec![], vec![])
                         .await
                     {
                         Ok(reconciled) => {
@@ -241,8 +306,25 @@ async fn run_step_loop_inner(
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
         let heartbeats = step_result.heartbeats.clone();
+        let mut observed_inventory_batches = step_result.observed_inventory_batches.clone();
 
         *state = step_result.state;
+
+        if state.status == DeploymentStatus::Running {
+            let observe_service_provider = service_provider.clone().unwrap_or_else(|| {
+                Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
+            });
+            let observe_report = run_observe_pass(
+                state.platform,
+                client_config,
+                &observe_service_provider,
+                deployment_id,
+                config.observe_label_selector.as_deref(),
+                config.observe_all_namespaces,
+            )
+            .await?;
+            observed_inventory_batches.extend(observe_report.inventory_batches);
+        }
 
         // Checkpoint after every step. This is a durability barrier: once a
         // cloud/API step has produced new state, the runner must not execute
@@ -260,6 +342,7 @@ async fn run_step_loop_inner(
                     update_heartbeat,
                     suggested_delay_ms,
                     heartbeats.clone(),
+                    observed_inventory_batches.clone(),
                 )
                 .await
             {
@@ -409,6 +492,7 @@ mod tests {
             _update_heartbeat: bool,
             _suggested_delay_ms: Option<u64>,
             _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
         ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
             self.checkpointed_statuses
                 .lock()
@@ -468,7 +552,7 @@ mod tests {
             platform: Platform::Test,
             current_release: None,
             target_release: Some(ReleaseInfo {
-                release_id: "rel_test".to_string(),
+                release_id: Some("rel_test".to_string()),
                 version: None,
                 description: None,
                 stack: test_stack(),
@@ -494,6 +578,9 @@ mod tests {
             },
             external_bindings: alien_core::ExternalBindings::default(),
             base_platform: None,
+            label_domain: None,
+            observe_label_selector: None,
+            observe_all_namespaces: false,
             compute_backend: None,
             allow_frozen_changes: false,
             domain_metadata: None,
@@ -666,6 +753,39 @@ mod tests {
 
         assert_eq!(result.steps_executed, 0);
         assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn observe_only_state_stops_without_transport_or_steps() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.status = DeploymentStatus::Running;
+        state.target_release = None;
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_running_refresh_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("observe-only deployment should stop before step execution");
+
+        assert_eq!(result.steps_executed, 0);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::NoWork);
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Neutral);
+        assert_eq!(result.loop_result.final_status, DeploymentStatus::Running);
         assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
     }
 

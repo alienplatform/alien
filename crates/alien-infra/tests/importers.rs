@@ -198,7 +198,7 @@ fn kubernetes_cluster_handoff_imports_as_running() {
     assert!(outputs.kubernetes_api_reachable);
     assert!(outputs.namespace_ready);
     assert!(outputs.rbac_ready);
-    assert!(!outputs.agent_ready);
+    assert!(!outputs.operator_ready);
     assert_eq!(outputs.cloud_metadata_ready, Some(true));
 }
 

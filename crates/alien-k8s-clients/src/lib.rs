@@ -21,6 +21,10 @@ pub use kubernetes::routes::RouteApi;
 pub use kubernetes::secrets::SecretsApi;
 pub use kubernetes::services::ServiceApi;
 pub use kubernetes::version::{KubernetesVersion, VersionApi};
+pub use kubernetes::workload_heartbeat::{
+    label_selector, read_kubernetes_workload, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadReadInput,
+};
 
 // Re-export error types from alien-client-core
 pub use alien_client_core::{Error, ErrorData, Result};

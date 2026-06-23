@@ -1,6 +1,6 @@
 //! Deployment state, step results, and runtime metadata.
 
-use crate::{Platform, ResourceHeartbeat, StackState};
+use crate::{ObservedInventoryBatch, Platform, ResourceHeartbeat, StackState};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -79,6 +79,16 @@ pub struct DeploymentState {
     pub protocol_version: u32,
 }
 
+impl DeploymentState {
+    /// Returns whether this state carries desired infrastructure for the
+    /// deployment runner to converge.
+    pub fn has_desired(&self) -> bool {
+        self.current_release.is_some()
+            || self.target_release.is_some()
+            || self.stack_state.is_some()
+    }
+}
+
 /// Result of a deployment step
 ///
 /// Contains the complete next deployment state along with hints for the platform.
@@ -102,9 +112,21 @@ pub struct DeploymentStepResult {
     #[serde(default, skip_serializing_if = "is_false")]
     pub update_heartbeat: bool,
 
-    /// Typed resource heartbeats emitted by controllers during this step.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Managed Alien resource status samples emitted by controllers during this step.
+    #[serde(
+        default,
+        rename = "resourceHeartbeats",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub heartbeats: Vec<ResourceHeartbeat>,
+
+    /// Observed raw-resource inventory batches read during this step.
+    #[serde(
+        default,
+        rename = "observedInventoryBatches",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {
@@ -120,3 +142,61 @@ pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
 /// Backwards-compatible alias for older call sites.
 pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Platform, ReleaseInfo, Stack, StackState};
+    use indexmap::IndexMap;
+
+    fn empty_stack() -> Stack {
+        Stack {
+            id: "stack_test".to_string(),
+            resources: IndexMap::new(),
+            permissions: crate::PermissionsConfig::default(),
+            supported_platforms: None,
+        }
+    }
+
+    fn release_info(id: &str) -> ReleaseInfo {
+        ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: empty_stack(),
+        }
+    }
+
+    fn state() -> DeploymentState {
+        DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Kubernetes,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    #[test]
+    fn deployment_state_has_desired_when_release_or_stack_state_exists() {
+        let observe_only = state();
+        assert!(!observe_only.has_desired());
+
+        let mut current = state();
+        current.current_release = Some(release_info("rel_current"));
+        assert!(current.has_desired());
+
+        let mut target = state();
+        target.target_release = Some(release_info("rel_target"));
+        assert!(target.has_desired());
+
+        let mut imported = state();
+        imported.stack_state = Some(StackState::new(Platform::Kubernetes));
+        assert!(imported.has_desired());
+    }
+}

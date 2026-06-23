@@ -15,14 +15,14 @@ let value: DataComputeCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "info",
+          reason: "forbidden",
+          severity: "error",
           source: "<value>",
         },
       ],
       health: "unknown",
-      lifecycle: "stopped",
-      partial: true,
+      lifecycle: "running",
+      partial: false,
       stale: true,
     },
     backend: "local",

@@ -232,6 +232,8 @@ export type { NetworkHeartbeatStatus } from "./network-heartbeat-status-schema.j
 export type { NetworkSettings } from "./network-settings-schema.js";
 export type { ObservedCounts } from "./observed-counts-schema.js";
 export type { ObservedHealth } from "./observed-health-schema.js";
+export type { ObservedInventoryBatch } from "./observed-inventory-batch-schema.js";
+export type { ObservedResourceSample } from "./observed-resource-sample-schema.js";
 export type { PermissionGrant } from "./permission-grant-schema.js";
 export type { PermissionProfile } from "./permission-profile-schema.js";
 export type { PermissionSetReference } from "./permission-set-reference-schema.js";
@@ -544,6 +546,8 @@ export { NetworkHeartbeatStatusSchema } from "./network-heartbeat-status-schema.
 export { NetworkSettingsSchema } from "./network-settings-schema.js";
 export { ObservedCountsSchema } from "./observed-counts-schema.js";
 export { ObservedHealthSchema } from "./observed-health-schema.js";
+export { ObservedInventoryBatchSchema } from "./observed-inventory-batch-schema.js";
+export { ObservedResourceSampleSchema } from "./observed-resource-sample-schema.js";
 export { PermissionGrantSchema } from "./permission-grant-schema.js";
 export { PermissionProfileSchema } from "./permission-profile-schema.js";
 export { PermissionSetReferenceSchema } from "./permission-set-reference-schema.js";

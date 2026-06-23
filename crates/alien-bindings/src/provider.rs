@@ -6,7 +6,7 @@ use crate::{
 };
 
 use alien_client_config::ClientConfigExt;
-use alien_core::{ClientConfig, Platform, StackState, ENV_ALIEN_BASE_PLATFORM};
+use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use std::{any::Any, collections::HashMap, sync::Arc};
@@ -112,13 +112,13 @@ impl BindingsProvider {
     }
 
     fn base_platform_from_env(env: &HashMap<String, String>) -> Result<Option<Platform>> {
-        let Some(base_platform) = env.get(ENV_ALIEN_BASE_PLATFORM) else {
+        let Some(base_platform) = env.get(ENV_OPERATOR_BASE_PLATFORM) else {
             return Ok(None);
         };
 
         let parsed: Platform = base_platform.parse().map_err(|reason| {
             AlienError::new(ErrorData::InvalidEnvironmentVariable {
-                variable_name: ENV_ALIEN_BASE_PLATFORM.to_string(),
+                variable_name: ENV_OPERATOR_BASE_PLATFORM.to_string(),
                 value: base_platform.clone(),
                 reason,
             })
@@ -126,7 +126,7 @@ impl BindingsProvider {
 
         if !matches!(parsed, Platform::Aws | Platform::Gcp | Platform::Azure) {
             return Err(AlienError::new(ErrorData::InvalidEnvironmentVariable {
-                variable_name: ENV_ALIEN_BASE_PLATFORM.to_string(),
+                variable_name: ENV_OPERATOR_BASE_PLATFORM.to_string(),
                 value: base_platform.clone(),
                 reason: "Kubernetes base platform must be aws, gcp, or azure".to_string(),
             }));
@@ -1643,7 +1643,7 @@ mod tests {
                 Platform::Kubernetes.as_str().to_string(),
             ),
             (
-                ENV_ALIEN_BASE_PLATFORM.to_string(),
+                ENV_OPERATOR_BASE_PLATFORM.to_string(),
                 Platform::Aws.as_str().to_string(),
             ),
             (
@@ -1665,7 +1665,7 @@ mod tests {
                 Platform::Kubernetes.as_str().to_string(),
             ),
             (
-                ENV_ALIEN_BASE_PLATFORM.to_string(),
+                ENV_OPERATOR_BASE_PLATFORM.to_string(),
                 Platform::Azure.as_str().to_string(),
             ),
             (
@@ -1729,13 +1729,13 @@ mod tests {
     async fn from_env_rejects_non_cloud_kubernetes_base_platform() {
         let mut env = kubernetes_aws_env();
         env.insert(
-            ENV_ALIEN_BASE_PLATFORM.to_string(),
+            ENV_OPERATOR_BASE_PLATFORM.to_string(),
             Platform::Kubernetes.as_str().to_string(),
         );
 
         let error = BindingsProvider::from_env(env).await.unwrap_err();
 
-        assert!(error.to_string().contains(ENV_ALIEN_BASE_PLATFORM));
+        assert!(error.to_string().contains(ENV_OPERATOR_BASE_PLATFORM));
     }
 }
 

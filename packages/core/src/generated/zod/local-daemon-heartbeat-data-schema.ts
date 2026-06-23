@@ -13,7 +13,7 @@ export const LocalDaemonHeartbeatDataSchema = z.object({
 get "daemonInstance"(){
                 return z.union([LocalRuntimeUnitStatusSchema, z.null()]).optional()
               },
-"daemonName": z.string(),
+"daemonName": z.optional(z.string()),
 get "events"(){
                 return z.array(LocalRuntimeEventSnapshotSchema)
               },

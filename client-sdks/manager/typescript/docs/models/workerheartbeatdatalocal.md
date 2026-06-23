@@ -19,9 +19,9 @@ let value: WorkerHeartbeatDataLocal = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 305200,
   backend: "local",

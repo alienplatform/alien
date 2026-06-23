@@ -17,6 +17,18 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class User extends ClientSDK {
   /**
+   * List all workspaces the current user has access to.
+   */
+  async listMemberships(
+    options?: RequestOptions,
+  ): Promise<operations.ListMembershipsResponse> {
+    return unwrapAsync(userListMemberships(
+      this,
+      options,
+    ));
+  }
+
+  /**
    * Get the current user's profile and user-scoped onboarding state.
    */
   async getProfile(
@@ -52,18 +64,6 @@ export class User extends ClientSDK {
     return unwrapAsync(userCompleteProfileSetup(
       this,
       request,
-      options,
-    ));
-  }
-
-  /**
-   * List all workspaces the current user has access to.
-   */
-  async listMemberships(
-    options?: RequestOptions,
-  ): Promise<operations.ListMembershipsResponse> {
-    return unwrapAsync(userListMemberships(
-      this,
       options,
     ));
   }

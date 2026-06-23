@@ -12,11 +12,10 @@ let value: DaemonHeartbeatDataAws = {
   daemonInstances: [
     {
       name: "<value>",
-      ready: true,
+      ready: false,
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 915980,
   events: [],
   healthyInstances: 401388,
@@ -26,9 +25,9 @@ let value: DaemonHeartbeatDataAws = {
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
+    lifecycle: "failed",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 429918,
   backend: "aws",
@@ -43,7 +42,7 @@ let value: DaemonHeartbeatDataAws = {
 | `capacityGroup`                                                                  | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
 | `commandSupported`                                                               | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
 | `daemonInstances`                                                                | [models.ManagedRuntimeUnitStatus](../models/managedruntimeunitstatus.md)[]       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `daemonName`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `daemonName`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `desiredMachines`                                                                | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
 | `events`                                                                         | [models.ManagedRuntimeEventSnapshot](../models/managedruntimeeventsnapshot.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
 | `healthyInstances`                                                               | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
