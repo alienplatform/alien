@@ -87,7 +87,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     // No CLI-side caching: every invocation asks the manager to create-or-
     // reuse a session. The manager controls session lifetime, token rotation,
     // and registry eviction.
-    let session = create_debug_session(&manager, &deployment_id).await?;
+    let session = request_debug_session(&manager, &deployment_id).await?;
     let session = resolve_pending_session(&manager, session).await?;
     exec_with_session(session, &args.cmd).await
 }
@@ -200,7 +200,7 @@ async fn resolve_deployment_id(
 }
 
 /// `POST /v1/debug/sessions` — request a debug session for the given deployment.
-async fn create_debug_session(
+async fn request_debug_session(
     manager: &ManagerContext,
     deployment_id: &str,
 ) -> Result<DebugSessionResponse> {
