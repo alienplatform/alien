@@ -834,22 +834,6 @@ async fn reimport_acm_certificate(
 }
 
 #[cfg(feature = "aws")]
-async fn delete_acm_certificate(client: &AcmClient, certificate_arn: &str) -> Result<()> {
-    acm_result(
-        client
-            .delete_certificate()
-            .certificate_arn(certificate_arn)
-            .send()
-            .await,
-        "DeleteCertificate",
-        "Certificate",
-        certificate_arn,
-    )?;
-
-    Ok(())
-}
-
-#[cfg(feature = "aws")]
 fn acm_result<T, E>(
     result: std::result::Result<T, AcmSdkError<E>>,
     operation: &str,
@@ -990,8 +974,17 @@ async fn delete_managed_acm_certificate(
 
     let aws_config = ctx.get_aws_config()?;
     let acm_client = ctx.service_provider.get_aws_acm_client(aws_config).await?;
-    match delete_acm_certificate(&acm_client, &certificate_arn).await {
-        Ok(()) => {
+    match acm_result(
+        acm_client
+            .delete_certificate()
+            .certificate_arn(&certificate_arn)
+            .send()
+            .await,
+        "DeleteCertificate",
+        "Certificate",
+        &certificate_arn,
+    ) {
+        Ok(_) => {
             info!(certificate_arn=%certificate_arn, "Deleted Kubernetes public endpoint ACM certificate");
             state.managed_acm_certificate_arn = None;
             Ok(())
