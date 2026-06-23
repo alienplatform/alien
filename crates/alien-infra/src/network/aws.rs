@@ -39,7 +39,6 @@ use aws_sdk_ec2::{
         authorize_security_group_ingress::AuthorizeSecurityGroupIngressInput,
         create_internet_gateway::{CreateInternetGatewayInput, CreateInternetGatewayOutput},
         create_nat_gateway::{CreateNatGatewayInput, CreateNatGatewayOutput},
-        create_route::CreateRouteInput,
         create_route_table::{CreateRouteTableInput, CreateRouteTableOutput},
         create_security_group::{CreateSecurityGroupInput, CreateSecurityGroupOutput},
         create_subnet::{CreateSubnetInput, CreateSubnetOutput},
@@ -488,38 +487,6 @@ async fn create_ec2_route_table(
         "RouteTable",
         &vpc_id,
     )
-}
-
-async fn create_ec2_route(client: &Ec2Client, request: CreateRouteInput) -> Result<()> {
-    let route_table_id = request.route_table_id().unwrap_or("<unknown>").to_string();
-
-    ec2_result(
-        client
-            .create_route()
-            .set_destination_prefix_list_id(request.destination_prefix_list_id)
-            .set_vpc_endpoint_id(request.vpc_endpoint_id)
-            .set_transit_gateway_id(request.transit_gateway_id)
-            .set_local_gateway_id(request.local_gateway_id)
-            .set_carrier_gateway_id(request.carrier_gateway_id)
-            .set_core_network_arn(request.core_network_arn)
-            .set_odb_network_arn(request.odb_network_arn)
-            .set_dry_run(request.dry_run)
-            .set_route_table_id(request.route_table_id)
-            .set_destination_cidr_block(request.destination_cidr_block)
-            .set_gateway_id(request.gateway_id)
-            .set_destination_ipv6_cidr_block(request.destination_ipv6_cidr_block)
-            .set_egress_only_internet_gateway_id(request.egress_only_internet_gateway_id)
-            .set_instance_id(request.instance_id)
-            .set_network_interface_id(request.network_interface_id)
-            .set_vpc_peering_connection_id(request.vpc_peering_connection_id)
-            .set_nat_gateway_id(request.nat_gateway_id)
-            .send()
-            .await,
-        "CreateRoute",
-        "Route",
-        &route_table_id,
-    )?;
-    Ok(())
 }
 
 async fn associate_ec2_route_table(
@@ -1620,20 +1587,18 @@ impl AwsNetworkController {
             })?;
 
         // Add route to Internet Gateway
-        create_ec2_route(
-            &client,
-            CreateRouteInput::builder()
+        ec2_result(
+            client
+                .create_route()
                 .route_table_id(public_rt_id.clone())
-                .destination_cidr_block("0.0.0.0/0".to_string())
+                .destination_cidr_block("0.0.0.0/0")
                 .gateway_id(igw_id.clone())
-                .build()
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to build Internet Gateway route request".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?,
+                .send()
+                .await,
+            "CreateRoute",
+            "Route",
+            &public_rt_id,
         )
-        .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to create route to Internet Gateway".to_string(),
             resource_id: Some(config.id.clone()),
@@ -1914,20 +1879,18 @@ impl AwsNetworkController {
                     })
                 })?;
 
-                create_ec2_route(
-                    &client,
-                    CreateRouteInput::builder()
-                        .route_table_id(private_rt_id.clone())
-                        .destination_cidr_block("0.0.0.0/0".to_string())
+                ec2_result(
+                    client
+                        .create_route()
+                        .route_table_id(private_rt_id)
+                        .destination_cidr_block("0.0.0.0/0")
                         .nat_gateway_id(nat_gateway_id.clone())
-                        .build()
-                        .into_alien_error()
-                        .context(ErrorData::CloudPlatformError {
-                            message: "Failed to build NAT Gateway route request".to_string(),
-                            resource_id: Some(config.id.clone()),
-                        })?,
+                        .send()
+                        .await,
+                    "CreateRoute",
+                    "Route",
+                    private_rt_id,
                 )
-                .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to create route to NAT Gateway".to_string(),
                     resource_id: Some(config.id.clone()),
