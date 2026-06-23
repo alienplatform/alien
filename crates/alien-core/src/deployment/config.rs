@@ -59,6 +59,18 @@ pub struct DeploymentConfig {
     /// namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_domain: Option<String>,
+    /// Kubernetes label selector that narrows which raw resources the observe
+    /// pass reports (e.g. `app.kubernetes.io/part-of=my-app`). `None` observes
+    /// everything in the namespace. Ignored by cloud observers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observe_label_selector: Option<String>,
+    /// When true the observe pass reports raw resources across every namespace
+    /// (cluster scope); otherwise it stays within the operator's own namespace.
+    /// The label selector, if any, still filters within whichever scope applies.
+    /// Ignored by cloud observers.
+    #[serde(default)]
+    #[builder(default)]
+    pub observe_all_namespaces: bool,
     /// Public URLs for exposed resources (optional override).
     ///
     /// Use this only when a caller already knows the public URL. Managed public

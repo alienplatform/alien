@@ -83,6 +83,8 @@ impl DeploymentLoopTransport for ManagerTransport {
                     suggested_delay_ms,
                     heartbeats,
                     observed_inventory_batches,
+                    capabilities: Vec::new(),
+                    operator_version: None,
                 },
             )
             .await?;

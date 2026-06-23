@@ -29,6 +29,7 @@ const value: operations.ResourceManaged = {
   deploymentName: "<value>",
 };
 ```
+
 ### `operations.ResourceObserved`
 
 ```typescript
@@ -59,3 +60,4 @@ const value: operations.ResourceObserved = {
   lastObservedAt: new Date("2025-12-16T15:58:04.032Z"),
 };
 ```
+

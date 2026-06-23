@@ -998,7 +998,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize runtime_metadata".to_string(),
             })?;
 
-        let current_release_id = state.current_release.as_ref().map(|r| r.release_id.clone());
+        let current_release_id = state
+            .current_release
+            .as_ref()
+            .and_then(|r| r.release_id.clone());
 
         // Serialize status using serde (kebab-case per DeploymentStatus definition)
         let status_str = serde_json::to_value(&state.status)

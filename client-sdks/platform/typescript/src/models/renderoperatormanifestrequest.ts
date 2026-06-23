@@ -6,6 +6,20 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 /**
+ * raw: a kubectl-applyable manifest for one cluster. helm: a paste-into-your-chart template whose namespace and environment name come from Helm at install time.
+ */
+export const RenderOperatorManifestRequestFormat = {
+  Raw: "raw",
+  Helm: "helm",
+} as const;
+/**
+ * raw: a kubectl-applyable manifest for one cluster. helm: a paste-into-your-chart template whose namespace and environment name come from Helm at install time.
+ */
+export type RenderOperatorManifestRequestFormat = ClosedEnum<
+  typeof RenderOperatorManifestRequestFormat
+>;
+
+/**
  * Operator permission tier
  */
 export const Permission = {
@@ -29,17 +43,21 @@ export type RenderOperatorManifestRequest = {
    */
   project: string;
   /**
-   * Environment name used as the operator identity
+   * raw: a kubectl-applyable manifest for one cluster. helm: a paste-into-your-chart template whose namespace and environment name come from Helm at install time.
    */
-  name: string;
+  format?: RenderOperatorManifestRequestFormat | undefined;
   /**
-   * Kubernetes namespace to install into and observe
+   * Per-environment identity. Required for raw output, ignored for helm.
    */
-  namespace: string;
+  environmentName?: string | undefined;
   /**
-   * Namespace scope to observe. Defaults to namespace.
+   * Namespace to observe and install into. Omit for helm to use the release namespace.
    */
-  scope?: string | undefined;
+  namespace?: string | undefined;
+  /**
+   * Optional Kubernetes label selector narrowing what is observed.
+   */
+  labelSelector?: string | undefined;
   /**
    * Operator permission tier
    */
@@ -53,6 +71,11 @@ export type RenderOperatorManifestRequest = {
    */
   logCollector?: LogCollector | undefined;
 };
+
+/** @internal */
+export const RenderOperatorManifestRequestFormat$outboundSchema: z.ZodEnum<
+  typeof RenderOperatorManifestRequestFormat
+> = z.enum(RenderOperatorManifestRequestFormat);
 
 /** @internal */
 export const Permission$outboundSchema: z.ZodEnum<typeof Permission> = z.enum(
@@ -79,9 +102,10 @@ export function logCollectorToJSON(logCollector: LogCollector): string {
 /** @internal */
 export type RenderOperatorManifestRequest$Outbound = {
   project: string;
-  name: string;
-  namespace: string;
-  scope?: string | undefined;
+  format: string;
+  environmentName?: string | undefined;
+  namespace?: string | undefined;
+  labelSelector?: string | undefined;
   permission: string;
   deploymentGroupToken: string;
   logCollector?: LogCollector$Outbound | undefined;
@@ -93,9 +117,10 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   RenderOperatorManifestRequest
 > = z.object({
   project: z.string(),
-  name: z.string(),
-  namespace: z.string(),
-  scope: z.string().optional(),
+  format: RenderOperatorManifestRequestFormat$outboundSchema.default("raw"),
+  environmentName: z.string().optional(),
+  namespace: z.string().optional(),
+  labelSelector: z.string().optional(),
   permission: Permission$outboundSchema.default("observe"),
   deploymentGroupToken: z.string(),
   logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),

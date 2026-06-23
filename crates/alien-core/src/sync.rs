@@ -9,6 +9,33 @@ use crate::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
 
+/// State of an Operator capability as observed inside the environment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OperatorCapabilityState {
+    /// The Operator has the permission or local facility needed for the capability.
+    Granted,
+    /// The environment explicitly denied the capability.
+    Denied,
+    /// The capability does not apply in this environment.
+    Unavailable,
+}
+
+/// Report-only Operator capability status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorCapabilityReport {
+    /// Stable capability key, such as `k8s-workloads` or `logs`.
+    pub key: String,
+    /// Whether the capability is currently usable.
+    pub state: OperatorCapabilityState,
+    /// Optional human-readable detail from the Operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +59,12 @@ pub struct SyncRequest {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    /// Report-only capabilities observed by the Operator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    /// Version of the Operator binary reporting this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
 }
 
 /// Response from the manager to the agent sync request.
@@ -77,6 +110,8 @@ mod tests {
             current_state: None,
             heartbeats: Vec::new(),
             observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -84,6 +119,8 @@ mod tests {
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
         assert!(json.get("resourceHeartbeats").is_none());
+        assert!(json.get("capabilities").is_none());
+        assert!(json.get("operatorVersion").is_none());
     }
 
     #[test]
@@ -94,6 +131,8 @@ mod tests {
         assert!(req.current_state.is_none());
         assert!(req.heartbeats.is_empty());
         assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
     }
 
     #[test]
@@ -130,6 +169,7 @@ mod tests {
         assert_eq!(req.deployment_id, "dep_1");
         assert!(req.current_state.is_none());
         assert!(req.heartbeats.is_empty());
+        assert!(req.capabilities.is_empty());
 
         // snake_case should NOT work
         let json = r#"{"deployment_id": "dep_1"}"#;
@@ -179,6 +219,7 @@ mod tests {
         let req: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(req.heartbeats.len(), 1);
         assert_eq!(req.heartbeats[0].resource_id, "api");
+        assert!(req.capabilities.is_empty());
 
         let serialized = serde_json::to_value(&req).unwrap();
         assert_eq!(serialized["resourceHeartbeats"][0]["resourceId"], "api");

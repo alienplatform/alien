@@ -15,8 +15,9 @@ import {
 } from "./stackbyplatform.js";
 
 export type CreateReleaseRequest = {
+  version?: string | undefined;
   gitMetadata?: GitMetadata | null | undefined;
-  stack: StackByPlatform;
+  stack?: StackByPlatform | null | undefined;
   rootDirectory?: string | null | undefined;
   /**
    * Project ID or name
@@ -26,8 +27,9 @@ export type CreateReleaseRequest = {
 
 /** @internal */
 export type CreateReleaseRequest$Outbound = {
+  version?: string | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
-  stack: StackByPlatform$Outbound;
+  stack?: StackByPlatform$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
   project: string;
 };
@@ -37,8 +39,9 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   CreateReleaseRequest$Outbound,
   CreateReleaseRequest
 > = z.object({
+  version: z.string().optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
-  stack: StackByPlatform$outboundSchema,
+  stack: z.nullable(StackByPlatform$outboundSchema).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   project: z.string(),
 });

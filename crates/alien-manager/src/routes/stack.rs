@@ -592,6 +592,8 @@ async fn prepare_import_stack(
         external_bindings: ExternalBindings::default(),
         base_platform: req.base_platform,
         label_domain: None,
+        observe_label_selector: None,
+        observe_all_namespaces: false,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,

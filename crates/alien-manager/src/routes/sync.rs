@@ -15,9 +15,9 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::TargetDeployment, DeploymentConfig, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform,
-    ReleaseInfo, ResourceHeartbeat,
+    sync::{OperatorCapabilityReport, TargetDeployment},
+    DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::AlienError;
 
@@ -80,6 +80,10 @@ pub struct ReconcileRequest {
     pub heartbeats: Vec<ResourceHeartbeat>,
     #[serde(default, rename = "observedInventoryBatches")]
     pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    #[serde(default)]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    #[serde(default, rename = "operatorVersion")]
+    pub operator_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +121,10 @@ pub struct AgentSyncRequest {
     pub heartbeats: Vec<ResourceHeartbeat>,
     #[serde(default, rename = "observedInventoryBatches")]
     pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    #[serde(default)]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    #[serde(default, rename = "operatorVersion")]
+    pub operator_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,6 +354,8 @@ async fn reconcile(
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
                 observed_inventory_batches: req.observed_inventory_batches,
+                capabilities: req.capabilities,
+                operator_version: req.operator_version,
             },
         )
         .await
@@ -475,6 +485,8 @@ mod tests {
 
         assert!(req.heartbeats.is_empty());
         assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
         assert!(req.update_heartbeat);
     }
 
@@ -545,6 +557,8 @@ mod tests {
 
         assert!(req.heartbeats.is_empty());
         assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
     }
 
     #[test]
@@ -839,6 +853,8 @@ async fn agent_sync(
                                 update_heartbeat: true,
                                 heartbeats: req.heartbeats.clone(),
                                 observed_inventory_batches: req.observed_inventory_batches.clone(),
+                                capabilities: req.capabilities.clone(),
+                                operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
                             },
                         )
@@ -992,7 +1008,7 @@ async fn agent_sync(
 
                 Some(TargetDeployment {
                     release_info: ReleaseInfo {
-                        release_id: r.id,
+                        release_id: Some(r.id),
                         version: None,
                         description: None,
                         stack,
@@ -1029,7 +1045,11 @@ async fn agent_sync(
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
-                if !req.heartbeats.is_empty() || !req.observed_inventory_batches.is_empty() {
+                if !req.heartbeats.is_empty()
+                    || !req.observed_inventory_batches.is_empty()
+                    || !req.capabilities.is_empty()
+                    || req.operator_version.is_some()
+                {
                     if let Err(e) = state
                         .deployment_store
                         .reconcile(
@@ -1041,6 +1061,8 @@ async fn agent_sync(
                                 update_heartbeat: true,
                                 heartbeats: req.heartbeats.clone(),
                                 observed_inventory_batches: req.observed_inventory_batches.clone(),
+                                capabilities: req.capabilities.clone(),
+                                operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
                             },
                         )
@@ -1188,7 +1210,7 @@ fn release_info_from_record(
     release_stack_platform: Platform,
 ) -> Option<ReleaseInfo> {
     Some(ReleaseInfo {
-        release_id: release.id.clone(),
+        release_id: Some(release.id.clone()),
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),

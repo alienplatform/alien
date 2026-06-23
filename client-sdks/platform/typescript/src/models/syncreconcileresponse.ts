@@ -8146,6 +8146,14 @@ export type TargetConfig = {
    */
   nativeImageHost?: string | null | undefined;
   /**
+   * Kubernetes label selector that narrows which raw resources the observe
+   *
+   * @remarks
+   * pass reports (e.g. `app.kubernetes.io/part-of=my-app`). `None` observes
+   * everything in the namespace. Ignored by cloud observers.
+   */
+  observeLabelSelector?: string | null | undefined;
+  /**
    * Public URLs for exposed resources (optional override).
    *
    * @remarks
@@ -23089,6 +23097,7 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
       ]),
     ).optional(),
     nativeImageHost: z.nullable(z.string()).optional(),
+    observeLabelSelector: z.nullable(z.string()).optional(),
     publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
     stackSettings: z.lazy(() =>
       SyncReconcileResponseStackSettings$inboundSchema

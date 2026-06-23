@@ -47,7 +47,8 @@ get "raw"(){
 get "resourceTypeHint"(){
                 return z.union([ResourceTypeSchema, z.null()]).optional()
               },
-"scope": z.string().nullish()
+"scope": z.string().nullish(),
+"version": z.string().describe("Release/version identity observed from the provider resource, when available.").nullish()
     })
 
 export type ObservedResourceSample = z.infer<typeof ObservedResourceSampleSchema>

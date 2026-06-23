@@ -149,6 +149,7 @@ impl KubernetesObserver {
         let Some(name) = deployment.metadata.name.clone() else {
             return Ok(None);
         };
+        let namespace = workload_namespace(scope, deployment.metadata.namespace.as_deref());
         let labels = deployment.metadata.labels.clone();
         let selector = deployment
             .spec
@@ -157,7 +158,7 @@ impl KubernetesObserver {
             .unwrap_or_default();
 
         self.workload_resource(
-            scope,
+            &namespace,
             &name,
             labels.as_ref(),
             selector,
@@ -177,6 +178,7 @@ impl KubernetesObserver {
         let Some(name) = statefulset.metadata.name.clone() else {
             return Ok(None);
         };
+        let namespace = workload_namespace(scope, statefulset.metadata.namespace.as_deref());
         let labels = statefulset.metadata.labels.clone();
         let selector = statefulset
             .spec
@@ -185,7 +187,7 @@ impl KubernetesObserver {
             .unwrap_or_default();
 
         self.workload_resource(
-            scope,
+            &namespace,
             &name,
             labels.as_ref(),
             selector,
@@ -205,6 +207,7 @@ impl KubernetesObserver {
         let Some(name) = daemonset.metadata.name.clone() else {
             return Ok(None);
         };
+        let namespace = workload_namespace(scope, daemonset.metadata.namespace.as_deref());
         let labels = daemonset.metadata.labels.clone();
         let selector = daemonset
             .spec
@@ -213,7 +216,7 @@ impl KubernetesObserver {
             .unwrap_or_default();
 
         self.workload_resource(
-            scope,
+            &namespace,
             &name,
             labels.as_ref(),
             selector,
@@ -225,9 +228,10 @@ impl KubernetesObserver {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn workload_resource(
         &self,
-        scope: &ObserveScope,
+        namespace: &str,
         name: &str,
         labels: Option<&BTreeMap<String, String>>,
         selector_labels: BTreeMap<String, String>,
@@ -240,13 +244,15 @@ impl KubernetesObserver {
             return Ok(None);
         }
 
-        let raw_id = raw_identity(workload_kind, &scope.namespace, name);
+        // Use the workload's own namespace (from object metadata), so cluster-wide
+        // (all-namespace) observe reports each resource under its real namespace.
+        let raw_id = raw_identity(workload_kind, namespace, name);
         let data = match alien_k8s_clients::read_kubernetes_workload(
             &self.context.pod_client,
             &self.context.event_client,
             &self.context.metrics_client,
             &KubernetesWorkloadReadInput {
-                namespace: scope.namespace.clone(),
+                namespace: namespace.to_string(),
                 workload_name: name.to_string(),
                 workload_kind,
                 data_kind,
@@ -261,7 +267,7 @@ impl KubernetesObserver {
             Err(error) if is_optional_observe_read_error(&error) => {
                 warn!(
                     kind = ?workload_kind,
-                    namespace = %scope.namespace,
+                    namespace = %namespace,
                     name = %name,
                     error = %error,
                     "Kubernetes observe workload read unavailable; skipping workload"
@@ -277,11 +283,11 @@ impl KubernetesObserver {
                 raw_identity: raw_id,
                 provider_kind: format!("apps/v1/{}", workload_kind_name(workload_kind)),
                 display_name: name.to_string(),
-                namespace: Some(scope.namespace.clone()),
+                namespace: Some(namespace.to_string()),
                 region: None,
                 scope: Some(kubernetes_inventory_scope(
                     workload_kind_name(workload_kind),
-                    &scope.namespace,
+                    namespace,
                 )),
                 resource_type_hint: Some(resource_type_for_workload(workload_kind)),
                 alien_resource_id: alien_resource_id_from_labels(&self.label_domain, labels),
@@ -376,6 +382,16 @@ fn report_for_kind(
             complete,
             resources,
         }],
+    }
+}
+
+/// The namespace to attribute a listed workload to: its own `metadata.namespace`
+/// when present (required for cluster-wide observe, where `scope.namespace` is
+/// empty), falling back to the scope's namespace for namespaced observe.
+fn workload_namespace(scope: &ObserveScope, object_namespace: Option<&str>) -> String {
+    match object_namespace {
+        Some(ns) if !ns.is_empty() => ns.to_string(),
+        _ => scope.namespace.clone(),
     }
 }
 

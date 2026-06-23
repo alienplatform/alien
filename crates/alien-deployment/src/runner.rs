@@ -155,6 +155,8 @@ async fn run_step_loop_inner(
             client_config,
             &service_provider,
             deployment_id,
+            config.observe_label_selector.as_deref(),
+            config.observe_all_namespaces,
         )
         .await?;
 
@@ -317,6 +319,8 @@ async fn run_step_loop_inner(
                 client_config,
                 &observe_service_provider,
                 deployment_id,
+                config.observe_label_selector.as_deref(),
+                config.observe_all_namespaces,
             )
             .await?;
             observed_inventory_batches.extend(observe_report.inventory_batches);
@@ -548,7 +552,7 @@ mod tests {
             platform: Platform::Test,
             current_release: None,
             target_release: Some(ReleaseInfo {
-                release_id: "rel_test".to_string(),
+                release_id: Some("rel_test".to_string()),
                 version: None,
                 description: None,
                 stack: test_stack(),
@@ -575,6 +579,8 @@ mod tests {
             external_bindings: alien_core::ExternalBindings::default(),
             base_platform: None,
             label_domain: None,
+            observe_label_selector: None,
+            observe_all_namespaces: false,
             compute_backend: None,
             allow_frozen_changes: false,
             domain_metadata: None,

@@ -398,6 +398,8 @@ impl DeploymentLoop {
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
                                 observed_inventory_batches: Vec::new(),
+                                capabilities: Vec::new(),
+                                operator_version: None,
                             },
                         )
                         .await?;
@@ -429,7 +431,7 @@ impl DeploymentLoop {
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
-            release_id: target_release_id.clone(),
+            release_id: Some(target_release_id.clone()),
             version: None,
             description: None,
             stack: deployment_stack.clone(),
@@ -442,7 +444,7 @@ impl DeploymentLoop {
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: deployment_stack.clone(),
@@ -532,6 +534,8 @@ impl DeploymentLoop {
                     .unwrap_or_default(),
                 base_platform: deployment.base_platform,
                 label_domain: None,
+                observe_label_selector: None,
+                observe_all_namespaces: false,
                 public_urls: None,
                 domain_metadata: None,
                 monitoring,
@@ -804,14 +808,14 @@ fn failed_state_for_credential_error(
                 .current_release_id
                 .as_ref()
                 .map(|id| ReleaseInfo {
-                    release_id: id.clone(),
+                    release_id: Some(id.clone()),
                     version: None,
                     description: None,
                     stack: stack.clone(),
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
-            release_id: target_release_id.to_string(),
+            release_id: Some(target_release_id.to_string()),
             version: None,
             description: None,
             stack: stack.clone(),

@@ -96,6 +96,8 @@ export * from "./managerstatus.js";
 export * from "./membership.js";
 export * from "./newdeploymentrequest.js";
 export * from "./newmanagerrequest.js";
+export * from "./operatorcapabilityreport.js";
+export * from "./operatorcapabilitystate.js";
 export * from "./package.js";
 export * from "./persistimporteddeploymentrequest.js";
 export * from "./pinreleaserequest.js";

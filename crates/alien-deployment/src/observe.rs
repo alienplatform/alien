@@ -16,6 +16,12 @@ pub async fn run_observe_pass(
     client_config: &ClientConfig,
     service_provider: &Arc<dyn alien_infra::PlatformServiceProvider>,
     deployment_id: &str,
+    // Kubernetes label selector narrowing what is observed. Ignored by cloud
+    // observers (which scope by account/project/region, not k8s labels).
+    label_selector: Option<&str>,
+    // Cluster scope: observe every namespace rather than only the operator's own.
+    // Ignored by cloud observers.
+    observe_all_namespaces: bool,
 ) -> Result<ObserveReport> {
     match platform {
         Platform::Aws => {
@@ -80,9 +86,17 @@ pub async fn run_observe_pass(
         event_client,
         metrics_client,
     });
+    // Cluster scope observes every namespace (an empty namespace lists across all
+    // of them); otherwise we stay in the operator's own namespace. The label
+    // selector, when present, filters within whichever scope applies — it no
+    // longer decides the namespace.
     let scope = ObserveScope {
-        namespace: namespace_from(kubernetes_config),
-        label_selector: None,
+        namespace: if observe_all_namespaces {
+            String::new()
+        } else {
+            namespace_from(kubernetes_config)
+        },
+        label_selector: label_selector.map(|selector| selector.to_string()),
     };
 
     observer

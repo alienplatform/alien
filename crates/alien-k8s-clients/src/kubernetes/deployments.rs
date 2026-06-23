@@ -11,6 +11,22 @@ use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
+/// Build an `apps/v1` collection URL. An empty `namespace` yields the
+/// cluster-scoped collection (`/apis/apps/v1/<resource>`), which lists across all
+/// namespaces; a non-empty one yields the namespaced collection.
+fn apps_v1_collection_url(base_url: &str, namespace: &str, resource: &str) -> String {
+    if namespace.is_empty() {
+        format!("{}/apis/apps/v1/{}", base_url, resource)
+    } else {
+        format!(
+            "{}/apis/apps/v1/namespaces/{}/{}",
+            base_url,
+            urlencoding::encode(namespace),
+            resource
+        )
+    }
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait]
 pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
@@ -121,11 +137,7 @@ impl KubernetesClient {
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<Deployment>> {
-        let mut url = format!(
-            "{}/apis/apps/v1/namespaces/{}/deployments",
-            self.get_base_url(),
-            urlencoding::encode(namespace)
-        );
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "deployments");
         let mut query_params = Vec::new();
 
         if let Some(ls) = &label_selector {
@@ -241,11 +253,7 @@ impl KubernetesClient {
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<StatefulSet>> {
-        let mut url = format!(
-            "{}/apis/apps/v1/namespaces/{}/statefulsets",
-            self.get_base_url(),
-            urlencoding::encode(namespace)
-        );
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "statefulsets");
         let mut query_params = Vec::new();
 
         if let Some(ls) = &label_selector {
@@ -361,11 +369,7 @@ impl KubernetesClient {
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<DaemonSet>> {
-        let mut url = format!(
-            "{}/apis/apps/v1/namespaces/{}/daemonsets",
-            self.get_base_url(),
-            urlencoding::encode(namespace)
-        );
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "daemonsets");
         let mut query_params = Vec::new();
 
         if let Some(ls) = &label_selector {

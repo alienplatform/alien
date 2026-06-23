@@ -257,6 +257,11 @@
 //!
 //! ### Delete Operations – Best-Effort Cleanup
 //! Delete states should treat `RemoteResourceNotFound` and `RemoteAccessDenied` as success, making cleanup idempotent even when an imported resource has already been removed or is no longer accessible.
+//! Provider dependency-drain errors during delete, such as GCP `resourceInUseByAnotherResource`,
+//! AWS `DependencyViolation`/`ResourceInUse`, and Azure `InUse`/`Conflict`, should usually be
+//! handled as wait conditions. Keep the referenced remote ID in state and return `Stay` or a
+//! wait state with a delay until the provider proves the dependency is gone or the resource is
+//! `RemoteResourceNotFound`.
 //! ```ignore
 //! match client.delete_service_account(&name).await {
 //!     Ok(_) => next_state_deleting_role(),

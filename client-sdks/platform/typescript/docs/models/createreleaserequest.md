@@ -19,7 +19,6 @@ let value: CreateReleaseRequest = {
     commitAuthorLogin: "johndoe",
     commitAuthorAvatarUrl: "https://github.com/johndoe.png",
   },
-  stack: {},
   project: "<value>",
 };
 ```
@@ -28,7 +27,8 @@ let value: CreateReleaseRequest = {
 
 | Field                                                  | Type                                                   | Required                                               | Description                                            |
 | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
+| `version`                                              | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |
 | `gitMetadata`                                          | [models.GitMetadata](../models/gitmetadata.md)         | :heavy_minus_sign:                                     | N/A                                                    |
-| `stack`                                                | [models.StackByPlatform](../models/stackbyplatform.md) | :heavy_check_mark:                                     | N/A                                                    |
+| `stack`                                                | [models.StackByPlatform](../models/stackbyplatform.md) | :heavy_minus_sign:                                     | N/A                                                    |
 | `rootDirectory`                                        | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |
 | `project`                                              | *string*                                               | :heavy_check_mark:                                     | Project ID or name                                     |

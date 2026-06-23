@@ -1705,7 +1705,7 @@ pub async fn push_initial_setup(
                     })?;
 
                 Some(ReleaseInfo {
-                    release_id: rel.id,
+                    release_id: Some(rel.id),
                     version: None,
                     description: None,
                     stack,
@@ -1957,7 +1957,7 @@ pub async fn push_deletion(
                 platform_stack_value
                     .and_then(|v| serde_json::from_value(v).ok())
                     .map(|stack| ReleaseInfo {
-                        release_id: rel.id,
+                        release_id: Some(rel.id),
                         version: None,
                         description: None,
                         stack,
