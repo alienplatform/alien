@@ -243,16 +243,6 @@ async fn create_ec2_vpc(client: &Ec2Client, request: CreateVpcInput) -> Result<C
     )
 }
 
-async fn delete_ec2_vpc(client: &Ec2Client, vpc_id: &str) -> Result<()> {
-    ec2_result(
-        client.delete_vpc().vpc_id(vpc_id).send().await,
-        "DeleteVpc",
-        "VPC",
-        vpc_id,
-    )?;
-    Ok(())
-}
-
 async fn modify_ec2_vpc_attribute(
     client: &Ec2Client,
     request: ModifyVpcAttributeInput,
@@ -324,16 +314,6 @@ async fn create_ec2_subnet(
     )
 }
 
-async fn delete_ec2_subnet(client: &Ec2Client, subnet_id: &str) -> Result<()> {
-    ec2_result(
-        client.delete_subnet().subnet_id(subnet_id).send().await,
-        "DeleteSubnet",
-        "Subnet",
-        subnet_id,
-    )?;
-    Ok(())
-}
-
 async fn create_ec2_internet_gateway(
     client: &Ec2Client,
     request: CreateInternetGatewayInput,
@@ -349,20 +329,6 @@ async fn create_ec2_internet_gateway(
         "InternetGateway",
         "*",
     )
-}
-
-async fn delete_ec2_internet_gateway(client: &Ec2Client, internet_gateway_id: &str) -> Result<()> {
-    ec2_result(
-        client
-            .delete_internet_gateway()
-            .internet_gateway_id(internet_gateway_id)
-            .send()
-            .await,
-        "DeleteInternetGateway",
-        "InternetGateway",
-        internet_gateway_id,
-    )?;
-    Ok(())
 }
 
 async fn attach_ec2_internet_gateway(
@@ -503,20 +469,6 @@ async fn allocate_ec2_address(
     )
 }
 
-async fn release_ec2_address(client: &Ec2Client, allocation_id: &str) -> Result<()> {
-    ec2_result(
-        client
-            .release_address()
-            .allocation_id(allocation_id)
-            .send()
-            .await,
-        "ReleaseAddress",
-        "ElasticIP",
-        allocation_id,
-    )?;
-    Ok(())
-}
-
 async fn create_ec2_route_table(
     client: &Ec2Client,
     request: CreateRouteTableInput,
@@ -536,20 +488,6 @@ async fn create_ec2_route_table(
         "RouteTable",
         &vpc_id,
     )
-}
-
-async fn delete_ec2_route_table(client: &Ec2Client, route_table_id: &str) -> Result<()> {
-    ec2_result(
-        client
-            .delete_route_table()
-            .route_table_id(route_table_id)
-            .send()
-            .await,
-        "DeleteRouteTable",
-        "RouteTable",
-        route_table_id,
-    )?;
-    Ok(())
 }
 
 async fn create_ec2_route(client: &Ec2Client, request: CreateRouteInput) -> Result<()> {
@@ -606,20 +544,6 @@ async fn associate_ec2_route_table(
     )
 }
 
-async fn disassociate_ec2_route_table(client: &Ec2Client, association_id: &str) -> Result<()> {
-    ec2_result(
-        client
-            .disassociate_route_table()
-            .association_id(association_id)
-            .send()
-            .await,
-        "DisassociateRouteTable",
-        "RouteTableAssociation",
-        association_id,
-    )?;
-    Ok(())
-}
-
 async fn describe_ec2_security_groups(
     client: &Ec2Client,
     request: DescribeSecurityGroupsInput,
@@ -661,20 +585,6 @@ async fn create_ec2_security_group(
         "SecurityGroup",
         &group_name,
     )
-}
-
-async fn delete_ec2_security_group(client: &Ec2Client, group_id: &str) -> Result<()> {
-    ec2_result(
-        client
-            .delete_security_group()
-            .group_id(group_id)
-            .send()
-            .await,
-        "DeleteSecurityGroup",
-        "SecurityGroup",
-        group_id,
-    )?;
-    Ok(())
 }
 
 async fn authorize_ec2_security_group_ingress(
@@ -2523,7 +2433,16 @@ impl AwsNetworkController {
         if let Some(allocation_id) = &self.eip_allocation_id {
             info!(allocation_id = %allocation_id, "Releasing Elastic IP");
 
-            match release_ec2_address(&client, allocation_id).await {
+            match ec2_result(
+                client
+                    .release_address()
+                    .allocation_id(allocation_id)
+                    .send()
+                    .await,
+                "ReleaseAddress",
+                "ElasticIP",
+                allocation_id,
+            ) {
                 Ok(_) => {
                     info!(allocation_id = %allocation_id, "Elastic IP released");
                 }
@@ -2560,7 +2479,12 @@ impl AwsNetworkController {
         if let Some(sg_id) = &self.security_group_id {
             info!(sg_id = %sg_id, "Deleting security group");
 
-            match delete_ec2_security_group(&client, sg_id).await {
+            match ec2_result(
+                client.delete_security_group().group_id(sg_id).send().await,
+                "DeleteSecurityGroup",
+                "SecurityGroup",
+                sg_id,
+            ) {
                 Ok(_) => {
                     info!(sg_id = %sg_id, "Security group deleted");
                 }
@@ -2601,7 +2525,12 @@ impl AwsNetworkController {
         {
             info!(subnet_id = %subnet_id, "Deleting subnet");
 
-            match delete_ec2_subnet(&client, &subnet_id).await {
+            match ec2_result(
+                client.delete_subnet().subnet_id(&subnet_id).send().await,
+                "DeleteSubnet",
+                "Subnet",
+                &subnet_id,
+            ) {
                 Ok(_) => {
                     info!(subnet_id = %subnet_id, "Subnet deleted");
                 }
@@ -2636,7 +2565,16 @@ impl AwsNetworkController {
         for assoc_id in self.route_table_association_ids.drain(..) {
             info!(assoc_id = %assoc_id, "Disassociating route table");
 
-            match disassociate_ec2_route_table(&client, &assoc_id).await {
+            match ec2_result(
+                client
+                    .disassociate_route_table()
+                    .association_id(&assoc_id)
+                    .send()
+                    .await,
+                "DisassociateRouteTable",
+                "RouteTableAssociation",
+                &assoc_id,
+            ) {
                 Ok(_) => {
                     info!(assoc_id = %assoc_id, "Route table disassociated");
                 }
@@ -2650,7 +2588,16 @@ impl AwsNetworkController {
         if let Some(rt_id) = self.public_route_table_id.take() {
             info!(rt_id = %rt_id, "Deleting public route table");
 
-            match delete_ec2_route_table(&client, &rt_id).await {
+            match ec2_result(
+                client
+                    .delete_route_table()
+                    .route_table_id(&rt_id)
+                    .send()
+                    .await,
+                "DeleteRouteTable",
+                "RouteTable",
+                &rt_id,
+            ) {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Public route table deleted");
                 }
@@ -2667,7 +2614,16 @@ impl AwsNetworkController {
         if let Some(rt_id) = self.private_route_table_id.take() {
             info!(rt_id = %rt_id, "Deleting private route table");
 
-            match delete_ec2_route_table(&client, &rt_id).await {
+            match ec2_result(
+                client
+                    .delete_route_table()
+                    .route_table_id(&rt_id)
+                    .send()
+                    .await,
+                "DeleteRouteTable",
+                "RouteTable",
+                &rt_id,
+            ) {
                 Ok(_) => {
                     info!(rt_id = %rt_id, "Private route table deleted");
                 }
@@ -2726,7 +2682,16 @@ impl AwsNetworkController {
 
             info!(igw_id = %igw_id, "Deleting Internet Gateway");
 
-            match delete_ec2_internet_gateway(&client, igw_id).await {
+            match ec2_result(
+                client
+                    .delete_internet_gateway()
+                    .internet_gateway_id(igw_id)
+                    .send()
+                    .await,
+                "DeleteInternetGateway",
+                "InternetGateway",
+                igw_id,
+            ) {
                 Ok(_) => {
                     info!(igw_id = %igw_id, "Internet Gateway deleted");
                 }
@@ -2760,7 +2725,12 @@ impl AwsNetworkController {
         if let Some(vpc_id) = &self.vpc_id {
             info!(vpc_id = %vpc_id, "Deleting VPC");
 
-            match delete_ec2_vpc(&client, vpc_id).await {
+            match ec2_result(
+                client.delete_vpc().vpc_id(vpc_id).send().await,
+                "DeleteVpc",
+                "VPC",
+                vpc_id,
+            ) {
                 Ok(_) => {
                     info!(vpc_id = %vpc_id, "VPC deleted");
                 }
