@@ -405,6 +405,21 @@ impl ExecutionMode {
         }
     }
 
+    /// Like [`resolve_manager`] but skips the artifact-registry repo
+    /// provisioning step. Use this for read-only / traffic-only flows
+    /// (`debug`, `commands`, `deployments list/get`) where the CLI never
+    /// pushes container images and the repo isn't needed.
+    ///
+    /// Saves ~10–15s per invocation on dev clusters where the artifact repo
+    /// provisioning call is slow (network round trip + cloud API call).
+    pub async fn resolve_manager_metadata_only(
+        &self,
+        project: &str,
+        platform: &str,
+    ) -> Result<ManagerContext> {
+        self.resolve_manager_inner(project, platform, false).await
+    }
+
     /// Resolve manager URL and return an authenticated manager SDK client.
     ///
     /// - Standalone: uses the known server_url
@@ -412,6 +427,15 @@ impl ExecutionMode {
     /// - Platform: calls /v1/resolve to discover the project's manager URL,
     ///   then calls the manager directly to create/get the artifact registry repo.
     pub async fn resolve_manager(&self, project: &str, platform: &str) -> Result<ManagerContext> {
+        self.resolve_manager_inner(project, platform, true).await
+    }
+
+    async fn resolve_manager_inner(
+        &self,
+        project: &str,
+        platform: &str,
+        with_artifact_repo: bool,
+    ) -> Result<ManagerContext> {
         match self {
             Self::Standalone {
                 server_url,
@@ -577,15 +601,24 @@ impl ExecutionMode {
                 // The manager owns backend selection: cloud targets use target providers,
                 // while pull platforms like Kubernetes/local fall back to the manager's
                 // primary registry provider.
-                let repo_name = create_or_get_artifact_repo(
-                    &manager_http_client,
-                    &manager_url,
-                    &resolved.project_id,
-                    platform,
-                )
-                .await?;
-
-                info!("Repository: {}", repo_name);
+                //
+                // Skip this for read-only / traffic-only flows where the CLI
+                // never pushes images (`debug`, `commands`, `deployments`).
+                // Cloud-side repo provisioning can take 10s+ on dev clusters
+                // and isn't worth the wait when we don't need the repo.
+                let repo_name = if with_artifact_repo {
+                    let name = create_or_get_artifact_repo(
+                        &manager_http_client,
+                        &manager_url,
+                        &resolved.project_id,
+                        platform,
+                    )
+                    .await?;
+                    info!("Repository: {}", name);
+                    Some(name)
+                } else {
+                    None
+                };
 
                 let manager_client =
                     ServerSdkClient::new_with_client(&manager_url, manager_http_client.clone());
@@ -598,7 +631,7 @@ impl ExecutionMode {
                     client: manager_client,
                     http_client: manager_http_client,
                     auth_token,
-                    repository_name: Some(repo_name),
+                    repository_name: repo_name,
                     repository_uri: None,
                     workspace: workspace.query,
                 })

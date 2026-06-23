@@ -75,16 +75,18 @@ use alien_debug_session::{DebugCredFile, DebugSessionResponse};
 /// Top-level entry for `alien debug`.
 pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     let (_, project_link) = ctx.resolve_project(None, true).await?;
-    let manager = ctx.resolve_manager(&project_link.project_id, "aws").await?;
+    // `debug` never pushes images, so skip the artifact-registry repo
+    // provisioning step — saves ~10s per invocation against cloud managers.
+    let manager = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
 
     let is_dev = ctx.is_dev();
     let deployment_id = resolve_deployment_id(&manager, &args.deployment, is_dev).await?;
 
-    // No CLI-side caching: every invocation mints a fresh session. The
-    // manager controls session lifetime, token rotation, and registry
-    // eviction — any client-side cache of server-side state is just a
-    // staleness bug waiting to happen, and the AWS/GCP/Azure cred mint is
-    // cheap enough that the latency saving isn't worth the failure mode.
+    // No CLI-side caching: every invocation asks the manager to create-or-
+    // reuse a session. The manager controls session lifetime, token rotation,
+    // and registry eviction.
     let session = create_debug_session(&manager, &deployment_id).await?;
     let session = resolve_pending_session(&manager, session).await?;
     exec_with_session(session, &args.cmd).await
