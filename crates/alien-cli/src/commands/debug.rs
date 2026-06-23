@@ -394,7 +394,10 @@ async fn exec_with_session(
         run_setup_script(&script, &env).await?;
     }
 
-    let status = spawn_child(deployment_label, &session_kind, &cred_dir, cmd, &env).await?;
+    let region = extract_region_from_env(&env, session_kind.provider);
+    let status =
+        spawn_child(deployment_label, &session_kind, region.as_deref(), &cred_dir, cmd, &env)
+            .await?;
 
     // The temp dir must outlive the child. Drop happens here, after wait.
     drop(cred_dir);
@@ -521,6 +524,7 @@ impl SessionMode {
 async fn spawn_child(
     deployment_label: &str,
     session_kind: &SessionKind,
+    region: Option<&str>,
     cred_dir: &TempDir,
     cmd: &[String],
     env: &BTreeMap<String, String>,
@@ -530,7 +534,7 @@ async fn spawn_child(
         // prompt + banner so it's obvious every command runs against the
         // remote deployment. We honor $SHELL but only special-case bash/zsh
         // for prompt customization; other shells get a vanilla session.
-        build_interactive_shell(deployment_label, session_kind, cred_dir)?
+        build_interactive_shell(deployment_label, session_kind, region, cred_dir)?
     } else {
         (cmd[0].clone(), cmd[1..].to_vec())
     };
@@ -576,6 +580,7 @@ async fn spawn_child(
 fn build_interactive_shell(
     deployment_label: &str,
     session_kind: &SessionKind,
+    region: Option<&str>,
     cred_dir: &TempDir,
 ) -> Result<(String, Vec<String>)> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
@@ -583,7 +588,7 @@ fn build_interactive_shell(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("sh");
-    let banner = render_banner(deployment_label, session_kind);
+    let banner = render_banner(deployment_label, session_kind, region);
     // Show only the deployment name in the prompt — strip any `<group>/`
     // prefix so the line stays short.
     let deployment_name = deployment_label
@@ -596,7 +601,7 @@ fn build_interactive_shell(
         "bash" => {
             let rc_path = cred_dir.path().join("bashrc");
             let rc = format!(
-                "{banner}\nexport PS1='\\[\\e[36m\\]{tag}\\[\\e[0m\\] ❯ '\n",
+                "{banner}\nexport PS1='\\[\\e[32m\\]\u{25CB}\\[\\e[0m\\] \\[\\e[36m\\]{tag}\\[\\e[0m\\] ❯ '\n",
                 banner = shell_echo_block(&banner),
                 tag = prompt_tag,
             );
@@ -619,7 +624,7 @@ fn build_interactive_shell(
         "zsh" => {
             let zshrc = cred_dir.path().join(".zshrc");
             let rc = format!(
-                "{banner}\nexport PS1=$'%F{{cyan}}{tag}%f ❯ '\n",
+                "{banner}\nexport PS1=$'%F{{green}}\u{25CB}%f %F{{cyan}}{tag}%f ❯ '\n",
                 banner = shell_echo_block(&banner),
                 tag = prompt_tag,
             );
@@ -650,13 +655,40 @@ fn build_interactive_shell(
 
 /// Render the multi-line shell banner shown when entering the interactive
 /// debug shell. Plain ASCII + ANSI colors; no emoji.
-fn render_banner(deployment_label: &str, session_kind: &SessionKind) -> String {
-    let provider = session_kind.provider.unwrap_or("none");
-    let mode = session_kind.mode.label();
+fn render_banner(
+    deployment_label: &str,
+    session_kind: &SessionKind,
+    region: Option<&str>,
+) -> String {
+    let mut parts = vec![format!("attached to \x1b[1m{deployment_label}\x1b[0m")];
+    if let Some(p) = session_kind.provider {
+        parts.push(p.to_string());
+    }
+    if let Some(r) = region {
+        parts.push(r.to_string());
+    }
+    parts.push(format!("{}-mode", session_kind.mode.label()));
+    let line = parts.join(" \x1b[2m·\x1b[0m ");
     format!(
-        "\x1b[36m●\x1b[0m alien · attached to \x1b[1m{deployment_label}\x1b[0m · {mode}-mode · provider={provider}\n\
-         \x1b[32m✓\x1b[0m session ready · type `exit` to end"
+        "\x1b[32m\u{25CB}\x1b[0m alien · {line}\n\
+         \x1b[32m\u{2713}\x1b[0m session ready · type `exit` to end"
     )
+}
+
+/// Pull a human-readable region label out of the env we're about to hand to
+/// the child. Different providers use different env-var names; we check the
+/// canonical one for each. Returns `None` for unknown / unset.
+fn extract_region_from_env(
+    env: &BTreeMap<String, String>,
+    provider: Option<&'static str>,
+) -> Option<String> {
+    let key = match provider? {
+        "aws" => "AWS_REGION",
+        "gcp" => "CLOUDSDK_COMPUTE_REGION",
+        "azure" => "AZURE_DEFAULTS_LOCATION",
+        _ => return None,
+    };
+    env.get(key).cloned()
 }
 
 /// Wrap a multi-line string into a series of `printf` lines safe to embed
