@@ -21,7 +21,6 @@ platform = ["dep:oauth2", "dep:open", "dep:keyring"]
 
 [dependencies]
 alien-core = { workspace = true }
-alien-debug-session = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
 alien-terraform = { workspace = true }

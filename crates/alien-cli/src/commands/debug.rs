@@ -70,7 +70,7 @@ struct CreateDebugSessionRequest {
 // Wire types live in `alien-debug-session` so the manager (push mode) and
 // the agent (pull mode) can produce identical payloads. The CLI only
 // consumes — no provider-specific knowledge needed here.
-use alien_debug_session::{DebugCredFile, DebugSessionResponse};
+use alien_core::debug_session::{DebugCredFile, DebugSessionResponse};
 
 /// Top-level entry for `alien debug`.
 pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
@@ -622,26 +622,36 @@ fn build_interactive_shell(
             ))
         }
         "zsh" => {
+            // ZDOTDIR redirects zsh to our per-session rc dir so we don't
+            // pollute the user's real ~/.zshrc. We write two files:
+            //   - .zshenv (always sourced, even for non-interactive shells)
+            //     prints the banner and sets PS1.
+            //   - .zshrc (sourced for interactive shells) does the same so
+            //     either invocation mode prints the banner.
+            //
+            // We deliberately use simple `print -P` for the banner instead
+            // of `printf '%s\n' '...'` because ANSI escape bytes embedded
+            // in single-quoted strings inside the rc file can confuse
+            // zsh's parser into staying in a continuation state when the
+            // user later types `exit` (visible as a stuck `function>` PS2
+            // prompt). `print -P` accepts %-escapes natively and never
+            // sees a literal ESC byte in the source.
             let zshrc = cred_dir.path().join(".zshrc");
             let rc = format!(
-                "{banner}\nexport PS1=$'%F{{green}}\u{25CB}%f %F{{cyan}}{tag}%f ❯ '\n",
-                banner = shell_echo_block(&banner),
+                "print -P '%F{{green}}\u{25CB}%f alien · attached to %B{deployment}%b · {mode}-mode'\n\
+                 print -P '%F{{green}}\u{2713}%f session ready · type `exit` to end'\n\
+                 export PS1=$'%F{{green}}\u{25CB}%f %F{{cyan}}{tag}%f \u{276F} '\n",
+                deployment = deployment_label,
+                mode = session_kind.mode.label(),
                 tag = prompt_tag,
             );
-            std::fs::write(&zshrc, rc)
+            std::fs::write(&zshrc, &rc)
                 .into_alien_error()
                 .context(ErrorData::FileOperationFailed {
                     operation: "write".to_string(),
                     file_path: zshrc.display().to_string(),
                     reason: "Failed to write zsh rc for debug shell".to_string(),
                 })?;
-            // ZDOTDIR redirects zsh's startup-file search to our cred_dir.
-            // Set it via the rc-file env path: callers thread ZDOTDIR
-            // through `env`, so we return the path as an env-side var here
-            // by also writing to a wrapper... simplest: just rely on the
-            // child env having ZDOTDIR set. We can't mutate the env map
-            // from this function, so push ZDOTDIR into the process env
-            // directly — only this child inherits it.
             std::env::set_var("ZDOTDIR", cred_dir.path());
             Ok((shell, vec!["-i".to_string()]))
         }

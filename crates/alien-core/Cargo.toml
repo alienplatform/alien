@@ -32,6 +32,7 @@ reqwest = { workspace = true }
 base64 = { workspace = true }
 alien-macros = { workspace = true }
 alien-error = { workspace = true, features = ["openapi"] }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 

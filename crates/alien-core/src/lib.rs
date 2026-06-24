@@ -76,6 +76,8 @@ pub mod sync;
 pub mod commands_types;
 pub use commands_types::*;
 
+pub mod debug_session;
+
 pub mod crontab_to_eventbridge;
 pub mod file_utils;
 pub mod image_rewrite;

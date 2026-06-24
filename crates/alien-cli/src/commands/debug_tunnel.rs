@@ -23,7 +23,7 @@
 //! same as the pull tunnel — the WS is a fan-in / fan-out channel.
 
 use crate::error::{ErrorData, Result};
-use alien_debug_session::PushTunnelDebugSession;
+use alien_core::debug_session::PushTunnelDebugSession;
 use alien_error::{AlienError, Context as _, IntoAlienError};
 use axum::{
     body::Bytes,
