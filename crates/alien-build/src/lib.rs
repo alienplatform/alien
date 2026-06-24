@@ -988,6 +988,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         info!("Completed exporting {} container images", completed_tasks);
     }
 
+    strip_local_daemon_only_compute_clusters(&mut stack, settings.platform.runtime_platform());
+
     // Save the modified stack configuration to stack.json
     let stack_json_path = output_dir.join("stack.json");
     let stack_json_content = serde_json::to_string_pretty(&stack)
@@ -1013,6 +1015,59 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         build_stack_started.elapsed().as_secs_f64()
     );
     Ok(stack)
+}
+
+fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Local {
+        return;
+    }
+
+    let daemon_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+        .filter_map(|daemon| daemon.cluster.clone())
+        .collect();
+
+    if daemon_clusters.is_empty() {
+        return;
+    }
+
+    let container_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+        .filter_map(|container| container.cluster.clone())
+        .collect();
+
+    let removed_clusters: HashSet<String> = stack
+        .resources()
+        .filter(|(id, entry)| {
+            entry.config.resource_type().as_ref() == "compute-cluster"
+                && daemon_clusters.contains(*id)
+                && !container_clusters.contains(*id)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    if removed_clusters.is_empty() {
+        return;
+    }
+
+    stack
+        .resources
+        .retain(|id, _| !removed_clusters.contains(id));
+
+    for (_, entry) in stack.resources_mut() {
+        let Some(daemon) = entry.config.downcast_mut::<Daemon>() else {
+            continue;
+        };
+        if daemon
+            .cluster
+            .as_ref()
+            .is_some_and(|cluster| removed_clusters.contains(cluster))
+        {
+            daemon.cluster = None;
+        }
+    }
 }
 
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
@@ -2909,6 +2964,41 @@ mod tests {
             DarwinArm64,
             LinuxArm64
         ])));
+    }
+
+    #[test]
+    fn local_build_strips_daemon_only_compute_cluster() {
+        let cluster = alien_core::ComputeCluster::new("bear-runtime".to_string())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let daemon = Daemon::new("bear-agent-loader".to_string())
+            .cluster("bear-runtime".to_string())
+            .permissions("loader".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/bear-agent-loader:latest".to_string(),
+            })
+            .build();
+        let mut stack = Stack::new("bear-agent-stack".to_string())
+            .add(cluster, alien_core::ResourceLifecycle::Frozen)
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        strip_local_daemon_only_compute_clusters(&mut stack, Platform::Local);
+
+        assert!(!stack.resources.contains_key("bear-runtime"));
+        let daemon = stack
+            .resources()
+            .find(|(id, _)| *id == "bear-agent-loader")
+            .and_then(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+            .expect("daemon should remain");
+        assert_eq!(daemon.cluster, None);
     }
 
     #[test]

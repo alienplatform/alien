@@ -165,8 +165,7 @@ async fn resolve_pending_session(
                 .await
                 .into_alien_error()
                 .context(ErrorData::ApiRequestFailed {
-                    message: "Manager returned a malformed debug session poll response"
-                        .to_string(),
+                    message: "Manager returned a malformed debug session poll response".to_string(),
                     url: Some(pending.poll_url.clone()),
                 })?;
 
@@ -291,11 +290,8 @@ async fn exec_with_session(
             } else {
                 None
             };
-            let kubeconfig_path = write_session_file(
-                cred_dir.path(),
-                "kubeconfig",
-                &pull.kubeconfig,
-            )?;
+            let kubeconfig_path =
+                write_session_file(cred_dir.path(), "kubeconfig", &pull.kubeconfig)?;
             let mut env = materialize_session(&cred_dir, pull.env, pull.files)?;
             // The kubeconfig env var always wins — if the manager also set one
             // explicitly, this re-sets it to the path we actually wrote.
@@ -310,20 +306,17 @@ async fn exec_with_session(
             // in-cluster cloud identity. Loopback guards live for the
             // child's run.
             let token = pull.cloud_proxy_token.clone();
-            let mut cloud_guards: Vec<crate::commands::debug_tunnel::PushTunnelGuard> =
-                Vec::new();
+            let mut cloud_guards: Vec<crate::commands::debug_tunnel::PushTunnelGuard> = Vec::new();
 
             if let (Some(url), Some(tok)) = (pull.aws_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_tunnel::spawn_pull_aws_loopback(&url, &tok)
-                        .await?;
+                    crate::commands::debug_tunnel::spawn_pull_aws_loopback(&url, &tok).await?;
                 env.append(&mut e);
                 cloud_guards.push(g);
             }
             if let (Some(url), Some(tok)) = (pull.gcp_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_tunnel::spawn_pull_gcp_loopback(&url, &tok)
-                        .await?;
+                    crate::commands::debug_tunnel::spawn_pull_gcp_loopback(&url, &tok).await?;
                 env.append(&mut e);
                 let gcloud_cfg = cred_dir.path().join("gcloud-config");
                 let mut isolation =
@@ -333,8 +326,7 @@ async fn exec_with_session(
             }
             if let (Some(url), Some(tok)) = (pull.azure_endpoint_url, token.clone()) {
                 let (mut e, g) =
-                    crate::commands::debug_tunnel::spawn_pull_azure_loopback(&url, &tok)
-                        .await?;
+                    crate::commands::debug_tunnel::spawn_pull_azure_loopback(&url, &tok).await?;
                 env.append(&mut e);
                 cloud_guards.push(g);
             }
@@ -395,9 +387,15 @@ async fn exec_with_session(
     }
 
     let region = extract_region_from_env(&env, session_kind.provider);
-    let status =
-        spawn_child(deployment_label, &session_kind, region.as_deref(), &cred_dir, cmd, &env)
-            .await?;
+    let status = spawn_child(
+        deployment_label,
+        &session_kind,
+        region.as_deref(),
+        &cred_dir,
+        cmd,
+        &env,
+    )
+    .await?;
 
     // The temp dir must outlive the child. Drop happens here, after wait.
     drop(cred_dir);
@@ -421,8 +419,7 @@ fn materialize_session(
     files: Vec<DebugCredFile>,
 ) -> Result<BTreeMap<String, String>> {
     for file in files {
-        if file.file_name.contains('/') || file.file_name.contains('\\') || file.file_name == ".."
-        {
+        if file.file_name.contains('/') || file.file_name.contains('\\') || file.file_name == ".." {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message: format!(
                     "Manager returned an unsafe debug credential filename: '{}'",
@@ -490,7 +487,10 @@ async fn run_setup_script(script: &str, env: &BTreeMap<String, String>) -> Resul
             service: "sh".to_string(),
             reason: format!(
                 "Debug-session setup script exited with status {}.",
-                status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
             ),
         }));
     }
@@ -605,13 +605,13 @@ fn build_interactive_shell(
                 banner = shell_echo_block(&banner),
                 tag = prompt_tag,
             );
-            std::fs::write(&rc_path, rc)
-                .into_alien_error()
-                .context(ErrorData::FileOperationFailed {
+            std::fs::write(&rc_path, rc).into_alien_error().context(
+                ErrorData::FileOperationFailed {
                     operation: "write".to_string(),
                     file_path: rc_path.display().to_string(),
                     reason: "Failed to write bash rc for debug shell".to_string(),
-                })?;
+                },
+            )?;
             Ok((
                 shell,
                 vec![
@@ -649,13 +649,13 @@ fn build_interactive_shell(
                 mode = session_kind.mode.label(),
                 tag = prompt_tag,
             );
-            std::fs::write(&zshrc, &rc)
-                .into_alien_error()
-                .context(ErrorData::FileOperationFailed {
+            std::fs::write(&zshrc, &rc).into_alien_error().context(
+                ErrorData::FileOperationFailed {
                     operation: "write".to_string(),
                     file_path: zshrc.display().to_string(),
                     reason: "Failed to write zsh rc for debug shell".to_string(),
-                })?;
+                },
+            )?;
             std::env::set_var("ZDOTDIR", cred_dir.path());
             Ok((shell, vec!["-i".to_string()]))
         }
@@ -718,4 +718,3 @@ fn shell_echo_block(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-

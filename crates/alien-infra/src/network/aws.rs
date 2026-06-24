@@ -1155,10 +1155,7 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })
                 })?;
-                let assocs = rt
-                    .association_set
-                    .map(|set| set.items)
-                    .unwrap_or_default();
+                let assocs = rt.association_set.map(|set| set.items).unwrap_or_default();
                 info!(
                     route_table_id = %id,
                     "Public route table already exists from a prior attempt — reusing"
@@ -1234,7 +1231,8 @@ impl AwsNetworkController {
         // returns the existing association_id on a duplicate associate call,
         // but skipping the call keeps the log clean and avoids needless API
         // traffic per retry.
-        for subnet_id in subnets_needing_association(&self.public_subnet_ids, &public_existing_assocs)
+        for subnet_id in
+            subnets_needing_association(&self.public_subnet_ids, &public_existing_assocs)
         {
             let assoc_response = client
                 .associate_route_table(
@@ -1284,10 +1282,7 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })
                 })?;
-                let assocs = rt
-                    .association_set
-                    .map(|set| set.items)
-                    .unwrap_or_default();
+                let assocs = rt.association_set.map(|set| set.items).unwrap_or_default();
                 info!(
                     route_table_id = %id,
                     "Private route table already exists from a prior attempt — reusing"

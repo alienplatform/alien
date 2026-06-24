@@ -440,7 +440,8 @@ mod tests {
     use super::{
         deployment_needs_target, deployment_state_from_record, management_platform,
         release_stack_platform, should_ignore_agent_state_report,
-        validate_initialize_base_platform, ReconcileRequest,
+        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        ReconcileRequest,
     };
 
     #[test]
@@ -580,6 +581,31 @@ mod tests {
         agent_state.status = DeploymentStatus::Provisioning;
 
         assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn returns_current_state_when_retry_is_pending() {
+        let mut deployment = deployment_record_with_state(
+            "provisioning-failed",
+            Some(StackState::new(Platform::Local)),
+        );
+        deployment.retry_requested = true;
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
+            &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_current_state_when_agent_blank_state_was_ignored() {
+        let deployment =
+            deployment_record_with_state("running", Some(StackState::new(Platform::Local)));
+
+        assert!(should_return_current_state_for_agent_sync(
+            true,
+            &deployment
+        ));
     }
 
     #[test]
@@ -921,7 +947,9 @@ async fn agent_sync(
         None
     };
 
-    let current_state = if ignored_agent_state_report {
+    let should_return_current_state =
+        should_return_current_state_for_agent_sync(ignored_agent_state_report, &deployment);
+    let current_state = if should_return_current_state {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
             let system = crate::auth::Subject::system();
@@ -1024,6 +1052,13 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
         || deployment.runtime_metadata.is_some()
         || deployment.current_release_id.is_some()
         || deployment.status != "pending"
+}
+
+fn should_return_current_state_for_agent_sync(
+    ignored_agent_state_report: bool,
+    deployment: &DeploymentRecord,
+) -> bool {
+    ignored_agent_state_report || deployment.retry_requested
 }
 
 fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {

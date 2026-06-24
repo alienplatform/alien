@@ -398,13 +398,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             .external_bindings(alien_core::ExternalBindings::default())
                             .allow_frozen_changes(false)
                             .compute_backend(backend)
-                            .environment_variables(
-                                alien_core::EnvironmentVariablesSnapshot {
-                                    variables: Vec::new(),
-                                    hash: "empty".to_string(),
-                                    created_at: "1970-01-01T00:00:00Z".to_string(),
-                                },
-                            )
+                            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                                variables: Vec::new(),
+                                hash: "empty".to_string(),
+                                created_at: "1970-01-01T00:00:00Z".to_string(),
+                            })
                             .build();
                         let put_client = reqwest::Client::new();
                         let resp = put_client
@@ -419,8 +417,10 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             })?;
                         if !resp.status().is_success() {
                             let status = resp.status();
-                            let body =
-                                resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
+                            let body = resp
+                                .text()
+                                .await
+                                .unwrap_or_else(|_| "<no body>".to_string());
                             return Err(AlienError::new(ErrorData::ConfigurationError {
                                 message: format!(
                                     "Failed to seed deployment-config: HTTP {status}: {body}"

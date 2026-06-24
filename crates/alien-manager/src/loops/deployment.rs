@@ -21,7 +21,7 @@ use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
     ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -59,9 +59,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
 
     let amd64 = std::env::var("ALIEN_BYO_HORIZON_AMI_AMD64").ok();
     let arm64 = std::env::var("ALIEN_BYO_HORIZON_AMI_ARM64").ok();
-    if amd64.as_deref().unwrap_or("").is_empty()
-        && arm64.as_deref().unwrap_or("").is_empty()
-    {
+    if amd64.as_deref().unwrap_or("").is_empty() && arm64.as_deref().unwrap_or("").is_empty() {
         return None;
     }
     let region = std::env::var("AWS_REGION")
@@ -757,6 +755,7 @@ impl DeploymentLoop {
     ///
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
+    /// - `ALIEN_DEPLOYMENT_NAME`
     /// - Commands polling configuration
     async fn build_environment_variables(
         &self,
@@ -772,8 +771,14 @@ impl DeploymentLoop {
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
         });
+        vars.push(EnvironmentVariable {
+            name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
+            value: deployment.name.clone(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
+        });
 
-        // 2. Commands configuration — only inject polling for K8s/Local.
+        // 3. Commands configuration — only inject polling for K8s/Local.
         // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
         // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
         // regardless of deployment model. K8s/Local run as containers that must poll.

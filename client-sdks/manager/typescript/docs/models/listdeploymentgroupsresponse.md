@@ -13,6 +13,8 @@ let value: ListDeploymentGroupsResponse = {
       id: "<id>",
       maxDeployments: 468085,
       name: "<value>",
+      projectId: "<id>",
+      workspaceId: "<id>",
     },
   ],
 };

@@ -225,6 +225,54 @@ async fn list_by_deployment_group() {
 }
 
 #[tokio::test]
+async fn list_by_deployment_group_and_name() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+
+    let group_a = store
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "group-a".to_string(),
+                max_deployments: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    let group_b = store
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "group-b".to_string(),
+                max_deployments: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    create_test_deployment(&store, &group_a.id, "api", Platform::Aws).await;
+    create_test_deployment(&store, &group_a.id, "worker", Platform::Aws).await;
+    create_test_deployment(&store, &group_b.id, "api", Platform::Gcp).await;
+
+    let matches = store
+        .list_deployments(
+            &test_subject(),
+            &DeploymentFilter {
+                deployment_group_id: Some(group_a.id.clone()),
+                name: Some("api".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].deployment_group_id, group_a.id);
+    assert_eq!(matches[0].name, "api");
+}
+
+#[tokio::test]
 async fn update_status() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);

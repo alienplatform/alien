@@ -112,6 +112,7 @@ pub struct ListDeploymentsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ListDeploymentsQuery {
     pub deployment_group_id: Option<String>,
+    pub name: Option<String>,
     #[serde(default)]
     pub include: Vec<String>,
 }
@@ -123,11 +124,13 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let query_string = parts.uri.query().unwrap_or("");
         let mut deployment_group_id: Option<String> = None;
+        let mut name: Option<String> = None;
         let mut include: Vec<String> = Vec::new();
 
         for (key, value) in form_urlencoded::parse(query_string.as_bytes()) {
             match key.as_ref() {
                 "deploymentGroupId" => deployment_group_id = Some(value.into_owned()),
+                "name" => name = Some(value.into_owned()),
                 "include" | "include[]" => include.push(value.into_owned()),
                 _ => {}
             }
@@ -135,6 +138,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
 
         Ok(ListDeploymentsQuery {
             deployment_group_id,
+            name,
             include,
         })
     }
@@ -437,6 +441,7 @@ async fn create_deployment(
     tag = "deployments",
     params(
         ("deploymentGroupId" = Option<String>, Query, description = "Filter by deployment group ID"),
+        ("name" = Option<String>, Query, description = "Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group."),
         ("include" = Option<Vec<String>>, Query, description = "Include related resources (e.g. deploymentGroup)"),
     ),
     responses(
@@ -470,8 +475,16 @@ async fn list_deployments(
         }
     };
 
+    if query.name.is_some() && deployment_group_id.is_none() {
+        return ErrorData::bad_request(
+            "name filter requires deploymentGroupId unless the token is scoped to a deployment group",
+        )
+        .into_response();
+    }
+
     let filter = DeploymentFilter {
         deployment_group_id,
+        name: query.name.clone(),
         ..Default::default()
     };
 

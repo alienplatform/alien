@@ -126,8 +126,8 @@ fn test_compute_cluster_management_can_use_tagged_launch_templates() {
     ));
     assert!(condition_equals(
         setup_security_group_statement,
-        "aws:ResourceTag/resource",
-        "compute"
+        "aws:ResourceTag/resource-type",
+        "compute-cluster"
     ));
 
     let instance_statement = result
@@ -312,7 +312,11 @@ fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
                 && statement
                     .action
                     .contains(&"ec2:RevokeSecurityGroupIngress".to_string())
-                && condition_equals(statement, "aws:ResourceTag/resource", "compute")
+                && condition_equals(
+                    statement,
+                    "aws:ResourceTag/resource-type",
+                    "compute-cluster",
+                )
                 && condition_equals(statement, "aws:ResourceTag/managed-by", "setup")
         })
         .expect("container provision should manage ingress on setup compute security groups");

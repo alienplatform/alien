@@ -54,6 +54,16 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    fn should_preserve_retry_requested(
+        deployment: &DeploymentRecord,
+        reported_state: &alien_core::DeploymentState,
+    ) -> bool {
+        deployment.retry_requested
+            && !reported_state.retry_requested
+            && Self::FAILED_STATUSES.contains(&deployment.status.as_str())
+            && reported_state.status.is_failed()
+    }
+
     fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
         let retryable_failed = Cond::all()
             .add(Expr::col(Deployments::Status).is_in(Self::FAILED_STATUSES))
@@ -230,6 +240,14 @@ impl SqliteDeploymentStore {
 
 #[cfg(test)]
 mod tests {
+    use alien_core::{
+        DeploymentState, DeploymentStatus, Platform, StackSettings,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    use chrono::Utc;
+
+    use crate::traits::DeploymentRecord;
+
     use super::SqliteDeploymentStore;
 
     #[test]
@@ -239,6 +257,94 @@ mod tests {
         assert!(condition.contains("julianday(\"locked_at\")"));
         assert!(condition.contains("julianday('now', '-5 minutes')"));
         assert!(!condition.contains("\"locked_at\" < datetime"));
+    }
+
+    #[test]
+    fn preserves_retry_when_manager_and_agent_states_are_failed() {
+        let mut deployment = deployment_record("provisioning-failed");
+        deployment.retry_requested = true;
+        let reported_state = deployment_state(DeploymentStatus::ProvisioningFailed, false);
+
+        assert!(SqliteDeploymentStore::should_preserve_retry_requested(
+            &deployment,
+            &reported_state
+        ));
+    }
+
+    #[test]
+    fn does_not_preserve_retry_after_agent_applies_it() {
+        let mut deployment = deployment_record("provisioning-failed");
+        deployment.retry_requested = true;
+        let reported_state = deployment_state(DeploymentStatus::ProvisioningFailed, true);
+
+        assert!(!SqliteDeploymentStore::should_preserve_retry_requested(
+            &deployment,
+            &reported_state
+        ));
+    }
+
+    #[test]
+    fn does_not_preserve_retry_for_active_agent_state() {
+        let mut deployment = deployment_record("provisioning-failed");
+        deployment.retry_requested = true;
+        let reported_state = deployment_state(DeploymentStatus::Provisioning, false);
+
+        assert!(!SqliteDeploymentStore::should_preserve_retry_requested(
+            &deployment,
+            &reported_state
+        ));
+    }
+
+    fn deployment_state(status: DeploymentStatus, retry_requested: bool) -> DeploymentState {
+        DeploymentState {
+            platform: Platform::Local,
+            status,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn deployment_record(status: &str) -> DeploymentRecord {
+        let now = Utc::now();
+        DeploymentRecord {
+            id: "dep_test".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "test".to_string(),
+            deployment_group_id: "dg_test".to_string(),
+            platform: Platform::Local,
+            deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: status.to_string(),
+            stack_settings: Some(StackSettings::default()),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            deployment_token: None,
+            management_config: None,
+            deployment_config: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: now,
+            updated_at: Some(now),
+            error: None,
+        }
     }
 }
 
@@ -690,6 +796,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(dg_id) = &filter.deployment_group_id {
                 query.and_where(Expr::col(Deployments::DeploymentGroupId).eq(dg_id.as_str()));
             }
+            if let Some(name) = &filter.name {
+                query.and_where(Expr::col(Deployments::Name).eq(name.as_str()));
+            }
             if let Some(statuses) = &filter.statuses {
                 let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Status).is_in(status_strs));
@@ -897,6 +1006,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(dg_id) = &filter.deployment_group_id {
                 query.and_where(Expr::col(Deployments::DeploymentGroupId).eq(dg_id.as_str()));
             }
+            if let Some(name) = &filter.name {
+                query.and_where(Expr::col(Deployments::Name).eq(name.as_str()));
+            }
             if let Some(ids) = &filter.deployment_ids {
                 let id_strs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Id).is_in(id_strs));
@@ -1036,6 +1148,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .map(|current| current == desired)
             })
             .unwrap_or(false);
+        let preserve_retry_requested = deployment
+            .as_ref()
+            .is_some_and(|d| Self::should_preserve_retry_requested(d, state));
+        let retry_requested = state.retry_requested || preserve_retry_requested;
 
         let headline_error = alien_deployment::deployment_headline_error_from_state(state);
         let error_json: Option<String> = headline_error
@@ -1057,7 +1173,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Deployments::DeploymentProtocolVersion,
                     state.protocol_version as i64,
                 )
-                .value(Deployments::RetryRequested, 0i64)
+                .value(
+                    Deployments::RetryRequested,
+                    if retry_requested { 1i64 } else { 0i64 },
+                )
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
 
             // Nullable fields: set value or explicit NULL to clear stale data
