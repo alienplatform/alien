@@ -3872,6 +3872,11 @@ mod tests {
                         image: "us-central1-docker.pkg.dev/project/repo/alien-rs-fn:tag"
                             .to_string(),
                     })
+                    // Cloud Run gen2 rejects < 512 MiB; the `WorkerMemoryCheck`
+                    // preflight enforces that at plan time. The default
+                    // `memory_mb` (256) is below the floor, so we set it
+                    // explicitly here to keep the fixture valid for GCP.
+                    .memory_mb(512)
                     .build(),
                 ResourceLifecycle::Live,
             )
