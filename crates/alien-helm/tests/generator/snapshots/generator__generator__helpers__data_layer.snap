@@ -113,8 +113,8 @@ runtime:
       enabled: true
       deletePersistentVolumeClaims: false
       image:
-        repository: registry.k8s.io/kubectl
-        tag: "v1.32.0"
+        repository: alpine/k8s
+        tag: "1.32.0"
         pullPolicy: IfNotPresent
 
 heartbeat:
@@ -1184,7 +1184,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "registry.k8s.io/kubectl" $cleanup }}:{{ dig "image" "tag" "v1.32.0" $cleanup }}"
+          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           command:
             - /bin/sh
