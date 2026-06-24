@@ -935,10 +935,6 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "test")]
         "TestWorkerController" => deser!(crate::worker::TestWorkerController),
 
-        // Daemon controllers
-        #[cfg(feature = "local")]
-        "LocalDaemonController" => deser!(crate::daemon::LocalDaemonController),
-
         // Container controllers
         // They are registered via register_controller_deserializer_extension().
         #[cfg(feature = "kubernetes")]

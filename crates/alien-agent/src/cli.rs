@@ -499,7 +499,8 @@ mod windows_entry {
             .build()
             .expect("failed to build tokio runtime");
 
-        let exit_code = match rt.block_on(super::run(args, init_hook, super::NOOP_DEBUG_LOOP_HOOK)) {
+        let exit_code = match rt.block_on(super::run(args, init_hook, super::NOOP_DEBUG_LOOP_HOOK))
+        {
             Ok(()) => 0,
             Err(e) => {
                 error!(error = %e, "Agent exited with error");
