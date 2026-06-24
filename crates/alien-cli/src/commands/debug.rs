@@ -637,8 +637,12 @@ fn build_interactive_shell(
             // prompt). `print -P` accepts %-escapes natively and never
             // sees a literal ESC byte in the source.
             let zshrc = cred_dir.path().join(".zshrc");
+            // The user is one stray `exit()` away from defining an empty
+            // function that shadows the builtin and recurses to FUNCNEST.
+            // Alias `exit` to the builtin so a typo is harmless.
             let rc = format!(
-                "print -P '%F{{green}}\u{25CB}%f alien · attached to %B{deployment}%b · {mode}-mode'\n\
+                "alias exit='builtin exit'\n\
+                 print -P '%F{{green}}\u{25CB}%f alien · attached to %B{deployment}%b · {mode}-mode'\n\
                  print -P '%F{{green}}\u{2713}%f session ready · type `exit` to end'\n\
                  export PS1=$'%F{{green}}\u{25CB}%f %F{{cyan}}{tag}%f \u{276F} '\n",
                 deployment = deployment_label,
