@@ -4376,7 +4376,8 @@ impl GcpWorkerController {
             })
             .collect();
 
-        // Build resource requirements
+        // Cloud Run gen2 requires `memory >= 512 Mi`; that's enforced by the
+        // `WorkerMemoryCheck` preflight, so we trust cfg.memory_mb here.
         let mut limits = HashMap::new();
         limits.insert("memory".to_string(), format!("{}Mi", cfg.memory_mb));
         // Cloud Run automatically allocates CPU based on memory

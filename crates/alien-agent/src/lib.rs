@@ -69,6 +69,18 @@ pub async fn run_agent_with_cancel(
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
+    run_agent_with_cancel_and_debug_loop(config, service_provider, None, cancel).await
+}
+
+/// Full-control entry point. Binary callers that ship a real
+/// [`DebugSessionLoop`] implementation pass it here; the OSS default is
+/// `None`, which falls back to the no-op stub.
+pub async fn run_agent_with_cancel_and_debug_loop(
+    config: AgentConfig,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    cancel: CancellationToken,
+) -> error::Result<()> {
     use tracing::{info, warn};
 
     info!(
@@ -156,6 +168,31 @@ pub async fn run_agent_with_cancel(
         None
     };
 
+    // Pull-mode `alien debug` tunnel loop. Polls the manager for pending
+    // debug sessions for this deployment and proxies kubectl traffic to the
+    // in-cluster apiserver. K8s/cloud-K8s only — other platforms either don't
+    // need a tunnel (push-mode K8s) or don't speak the kube apiserver
+    // protocol (cloud functions).
+    let debug_session_handle = if !config.is_airgapped()
+        && matches!(config.platform, Platform::Kubernetes)
+    {
+        // Resolve which loop implementation to run. Binary callers that ship
+        // the closed loop inject it via `run_agent_with_cancel_and_debug_loop`;
+        // OSS callers fall through to the no-op stub.
+        let loop_impl: Arc<dyn loops::debug_session::DebugSessionLoop> =
+            debug_session_loop.unwrap_or_else(|| {
+                Arc::new(loops::debug_session::UnimplementedDebugSessionLoop)
+            });
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop_impl.run(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
     // Wait for cancellation or any loop to exit unexpectedly
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -163,6 +200,15 @@ pub async fn run_agent_with_cancel(
         },
         _ = deployment_handle => {
             warn!("Deployment loop exited unexpectedly");
+        },
+        _ = async {
+            if let Some(h) = debug_session_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            warn!("Debug-session loop exited unexpectedly");
         },
         _ = async {
             if let Some(h) = sync_handle {

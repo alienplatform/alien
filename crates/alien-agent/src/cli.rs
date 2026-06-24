@@ -4,7 +4,8 @@
 //! parsing, signal handling, panic hooks, or the Windows service shim.
 
 use crate::error::{ErrorData, Result};
-use crate::{run_agent_with_cancel, AgentConfig, InstanceLock};
+use crate::loops::debug_session::DebugSessionLoop;
+use crate::{run_agent_with_cancel_and_debug_loop, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -97,7 +98,13 @@ pub struct Args {
 /// Downstream distributions register additional controller factories here.
 pub type InitHook = fn();
 
+/// Optional second hook that lets downstream binaries inject a real
+/// [`DebugSessionLoop`] implementation. Defaults to `None`, which leaves
+/// the OSS no-op stub in place.
+pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
+
 const NOOP_INIT: InitHook = || {};
+const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 
 /// CLI entry point. Parses args, sets up tracing/panic hooks, runs the
 /// agent until SIGTERM/SIGINT/Ctrl-C. Calls `init_hook` once before the
@@ -105,6 +112,21 @@ const NOOP_INIT: InitHook = || {};
 /// hook; downstream binaries that wrap this entry point pass a hook that
 /// registers their additional controllers.
 pub fn cli_main_with_hook(init_hook: InitHook) {
+    cli_main_with_hooks(init_hook, NOOP_DEBUG_LOOP_HOOK);
+}
+
+/// Like [`cli_main_with_hook`] but also accepts a [`DebugLoopHook`] so
+/// downstream binaries can inject a real [`DebugSessionLoop`] before the
+/// agent starts.
+pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) {
+    // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
+    // (pulled by other deps) present in the tree can't auto-pick a provider
+    // and panics on first TLS use ("Could not automatically determine the
+    // process-level CryptoProvider"). Install one explicitly before any
+    // rustls-backed client (reqwest, tokio-tungstenite, aws-sdk) is touched.
+    // Ignoring `Err` makes this idempotent across re-invocations in tests.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = Args::parse();
 
     #[cfg(windows)]
@@ -117,7 +139,7 @@ pub fn cli_main_with_hook(init_hook: InitHook) {
         .build()
         .expect("failed to build tokio runtime");
 
-    if let Err(e) = rt.block_on(run(args, init_hook)) {
+    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook)) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -128,7 +150,11 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
+async fn run(
+    mut args: Args,
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+) -> Result<()> {
     let embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
 
     args.agent_name = args.agent_name.or_else(|| env_string("OPERATOR_NAME"));
@@ -307,7 +333,13 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
             None
         };
 
-    run_agent_with_cancel(agent_config, service_provider, cancel).await?;
+    run_agent_with_cancel_and_debug_loop(
+        agent_config,
+        service_provider,
+        debug_loop_hook(),
+        cancel,
+    )
+    .await?;
 
     Ok(())
 }

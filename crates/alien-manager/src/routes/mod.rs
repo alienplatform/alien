@@ -17,7 +17,10 @@ pub mod tokens;
 pub mod vault;
 pub mod whoami;
 
-mod auth;
+// Public so embedders (e.g. alien-managerx route handlers) can fetch a
+// validated `Subject` the same way as OSS handlers, instead of pulling the
+// raw bearer + workspace headers themselves.
+pub mod auth;
 
 use std::collections::HashMap;
 use std::sync::Arc;
