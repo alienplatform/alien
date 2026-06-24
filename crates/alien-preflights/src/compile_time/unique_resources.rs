@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 /// Ensures resources that must appear at most once don't have multiple instances.
 ///
-/// Resources like `ArtifactRegistry` and `Build` must appear at most once in the stack.
+/// Resources like `ArtifactRegistry`, `Build`, and `ComputeCluster` must appear at most once in
+/// the stack.
 pub struct UniqueResourcesCheck;
 
 #[async_trait::async_trait]
@@ -19,13 +20,13 @@ impl CompileTimeCheck for UniqueResourcesCheck {
         stack.resources().any(|(_, resource_entry)| {
             matches!(
                 resource_entry.config.resource_type().0.as_ref(),
-                "artifact-registry" | "build"
+                "artifact-registry" | "build" | "compute-cluster"
             )
         })
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
-        let unique_types = HashSet::from(["artifact-registry", "build"]);
+        let unique_types = HashSet::from(["artifact-registry", "build", "compute-cluster"]);
         let mut type_counts: HashMap<String, Vec<String>> = HashMap::new();
 
         for (resource_id, resource_entry) in stack.resources() {
@@ -64,7 +65,7 @@ impl CompileTimeCheck for UniqueResourcesCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Build, ResourceEntry, ResourceLifecycle};
+    use alien_core::{Build, ComputeCluster, ResourceEntry, ResourceLifecycle};
     use indexmap::IndexMap;
 
     #[tokio::test]
@@ -135,6 +136,45 @@ mod tests {
         let check = UniqueResourcesCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(!result.success);
+        assert!(result.errors[0].contains("must appear at most once"));
+    }
+
+    #[tokio::test]
+    async fn test_unique_resources_rejects_multiple_compute_clusters() {
+        let cluster1 = ComputeCluster::new("compute-1".to_string()).build();
+        let cluster2 = ComputeCluster::new("compute-2".to_string()).build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "compute-1".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(cluster1),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "compute-2".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(cluster2),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let check = UniqueResourcesCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("compute-cluster"));
         assert!(result.errors[0].contains("must appear at most once"));
     }
 }

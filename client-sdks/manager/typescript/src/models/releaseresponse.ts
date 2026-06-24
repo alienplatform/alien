@@ -21,6 +21,16 @@ export type ReleaseResponse = {
   id: string;
   projectId: string;
   /**
+   * Setup-step fingerprints — used by `alien release` to short-circuit
+   *
+   * @remarks
+   * re-pushing artifacts that haven't changed across releases. The
+   * platform-API client requires this field to be present (even if
+   * empty). The OSS standalone manager doesn't track per-setup-step
+   * fingerprints, so we return an empty map.
+   */
+  setupFingerprints?: { [k: string]: any } | undefined;
+  /**
    * The release API accepts stacks keyed by platform.
    *
    * @remarks
@@ -39,6 +49,7 @@ export const ReleaseResponse$inboundSchema: z.ZodType<
   gitMetadata: z.nullable(GitMetadataResponse$inboundSchema).optional(),
   id: z.string(),
   projectId: z.string(),
+  setupFingerprints: z.record(z.string(), z.any()).optional(),
   stack: StackByPlatform$inboundSchema,
   workspaceId: z.string(),
 });

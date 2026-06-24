@@ -1143,12 +1143,11 @@ pub fn select_instance_type(
     // Burstable but needs nested virt must be upgraded to GeneralPurpose
     // (the family that actually has nested-virt-capable entries).
     let raw_family = select_family(requirements);
-    let family =
-        if requirements.nested_virt && raw_family == InstanceFamily::Burstable {
-            InstanceFamily::GeneralPurpose
-        } else {
-            raw_family
-        };
+    let family = if requirements.nested_virt && raw_family == InstanceFamily::Burstable {
+        InstanceFamily::GeneralPurpose
+    } else {
+        raw_family
+    };
 
     // Filter catalog to matching platform + family. Nested-virt-capable
     // entries (m8i/c8i/r8i on AWS) are NESTED-VIRT-ONLY: they're added

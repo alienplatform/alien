@@ -34,6 +34,9 @@ pub struct AgentConfig {
     /// Optional base cloud platform for cloud-backed Kubernetes.
     pub base_platform: Option<Platform>,
 
+    /// Human-readable deployment name configured for this agent.
+    pub agent_name: Option<String>,
+
     /// Sync configuration (None = airgapped mode)
     pub sync: Option<SyncConfig>,
 
@@ -135,6 +138,7 @@ mod tests {
         assert_eq!(config.deployment_interval_seconds, 1);
         assert_eq!(config.otlp_server_host, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(config.otlp_server_port, 4318);
+        assert_eq!(config.agent_name, None);
         assert!(!config.is_airgapped());
         assert!(!config.requires_deployment_approval());
     }
@@ -151,6 +155,7 @@ mod tests {
             .data_dir("/var/agent")
             .sync_interval_seconds(60)
             .otlp_server_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+            .agent_name("local-runner")
             .maybe_stack_settings(Some(alien_core::StackSettings {
                 updates: alien_core::UpdatesMode::ApprovalRequired,
                 telemetry: alien_core::TelemetryMode::Auto,
@@ -171,6 +176,7 @@ mod tests {
         assert!(!config.requires_telemetry_approval());
         assert!(config.is_telemetry_enabled());
         assert_eq!(config.api_server_port, Some(8080));
+        assert_eq!(config.agent_name.as_deref(), Some("local-runner"));
     }
 
     #[test]

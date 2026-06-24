@@ -37,7 +37,7 @@ use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
 };
 use alien_bindings::BindingsProviderApi;
-use alien_core::Platform;
+use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Platform, Worker, WorkerCode};
 
 use super::AppState;
 use crate::auth::{Scope, Subject};
@@ -427,11 +427,7 @@ async fn proxy_push(
     let signed_session_repo = if is_oci_upload_session_path(&full_path)
         && query.contains_key(UPLOAD_SESSION_VERSION_PARAM)
     {
-        match verify_upload_session_auth(
-            &state.config.response_signing_key,
-            &full_path,
-            &query,
-        ) {
+        match verify_upload_session_auth(&state.config.response_signing_key, &full_path, &query) {
             Ok(repo) => Some(repo),
             Err(e) => return e,
         }
@@ -884,9 +880,7 @@ fn rewrite_location_with_upload_session_auth(
     // `proxy_upload_session`) and OCI's `/v2/{repo}/blobs/uploads/{id}`
     // (handled inline in `proxy_push` via the signed-URL bypass).
     // Anything else passes through unchanged.
-    if !url.path().starts_with("/artifacts-uploads/")
-        && !is_oci_upload_session_path(url.path())
-    {
+    if !url.path().starts_with("/artifacts-uploads/") && !is_oci_upload_session_path(url.path()) {
         return Ok(location.to_string());
     }
 
@@ -1425,6 +1419,7 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
+    use alien_core::{ResourceLifecycle, Stack};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1477,6 +1472,24 @@ mod tests {
         assert_eq!(
             extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
             "alien-e2e"
+        );
+    }
+
+    #[test]
+    fn extract_repo_names_includes_daemon_image_resources() {
+        let daemon = Daemon::new("bear-agent-loader".to_string())
+            .code(DaemonCode::Image {
+                image: "manager.example.com/artifacts/prj_test:bear-agent-loader-v1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+
+        assert_eq!(
+            extract_repo_names(&stack),
+            vec!["artifacts/prj_test".to_string()]
         );
     }
 

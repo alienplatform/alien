@@ -124,6 +124,9 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     # Deploy to AWS using a deployment group token
     alien-deploy deploy --token ax_dg_abc123... --platform aws
 
+    # Deploy using a token file so the token is not exposed in argv
+    alien-deploy deploy --token-file /run/alien/token --platform local --experimental
+
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
 
@@ -140,6 +143,10 @@ pub struct UpArgs {
     /// Authentication token (deployment or deployment group token)
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: Option<String>,
+
+    /// Read authentication token from a file.
+    #[arg(long, conflicts_with = "token")]
+    pub token_file: Option<PathBuf>,
 
     /// Manager URL override for pull-model platforms.
     /// Cloud push deployments resolve their manager and install context from
@@ -311,6 +318,8 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+    use std::io::Write;
 
     #[test]
     fn cloud_push_platforms_require_install_context() {
@@ -409,6 +418,53 @@ mod tests {
     #[test]
     fn sanitize_kubernetes_dns_label_falls_back_when_empty() {
         assert_eq!(sanitize_kubernetes_dns_label("___"), "alien");
+    }
+
+    #[test]
+    fn resolve_token_reads_token_file() {
+        let mut token_file = tempfile::NamedTempFile::new().expect("token file");
+        token_file
+            .write_all(b" ax_dg_file_token\n")
+            .expect("write token");
+
+        let cli = crate::Cli::try_parse_from([
+            "alien-deploy",
+            "deploy",
+            "--token-file",
+            token_file.path().to_str().expect("utf8 path"),
+            "--platform",
+            "local",
+            "--experimental",
+        ])
+        .expect("parse deploy");
+        let crate::Commands::Deploy(args) = cli.command else {
+            panic!("expected deploy variant");
+        };
+
+        let token = resolve_token(&args, None).expect("token should resolve");
+        assert_eq!(token, "ax_dg_file_token");
+    }
+
+    #[test]
+    fn resolve_token_rejects_empty_token_file() {
+        let token_file = tempfile::NamedTempFile::new().expect("token file");
+
+        let cli = crate::Cli::try_parse_from([
+            "alien-deploy",
+            "deploy",
+            "--token-file",
+            token_file.path().to_str().expect("utf8 path"),
+            "--platform",
+            "local",
+            "--experimental",
+        ])
+        .expect("parse deploy");
+        let crate::Commands::Deploy(args) = cli.command else {
+            panic!("expected deploy variant");
+        };
+
+        let error = resolve_token(&args, None).expect_err("empty token file should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 }
 
@@ -558,6 +614,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &name,
                 &stack_settings,
                 platform,
+                embedded_config,
             )
             .await?;
         }
@@ -776,6 +833,9 @@ fn resolve_deployment_info(
 fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
     args.token
         .clone()
+        .map(Ok)
+        .or_else(|| args.token_file.as_ref().map(|path| read_token_file(path)))
+        .transpose()?
         .or_else(|| {
             embedded_config
                 .and_then(|c| c.token_env_var.as_ref())
@@ -794,6 +854,22 @@ fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Re
                 ),
             })
         })
+}
+
+fn read_token_file(path: &Path) -> Result<String> {
+    let token = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: format!("Failed to read token file {}", path.display()),
+        },
+    )?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "token-file".to_string(),
+            message: format!("Token file {} is empty", path.display()),
+        }));
+    }
+    Ok(token)
 }
 
 fn resolve_base_url(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> String {
@@ -1084,6 +1160,7 @@ async fn run_pull_model(
     deployment_name: &str,
     stack_settings: &StackSettings,
     platform: Platform,
+    embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
     match platform {
         Platform::Kubernetes => {
@@ -1098,7 +1175,18 @@ async fn run_pull_model(
             )
             .await
         }
-        _ => run_local_pull_model(args, manager_url, token, &platform.to_string()).await,
+        _ => {
+            run_local_pull_model(
+                args,
+                manager_url,
+                token,
+                deployment_id,
+                deployment_name,
+                &platform.to_string(),
+                embedded_config,
+            )
+            .await
+        }
     }
 }
 
@@ -1106,23 +1194,28 @@ async fn run_local_pull_model(
     args: &UpArgs,
     manager_url: &str,
     token: &str,
+    deployment_id: &str,
+    deployment_name: &str,
     platform: &str,
+    embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
-    let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
-        use super::agent::generate_encryption_key_public;
-        generate_encryption_key_public()
-    });
-
     // Find or download the alien-agent binary
-    let binary_path = find_or_download_agent_binary().await?;
+    let binary_path = find_or_download_agent_binary(embedded_config).await?;
 
     output::info(&format!("Agent binary: {}", binary_path.display()));
 
     if args.foreground {
+        let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
+            use super::agent::generate_encryption_key_public;
+            generate_encryption_key_public()
+        });
+
         return run_agent_foreground(
             &binary_path,
             manager_url,
             token,
+            deployment_id,
+            deployment_name,
             platform,
             &encryption_key,
             args.data_dir.as_deref(),
@@ -1137,9 +1230,11 @@ async fn run_local_pull_model(
         binary: Some(binary_path),
         sync_url: manager_url.to_string(),
         sync_token: token.to_string(),
+        deployment_id: Some(deployment_id.to_string()),
+        agent_name: Some(deployment_name.to_string()),
         platform: platform.to_string(),
         data_dir: None,
-        encryption_key: Some(encryption_key),
+        encryption_key: args.encryption_key.clone(),
     };
 
     super::agent::install_service(install_args)?;
@@ -1156,6 +1251,8 @@ async fn run_agent_foreground(
     binary_path: &std::path::Path,
     manager_url: &str,
     token: &str,
+    deployment_id: &str,
+    agent_name: &str,
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
@@ -1224,6 +1321,10 @@ async fn run_agent_foreground(
         .arg(manager_url)
         .arg("--sync-token-file")
         .arg(sync_token_file.path())
+        .arg("--deployment-id")
+        .arg(deployment_id)
+        .arg("--agent-name")
+        .arg(agent_name)
         .arg("--encryption-key-file")
         .arg(encryption_key_file.path())
         .arg("--data-dir")
@@ -1549,7 +1650,9 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
 const DEFAULT_RELEASES_URL: &str = "https://releases.alien.dev";
 
 /// Find the alien-agent binary locally, or download it from the releases URL.
-async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
+async fn find_or_download_agent_binary(
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<std::path::PathBuf> {
     // Try to find it locally first
     if let Ok(path) = super::agent::which_agent_binary() {
         return Ok(path);
@@ -1573,14 +1676,18 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
 
     let binary_path = bin_dir.join("alien-agent");
 
-    let releases_url =
-        std::env::var("ALIEN_RELEASES_URL").unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
-
     let (os, arch) = detect_os_arch()?;
-    let url = format!(
-        "{}/alien-agent/latest/{}-{}/alien-agent",
-        releases_url, os, arch
-    );
+    let url = if let Some(url) = embedded_config.and_then(|config| config.agent_binary_url.as_ref())
+    {
+        url.clone()
+    } else {
+        let releases_url = std::env::var("ALIEN_RELEASES_URL")
+            .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
+        format!(
+            "{}/alien-agent/latest/{}-{}/alien-agent",
+            releases_url, os, arch
+        )
+    };
 
     output::info(&format!("Downloading alien-agent from {}...", url));
 

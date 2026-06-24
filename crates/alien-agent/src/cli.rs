@@ -106,6 +106,13 @@ pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 
+#[derive(Debug, PartialEq, Eq)]
+enum StartupDeploymentId {
+    Stored(String),
+    Configured(String),
+    Initialize,
+}
+
 /// CLI entry point. Parses args, sets up tracing/panic hooks, runs the
 /// agent until SIGTERM/SIGINT/Ctrl-C. Calls `init_hook` once before the
 /// deployment loop starts. The OSS `alien-agent` binary passes a no-op
@@ -150,11 +157,7 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(
-    mut args: Args,
-    init_hook: InitHook,
-    debug_loop_hook: DebugLoopHook,
-) -> Result<()> {
+async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook) -> Result<()> {
     let embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
 
     args.agent_name = args.agent_name.or_else(|| env_string("OPERATOR_NAME"));
@@ -211,33 +214,41 @@ async fn run(
 
             info!("   Sync URL: {}", sync_url);
 
-            if let Some(stored_deployment_id) = db.get_deployment_id().await? {
-                info!("   Using stored deployment ID: {}", stored_deployment_id);
-            } else if let Some(deployment_id) = configured_deployment_id {
-                info!("   Using configured deployment ID: {}", deployment_id);
-                db.set_deployment_id(&deployment_id).await?;
-            } else {
-                info!("   First startup, initializing with manager...");
-
-                let (initialized_deployment_id, deployment_token) = initialize_with_manager(
-                    &sync_url,
-                    &sync_token,
-                    args.platform,
-                    args.agent_name.as_deref(),
-                )
-                .await?;
-
-                db.set_deployment_id(&initialized_deployment_id).await?;
-
-                if let Some(ref dt) = deployment_token {
-                    info!("   Received deployment-scoped token from manager");
-                    sync_token = dt.clone();
+            match select_startup_deployment_id(
+                db.get_deployment_id().await?,
+                configured_deployment_id,
+                &data_dir,
+            )? {
+                StartupDeploymentId::Stored(stored_deployment_id) => {
+                    info!("   Using stored deployment ID: {}", stored_deployment_id);
                 }
+                StartupDeploymentId::Configured(deployment_id) => {
+                    info!("   Using configured deployment ID: {}", deployment_id);
+                    db.set_deployment_id(&deployment_id).await?;
+                }
+                StartupDeploymentId::Initialize => {
+                    info!("   First startup, initializing with manager...");
 
-                info!(
-                    "   Initialized successfully, deployment ID: {}",
-                    initialized_deployment_id
-                );
+                    let (initialized_deployment_id, deployment_token) = initialize_with_manager(
+                        &sync_url,
+                        &sync_token,
+                        args.platform,
+                        args.agent_name.as_deref(),
+                    )
+                    .await?;
+
+                    db.set_deployment_id(&initialized_deployment_id).await?;
+
+                    if let Some(ref dt) = deployment_token {
+                        info!("   Received deployment-scoped token from manager");
+                        sync_token = dt.clone();
+                    }
+
+                    info!(
+                        "   Initialized successfully, deployment ID: {}",
+                        initialized_deployment_id
+                    );
+                }
             }
 
             Some(crate::SyncConfig {
@@ -298,6 +309,7 @@ async fn run(
     let agent_config = AgentConfig::builder()
         .platform(args.platform)
         .maybe_base_platform(args.base_platform)
+        .maybe_agent_name(args.agent_name)
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)
@@ -333,15 +345,30 @@ async fn run(
             None
         };
 
-    run_agent_with_cancel_and_debug_loop(
-        agent_config,
-        service_provider,
-        debug_loop_hook(),
-        cancel,
-    )
-    .await?;
+    run_agent_with_cancel_and_debug_loop(agent_config, service_provider, debug_loop_hook(), cancel)
+        .await?;
 
     Ok(())
+}
+
+fn select_startup_deployment_id(
+    stored_deployment_id: Option<String>,
+    configured_deployment_id: Option<String>,
+    data_dir: &str,
+) -> Result<StartupDeploymentId> {
+    match (stored_deployment_id, configured_deployment_id) {
+        (Some(stored), Some(configured)) if stored != configured => {
+            Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Agent data directory '{}' is already initialized for deployment '{}', but this service was configured for deployment '{}'. Use the original deployment name/token for this host, or stop the service and clear the data directory before assigning this host to a different deployment.",
+                    data_dir, stored, configured
+                ),
+            }))
+        }
+        (Some(stored), _) => Ok(StartupDeploymentId::Stored(stored)),
+        (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
+        (None, None) => Ok(StartupDeploymentId::Initialize),
+    }
 }
 
 #[cfg(unix)]
@@ -719,7 +746,7 @@ async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::is_secret_file_mode_allowed;
+    use super::{is_secret_file_mode_allowed, select_startup_deployment_id, StartupDeploymentId};
 
     #[test]
     fn secret_file_mode_allows_kubernetes_fs_group_read() {
@@ -735,5 +762,49 @@ mod tests {
         assert!(!is_secret_file_mode_allowed(0o644));
         assert!(!is_secret_file_mode_allowed(0o700));
         assert!(!is_secret_file_mode_allowed(0o040));
+    }
+
+    #[test]
+    fn startup_deployment_id_uses_matching_stored_id() {
+        let selected = select_startup_deployment_id(
+            Some("dep_existing".to_string()),
+            Some("dep_existing".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect("matching configured deployment should be accepted");
+
+        assert_eq!(
+            selected,
+            StartupDeploymentId::Stored("dep_existing".to_string())
+        );
+    }
+
+    #[test]
+    fn startup_deployment_id_rejects_mismatched_configured_id() {
+        let err = select_startup_deployment_id(
+            Some("dep_existing".to_string()),
+            Some("dep_other".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect_err("mismatched configured deployment should fail");
+
+        assert_eq!(err.code, "CONFIGURATION_ERROR");
+        assert!(err.message.contains("dep_existing"));
+        assert!(err.message.contains("dep_other"));
+    }
+
+    #[test]
+    fn startup_deployment_id_uses_configured_id_without_stored_state() {
+        let selected = select_startup_deployment_id(
+            None,
+            Some("dep_configured".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect("configured deployment should be used for empty state");
+
+        assert_eq!(
+            selected,
+            StartupDeploymentId::Configured("dep_configured".to_string())
+        );
     }
 }

@@ -1461,6 +1461,7 @@ impl LocalWorkerManager {
                 "deployment".to_string(),
                 token.to_string(),
             ));
+            let pull_policy = dockdash::PullPolicy::Always;
 
             debug!(
                 worker_id = %worker_id,
@@ -1486,7 +1487,12 @@ impl LocalWorkerManager {
                     "arm64" => dockdash::Arch::ARM64,
                     _ => dockdash::Arch::Amd64,
                 }),
-                pull_policy: dockdash::PullPolicy::Missing,
+                // dockdash seeds oci-client auth as a side effect of pulling
+                // the manifest. With PullPolicy::Missing, a cached manifest can
+                // skip auth setup and the first missing blob is pulled
+                // anonymously. Manager-registry pulls are always authenticated,
+                // so refresh the manifest to seed auth before blob pulls.
+                pull_policy,
                 blob_cache: None,
                 auth,
                 protocol,

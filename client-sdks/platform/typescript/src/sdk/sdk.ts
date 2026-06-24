@@ -8,6 +8,7 @@ import { Auth } from "./auth.js";
 import { Billing } from "./billing.js";
 import { CloudRegions } from "./cloudregions.js";
 import { Commands } from "./commands.js";
+import { DebugSessions } from "./debugsessions.js";
 import { Deployment } from "./deployment.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
@@ -87,6 +88,11 @@ export class Alien extends ClientSDK {
   private _commands?: Commands;
   get commands(): Commands {
     return (this._commands ??= new Commands(this._options));
+  }
+
+  private _debugSessions?: DebugSessions;
+  get debugSessions(): DebugSessions {
+    return (this._debugSessions ??= new DebugSessions(this._options));
   }
 
   private _deployment?: Deployment;

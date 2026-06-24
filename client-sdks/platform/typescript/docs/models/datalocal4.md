@@ -7,7 +7,6 @@ import { DataLocal4 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal4 = {
   commandSupported: true,
-  daemonName: "<value>",
   events: [
     {
       kind: "<value>",
@@ -35,7 +34,7 @@ let value: DataLocal4 = {
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `commandSupported`                                                               | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
 | `daemonInstance`                                                                 | *models.DaemonInstanceUnion*                                                     | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `daemonName`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `daemonName`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `events`                                                                         | [models.SyncReconcileRequestEvent10](../models/syncreconcilerequestevent10.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
 | `exitReason`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `imagePathPresent`                                                               | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |

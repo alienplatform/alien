@@ -6905,10 +6905,12 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, worker runtimes export captured application logs through the
- * given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
- * deployment code must sync them to a runtime-only secret and avoid putting
- * them into user application environment variables.
+ * When set, injected compute runtimes export captured application logs
+ * through the given endpoint via OTLP/HTTP; which resources are injected
+ * is platform-dependent. Workers and daemons read auth headers from a
+ * runtime-only secret — never from application environment variables.
+ * Containers have no runtime wrapper, so they get the endpoint and auth
+ * header as plain OTEL env vars for the application's own exporter.
  */
 export type SyncReconcileResponseMonitoring = {
   /**

@@ -617,6 +617,15 @@
             }
           },
           {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "include",
             "in": "query",
             "description": "Include related resources (e.g. deploymentGroup)",
@@ -5558,7 +5567,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`."
+            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -5799,7 +5808,9 @@
           "name",
           "maxDeployments",
           "deploymentCount",
-          "createdAt"
+          "createdAt",
+          "projectId",
+          "workspaceId"
         ],
         "properties": {
           "createdAt": {
@@ -5818,6 +5829,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema. Standalone\nOSS mode is single-tenant, so we synthesize a project id\nmatching the workspace id."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema."
           }
         }
       },
@@ -5867,6 +5886,9 @@
           "platform",
           "status",
           "deploymentGroupId",
+          "deploymentProtocolVersion",
+          "projectId",
+          "workspaceId",
           "retryRequested",
           "createdAt"
         ],
@@ -5892,6 +5914,12 @@
           },
           "deploymentGroupId": {
             "type": "string"
+          },
+          "deploymentProtocolVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Required by the platform-SDK Deployment schema. Hard-coded to\nalien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI\naccepts the response.",
+            "minimum": 0
           },
           "desiredReleaseId": {
             "type": [
@@ -5920,6 +5948,10 @@
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
+          },
           "retryRequested": {
             "type": "boolean"
           },
@@ -5934,6 +5966,10 @@
               "string",
               "null"
             ]
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema."
           }
         }
       },
@@ -11041,6 +11077,14 @@
           "projectId": {
             "type": "string"
           },
+          "setupFingerprints": {
+            "type": "object",
+            "description": "Setup-step fingerprints — used by `alien release` to short-circuit\nre-pushing artifacts that haven't changed across releases. The\nplatform-API client requires this field to be present (even if\nempty). The OSS standalone manager doesn't track per-setup-step\nfingerprints, so we return an empty map.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           },
@@ -12618,6 +12662,7 @@
           "kind",
           "id",
           "workspaceId",
+          "workspaceName",
           "role",
           "scope"
         ],
@@ -12636,6 +12681,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "workspaceName": {
+            "type": "string",
+            "description": "Required by the platform-SDK `ServiceAccountSubject` parser when\nthe CLI looks up a deployment-group token by workspace name."
           }
         }
       },

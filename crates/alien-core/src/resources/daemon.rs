@@ -218,5 +218,4 @@ mod tests {
             serde_json::from_value(json).expect("daemon should deserialize");
         assert_eq!(roundtrip.resource_type().as_ref(), "daemon");
     }
-
 }

@@ -44,10 +44,12 @@ impl StackMutation for ComputeClusterMutation {
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "container");
-        // Also fire for daemons that reference a cluster — daemon.cluster()
-        // is required for AWS/GCP/Azure deployments, so if a daemon names a
-        // cluster, we need to make sure it exists in the stack.
-        let daemon_cluster_ids = referenced_daemon_clusters(stack);
+        // Also fire for daemons that reference a cluster on Horizon-backed
+        // cloud platforms. Local daemons ignore `.cluster(...)`, so a daemon-only
+        // local stack must not grow a Docker-backed ComputeCluster during
+        // deployment preflights.
+        let daemon_cluster_ids =
+            referenced_daemon_clusters_for_platform(stack, stack_state.platform);
         let has_daemon_cluster_ref = !daemon_cluster_ids.is_empty();
         if !has_containers && !has_daemon_cluster_ref {
             return false;
@@ -175,9 +177,10 @@ impl ComputeClusterMutation {
 
     async fn create_cluster(&self, mut stack: Stack, stack_state: &StackState) -> Result<Stack> {
         info!("Auto-generating ComputeCluster for containers in stack");
-        // If a daemon explicitly references a cluster, use its name so the
-        // .cluster("X") reference resolves. Otherwise default to "compute".
-        let cluster_id = referenced_daemon_clusters(&stack)
+        // If a daemon explicitly references a cluster on a cloud platform, use
+        // its name so the .cluster("X") reference resolves. Local daemons ignore
+        // the field, so local container auto-clusters keep the default name.
+        let cluster_id = referenced_daemon_clusters_for_platform(&stack, stack_state.platform)
             .into_iter()
             .next()
             .unwrap_or_else(|| "compute".to_string());
@@ -401,6 +404,14 @@ fn referenced_daemon_clusters(stack: &Stack) -> Vec<String> {
         }
     }
     clusters
+}
+
+fn referenced_daemon_clusters_for_platform(stack: &Stack, platform: Platform) -> Vec<String> {
+    if platform == Platform::Local {
+        Vec::new()
+    } else {
+        referenced_daemon_clusters(stack)
+    }
 }
 
 /// Determine which capacity group a container needs based on its hardware requirements.
@@ -717,8 +728,7 @@ mod tests {
             (Platform::Gcp, "n2-standard-4"),
             (Platform::Azure, "Standard_D4s_v5"),
         ] {
-            let group =
-                build_capacity_group_for_id("general", &refs, platform, false).unwrap();
+            let group = build_capacity_group_for_id("general", &refs, platform, false).unwrap();
             assert_eq!(group.instance_type.as_deref(), Some(expected_instance));
             assert_eq!(group.min_size, 2);
             assert_eq!(group.max_size, 4);
@@ -842,6 +852,51 @@ mod tests {
 
         let stack_state = StackState {
             platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+
+        let mutation = ComputeClusterMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(!mutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[tokio::test]
+    async fn test_should_not_run_for_local_daemon_cluster_ref() {
+        let mut resources = IndexMap::new();
+
+        let daemon = Daemon::new("bear-agent-loader".to_string())
+            .cluster("bear-runtime".to_string())
+            .permissions("loader".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "registry.example.com/bear-agent-loader:latest".to_string(),
+            })
+            .build();
+
+        resources.insert(
+            "bear-agent-loader".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState {
+            platform: Platform::Local,
             resources: Default::default(),
             resource_prefix: "test".to_string(),
         };

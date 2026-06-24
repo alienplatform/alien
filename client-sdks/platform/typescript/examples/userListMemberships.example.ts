@@ -8,7 +8,7 @@ dotenv.config();
  * Example usage of the @alienplatform/platform-api SDK
  *
  * To run this example from the examples directory:
- * npm run build && npx tsx userGetProfile.example.ts
+ * npm run build && npx tsx userListMemberships.example.ts
  */
 
 import { Alien } from "@alienplatform/platform-api";
@@ -18,7 +18,7 @@ const alien = new Alien({
 });
 
 async function main() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }

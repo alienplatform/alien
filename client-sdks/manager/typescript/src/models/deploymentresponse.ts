@@ -21,6 +21,14 @@ export type DeploymentResponse = {
   currentReleaseId?: string | null | undefined;
   deploymentGroup?: DeploymentGroupMinimal | null | undefined;
   deploymentGroupId: string;
+  /**
+   * Required by the platform-SDK Deployment schema. Hard-coded to
+   *
+   * @remarks
+   * alien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI
+   * accepts the response.
+   */
+  deploymentProtocolVersion: number;
   desiredReleaseId?: string | null | undefined;
   environmentInfo?: any | undefined;
   error?: any | undefined;
@@ -31,12 +39,24 @@ export type DeploymentResponse = {
    * Represents the target cloud platform.
    */
   platform: PlatformEnum;
+  /**
+   * Required by the platform-SDK Deployment schema. Standalone is
+   *
+   * @remarks
+   * single-tenant; reuse the same synthetic project id used in the
+   * deployment-groups route.
+   */
+  projectId: string;
   retryRequested: boolean;
   runtimeMetadata?: any | undefined;
   stackSettings?: any | undefined;
   stackState?: any | undefined;
   status: string;
   updatedAt?: string | null | undefined;
+  /**
+   * Required by the platform-SDK Deployment schema.
+   */
+  workspaceId: string;
 };
 
 /** @internal */
@@ -48,6 +68,7 @@ export const DeploymentResponse$inboundSchema: z.ZodType<
   currentReleaseId: z.nullable(z.string()).optional(),
   deploymentGroup: z.nullable(DeploymentGroupMinimal$inboundSchema).optional(),
   deploymentGroupId: z.string(),
+  deploymentProtocolVersion: z.int(),
   desiredReleaseId: z.nullable(z.string()).optional(),
   environmentInfo: z.any().optional(),
   error: z.any().optional(),
@@ -55,12 +76,14 @@ export const DeploymentResponse$inboundSchema: z.ZodType<
   importSource: z.nullable(ImportSourceKind$inboundSchema).optional(),
   name: z.string(),
   platform: PlatformEnum$inboundSchema,
+  projectId: z.string(),
   retryRequested: z.boolean(),
   runtimeMetadata: z.any().optional(),
   stackSettings: z.any().optional(),
   stackState: z.any().optional(),
   status: z.string(),
   updatedAt: z.nullable(z.string()).optional(),
+  workspaceId: z.string(),
 });
 
 export function deploymentResponseFromJSON(

@@ -211,6 +211,14 @@ async fn sync_with_manager(
             state.db.set_deployment_state(&manager_state).await?;
             state_hydrated = true;
             info!("Hydrated deployment state from manager");
+        } else if let Some(mut local_state) = local_state {
+            if apply_manager_retry_request(&mut local_state, &manager_state) {
+                state.db.set_deployment_state(&local_state).await?;
+                state_hydrated = true;
+                info!("Applied deployment retry request from manager");
+            } else {
+                debug!("Manager returned deployment state, but local state is already initialized");
+            }
         } else {
             debug!("Manager returned deployment state, but local state is already initialized");
         }
@@ -295,13 +303,28 @@ fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> boo
         && state.runtime_metadata.is_none()
 }
 
+fn apply_manager_retry_request(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    if !manager_state.retry_requested
+        || local_state.retry_requested
+        || !local_state.status.is_failed()
+    {
+        return false;
+    }
+
+    local_state.retry_requested = true;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use alien_core::{
         DeploymentState, DeploymentStatus, Platform, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
 
-    use super::is_uninitialized_deployment_state;
+    use super::{apply_manager_retry_request, is_uninitialized_deployment_state};
 
     #[test]
     fn recognizes_empty_pending_state_as_uninitialized() {
@@ -337,5 +360,58 @@ mod tests {
         };
 
         assert!(!is_uninitialized_deployment_state(&state));
+    }
+
+    #[test]
+    fn applies_manager_retry_request_to_failed_local_state() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            retry_requested: true,
+            ..local_state.clone()
+        };
+
+        assert!(apply_manager_retry_request(
+            &mut local_state,
+            &manager_state
+        ));
+        assert!(local_state.retry_requested);
+    }
+
+    #[test]
+    fn ignores_manager_retry_request_for_active_local_state() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Provisioning,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::ProvisioningFailed,
+            retry_requested: true,
+            ..local_state.clone()
+        };
+
+        assert!(!apply_manager_retry_request(
+            &mut local_state,
+            &manager_state
+        ));
+        assert!(!local_state.retry_requested);
     }
 }
