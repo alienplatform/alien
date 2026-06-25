@@ -64,6 +64,8 @@ pub enum ResourceHeartbeatData {
     Queue(QueueHeartbeatData),
     #[serde(rename = "kv")]
     Kv(KvHeartbeatData),
+    #[serde(rename = "postgres")]
+    Postgres(PostgresHeartbeatData),
     #[serde(rename = "vault")]
     Vault(VaultHeartbeatData),
     #[serde(rename = "service-account")]
@@ -1301,6 +1303,98 @@ pub struct LocalKvHeartbeatData {
     pub path_exists: bool,
     pub is_directory: Option<bool>,
     pub cloud_metadata_supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "backend", rename_all = "camelCase")]
+pub enum PostgresHeartbeatData {
+    /// AWS Aurora Serverless v2 backend.
+    Aurora(AuroraPostgresHeartbeatData),
+    /// GCP Cloud SQL backend.
+    CloudSql(GcpCloudSqlPostgresHeartbeatData),
+    /// Azure Flexible Server backend.
+    FlexibleServer(AzureFlexibleServerPostgresHeartbeatData),
+    /// Local embedded Postgres backend.
+    Local(LocalPostgresHeartbeatData),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PostgresHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+    pub stale: bool,
+    pub partial: bool,
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
+}
+
+impl Default for PostgresHeartbeatStatus {
+    fn default() -> Self {
+        Self {
+            health: ObservedHealth::Unknown,
+            lifecycle: ProviderLifecycleState::Unknown,
+            message: None,
+            stale: false,
+            partial: false,
+            collection_issues: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPostgresHeartbeatData {
+    pub status: PostgresHeartbeatStatus,
+    pub name: String,
+    pub port: Option<u16>,
+    pub version: String,
+    pub process_running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AuroraPostgresHeartbeatData {
+    pub status: PostgresHeartbeatStatus,
+    pub cluster_identifier: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Latest sampled `ServerlessDatabaseCapacity` (ACU).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serverless_capacity: Option<f64>,
+    /// True when a `minCapacity: 0` instance has not reached 0 ACU over the observation
+    /// window — it is silently paying always-on prices (auto-pause verification).
+    pub never_pauses: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GcpCloudSqlPostgresHeartbeatData {
+    pub status: PostgresHeartbeatStatus,
+    pub instance_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureFlexibleServerPostgresHeartbeatData {
+    pub status: PostgresHeartbeatStatus,
+    pub server_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

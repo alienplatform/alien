@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bindings::{
     ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, KvBinding,
-    QueueBinding, StorageBinding, VaultBinding,
+    PostgresBinding, QueueBinding, StorageBinding, VaultBinding,
 };
 use crate::error::ErrorData;
 use crate::resource::ResourceOutputs;
@@ -38,6 +38,8 @@ pub enum ExternalBinding {
     Vault(VaultBinding),
     /// External Azure Container Apps Environment binding (pre-existing environment)
     ContainerAppsEnvironment(ContainerAppsEnvironmentBinding),
+    /// External Postgres binding (operator-provided / BYO database)
+    Postgres(PostgresBinding),
 }
 
 /// Map from resource ID to external binding.
@@ -159,6 +161,20 @@ impl ExternalBindings {
         }
     }
 
+    /// Gets a Postgres binding for the given resource ID.
+    /// Returns an error if the binding exists but is not a Postgres type.
+    pub fn get_postgres(&self, id: &str) -> crate::error::Result<Option<&PostgresBinding>> {
+        match self.0.get(id) {
+            Some(ExternalBinding::Postgres(b)) => Ok(Some(b)),
+            Some(other) => Err(AlienError::new(ErrorData::ExternalBindingTypeMismatch {
+                resource_id: id.to_string(),
+                expected: "postgres".to_string(),
+                actual: other.binding_type().to_string(),
+            })),
+            None => Ok(None),
+        }
+    }
+
     /// Inserts an external binding for a resource.
     pub fn insert(&mut self, resource_id: impl Into<String>, binding: ExternalBinding) {
         self.0.insert(resource_id.into(), binding);
@@ -175,6 +191,7 @@ impl ExternalBinding {
             ExternalBinding::ArtifactRegistry(_) => "artifact_registry",
             ExternalBinding::Vault(_) => "vault",
             ExternalBinding::ContainerAppsEnvironment(_) => "azure_container_apps_environment",
+            ExternalBinding::Postgres(_) => "postgres",
         }
     }
 
@@ -242,6 +259,7 @@ pub fn validate_binding_type(
         ("artifact_registry", ExternalBinding::ArtifactRegistry(_)) => true,
         ("vault", ExternalBinding::Vault(_)) => true,
         ("azure_container_apps_environment", ExternalBinding::ContainerAppsEnvironment(_)) => true,
+        ("postgres", ExternalBinding::Postgres(_)) => true,
         _ => false,
     };
 

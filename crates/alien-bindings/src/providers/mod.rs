@@ -3,6 +3,7 @@ pub mod artifact_registry;
 pub mod build;
 pub mod container;
 pub mod kv;
+pub mod postgres;
 pub mod queue;
 pub mod service_account;
 pub mod storage;

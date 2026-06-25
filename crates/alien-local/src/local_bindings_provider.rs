@@ -8,19 +8,19 @@
 
 use crate::error::Result;
 use crate::{
-    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalQueueManager,
-    LocalStorageManager, LocalVaultManager, LocalWorkerManager,
+    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager,
+    LocalQueueManager, LocalStorageManager, LocalVaultManager, LocalWorkerManager,
 };
 use alien_bindings::{
     error::ErrorData as BindingsErrorData,
     providers::{
         artifact_registry::local::LocalArtifactRegistry,
         container::LocalContainer as LocalContainerBinding, kv::local::LocalKv,
-        storage::local::LocalStorage, vault::local::LocalVault,
+        postgres::local::LocalPostgres, storage::local::LocalStorage, vault::local::LocalVault,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
-        Storage, Vault, Worker,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue,
+        ServiceAccount, Storage, Vault, Worker,
     },
 };
 use alien_core::bindings::{KvBinding, VaultBinding};
@@ -54,6 +54,7 @@ use tokio::task::JoinHandle;
 pub struct LocalBindingsProvider {
     storage_manager: Arc<LocalStorageManager>,
     kv_manager: Arc<LocalKvManager>,
+    postgres_manager: Arc<LocalPostgresManager>,
     queue_manager: Arc<LocalQueueManager>,
     vault_manager: Arc<LocalVaultManager>,
     artifact_registry_manager: Arc<LocalArtifactRegistryManager>,
@@ -78,6 +79,7 @@ impl Clone for LocalBindingsProvider {
         Self {
             storage_manager: self.storage_manager.clone(),
             kv_manager: self.kv_manager.clone(),
+            postgres_manager: self.postgres_manager.clone(),
             queue_manager: self.queue_manager.clone(),
             vault_manager: self.vault_manager.clone(),
             artifact_registry_manager: self.artifact_registry_manager.clone(),
@@ -137,10 +139,16 @@ impl LocalBindingsProvider {
             );
         let artifact_registry_manager = Arc::new(artifact_registry_manager);
 
+        // Postgres manager owns a monitor-and-recover background task that must be tracked for shutdown.
+        let (postgres_manager, postgres_task) =
+            LocalPostgresManager::new_with_shutdown(state_dir.clone(), shutdown_tx.subscribe());
+        let postgres_manager = Arc::new(postgres_manager);
+
         // Create the provider (without worker_manager and container_manager initially)
         let provider = Arc::new(Self {
             storage_manager: storage_manager.clone(),
             kv_manager: kv_manager.clone(),
+            postgres_manager: postgres_manager.clone(),
             queue_manager: queue_manager.clone(),
             vault_manager: vault_manager.clone(),
             artifact_registry_manager: artifact_registry_manager.clone(),
@@ -173,6 +181,7 @@ impl LocalBindingsProvider {
             if let Some(task) = registry_task {
                 tasks.push(task);
             }
+            tasks.push(postgres_task);
         }
 
         Ok(provider)
@@ -212,6 +221,11 @@ impl LocalBindingsProvider {
     /// Returns the KV manager.
     pub fn kv_manager(&self) -> &Arc<LocalKvManager> {
         &self.kv_manager
+    }
+
+    /// Returns the Postgres manager.
+    pub fn postgres_manager(&self) -> &Arc<LocalPostgresManager> {
+        &self.postgres_manager
     }
 
     /// Returns the queue manager.
@@ -418,6 +432,21 @@ impl BindingsProviderApi for LocalBindingsProvider {
             })?;
 
         Ok(Arc::new(kv))
+    }
+
+    async fn load_postgres(
+        &self,
+        binding_name: &str,
+    ) -> alien_bindings::error::Result<Arc<dyn Postgres>> {
+        let binding = self.postgres_manager.get_binding(binding_name).context(
+            BindingsErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                reason: format!("Postgres not found for '{}'", binding_name),
+            },
+        )?;
+
+        let postgres = LocalPostgres::from_binding(binding_name, &binding)?;
+        Ok(Arc::new(postgres))
     }
 
     async fn load_queue(

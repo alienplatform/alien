@@ -11,6 +11,9 @@ use alien_core::ComputeCluster;
 use alien_core::Container;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::Daemon;
+// Local Postgres only; cloud controllers come in via register_registry_extension.
+#[cfg(feature = "local")]
+use alien_core::Postgres;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, Build, Kv, Network, RemoteStackManagement, ServiceAccount,
@@ -632,6 +635,15 @@ impl ResourceRegistry {
             Kv::RESOURCE_TYPE,
             Platform::Local,
             Box::new(DefaultControllerFactory::<crate::kv::LocalKvController>::new()),
+        );
+
+        // Register Local Postgres controller. Cloud Postgres controllers are registered
+        // elsewhere; Kubernetes/on-prem use external bindings — no controller needed.
+        #[cfg(feature = "local")]
+        registry.register_controller_factory(
+            Postgres::RESOURCE_TYPE,
+            Platform::Local,
+            Box::new(DefaultControllerFactory::<crate::postgres::LocalPostgresController>::new()),
         );
 
         // Register Local ComputeCluster controller

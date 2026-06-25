@@ -21,6 +21,12 @@ serde_json = { workspace = true }
 
 # Database
 sled = { workspace = true }
+# Embedded Postgres for the Local platform (downloads + runs native binaries)
+postgresql_embedded = { workspace = true }
+# Installs the pgvector extension into the embedded server from Alien's release host
+postgresql_extensions = { workspace = true }
+# Generated database passwords
+rand = { workspace = true }
 
 # Object storage
 object_store = { workspace = true, features = ["http"] }
