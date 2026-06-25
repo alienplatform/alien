@@ -74,6 +74,10 @@ export { ArtifactRegistry } from "./bindings/artifact-registry.js"
 export { WorkerBinding } from "./bindings/worker.js"
 export { ServiceAccount } from "./bindings/service-account.js"
 
+// Postgres is connection-only (no gRPC service): a function that resolves connection
+// details for a linked database, not a channel-backed binding class.
+export { getPostgresConnection, type PostgresConnection } from "./bindings/postgres.js"
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -140,6 +144,7 @@ export {
   EventHandlerAlreadyRegisteredError,
   CommandAlreadyRegisteredError,
   InvalidBindingConfigError,
+  PostgresSecretResolutionError,
 } from "./errors.js"
 
 // ============================================================================
