@@ -19,11 +19,11 @@ pub struct LocalPostgresController {
     pub(crate) database: Option<String>,
     /// Port the local server listens on; tracked for outputs and heartbeats.
     pub(crate) port: Option<u16>,
-    /// Resolved Local binding, emitted to dependents so the out-of-process env-var binding path can
-    /// read the connection details. Held in memory only: `#[serde(skip)]` keeps the runtime-generated
-    /// password out of durable controller state, which is persisted and can be synced to the control
-    /// plane. The manager's 0600 metadata file is the source of truth; `ready` re-resolves this from it
-    /// after a reload (when the field deserializes back to `None`).
+    /// Resolved Local binding, held in memory only (`#[serde(skip)]`) — it inlines the
+    /// runtime-generated password, which must stay out of durable, persisted, and control-plane-synced
+    /// state. `get_binding_params` strips the password before emitting the connection coordinates;
+    /// `LocalBindingsProvider::load_postgres` re-reads the password in-process from the manager's 0600
+    /// metadata, the source of truth.
     #[serde(skip)]
     pub(crate) binding: Option<PostgresBinding>,
 }
@@ -227,59 +227,31 @@ impl LocalPostgresController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        // Emit the resolved connection details computed during create. Dependents also
-        // resolve live via the manager, but emitting here keeps the env-var binding path
-        // working for out-of-process workers.
+        // The executor persists this into the deployment's `remote_binding_params`, which is synced
+        // to the control plane. Unlike cloud variants (which carry a secret-store locator), a Local
+        // binding inlines its runtime-generated password because the in-process resolver connects
+        // directly. Keep the password in the in-memory binding for that path, but strip it from this
+        // emitted copy so it never reaches synced/persisted state — `LocalBindingsProvider::load_postgres`
+        // reads it from the manager's 0600 metadata, so the synced coordinates don't need it. (An
+        // out-of-process SDK resolver reading that metadata is a follow-up; it doesn't work today.)
         match &self.binding {
-            Some(binding) => Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: self
-                        .database
-                        .clone()
-                        .unwrap_or_else(|| "postgres".to_string()),
-                    message: "Failed to serialize Postgres binding parameters".to_string(),
-                },
-            )?)),
             None => Ok(None),
+            Some(binding) => {
+                let mut value = serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: self
+                            .database
+                            .clone()
+                            .unwrap_or_else(|| "postgres".to_string()),
+                        message: "Failed to serialize Postgres binding parameters".to_string(),
+                    },
+                )?;
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("password");
+                }
+                Ok(Some(value))
+            }
         }
-    }
-
-    async fn resolve_binding_params(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
-    ) -> Result<Option<serde_json::Value>> {
-        // `binding` is `#[serde(skip)]`, so the controller a dependent deserializes via
-        // `get_internal_controller` has it as `None`. Re-resolve the connection details from the
-        // manager — the 0600 metadata file is the source of truth — so a linked out-of-process
-        // workload gets its `ALIEN_<NAME>_BINDING` env var without the inline password ever entering
-        // persisted control-plane state.
-        if self.binding.is_some() {
-            return self.get_binding_params();
-        }
-
-        let manager = ctx
-            .service_provider
-            .get_local_postgres_manager()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::LocalServicesNotAvailable {
-                    service_name: "postgres_manager".to_string(),
-                })
-            })?;
-
-        let binding = manager
-            .get_binding(resource_id)
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to read binding for local Postgres '{}'", resource_id),
-                resource_id: Some(resource_id.to_string()),
-            })?;
-
-        Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
-            ErrorData::ResourceStateSerializationFailed {
-                resource_id: resource_id.to_string(),
-                message: "Failed to serialize Postgres binding parameters".to_string(),
-            },
-        )?))
     }
 }
 

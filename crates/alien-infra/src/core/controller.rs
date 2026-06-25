@@ -1395,6 +1395,18 @@ mod tests {
             "serialized controller state must not contain the runtime password"
         );
 
+        // The second persistence channel: `get_binding_params` feeds the deployment's
+        // `remote_binding_params`, which is synced to the control plane. It must emit a locator and
+        // strip the password too — the `#[serde(skip)]` above only covers `internal_state`.
+        let binding_params = controller
+            .get_binding_params()
+            .expect("binding params serialize")
+            .expect("Local controller emits binding params");
+        assert!(
+            !serde_json::to_string(&binding_params).unwrap().contains(PASSWORD),
+            "binding params (the remote_binding_params channel) must not contain the runtime password"
+        );
+
         let restored =
             deserialize_controller(value).expect("LocalPostgresController must deserialize");
         assert_eq!(restored.controller_type(), "LocalPostgresController");
