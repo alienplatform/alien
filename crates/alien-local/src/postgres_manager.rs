@@ -13,7 +13,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::bindings::PostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use postgresql_embedded::{PostgreSQL, Settings, Status, VersionReq};
+use postgresql_embedded::{PostgreSQL, Settings, Status, VersionReq, BOOTSTRAP_SUPERUSER};
 use postgresql_extensions::repository::portal_corp::repository::PortalCorp;
 use postgresql_extensions::repository::{registry, Repository};
 use postgresql_extensions::{AvailableExtension, Version};
@@ -27,8 +27,11 @@ use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-/// Admin user created on every local database.
-const ADMIN_USER: &str = "alien";
+/// Admin user advertised in the binding. `postgresql_embedded` always names the bootstrap superuser
+/// `BOOTSTRAP_SUPERUSER` ("postgres") and ignores `Settings.username`, so the binding must report that
+/// exact role — any other name is a role that does not exist, and Postgres reports a missing role as
+/// "password authentication failed" under password auth, which looks like (but isn't) a bad password.
+const ADMIN_USER: &str = BOOTSTRAP_SUPERUSER;
 /// How often the monitor loop checks that each server is still up.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -162,33 +165,49 @@ impl LocalPostgresManager {
 
     /// Starts (or, if already running, returns) the database for `id`. Idempotent:
     /// `initdb` runs once, and the password and port are generated once and reused.
+    ///
+    /// The lock is held across the whole boot so check-and-insert is atomic: the startup
+    /// monitor's `recover_all` and a controller's `create_start` can call this for the same id
+    /// concurrently, and a check-then-release-then-boot would let both pass the guard and boot two
+    /// servers on one data dir and port. Holding it serialises per-id starts; the only contention
+    /// is other lifecycle ops — never the SQL data path, which bypasses the manager — so the cost
+    /// is cold-start latency, not throughput.
     pub async fn start_postgres(&self, id: &str, version: &str) -> Result<()> {
-        if self.runtimes.lock().await.contains_key(id) {
+        let mut runtimes = self.runtimes.lock().await;
+        if runtimes.contains_key(id) {
             return Ok(());
         }
 
         let metadata = self.load_or_init_metadata(id, version).await?;
         let postgres = self.boot(&metadata).await?;
 
-        self.runtimes.lock().await.insert(id.to_string(), postgres);
+        runtimes.insert(id.to_string(), postgres);
         info!(postgres_id = %id, "Local Postgres started");
         Ok(())
     }
 
     /// Stops the server but keeps its data and metadata so it can be recovered.
+    ///
+    /// Drops the tracking entry only after `stop()` succeeds, re-inserting the handle on
+    /// failure. `boot()` runs with `temporary: false`, so a dropped handle leaves a live
+    /// process; if it also left the id untracked, a `delete_postgres` retry would skip the
+    /// stop and `remove_dir_all` the data dir out from under the running server.
     pub async fn stop_postgres(&self, id: &str) -> Result<()> {
-        if let Some(postgres) = self.runtimes.lock().await.remove(id) {
-            postgres
-                .stop()
-                .await
-                .into_alien_error()
-                .context(ErrorData::LocalProcessError {
+        let mut runtimes = self.runtimes.lock().await;
+        let Some(postgres) = runtimes.remove(id) else {
+            return Ok(());
+        };
+        match postgres.stop().await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                runtimes.insert(id.to_string(), postgres);
+                Err(error).into_alien_error().context(ErrorData::LocalProcessError {
                     process_id: id.to_string(),
                     operation: "stop".to_string(),
                     reason: "Failed to stop local Postgres".to_string(),
-                })?;
+                })
+            }
         }
-        Ok(())
     }
 
     /// Stops the server and removes its data directory and metadata. Tolerates an already-gone

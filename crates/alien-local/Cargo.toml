@@ -71,7 +71,8 @@ sec = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 bytes = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-postgres = { workspace = true }
 dockdash = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

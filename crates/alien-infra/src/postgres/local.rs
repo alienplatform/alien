@@ -19,11 +19,12 @@ pub struct LocalPostgresController {
     pub(crate) database: Option<String>,
     /// Port the local server listens on; tracked for outputs and heartbeats.
     pub(crate) port: Option<u16>,
-    /// Resolved Local binding, emitted to dependents and serialized into local controller state so
-    /// the out-of-process env-var binding path can read it without the manager. The runtime-generated
-    /// password therefore lives in the controller-state file — acceptable on Local (loopback-only,
-    /// never platform-synced, never committed); cloud controllers carry only the secret identifier
-    /// (ARN / name / URI), never the password.
+    /// Resolved Local binding, emitted to dependents so the out-of-process env-var binding path can
+    /// read the connection details. Held in memory only: `#[serde(skip)]` keeps the runtime-generated
+    /// password out of durable controller state, which is persisted and can be synced to the control
+    /// plane. The manager's 0600 metadata file is the source of truth; `ready` re-resolves this from it
+    /// after a reload (when the field deserializes back to `None`).
+    #[serde(skip)]
     pub(crate) binding: Option<PostgresBinding>,
 }
 
@@ -115,6 +116,17 @@ impl LocalPostgresController {
                 message: format!("Postgres health check failed for '{}'", config.id),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        // Re-resolve from the manager after a reload (the field is `#[serde(skip)]`, so empty), so
+        // dependents can still read the connection details via `get_binding_params`.
+        if self.binding.is_none() {
+            self.binding = Some(manager.get_binding(&config.id).context(
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to read binding for local Postgres '{}'", config.id),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?);
+        }
 
         emit_local_postgres_heartbeat(ctx, &config.id, &config.version, self.port);
         debug!(postgres_id = %config.id, "Postgres health check passed");
@@ -230,6 +242,44 @@ impl LocalPostgresController {
             )?)),
             None => Ok(None),
         }
+    }
+
+    async fn resolve_binding_params(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        // `binding` is `#[serde(skip)]`, so the controller a dependent deserializes via
+        // `get_internal_controller` has it as `None`. Re-resolve the connection details from the
+        // manager — the 0600 metadata file is the source of truth — so a linked out-of-process
+        // workload gets its `ALIEN_<NAME>_BINDING` env var without the inline password ever entering
+        // persisted control-plane state.
+        if self.binding.is_some() {
+            return self.get_binding_params();
+        }
+
+        let manager = ctx
+            .service_provider
+            .get_local_postgres_manager()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::LocalServicesNotAvailable {
+                    service_name: "postgres_manager".to_string(),
+                })
+            })?;
+
+        let binding = manager
+            .get_binding(resource_id)
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read binding for local Postgres '{}'", resource_id),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
+            ErrorData::ResourceStateSerializationFailed {
+                resource_id: resource_id.to_string(),
+                message: "Failed to serialize Postgres binding parameters".to_string(),
+            },
+        )?))
     }
 }
 
