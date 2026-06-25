@@ -46,6 +46,8 @@ impl ResourceImporter for AzureNetworkImporter {
             public_subnet_name,
             private_subnet_name,
             application_gateway_subnet_name,
+            // Import data does not carry the dedicated PE subnet.
+            private_endpoint_subnet_name: None,
             nat_gateway_name: None,
             nat_gateway_id: data.nat_gateway_id,
             public_ip_name: None,

@@ -5,7 +5,6 @@ expression: schemas
 {
   "aws_artifact_registry": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS ArtifactRegistry ImportData.",
     "properties": {
       "accountId": {
@@ -51,7 +50,6 @@ expression: schemas
   },
   "aws_build": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Build ImportData.",
     "properties": {
       "buildEnvVars": {
@@ -80,7 +78,6 @@ expression: schemas
   },
   "aws_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS ComputeCluster ImportData.",
     "properties": {
       "clusterId": {
@@ -106,7 +103,6 @@ expression: schemas
   },
   "aws_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Worker ImportData.",
     "properties": {
       "apiId": {
@@ -194,7 +190,6 @@ expression: schemas
   },
   "aws_kv": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS KV ImportData.",
     "properties": {
       "tableArn": {
@@ -215,7 +210,6 @@ expression: schemas
   },
   "aws_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Network ImportData.",
     "properties": {
       "availabilityZones": {
@@ -309,9 +303,63 @@ expression: schemas
     "title": "AwsNetworkImportData",
     "type": "object"
   },
+  "aws_postgres": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS Postgres (Aurora Serverless v2) registration data: the handles a setup-created Aurora cluster is registered with, as a Frozen Postgres resource — setup owns the cluster, Alien refreshes and heartbeats it. Carries the master password's Secrets Manager ARN, never the password.",
+    "properties": {
+      "clusterEndpoint": {
+        "description": "Cluster writer endpoint (the binding host).",
+        "type": "string"
+      },
+      "clusterIdentifier": {
+        "description": "Aurora DB cluster identifier.",
+        "type": "string"
+      },
+      "database": {
+        "description": "Default database name.",
+        "type": "string"
+      },
+      "engineVersion": {
+        "description": "Engine version the cluster reports.",
+        "type": "string"
+      },
+      "instanceIdentifier": {
+        "description": "Writer instance identifier within the cluster.",
+        "type": "string"
+      },
+      "passwordSecretArn": {
+        "description": "Secrets Manager ARN of the master password (never the password itself).",
+        "type": "string"
+      },
+      "securityGroupId": {
+        "description": "Dedicated security group admitting 5432 from the stack security group.",
+        "type": "string"
+      },
+      "subnetGroupName": {
+        "description": "DB subnet group spanning the private subnets.",
+        "type": "string"
+      },
+      "username": {
+        "description": "Master username.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clusterEndpoint",
+      "clusterIdentifier",
+      "database",
+      "engineVersion",
+      "instanceIdentifier",
+      "passwordSecretArn",
+      "securityGroupId",
+      "subnetGroupName",
+      "username"
+    ],
+    "title": "AwsPostgresImportData",
+    "type": "object"
+  },
   "aws_queue": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Queue ImportData.",
     "properties": {
       "queueArn": {
@@ -337,7 +385,6 @@ expression: schemas
   },
   "aws_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS RemoteStackManagement ImportData.",
     "properties": {
       "managementPermissionsApplied": {
@@ -363,7 +410,6 @@ expression: schemas
   },
   "aws_service_account": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS ServiceAccount ImportData.",
     "properties": {
       "roleArn": {
@@ -389,7 +435,6 @@ expression: schemas
   },
   "aws_storage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Storage ImportData.",
     "properties": {
       "bucketArn": {
@@ -410,7 +455,6 @@ expression: schemas
   },
   "aws_vault": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "AWS Vault ImportData.",
     "properties": {
       "accountId": {
@@ -436,7 +480,6 @@ expression: schemas
   },
   "azure_artifact_registry": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ArtifactRegistry ImportData — an Azure Container Registry.",
     "properties": {
       "loginServer": {
@@ -477,7 +520,6 @@ expression: schemas
   },
   "azure_build": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Build ImportData — an Azure Container Registry build task.",
     "properties": {
       "buildEnvVars": {
@@ -516,7 +558,6 @@ expression: schemas
   },
   "azure_container_apps_environment": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ContainerAppsEnvironment ImportData — parent environment for Container Apps in this stack. Realized once per stack.",
     "properties": {
       "customDomainVerificationId": {
@@ -559,7 +600,6 @@ expression: schemas
   },
   "azure_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ComputeCluster ImportData — AKS node pool identity / network.",
     "properties": {
       "clusterId": {
@@ -585,7 +625,6 @@ expression: schemas
   },
   "azure_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Worker ImportData — a Container App backed by the stack's Container Apps Environment.",
     "properties": {
       "containerAppName": {
@@ -618,7 +657,6 @@ expression: schemas
   },
   "azure_kv": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure KV ImportData — a table in the stack's shared Azure Storage account.",
     "properties": {
       "resourceGroup": {
@@ -654,9 +692,22 @@ expression: schemas
   },
   "azure_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Network ImportData — VNet + subnets + NAT topology.",
     "properties": {
+      "applicationGatewaySubnetId": {
+        "description": "Dedicated subnet for classic Azure Application Gateway ingress.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "applicationGatewaySubnetName": {
+        "description": "Dedicated subnet name for classic Azure Application Gateway ingress.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "isByoVnet": {
         "description": "True when the VNet is owned outside this stack.",
         "type": "boolean"
@@ -714,9 +765,73 @@ expression: schemas
     "title": "AzureNetworkImportData",
     "type": "object"
   },
+  "azure_postgres": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Azure Postgres (Flexible Server + Private Endpoint) registration data: the handles a setup-created Flexible Server — with its Private Endpoint, private DNS zone, and the Key Vault secret holding the master password — is registered with, as a Frozen Postgres resource: setup owns the server, Alien refreshes and heartbeats it. The raw password is never carried — only the Key Vault secret URI is.",
+    "properties": {
+      "database": {
+        "description": "Default database name.",
+        "type": "string"
+      },
+      "host": {
+        "description": "Private DNS FQDN host workloads resolve to reach the server (the binding host).",
+        "type": "string"
+      },
+      "keyVaultUrl": {
+        "description": "Key Vault base URL holding the password (e.g. `https://<vault>.vault.azure.net`).",
+        "type": "string"
+      },
+      "passwordSecretName": {
+        "description": "Key Vault secret name of the master password (never the password).",
+        "type": "string"
+      },
+      "passwordSecretUri": {
+        "description": "Key Vault secret URI of the master password; the binding carries this and the workload resolves the value at load time.",
+        "type": "string"
+      },
+      "privateEndpointName": {
+        "description": "Private Endpoint name fronting the server in the dedicated PE subnet.",
+        "type": "string"
+      },
+      "region": {
+        "description": "Azure region the server lives in.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group the server lives in.",
+        "type": "string"
+      },
+      "serverName": {
+        "description": "Flexible Server name on Azure.",
+        "type": "string"
+      },
+      "serverResourceId": {
+        "description": "Full ARM resource id of the Flexible Server (the deletable handle).",
+        "type": "string"
+      },
+      "version": {
+        "description": "Engine version the server reports.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "database",
+      "host",
+      "keyVaultUrl",
+      "passwordSecretName",
+      "passwordSecretUri",
+      "privateEndpointName",
+      "region",
+      "resourceGroup",
+      "serverName",
+      "serverResourceId",
+      "version"
+    ],
+    "title": "AzureFlexibleServerPostgresImportData",
+    "type": "object"
+  },
   "azure_queue": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Queue ImportData — a Service Bus queue.",
     "properties": {
       "namespaceName": {
@@ -747,7 +862,6 @@ expression: schemas
   },
   "azure_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure RemoteStackManagement ImportData — UAMI + Federated Identity Credential the manager uses to act on this stack via Azure AD.",
     "properties": {
       "clientId": {
@@ -793,7 +907,6 @@ expression: schemas
   },
   "azure_resource_group": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ResourceGroup ImportData — the parent resource group every Azure resource in this stack lives in. Realized once per stack.",
     "properties": {
       "location": {
@@ -819,7 +932,6 @@ expression: schemas
   },
   "azure_service_account": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ServiceAccount ImportData — User-Assigned Managed Identity (UAMI) plus optional Federated Identity Credentials trusting Alien's OIDC issuer.",
     "properties": {
       "clientId": {
@@ -860,7 +972,6 @@ expression: schemas
   },
   "azure_service_activation": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ServiceActivation ImportData — registers an Azure resource provider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the stack contains resources that depend on a specific Azure RP (Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).",
     "properties": {
       "providerNamespace": {
@@ -886,7 +997,6 @@ expression: schemas
   },
   "azure_service_bus_namespace": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure ServiceBusNamespace ImportData — parent namespace for Queue resources. Realized once per stack and shared across `Queue`s.",
     "properties": {
       "endpoint": {
@@ -917,7 +1027,6 @@ expression: schemas
   },
   "azure_storage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Storage ImportData — a Blob container inside a Storage Account.",
     "properties": {
       "containerName": {
@@ -948,11 +1057,14 @@ expression: schemas
   },
   "azure_storage_account": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure StorageAccount ImportData — the parent storage account that holds Blob containers + queues + tables for this stack. Realized once per stack and shared across `Storage` resources.",
     "properties": {
       "blobEndpoint": {
         "description": "Primary blob endpoint URL.",
+        "type": "string"
+      },
+      "fileEndpoint": {
+        "description": "Primary file endpoint URL.",
         "type": "string"
       },
       "queueEndpoint": {
@@ -963,6 +1075,10 @@ expression: schemas
         "description": "Resource group containing the storage account.",
         "type": "string"
       },
+      "resourceId": {
+        "description": "Full Azure resource ID of the storage account.",
+        "type": "string"
+      },
       "storageAccountName": {
         "description": "Storage account name (globally unique).",
         "type": "string"
@@ -970,21 +1086,27 @@ expression: schemas
       "subscriptionId": {
         "description": "Subscription ID containing the storage account.",
         "type": "string"
+      },
+      "tableEndpoint": {
+        "description": "Primary table endpoint URL.",
+        "type": "string"
       }
     },
     "required": [
       "blobEndpoint",
+      "fileEndpoint",
       "queueEndpoint",
       "resourceGroup",
+      "resourceId",
       "storageAccountName",
-      "subscriptionId"
+      "subscriptionId",
+      "tableEndpoint"
     ],
     "title": "AzureStorageAccountImportData",
     "type": "object"
   },
   "azure_vault": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "Azure Vault ImportData — a Key Vault namespace.",
     "properties": {
       "resourceGroup": {
@@ -1015,7 +1137,6 @@ expression: schemas
   },
   "gcp_artifact_registry": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP ArtifactRegistry ImportData — an Artifact Registry repository.",
     "properties": {
       "projectId": {
@@ -1061,7 +1182,6 @@ expression: schemas
   },
   "gcp_build": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Build ImportData — Cloud Build trigger + worker pool reference.",
     "properties": {
       "buildEnvVars": {
@@ -1105,7 +1225,6 @@ expression: schemas
   },
   "gcp_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP ComputeCluster ImportData — GKE node pool identity + network.",
     "properties": {
       "clusterId": {
@@ -1131,7 +1250,6 @@ expression: schemas
   },
   "gcp_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Worker ImportData — a Cloud Run service.",
     "properties": {
       "commandsSubscriptionName": {
@@ -1202,7 +1320,6 @@ expression: schemas
   },
   "gcp_kv": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP KV ImportData — a Firestore Native database.",
     "properties": {
       "databaseId": {
@@ -1228,7 +1345,6 @@ expression: schemas
   },
   "gcp_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.",
     "properties": {
       "cidrBlock": {
@@ -1290,9 +1406,63 @@ expression: schemas
     "title": "GcpNetworkImportData",
     "type": "object"
   },
+  "gcp_postgres": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP Postgres (Cloud SQL + Private Service Connect) registration data: the handles a setup-created Cloud SQL instance and its PSC consumer endpoint are registered with, as a Frozen Postgres resource — setup owns the instance, Alien refreshes and heartbeats it.",
+    "properties": {
+      "database": {
+        "description": "Default database name.",
+        "type": "string"
+      },
+      "databaseVersion": {
+        "description": "Engine version the instance reports.",
+        "type": "string"
+      },
+      "endpointIp": {
+        "description": "PSC consumer endpoint IP (the binding host).",
+        "type": "string"
+      },
+      "instanceName": {
+        "description": "Cloud SQL instance name.",
+        "type": "string"
+      },
+      "passwordSecretName": {
+        "description": "Secret Manager secret name of the master password (never the password).",
+        "type": "string"
+      },
+      "pscAddressName": {
+        "description": "Regional internal address backing the PSC consumer endpoint.",
+        "type": "string"
+      },
+      "pscForwardingRuleName": {
+        "description": "Regional forwarding rule for the PSC consumer endpoint.",
+        "type": "string"
+      },
+      "pscServiceAttachment": {
+        "description": "PSC service-attachment URI exposed by the instance.",
+        "type": "string"
+      },
+      "region": {
+        "description": "GCP region.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "database",
+      "databaseVersion",
+      "endpointIp",
+      "instanceName",
+      "passwordSecretName",
+      "pscAddressName",
+      "pscForwardingRuleName",
+      "pscServiceAttachment",
+      "region"
+    ],
+    "title": "GcpPostgresImportData",
+    "type": "object"
+  },
   "gcp_queue": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Queue ImportData — a Pub/Sub topic plus subscription created in the customer's project.",
     "properties": {
       "projectId": {
@@ -1328,7 +1498,6 @@ expression: schemas
   },
   "gcp_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",
     "properties": {
       "managementPermissionsApplied": {
@@ -1364,9 +1533,99 @@ expression: schemas
     "title": "GcpRemoteStackManagementImportData",
     "type": "object"
   },
+  "kubernetes_cluster": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AzureApplicationGatewayForContainersBootstrap": {
+        "description": "Application Gateway for Containers bootstrap data emitted by AKS setup.",
+        "properties": {
+          "albName": {
+            "type": "string"
+          },
+          "albNamespace": {
+            "type": "string"
+          },
+          "associationSubnetId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "albName",
+          "albNamespace",
+          "associationSubnetId"
+        ],
+        "type": "object"
+      },
+      "KubernetesClusterOwnership": {
+        "description": "Ownership model for the Kubernetes cluster.",
+        "enum": [
+          "managed",
+          "existing",
+          "external"
+        ],
+        "type": "string"
+      },
+      "KubernetesClusterProvider": {
+        "description": "Kubernetes provider backing the runtime substrate.",
+        "enum": [
+          "eks",
+          "gke",
+          "aks",
+          "generic"
+        ],
+        "type": "string"
+      }
+    },
+    "description": "KubernetesCluster ImportData emitted by setup artifacts.",
+    "properties": {
+      "azureApplicationGatewayForContainers": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/AzureApplicationGatewayForContainersBootstrap"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "cloudMetadataReady": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "clusterId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "clusterName": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "namespace": {
+        "type": "string"
+      },
+      "ownership": {
+        "$ref": "#/definitions/KubernetesClusterOwnership"
+      },
+      "provider": {
+        "$ref": "#/definitions/KubernetesClusterProvider"
+      }
+    },
+    "required": [
+      "namespace",
+      "ownership",
+      "provider"
+    ],
+    "title": "KubernetesClusterImportData",
+    "type": "object"
+  },
   "gcp_service_account": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP ServiceAccount ImportData.",
     "properties": {
       "projectId": {
@@ -1397,7 +1656,6 @@ expression: schemas
   },
   "gcp_service_activation": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP ServiceActivation ImportData — a `google_project_service` enabling a single GCP API on the customer's project.\n\nAdded by the `GcpServiceActivationMutation` preflight when the stack contains resources that need a specific API enabled (Cloud Run, Pub/Sub, Firestore, …).",
     "properties": {
       "activated": {
@@ -1423,7 +1681,6 @@ expression: schemas
   },
   "gcp_storage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Storage ImportData — a Cloud Storage bucket created in the customer's project.",
     "properties": {
       "bucketName": {
@@ -1454,7 +1711,6 @@ expression: schemas
   },
   "gcp_vault": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "description": "GCP Vault ImportData — Secret Manager namespace.",
     "properties": {
       "projectId": {

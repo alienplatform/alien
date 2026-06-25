@@ -56,7 +56,11 @@ impl StackMutation for SecretsVaultMutation {
                 config: alien_core::Resource::new(vault),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                remote_access: false,
+                // The deployment loop syncs secrets into this vault from control-plane state
+                // (`sync_secrets_to_vault` resolves it via `from_stack_state`), so its binding must
+                // be synced. Safe to sync: the binding is only a reference (Parameter Store / Secret
+                // Manager / Key Vault locator), never the secret values themselves.
+                remote_access: true,
             };
             stack
                 .resources

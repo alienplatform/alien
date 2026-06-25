@@ -206,6 +206,7 @@ fn azure_network_byo_vnet_emits_data_lookups() {
             public_subnet_name: "public".to_string(),
             private_subnet_name: "private".to_string(),
             application_gateway_subnet_name: Some("appgw".to_string()),
+            private_endpoint_subnet_name: None,
         }),
         ..StackSettings::default()
     };
