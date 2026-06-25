@@ -1,12 +1,1 @@
-{
-  "type": "object",
-  "properties": {
-    "blob": { "type": ["string", "null"] },
-    "dfs": { "type": ["string", "null"] },
-    "file": { "type": ["string", "null"] },
-    "queue": { "type": ["string", "null"] },
-    "table": { "type": ["string", "null"] },
-    "web": { "type": ["string", "null"] }
-  },
-  "x-readme-ref-name": "AzureStorageAccountEndpoints"
-}
+{"type":"object","properties":{"blob":{"type":["string","null"]},"dfs":{"type":["string","null"]},"file":{"type":["string","null"]},"queue":{"type":["string","null"]},"table":{"type":["string","null"]},"web":{"type":["string","null"]}},"x-readme-ref-name":"AzureStorageAccountEndpoints"}

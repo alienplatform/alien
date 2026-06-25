@@ -186,6 +186,16 @@ pub enum ErrorData {
         field: Option<String>,
     },
 
+    /// Public URL configuration is invalid.
+    #[error(
+        code = "PUBLIC_URL_INVALID",
+        message = "Invalid public URL for resource '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    PublicUrlInvalid { resource_id: String, reason: String },
+
     /// JSON serialization failed.
     #[error(
         code = "JSON_SERIALIZATION_FAILED",

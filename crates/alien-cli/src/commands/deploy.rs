@@ -7,33 +7,6 @@
 
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 
-/// Read `ALIEN_BYO_HORIZON_*` env vars and synthesize a
-/// `ComputeBackend::Horizon`. Returns `None` when the env vars aren't all
-/// set, so non-BYO callers get the production path unchanged.
-fn synthesize_byo_horizon_compute_backend() -> Option<alien_core::ComputeBackend> {
-    let url = std::env::var("ALIEN_BYO_HORIZON_URL").ok()?;
-    let cluster_id = std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID").ok()?;
-    let token = std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN").ok()?;
-    if url.is_empty() || cluster_id.is_empty() || token.is_empty() {
-        return None;
-    }
-    let mut clusters: std::collections::HashMap<String, alien_core::HorizonClusterConfig> =
-        std::collections::HashMap::new();
-    clusters.insert(
-        cluster_id.clone(),
-        alien_core::HorizonClusterConfig {
-            cluster_id,
-            management_token: token,
-        },
-    );
-    Some(alien_core::ComputeBackend::Horizon(
-        alien_core::HorizonConfig {
-            url,
-            horizon_machine_image: None,
-            clusters,
-        },
-    ))
-}
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
     wait_for_dev_deployment_ready_with_progress,
@@ -43,7 +16,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
+use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
@@ -377,59 +350,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
                     info!("   Deployment created: {}", deployment_id);
 
-                    // Standalone-mode bridge: in production the platform API
-                    // populates `compute_backend` (and the rest of
-                    // DeploymentConfig) on the deployment record at creation
-                    // time. Standalone has no such API leg, so if BYO horizon
-                    // env vars are set we PUT a synthesized config onto the
-                    // deployment NOW — before our acquire_deployment call
-                    // below — so the manager's preflight loop reads
-                    // `compute_backend = Some(Horizon(...))` instead of None
-                    // and the "managed container backend required" check
-                    // passes.
-                    if let Some(backend) = synthesize_byo_horizon_compute_backend() {
-                        let put_url = format!(
-                            "{}/v1/deployments/{}/deployment-config",
-                            base_url.trim_end_matches('/'),
-                            deployment_id
-                        );
-                        let cfg = DeploymentConfig::builder()
-                            .stack_settings(alien_core::StackSettings::default())
-                            .external_bindings(alien_core::ExternalBindings::default())
-                            .allow_frozen_changes(false)
-                            .compute_backend(backend)
-                            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
-                                variables: Vec::new(),
-                                hash: "empty".to_string(),
-                                created_at: "1970-01-01T00:00:00Z".to_string(),
-                            })
-                            .build();
-                        let put_client = reqwest::Client::new();
-                        let resp = put_client
-                            .put(&put_url)
-                            .bearer_auth(&deployment_token)
-                            .json(&cfg)
-                            .send()
-                            .await
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to PUT initial deployment-config".to_string(),
-                            })?;
-                        if !resp.status().is_success() {
-                            let status = resp.status();
-                            let body = resp
-                                .text()
-                                .await
-                                .unwrap_or_else(|_| "<no body>".to_string());
-                            return Err(AlienError::new(ErrorData::ConfigurationError {
-                                message: format!(
-                                    "Failed to seed deployment-config: HTTP {status}: {body}"
-                                ),
-                            }));
-                        }
-                        info!("   Seeded compute_backend on deployment record");
-                    }
-
                     tracker
                         .add_deployment(args.name.clone(), deployment_token, &base_url)
                         .await
@@ -607,7 +527,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         })?
         .unwrap_or_default();
 
-    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+    let mut config: alien_core::DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
         "environmentVariables": {
             "variables": [],
@@ -619,39 +539,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     .context(ErrorData::ConfigurationError {
         message: "Failed to construct deployment config".to_string(),
     })?;
-
-    // Standalone mode: the deployment record in the standalone manager has
-    // no `compute_backend` set, but cloud daemons run via Horizon. Synthesize
-    // one here from the BYO env vars set on the manager side so the
-    // preflight check "Cloud container deployments require a managed
-    // container backend" passes and the daemon's `horizon()` resolver gets a
-    // valid HorizonConfig (in addition to the env-var fallback).
-    if config.compute_backend.is_none() {
-        if let (Ok(url), Ok(cluster_id), Ok(token)) = (
-            std::env::var("ALIEN_BYO_HORIZON_URL"),
-            std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID"),
-            std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN"),
-        ) {
-            let mut clusters: std::collections::HashMap<String, alien_core::HorizonClusterConfig> =
-                std::collections::HashMap::new();
-            // ComputeClusterMutation auto-creates a cluster with the
-            // daemon's `.cluster(...)` id; use that id as the key.
-            clusters.insert(
-                cluster_id.clone(),
-                alien_core::HorizonClusterConfig {
-                    cluster_id,
-                    management_token: token,
-                },
-            );
-            config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
-                alien_core::HorizonConfig {
-                    url,
-                    horizon_machine_image: None,
-                    clusters,
-                },
-            ));
-        }
-    }
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());

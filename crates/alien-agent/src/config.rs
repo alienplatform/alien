@@ -79,7 +79,7 @@ pub struct AgentConfig {
     /// Kubernetes namespace (Kubernetes platform only)
     pub namespace: Option<String>,
 
-    /// Public URLs for exposed resources (Kubernetes platform only).
+    /// Public URLs for exposed resources in pull-model deployments.
     /// Maps resource ID to public URL (e.g., {"api": "https://api.acme.com"}).
     pub public_urls: Option<HashMap<String, String>>,
 
@@ -165,6 +165,7 @@ mod tests {
                 domains: None,
                 kubernetes: None,
                 external_bindings: None,
+                compute: None,
             }))
             .api_server_port(8080)
             .build();
@@ -204,6 +205,7 @@ mod tests {
                 domains: None,
                 kubernetes: None,
                 external_bindings: None,
+                compute: None,
             }))
             .build();
 
@@ -226,6 +228,7 @@ mod tests {
                 domains: None,
                 kubernetes: None,
                 external_bindings: None,
+                compute: None,
             }))
             .build();
 
@@ -248,6 +251,7 @@ mod tests {
                 domains: None,
                 kubernetes: None,
                 external_bindings: None,
+                compute: None,
             }))
             .build();
 

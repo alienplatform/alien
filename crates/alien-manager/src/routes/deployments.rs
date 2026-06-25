@@ -10,8 +10,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, EnvironmentVariable,
-    Platform, StackSettings, StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
+    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
+    RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -198,10 +199,6 @@ pub fn router() -> Router<AppState> {
             post(create_deployment).get(list_deployments),
         )
         .route("/v1/deployments/{id}", get(get_deployment))
-        .route(
-            "/v1/deployments/{id}/deployment-config",
-            axum::routing::put(set_deployment_config),
-        )
         .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
@@ -617,6 +614,10 @@ async fn get_deployment_info(
                     .get_resource_outputs::<ContainerOutputs>(resource_id)
                     .ok()
                     .and_then(|o| o.url.clone()),
+                "daemon" => stack_state
+                    .get_resource_outputs::<DaemonOutputs>(resource_id)
+                    .ok()
+                    .and_then(|o| o.url.clone()),
                 _ => None,
             };
             resources.insert(
@@ -767,47 +768,6 @@ async fn retry_deployment(
     if let Err(e) = state
         .deployment_store
         .set_retry_requested(&subject, &id)
-        .await
-    {
-        return e.into_response();
-    }
-
-    Json(serde_json::json!({ "success": true })).into_response()
-}
-
-/// `PUT /v1/deployments/{id}/deployment-config` — persist an externally-
-/// supplied `DeploymentConfig` (carries `compute_backend`, `domain_metadata`,
-/// etc) onto the deployment record. In production the platform API populates
-/// this at create time; in standalone mode the CLI calls this immediately
-/// after creating a deployment via a dg token, so the manager's deployment
-/// loop reads the synthesized config instead of falling back to a
-/// hardcoded one with `compute_backend: None`.
-///
-/// Auth: same as other deployment-update routes. The caller must be able
-/// to update the deployment per the workspace/project authorization policy.
-async fn set_deployment_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(config): Json<alien_core::DeploymentConfig>,
-) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-
-    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
-        Err(e) => return e.into_response(),
-    };
-    if !state.authz.can_update_deployment(&subject, &deployment) {
-        return ErrorData::forbidden("Cannot update deployment config").into_response();
-    }
-
-    if let Err(e) = state
-        .deployment_store
-        .set_deployment_config(&subject, &id, config)
         .await
     {
         return e.into_response();

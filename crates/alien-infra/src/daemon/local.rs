@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -20,6 +21,8 @@ pub struct LocalDaemonController {
     pub(crate) extracted_image_path: Option<PathBuf>,
     /// Name used by the local daemon runtime.
     pub(crate) daemon_name: Option<String>,
+    /// Public URL when the daemon declares or receives a public HTTP endpoint.
+    pub(crate) public_url: Option<String>,
 }
 
 #[controller]
@@ -108,11 +111,16 @@ impl LocalDaemonController {
 
         let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
+            .add_current_resource_public_endpoint(ctx, &config.id)
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
         if config.commands_enabled {
             env_builder = env_builder.add_passthrough_transport_env_vars();
+        }
+
+        if let Some(endpoint) = config.ports.first() {
+            env_builder = env_builder.add_env_var("PORT".to_string(), endpoint.port.to_string());
         }
 
         let env_vars = env_builder.build();
@@ -124,6 +132,7 @@ impl LocalDaemonController {
             },
         )?;
         self.daemon_name = Some(config.id.clone());
+        self.public_url = local_daemon_public_url(ctx, &config);
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -225,6 +234,7 @@ impl LocalDaemonController {
             })?;
         self.daemon_name = None;
         self.extracted_image_path = None;
+        self.public_url = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -249,9 +259,30 @@ impl LocalDaemonController {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_name.clone(),
                 running: true,
+                url: self.public_url.clone(),
+                load_balancer_endpoint: None,
             })
         })
     }
+}
+
+fn local_daemon_public_url(ctx: &ResourceControllerContext<'_>, config: &Daemon) -> Option<String> {
+    local_daemon_public_url_from_config(ctx.deployment_config.public_urls.as_ref(), config)
+}
+
+fn local_daemon_public_url_from_config(
+    public_urls: Option<&HashMap<String, String>>,
+    config: &Daemon,
+) -> Option<String> {
+    public_urls
+        .and_then(|urls| urls.get(&config.id))
+        .cloned()
+        .or_else(|| {
+            config
+                .ports
+                .first()
+                .map(|endpoint| format!("http://localhost:{}", endpoint.port))
+        })
 }
 
 fn emit_local_daemon_heartbeat(
@@ -301,4 +332,56 @@ fn emit_local_daemon_heartbeat(
         })),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{DaemonCode, ExposeProtocol};
+
+    fn daemon_with_public_port() -> Daemon {
+        Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .expose_port(8080, ExposeProtocol::Http)
+            .build()
+    }
+
+    #[test]
+    fn local_daemon_public_url_prefers_configured_resource_url() {
+        let daemon = daemon_with_public_port();
+        let public_urls = HashMap::from([(
+            "gateway".to_string(),
+            "https://gateway.example.test".to_string(),
+        )]);
+
+        assert_eq!(
+            local_daemon_public_url_from_config(Some(&public_urls), &daemon).as_deref(),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
+    fn local_daemon_public_url_falls_back_to_localhost_for_declared_port() {
+        let daemon = daemon_with_public_port();
+
+        assert_eq!(
+            local_daemon_public_url_from_config(None, &daemon).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn local_daemon_public_url_is_absent_without_config_or_public_port() {
+        let daemon = Daemon::new("internal".to_string())
+            .code(DaemonCode::Image {
+                image: "internal:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+
+        assert_eq!(local_daemon_public_url_from_config(None, &daemon), None);
+    }
 }

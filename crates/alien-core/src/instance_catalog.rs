@@ -276,9 +276,9 @@ static CATALOG: &[InstanceTypeSpec] = &[
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
-    // m8i (8th-gen Intel Sapphire Rapids) is the only AWS family that
-    // accepts `CpuOptions.NestedVirtualization=enabled`. The catalog
-    // filter in `select_instance_type` includes m8i only when the
+    // 8th-gen Intel AWS families accept
+    // `CpuOptions.NestedVirtualization=enabled`. The catalog filter in
+    // `select_instance_type` includes these entries only when the
     // workload requests nested virt, so ordinary workloads continue to
     // pick the cost-efficient Graviton (m7g) above. The pairwise
     // interleave keeps the per-family vCPU-non-decreasing invariant
@@ -375,10 +375,30 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "c8i.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 4 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "c7g.xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
         architecture: Architecture::Arm64,
+        vcpu: 4,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "c8i.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::X86_64,
         vcpu: 4,
         memory_bytes: 8 * GI,
         ephemeral_storage_bytes: 20 * GI,
@@ -395,10 +415,30 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "c8i.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::X86_64,
+        vcpu: 8,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "c7g.4xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
         architecture: Architecture::Arm64,
+        vcpu: 16,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "c8i.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::X86_64,
         vcpu: 16,
         memory_bytes: 32 * GI,
         ephemeral_storage_bytes: 20 * GI,
@@ -1465,6 +1505,16 @@ mod tests {
         assert_eq!(spec.vcpu, 8);
         assert_eq!(spec.memory_bytes, 32 * GI);
         assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
+    }
+
+    #[test]
+    fn test_find_aws_c8i_nested_virt_instance_type() {
+        let spec = find_instance_type(Platform::Aws, "c8i.large").expect("should find c8i.large");
+        assert_eq!(spec.vcpu, 2);
+        assert_eq!(spec.memory_bytes, 4 * GI);
+        assert_eq!(spec.family, InstanceFamily::ComputeOptimized);
+        assert_eq!(spec.architecture, Architecture::X86_64);
+        assert!(spec.is_nested_virt_capable());
     }
 
     #[test]

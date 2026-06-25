@@ -60,8 +60,9 @@ pub struct MachineProfile {
 pub struct CapacityGroup {
     /// Unique identifier for this capacity group (must be lowercase alphanumeric with hyphens)
     pub group_id: String,
-    /// Instance type for machines in this group (e.g., "m7g.xlarge", "n2-standard-8")
-    /// Auto-selected if not specified, based on profile requirements.
+    /// Provider machine selected at deployment time.
+    /// `alien.ts` should declare portable requirements; preflight materialization
+    /// fills this field from `StackSettings.compute`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_type: Option<String>,
     /// Machine resource profile (auto-derived from instance_type if not specified)
@@ -95,15 +96,21 @@ pub struct CapacityGroup {
 /// ## Example
 ///
 /// ```rust
-/// use alien_core::{ComputeCluster, CapacityGroup};
+/// use alien_core::{CapacityGroup, ComputeCluster, MachineProfile};
 ///
 /// let cluster = ComputeCluster::new("compute".to_string())
 ///     .capacity_group(CapacityGroup {
 ///         group_id: "general".to_string(),
-///         instance_type: Some("m7g.xlarge".to_string()),
-///         profile: None,
+///         instance_type: None,
+///         profile: Some(MachineProfile {
+///             cpu: "4.0".to_string(),
+///             memory_bytes: 16 * 1024 * 1024 * 1024,
+///             ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+///             gpu: None,
+///         }),
 ///         min_size: 1,
 ///         max_size: 5,
+///         nested_virtualization: None,
 ///     })
 ///     .build();
 /// ```

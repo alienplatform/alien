@@ -429,17 +429,19 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, ResourceHeartbeatData, StackSettings,
-        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
+        ExternalBindings, Platform, ResourceHeartbeatData, StackSettings, StackState,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
+    use std::collections::HashMap;
 
     use crate::traits::DeploymentRecord;
 
     use super::{
-        deployment_needs_target, deployment_state_from_record, management_platform,
-        release_stack_platform, should_ignore_agent_state_report,
+        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
+        management_platform, release_stack_platform, should_ignore_agent_state_report,
         should_return_current_state_for_agent_sync, validate_initialize_base_platform,
         ReconcileRequest,
     };
@@ -650,6 +652,31 @@ mod tests {
         assert!(deployment_needs_target(&deployment));
     }
 
+    #[test]
+    fn target_config_preserves_control_plane_public_urls() {
+        let mut deployment = deployment_record_with_state("provisioning", None);
+        let public_urls = HashMap::from([(
+            "bear-agent-loader".to_string(),
+            "https://byoc.example.test".to_string(),
+        )]);
+        deployment.deployment_config = Some(DeploymentConfig {
+            public_urls: Some(public_urls.clone()),
+            ..test_deployment_config()
+        });
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            Some("ax_dep_test".to_string()),
+            None,
+        );
+
+        assert_eq!(config.public_urls, Some(public_urls));
+    }
+
     fn uninitialized_state() -> DeploymentState {
         DeploymentState {
             platform: Platform::Kubernetes,
@@ -662,6 +689,29 @@ mod tests {
             runtime_metadata: None,
             retry_requested: false,
             protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn test_deployment_config() -> DeploymentConfig {
+        DeploymentConfig {
+            deployment_name: None,
+            stack_settings: StackSettings::default(),
+            management_config: None,
+            environment_variables: EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            },
+            allow_frozen_changes: false,
+            compute_backend: None,
+            external_bindings: ExternalBindings::default(),
+            base_platform: None,
+            public_urls: None,
+            domain_metadata: None,
+            monitoring: None,
+            manager_url: None,
+            deployment_token: None,
+            native_image_host: None,
         }
     }
 
@@ -694,8 +744,8 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
-            deployment_config: None,
             deployment_token: None,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -884,52 +934,25 @@ async fn agent_sync(
                     .clone()
                     .unwrap_or_default();
 
-                let config = if let Some(mut config) = deployment.deployment_config.clone() {
-                    if config.deployment_name.is_none() {
-                        config.deployment_name = Some(deployment.name.clone());
-                    }
-                    if config.management_config.is_none() {
-                        config.management_config = management_config;
-                    }
-                    config.deployment_token = agent_token.clone();
-                    if config.base_platform.is_none() {
-                        config.base_platform = deployment.base_platform;
-                    }
-                    config.manager_url = Some(manager_url);
-                    config.native_image_host = native_image_host;
-                    config
-                } else {
-                    // Records loaded for sync always carry stack settings; in a
-                    // handler, answer with a 500 rather than panic-dropping the
-                    // connection if that invariant is ever broken.
-                    let stack_settings = match deployment.stack_settings.clone() {
-                        Some(settings) => settings,
-                        None => {
-                            return ErrorData::internal(
-                                "synced deployment is missing stack_settings",
-                            )
+                // Records loaded for sync always carry stack settings; in a
+                // handler, answer with a 500 rather than panic-dropping the
+                // connection if that invariant is ever broken.
+                let stack_settings = match deployment.stack_settings.clone() {
+                    Some(settings) => settings,
+                    None => {
+                        return ErrorData::internal("synced deployment is missing stack_settings")
                             .into_response();
-                        }
-                    };
-                    DeploymentConfig::builder()
-                        .deployment_name(deployment.name.clone())
-                        .stack_settings(stack_settings.clone())
-                        .maybe_management_config(management_config)
-                        .environment_variables(EnvironmentVariablesSnapshot {
-                            variables: env_vars,
-                            hash: String::new(),
-                            created_at: String::new(),
-                        })
-                        .allow_frozen_changes(false)
-                        .external_bindings(
-                            stack_settings.external_bindings.clone().unwrap_or_default(),
-                        )
-                        .maybe_base_platform(deployment.base_platform)
-                        .maybe_manager_url(Some(manager_url))
-                        .maybe_deployment_token(agent_token)
-                        .maybe_native_image_host(native_image_host)
-                        .build()
+                    }
                 };
+                let config = build_target_deployment_config(
+                    &deployment,
+                    stack_settings,
+                    management_config,
+                    env_vars,
+                    manager_url,
+                    agent_token,
+                    native_image_host,
+                );
 
                 Some(TargetDeployment {
                     release_info: ReleaseInfo {
@@ -1002,6 +1025,39 @@ async fn agent_sync(
 
 fn release_stack_platform(platform: Platform) -> Platform {
     platform
+}
+
+fn build_target_deployment_config(
+    deployment: &DeploymentRecord,
+    stack_settings: alien_core::StackSettings,
+    management_config: Option<alien_core::ManagementConfig>,
+    env_vars: Vec<EnvironmentVariable>,
+    manager_url: String,
+    agent_token: Option<String>,
+    native_image_host: Option<String>,
+) -> DeploymentConfig {
+    let deployment_config = deployment.deployment_config.as_ref();
+
+    DeploymentConfig::builder()
+        .deployment_name(deployment.name.clone())
+        .stack_settings(stack_settings.clone())
+        .maybe_management_config(management_config)
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: env_vars,
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .allow_frozen_changes(false)
+        .maybe_compute_backend(deployment_config.and_then(|config| config.compute_backend.clone()))
+        .external_bindings(stack_settings.external_bindings.clone().unwrap_or_default())
+        .maybe_base_platform(deployment.base_platform)
+        .maybe_public_urls(deployment_config.and_then(|config| config.public_urls.clone()))
+        .maybe_domain_metadata(deployment_config.and_then(|config| config.domain_metadata.clone()))
+        .maybe_monitoring(deployment_config.and_then(|config| config.monitoring.clone()))
+        .maybe_manager_url(Some(manager_url))
+        .maybe_deployment_token(agent_token)
+        .maybe_native_image_host(native_image_host)
+        .build()
 }
 
 fn management_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {

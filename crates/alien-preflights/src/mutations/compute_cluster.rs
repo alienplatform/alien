@@ -34,7 +34,7 @@ impl StackMutation for ComputeClusterMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
         if stack_state.platform == Platform::Kubernetes {
             return false;
@@ -77,13 +77,13 @@ impl StackMutation for ComputeClusterMutation {
             .find(|e| e.config.resource_type().as_ref() == "compute-cluster")
         {
             if let Some(cluster) = cluster_entry.config.downcast_ref::<ComputeCluster>() {
-                // A customer-declared capacity group that names an
-                // `instance_type` but has no `profile` needs the backfill
-                // mutation to fill the profile from the instance catalog.
+                // Cloud capacity groups must be materialized from the selected
+                // deployment compute settings before controllers see the
+                // prepared stack.
                 if cluster
                     .capacity_groups
                     .iter()
-                    .any(|g| g.profile.is_none() && g.instance_type.is_some())
+                    .any(|g| group_needs_materialization(g, stack_state.platform, config))
                 {
                     return true;
                 }
@@ -111,7 +111,7 @@ impl StackMutation for ComputeClusterMutation {
         &self,
         stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         let has_cluster = stack
             .resources
@@ -119,63 +119,54 @@ impl StackMutation for ComputeClusterMutation {
             .any(|entry| entry.config.resource_type().as_ref() == "compute-cluster");
 
         let stack = if !has_cluster {
-            self.create_cluster(stack, stack_state).await?
+            self.create_cluster(stack, stack_state, config).await?
         } else {
-            self.add_missing_capacity_groups(stack, stack_state).await?
+            self.add_missing_capacity_groups(stack, stack_state, config).await?
         };
 
-        // Backfill any missing `profile` from `instance_type` on
-        // customer-declared capacity groups. The compile-time
-        // CapacityGroupProfileCheck requires both fields for cloud
-        // platforms; the customer-facing SDK lets you set `instanceType`
-        // alone, so we derive the profile from the instance catalog here.
-        Ok(self.backfill_capacity_group_profiles(stack, stack_state))
+        self.materialize_capacity_groups(stack, stack_state, config)
     }
 }
 
 impl ComputeClusterMutation {
-    /// Backfill `profile` on every ComputeCluster capacity group whose
-    /// `instance_type` is set but whose `profile` is None. Looking up the
-    /// catalog entry by instance type gives us the canonical machine
-    /// profile (CPU, memory, ephemeral storage, GPU) without making the
-    /// customer specify all four. Customer-declared groups that omit
-    /// `instance_type` are left alone — the downstream
-    /// `CapacityGroupProfileCheck` will surface a clear error and the
-    /// auto-generated groups go through `build_capacity_group_for_id`
-    /// which already sets both fields.
-    fn backfill_capacity_group_profiles(
+    fn materialize_capacity_groups(
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-    ) -> Stack {
+        config: &DeploymentConfig,
+    ) -> Result<Stack> {
         if !matches!(
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
-            return stack;
+            for entry in stack.resources.values_mut() {
+                let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                    continue;
+                };
+                for group in cluster.capacity_groups.iter_mut() {
+                    group.instance_type = None;
+                }
+            }
+            return Ok(stack);
         }
+
         for entry in stack.resources.values_mut() {
             let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
                 continue;
             };
             for group in cluster.capacity_groups.iter_mut() {
-                if group.profile.is_some() {
-                    continue;
-                }
-                let Some(instance) = group.instance_type.as_deref() else {
-                    continue;
-                };
-                if let Some(spec) =
-                    alien_core::instance_catalog::find_instance_type(stack_state.platform, instance)
-                {
-                    group.profile = Some(spec.to_machine_profile());
-                }
+                materialize_group(group, stack_state.platform, config)?;
             }
         }
-        stack
+        Ok(stack)
     }
 
-    async fn create_cluster(&self, mut stack: Stack, stack_state: &StackState) -> Result<Stack> {
+    async fn create_cluster(
+        &self,
+        mut stack: Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<Stack> {
         info!("Auto-generating ComputeCluster for containers in stack");
         // If a daemon explicitly references a cluster on a cloud platform, use
         // its name so the .cluster("X") reference resolves. Local daemons ignore
@@ -201,7 +192,7 @@ impl ComputeClusterMutation {
         // whose `nestedVirtualization: true` is set. The preflight does not
         // smuggle the flag in from workloads.
         let capacity_groups =
-            build_categorized_capacity_groups(&containers, stack_state.platform, false)?;
+            build_categorized_capacity_groups(&containers, stack_state.platform, false, config)?;
 
         info!(
             platform = %stack_state.platform,
@@ -288,6 +279,7 @@ impl ComputeClusterMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         if !matches!(
             stack_state.platform,
@@ -358,6 +350,7 @@ impl ComputeClusterMutation {
                 &group_containers,
                 stack_state.platform,
                 false,
+                config,
             )?;
             info!(group_id = %group_id, instance_type = ?group.instance_type, "Adding new capacity group");
             new_groups.push(group);
@@ -430,11 +423,121 @@ fn needed_capacity_group(container: &Container) -> &'static str {
     "general"
 }
 
+fn group_needs_materialization(
+    group: &CapacityGroup,
+    platform: Platform,
+    config: &DeploymentConfig,
+) -> bool {
+    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        return group.instance_type.is_some();
+    }
+
+    let Some(settings) = &config.stack_settings.compute else {
+        return group.instance_type.is_none() || group.profile.is_none();
+    };
+    let Some(selection) = settings.pools.get(&group.group_id) else {
+        return group.instance_type.is_none() || group.profile.is_none();
+    };
+    group.instance_type.as_deref() != selection.machine()
+        || group.min_size != selection.min_size()
+        || group.max_size != selection.max_size()
+        || group.profile.is_none()
+}
+
+fn materialize_group(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    config: &DeploymentConfig,
+) -> Result<()> {
+    let settings = config.stack_settings.compute.as_ref().ok_or_else(|| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!(
+                "Compute selection is required for {} capacity group '{}'",
+                platform, group.group_id
+            ),
+            resource_id: None,
+        })
+    })?;
+    let selection = settings.pools.get(&group.group_id).ok_or_else(|| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!(
+                "Missing compute selection for capacity group '{}'",
+                group.group_id
+            ),
+            resource_id: None,
+        })
+    })?;
+    selection.validate().map_err(|message| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!("Invalid compute selection for '{}': {message}", group.group_id),
+            resource_id: None,
+        })
+    })?;
+    let machine = selection.machine().ok_or_else(|| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!(
+                "Compute selection for '{}' must include a provider machine on {}",
+                group.group_id, platform
+            ),
+            resource_id: None,
+        })
+    })?;
+    let spec = instance_catalog::find_instance_type(platform, machine).ok_or_else(|| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!(
+                "Unknown {} machine '{}' selected for capacity group '{}'",
+                platform, machine, group.group_id
+            ),
+            resource_id: None,
+        })
+    })?;
+    if group.nested_virtualization == Some(true) && !spec.is_nested_virt_capable() {
+        return Err(AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message: format!(
+                "{} machine '{}' does not support nested virtualization for capacity group '{}'",
+                platform, machine, group.group_id
+            ),
+            resource_id: None,
+        }));
+    }
+
+    group.instance_type = Some(machine.to_string());
+    group.profile = Some(spec.to_machine_profile());
+    group.min_size = selection.min_size();
+    group.max_size = selection.max_size();
+    Ok(())
+}
+
+fn default_min_machines(requirements: &WorkloadRequirements) -> u32 {
+    if requirements.total_cpu_at_desired > 0.0 || requirements.total_memory_bytes_at_desired > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn default_max_machines(requirements: &WorkloadRequirements) -> u32 {
+    let min = default_min_machines(requirements);
+    let by_cpu = (requirements.total_cpu_at_max / requirements.max_cpu_per_container.max(1.0))
+        .ceil() as u32;
+    let by_mem = requirements
+        .total_memory_bytes_at_max
+        .div_ceil(requirements.max_memory_per_container.max(1)) as u32;
+    min.max(by_cpu).max(by_mem).max(1)
+}
+
 /// Build capacity groups categorized by hardware type.
 fn build_categorized_capacity_groups(
     containers: &[&Container],
     platform: Platform,
     needs_nested_virt: bool,
+    config: &DeploymentConfig,
 ) -> Result<Vec<CapacityGroup>> {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => {
@@ -455,6 +558,7 @@ fn build_categorized_capacity_groups(
                     &general,
                     platform,
                     needs_nested_virt,
+                    config,
                 )?);
             }
             if !storage.is_empty() {
@@ -463,6 +567,7 @@ fn build_categorized_capacity_groups(
                     &storage,
                     platform,
                     needs_nested_virt,
+                    config,
                 )?);
             }
             if !gpu.is_empty() {
@@ -471,13 +576,14 @@ fn build_categorized_capacity_groups(
                     &gpu,
                     platform,
                     needs_nested_virt,
+                    config,
                 )?);
             }
             Ok(groups)
         }
         Platform::Local => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),
-            instance_type: Some("local".to_string()),
+            instance_type: None,
             profile: Some(MachineProfile {
                 cpu: "4.0".to_string(),
                 memory_bytes: 8 * 1024 * 1024 * 1024,
@@ -490,7 +596,7 @@ fn build_categorized_capacity_groups(
         }]),
         Platform::Kubernetes | Platform::Test => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),
-            instance_type: Some("kubernetes".to_string()),
+            instance_type: None,
             profile: Some(MachineProfile {
                 cpu: "4.0".to_string(),
                 memory_bytes: 8 * 1024 * 1024 * 1024,
@@ -510,6 +616,7 @@ fn build_capacity_group_for_id(
     containers: &[&Container],
     platform: Platform,
     needs_nested_virt: bool,
+    config: &DeploymentConfig,
 ) -> Result<CapacityGroup> {
     let mut requirements = if containers.is_empty() {
         WorkloadRequirements {
@@ -538,22 +645,25 @@ fn build_capacity_group_for_id(
     } else {
         requirements
     };
-    let selection =
-        instance_catalog::select_instance_type(platform, &effective).map_err(|msg| {
-            AlienError::new(crate::error::ErrorData::StackMutationFailed {
-                mutation_name: "ComputeClusterMutation".to_string(),
-                message: format!("Instance type selection failed for '{}': {msg}", group_id),
-                resource_id: None,
-            })
-        })?;
-    Ok(CapacityGroup {
+    let mut group = CapacityGroup {
         group_id: group_id.to_string(),
-        instance_type: Some(selection.instance_type.to_string()),
-        profile: Some(selection.profile),
-        min_size: selection.min_machines,
-        max_size: selection.max_machines,
+        instance_type: None,
+        profile: None,
+        min_size: default_min_machines(&effective),
+        max_size: default_max_machines(&effective),
         nested_virtualization: None,
-    })
+    };
+    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        materialize_group(&mut group, platform, config)?;
+    } else {
+        group.profile = Some(MachineProfile {
+            cpu: format!("{}.0", effective.max_cpu_per_container.max(1.0).ceil() as u32),
+            memory_bytes: effective.max_memory_per_container.max(2 * 1024 * 1024 * 1024),
+            ephemeral_storage_bytes: effective.max_ephemeral_storage_bytes.max(20 * 1024 * 1024 * 1024),
+            gpu: effective.gpu,
+        });
+    }
+    Ok(group)
 }
 
 /// Aggregate resource requirements from all containers into a single WorkloadRequirements.
@@ -662,8 +772,9 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerAutoscaling, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings,
-        NetworkSettings, ResourceSpec, StackSettings,
+        ComputePoolSelection, ComputeSettings, ContainerAutoscaling, ContainerCode,
+        EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, ResourceSpec,
+        StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -689,6 +800,42 @@ mod tests {
                 desired: memory.to_string(),
             })
             .permissions("test".to_string())
+            .build()
+    }
+
+    fn deployment_config_with_compute_pool(
+        machine: &str,
+        min_size: u32,
+        max_size: u32,
+    ) -> DeploymentConfig {
+        deployment_config_with_compute_pools(&[("general", machine, min_size, max_size)])
+    }
+
+    fn deployment_config_with_compute_pools(
+        selections: &[(&str, &str, u32, u32)],
+    ) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(ComputeSettings {
+                    pools: selections
+                        .iter()
+                        .map(|(pool_id, machine, min_size, max_size)| {
+                            (
+                                (*pool_id).to_string(),
+                                ComputePoolSelection::Autoscale {
+                                    min: *min_size,
+                                    max: *max_size,
+                                    machine: Some((*machine).to_string()),
+                                },
+                            )
+                        })
+                        .collect(),
+                }),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
             .build()
     }
 
@@ -728,7 +875,9 @@ mod tests {
             (Platform::Gcp, "n2-standard-4"),
             (Platform::Azure, "Standard_D4s_v5"),
         ] {
-            let group = build_capacity_group_for_id("general", &refs, platform, false).unwrap();
+            let config = deployment_config_with_compute_pool(expected_instance, 2, 4);
+            let group =
+                build_capacity_group_for_id("general", &refs, platform, false, &config).unwrap();
             assert_eq!(group.instance_type.as_deref(), Some(expected_instance));
             assert_eq!(group.min_size, 2);
             assert_eq!(group.max_size, 4);
@@ -797,8 +946,13 @@ mod tests {
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
-                instance_type: None,
-                profile: None,
+                instance_type: Some("m7g.large".to_string()),
+                profile: Some(MachineProfile {
+                    cpu: "2.0".to_string(),
+                    memory_bytes: 8 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    gpu: None,
+                }),
                 min_size: 1,
                 max_size: 10,
                 nested_virtualization: None,
@@ -956,12 +1110,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await;
 
         assert!(result.is_ok());
@@ -1038,12 +1187,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Check that Local platform gets min=1, max=1 with synthetic profile
@@ -1055,7 +1199,7 @@ mod tests {
         let group = &cluster.capacity_groups[0];
         assert_eq!(group.min_size, 1);
         assert_eq!(group.max_size, 1);
-        assert_eq!(group.instance_type.as_deref(), Some("local"));
+        assert_eq!(group.instance_type, None);
         assert!(
             group.profile.is_some(),
             "Local platform should have a synthetic profile"
@@ -1108,12 +1252,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await;
 
         assert!(result.is_ok());
@@ -1189,12 +1328,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Cluster should depend on default-network since it exists
@@ -1248,12 +1382,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("n2-standard-2", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Cluster should NOT depend on default-network since it doesn't exist
@@ -1307,13 +1436,14 @@ mod tests {
                 resource_prefix: "test".to_string(),
             };
 
+            let machine = match platform {
+                Platform::Aws => "m7g.large",
+                Platform::Gcp => "n2-standard-2",
+                Platform::Azure => "Standard_D2s_v5",
+                _ => unreachable!("test only covers cloud platforms"),
+            };
             let mutation = ComputeClusterMutation;
-            let config = DeploymentConfig::builder()
-                .stack_settings(StackSettings::default())
-                .environment_variables(empty_env_snapshot())
-                .allow_frozen_changes(false)
-                .external_bindings(ExternalBindings::default())
-                .build();
+            let config = deployment_config_with_compute_pool(machine, 1, 1);
             let result = mutation
                 .mutate(stack, &stack_state, &config)
                 .await
@@ -1354,8 +1484,13 @@ mod tests {
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
-                instance_type: Some("t3.xlarge".to_string()),
-                profile: None,
+                instance_type: Some("m7g.large".to_string()),
+                profile: Some(MachineProfile {
+                    cpu: "2.0".to_string(),
+                    memory_bytes: 8 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    gpu: None,
+                }),
                 min_size: 1,
                 max_size: 10,
                 nested_virtualization: None,
@@ -1411,12 +1546,10 @@ mod tests {
             resources: Default::default(),
             resource_prefix: "test".to_string(),
         };
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pools(&[
+            ("general", "m7g.large", 1, 10),
+            ("gpu", "p4d.24xlarge", 1, 1),
+        ]);
 
         let mutation = ComputeClusterMutation;
         assert!(
@@ -1533,12 +1666,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.xlarge", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         let cluster_entry = result.resources.get("compute").unwrap();
@@ -1611,12 +1739,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
 
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
         let cluster = result
@@ -1662,7 +1785,12 @@ mod tests {
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m8i.xlarge".to_string()),
-                profile: None,
+                profile: Some(MachineProfile {
+                    cpu: "4.0".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    gpu: None,
+                }),
                 min_size: 1,
                 max_size: 1,
                 nested_virtualization: Some(true),
@@ -1701,12 +1829,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let mutation = ComputeClusterMutation;
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = deployment_config_with_compute_pool("m8i.xlarge", 1, 1);
 
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
         let cluster = result
