@@ -232,8 +232,9 @@ impl LocalPostgresManager {
         Ok(())
     }
 
-    /// Verifies the server is up. Never connects to the database — it checks the
-    /// process status, matching the design's "the manager never speaks SQL" rule.
+    /// Verifies the server is up by checking process status — never connects to the database.
+    /// Same-stack bindings are the only path that talks to the database, so the manager never
+    /// speaks SQL; health is the process being up, not a query round-trip.
     pub async fn check_health(&self, id: &str) -> Result<()> {
         let runtimes = self.runtimes.lock().await;
         let postgres = runtimes.get(id).ok_or_else(|| {

@@ -482,7 +482,6 @@ fn encode_userinfo(value: &str) -> String {
 /// speaks the same wire protocol, so the binding returns connection details and the
 /// application uses its own driver.
 pub trait Postgres: Binding {
-    /// Resolved connection parameters.
     fn connection_params(&self) -> PostgresConnectionParams;
 
     /// `postgres://` connection string, derived from `connection_params` and never stored.

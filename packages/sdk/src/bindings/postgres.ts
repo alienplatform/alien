@@ -102,7 +102,7 @@ type SslMode = "disable" | "prefer" | "require"
 // matching the Rust resolver's `encode_userinfo`. `encodeURIComponent` leaves the sub-delims
 // ! ' ( ) * literal; encode them too so a password containing any of them produces the same
 // connection string on the TS and Rust runtimes (a generated password can include them).
-function encodeUserinfo(value: string): string {
+export function encodeUserinfo(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
     (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"),
@@ -257,9 +257,12 @@ async function readAwsSecret(secretArn: string): Promise<string> {
     )
   }
   if (!password) {
+    // An empty stored secret is a control-plane invariant the workload can't fix, not bad user
+    // input — surface it as a (retryable) resolution failure, like the read-failure path above.
     throw new AlienError(
-      InvalidBindingConfigError.create({
-        message: `Secrets Manager secret '${secretArn}' has no SecretString`,
+      PostgresSecretResolutionError.create({
+        secret: secretArn,
+        reason: "Secrets Manager secret has no SecretString",
       }),
     )
   }
@@ -303,9 +306,12 @@ async function readGcpSecret(secretName: string): Promise<string> {
   // otherwise decode to an empty password and silently pass. Guard on length so an empty payload
   // fails fast like the AWS/Azure paths (`!password` / `!value`).
   if (data == null || data.length === 0) {
+    // An empty stored secret is a control-plane invariant the workload can't fix, not bad user
+    // input — surface it as a (retryable) resolution failure, like the read-failure path above.
     throw new AlienError(
-      InvalidBindingConfigError.create({
-        message: `Secret Manager secret '${secretName}' has no payload`,
+      PostgresSecretResolutionError.create({
+        secret: secretName,
+        reason: "Secret Manager secret has no payload",
       }),
     )
   }
@@ -372,9 +378,12 @@ async function readAzureSecret(secretUri: string): Promise<string> {
     )
   }
   if (!value) {
+    // An empty stored secret is a control-plane invariant the workload can't fix, not bad user
+    // input — surface it as a (retryable) resolution failure, like the read-failure path above.
     throw new AlienError(
-      InvalidBindingConfigError.create({
-        message: `Key Vault secret '${secretName}' has no value`,
+      PostgresSecretResolutionError.create({
+        secret: secretName,
+        reason: "Key Vault secret has no value",
       }),
     )
   }

@@ -9,6 +9,7 @@ use crate::{
 };
 
 use alien_client_config::ClientConfigExt;
+use alien_core::bindings::PostgresBinding;
 use alien_core::{ClientConfig, Platform, StackState, ENV_ALIEN_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -1288,8 +1289,6 @@ impl BindingsProviderApi for BindingsProvider {
         {
             return Ok(cached);
         }
-
-        use alien_core::bindings::PostgresBinding;
 
         let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
             AlienError::new(ErrorData::BindingConfigInvalid {

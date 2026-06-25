@@ -107,8 +107,7 @@ impl LocalPostgresController {
                 })
             })?;
 
-        // Never connect to Postgres for health — same-stack bindings are the only path
-        // that talks to the database; watch the manager's process status instead.
+        // Watch the manager's process status (it checks liveness without speaking SQL).
         manager
             .check_health(&config.id)
             .await
@@ -289,7 +288,7 @@ fn emit_local_postgres_heartbeat(
 }
 
 impl LocalPostgresController {
-    /// Creates a controller in a ready state with mock values for testing purposes.
+    /// A controller pinned to the Ready state with mock values.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(database: &str, port: u16) -> Self {
         Self {

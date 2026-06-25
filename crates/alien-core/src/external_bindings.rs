@@ -161,7 +161,6 @@ impl ExternalBindings {
         }
     }
 
-    /// Gets a Postgres binding for the given resource ID.
     /// Returns an error if the binding exists but is not a Postgres type.
     pub fn get_postgres(&self, id: &str) -> crate::error::Result<Option<&PostgresBinding>> {
         match self.0.get(id) {
