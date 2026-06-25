@@ -230,9 +230,10 @@ impl LocalPostgresController {
         // to the control plane. Unlike cloud variants (which carry a secret-store locator), a Local
         // binding inlines its runtime-generated password because the in-process resolver connects
         // directly. Keep the password in the in-memory binding for that path, but strip it from this
-        // emitted copy so it never reaches synced/persisted state — `LocalBindingsProvider::load_postgres`
-        // reads it from the manager's 0600 metadata, so the synced coordinates don't need it. (An
-        // out-of-process SDK resolver reading that metadata is a follow-up; it doesn't work today.)
+        // emitted copy so it never reaches synced/persisted state. In-process dependents resolve the
+        // password from the manager's 0600 metadata (`LocalBindingsProvider::load_postgres`), and a
+        // linked out-of-process workload gets the full binding via `resolve_binding_params` below — a
+        // separate, never-synced channel — so the synced coordinates here don't need the password.
         match &self.binding {
             None => Ok(None),
             Some(binding) => {
@@ -251,6 +252,48 @@ impl LocalPostgresController {
                 Ok(Some(value))
             }
         }
+    }
+
+    /// Resolve the full binding (including the inline local password) for delivery to a linked
+    /// workload's environment variable. This is the worker-env channel: the result is set on the
+    /// dependent worker's resource config and is never persisted in Alien's synced deployment state,
+    /// so unlike `get_binding_params` (which feeds the synced `remote_binding_params` and must stay
+    /// password-free) it carries the live connection a local out-of-process worker needs to connect.
+    /// Callers reach this through `get_internal_controller`, which deserializes the controller and so
+    /// drops the `#[serde(skip)]` binding to `None` — re-resolve from the manager's 0600 metadata then.
+    async fn resolve_binding_params(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let binding = match &self.binding {
+            Some(binding) => binding.clone(),
+            None => {
+                let manager = ctx
+                    .service_provider
+                    .get_local_postgres_manager()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::LocalServicesNotAvailable {
+                            service_name: "postgres_manager".to_string(),
+                        })
+                    })?;
+                manager
+                    .get_binding(resource_id)
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read binding for local Postgres '{}'",
+                            resource_id
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    })?
+            }
+        };
+        Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
+            ErrorData::ResourceStateSerializationFailed {
+                resource_id: resource_id.to_string(),
+                message: "Failed to serialize Postgres binding parameters".to_string(),
+            },
+        )?))
     }
 }
 
