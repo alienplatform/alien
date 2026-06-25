@@ -1,9 +1,8 @@
 import * as alien from "@alienplatform/core"
 
-// Postgres is Local-only in the OSS e2e suite: only the embedded Local controller ships in this repo
-// (the managed-cloud backends land in a later release), so declaring it on a cloud target would ask
-// the executor to provision a backend with no registered controller. Gate on the target platform the
-// e2e harness exposes to config evaluation.
+// Postgres is Local-only in the OSS e2e suite: only the embedded Local controller ships in this repo,
+// so declaring it on a cloud target would ask the executor to provision a backend with no registered
+// controller. Gate on the target platform the e2e harness exposes to config evaluation.
 const isLocal = process.env.ALIEN_TARGET_PLATFORM === "local"
 
 const storage = new alien.Storage("alien-storage").build()

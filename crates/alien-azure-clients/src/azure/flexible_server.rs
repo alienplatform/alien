@@ -392,7 +392,6 @@ mod tests {
         let server: FlexibleServer = serde_json::from_str(body).unwrap();
         assert_eq!(server.properties.state.as_deref(), Some("Ready"));
         assert_eq!(server.properties.network.public_network_access, "Disabled");
-        // Read-back of the canonical key must populate the required storage field.
         assert_eq!(server.properties.storage.storage_size_gb, 32);
     }
 }

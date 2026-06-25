@@ -99,8 +99,6 @@ fn emit_azure_network_heartbeat(
     });
 }
 
-/// Returns true when the desired stack contains at least one Postgres resource.
-///
 /// A Postgres on Azure is reached through a Private Endpoint that must live in its
 /// own subnet, so its presence is what makes `private_endpoint_subnet_name`
 /// mandatory for a BYO-VNet.
@@ -1930,10 +1928,15 @@ mod tests {
     use super::AzureNetworkController;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
-    use alien_azure_clients::azure::models::virtual_network::{
-        AddressSpace, VirtualNetwork, VirtualNetworkPropertiesFormat,
+    use alien_azure_clients::azure::models::{
+        nat_gateway::NatGateway, network_security_group::NetworkSecurityGroup,
+        public_ip_address::PublicIpAddress,
+        virtual_network::{
+            AddressSpace, Subnet, VirtualNetwork, VirtualNetworkPropertiesFormat,
+        },
     };
     use alien_azure_clients::azure::network::MockNetworkApi;
+    use alien_azure_clients::long_running_operation::OperationResult;
     use alien_core::{Network, NetworkSettings, Platform, Postgres, ResourceStatus, StackSettings};
     use std::sync::Arc;
 
@@ -2086,6 +2089,88 @@ mod tests {
             controller.private_endpoint_subnet_name.as_deref(),
             Some("customer-pe-subnet"),
             "the PE subnet must resolve to the customer-named subnet"
+        );
+    }
+
+    /// The Alien-managed create path walks through the dedicated PE-subnet states
+    /// (`CreatingPrivateEndpointSubnet` / `WaitingForPrivateEndpointSubnet`) on its way
+    /// to Ready, provisioning the PE subnet alongside the rest of the topology. Every
+    /// API call resolves synchronously, so the controller stays on the `Completed` path
+    /// straight through to Ready.
+    #[tokio::test]
+    async fn managed_create_path_provisions_private_endpoint_subnet() {
+        let mut mock_network = MockNetworkApi::new();
+        mock_network
+            .expect_create_or_update_virtual_network()
+            .returning(|_, _, _| Ok(OperationResult::Completed(VirtualNetwork::default())));
+        // public, private, Application Gateway, Private Endpoint, and the NAT association
+        // all PUT a subnet on the managed create path.
+        mock_network
+            .expect_create_or_update_subnet()
+            .times(5)
+            .returning(|_, _, _, _| Ok(OperationResult::Completed(Subnet::default())));
+        // The NAT gateway handler reads the public IP's id, and the NAT-association handler
+        // reads the NAT gateway's id, so both responses must carry one.
+        mock_network
+            .expect_create_or_update_public_ip_address()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(PublicIpAddress {
+                    id: Some("/public-ip/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_nat_gateway()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(NatGateway {
+                    id: Some("/nat-gateway/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_network_security_group()
+            .returning(|_, _, _| Ok(OperationResult::Completed(NetworkSecurityGroup::default())));
+        let mock_network = Arc::new(mock_network);
+
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_network_client()
+            .returning(move |_| Ok(mock_network.clone()));
+
+        let managed_network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: Some("10.46.0.0/16".to_string()),
+                availability_zones: 2,
+            })
+            .build();
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(managed_network)
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(mock_provider))
+            // The managed create path resolves its resource group from the stack state.
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("managed create path should reconcile to Ready");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let controller = executor
+            .internal_state::<AzureNetworkController>()
+            .expect("controller should be an AzureNetworkController");
+        assert!(!controller.is_byo_vnet, "should be in Alien-managed mode");
+        assert_eq!(
+            controller.private_endpoint_subnet_name.as_deref(),
+            Some("test-default-network-pe-subnet"),
+            "the managed create path must provision the dedicated PE subnet"
         );
     }
 }

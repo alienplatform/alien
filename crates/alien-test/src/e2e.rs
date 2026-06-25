@@ -259,8 +259,8 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             bindings.push(Binding::Events);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
-            // Postgres ships only its embedded Local controller in this repo; the managed-cloud
-            // controllers land in a later release, so it is exercised on Local only for now.
+            // Only the embedded Local controller ships in this repo, so Postgres is
+            // exercised on Local only.
             bindings.push(Binding::Postgres);
         }
         _ => {}
