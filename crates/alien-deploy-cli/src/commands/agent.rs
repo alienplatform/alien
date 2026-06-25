@@ -8,6 +8,7 @@ use crate::output;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Args, Subcommand};
 use service_manager::*;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -66,6 +67,10 @@ pub struct InstallArgs {
     /// Encryption key (64-char hex). Generated if not provided.
     #[arg(long)]
     pub encryption_key: Option<String>,
+
+    /// Generic public URLs for exposed resources, keyed by resource ID.
+    #[arg(skip)]
+    pub public_urls: Option<HashMap<String, String>>,
 }
 
 pub async fn agent_command(args: AgentArgs) -> Result<()> {
@@ -153,7 +158,32 @@ fn install(args: InstallArgs) -> Result<()> {
             ),
         })?;
 
-    let service_args = vec![
+    let public_urls_path = std::path::Path::new(&data_dir).join("public-urls.json");
+    if let Some(public_urls) = &args.public_urls {
+        let public_urls_json = serde_json::to_vec(public_urls).into_alien_error().context(
+            ErrorData::AgentServiceError {
+                message: "Failed to serialize public URLs".to_string(),
+            },
+        )?;
+        std::fs::write(&public_urls_path, public_urls_json)
+            .into_alien_error()
+            .context(ErrorData::AgentServiceError {
+                message: format!(
+                    "Failed to write public URLs to {}",
+                    public_urls_path.display()
+                ),
+            })?;
+    } else if let Err(e) = std::fs::remove_file(&public_urls_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            output::warn(&format!(
+                "Could not remove stale public URLs file {}: {}",
+                public_urls_path.display(),
+                e
+            ));
+        }
+    }
+
+    let mut service_args = vec![
         OsString::from("--service"),
         OsString::from("--platform"),
         OsString::from(&args.platform),
@@ -166,6 +196,10 @@ fn install(args: InstallArgs) -> Result<()> {
         OsString::from("--encryption-key-file"),
         OsString::from(&encryption_key_path),
     ];
+    if args.public_urls.is_some() {
+        service_args.push(OsString::from("--public-urls-file"));
+        service_args.push(OsString::from(&public_urls_path));
+    }
     let service_args = if let Some(deployment_id) = &args.deployment_id {
         let mut service_args = service_args;
         service_args.push(OsString::from("--deployment-id"));

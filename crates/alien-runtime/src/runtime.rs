@@ -124,8 +124,18 @@ pub async fn run(
             (wait, control, Some(prov))
         }
         BindingsSource::FromEnvironment => {
-            info!("Creating bindings provider from environment (cloud platform)");
-            let (wait, control, prov) = start_grpc_server(&config.bindings_address, None).await?;
+            info!("Creating lazy bindings provider from environment (cloud platform)");
+            let provider = Arc::new(
+                BindingsProvider::from_env_lazy(std::env::vars().collect()).context(
+                    ErrorData::BindingsOperationFailed {
+                        address: config.bindings_address.clone(),
+                        provider: None,
+                        message: "Failed to create bindings provider".to_string(),
+                    },
+                )?,
+            );
+            let (wait, control, prov) =
+                start_grpc_server(&config.bindings_address, Some(provider)).await?;
             (wait, control, Some(prov))
         }
     };

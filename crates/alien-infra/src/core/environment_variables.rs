@@ -3,12 +3,13 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
     kubernetes_base_platform_runtime_environment_plan,
-    passthrough_transport_runtime_environment_plan, render_runtime_environment_entries,
-    render_runtime_environment_plan, standard_runtime_environment_plan,
-    validate_prepared_runtime_environment_map, worker_runtime_environment_contract, ResourceRef,
-    ResourceStatus, RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer,
-    RuntimeEnvironmentValue, ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
-    ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+    passthrough_transport_runtime_environment_plan, public_url_host,
+    render_runtime_environment_entries, render_runtime_environment_plan,
+    standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
+    worker_runtime_environment_contract, ResourceRef, ResourceStatus,
+    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue,
+    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+    ENV_ALIEN_PUBLIC_HOST, ENV_ALIEN_PUBLIC_URL,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::collections::HashMap;
@@ -143,6 +144,30 @@ impl EnvironmentVariableBuilder {
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
+    }
+
+    pub fn add_current_resource_public_endpoint(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Self {
+        let Some(public_url) = ctx
+            .deployment_config
+            .public_urls
+            .as_ref()
+            .and_then(|urls| urls.get(resource_id))
+        else {
+            return self;
+        };
+
+        self.env_vars
+            .insert(ENV_ALIEN_PUBLIC_URL.to_string(), public_url.clone());
+        if let Some(host) = public_url_host(public_url) {
+            self.env_vars
+                .insert(ENV_ALIEN_PUBLIC_HOST.to_string(), host);
+        }
+
+        self
     }
 
     /// Add the complete scalar runtime environment for a Worker.
@@ -447,5 +472,22 @@ mod tests {
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(bindings.len(), 0);
+    }
+
+    #[test]
+    fn public_url_host_extracts_host_from_common_public_urls() {
+        assert_eq!(
+            public_url_host("https://gateway.dep123.byoc.example.test"),
+            Some("gateway.dep123.byoc.example.test".to_string())
+        );
+        assert_eq!(
+            public_url_host("https://gateway.dep123.byoc.example.test:8443"),
+            Some("gateway.dep123.byoc.example.test".to_string())
+        );
+        assert_eq!(
+            public_url_host("http://[::1]:8080"),
+            Some("[::1]".to_string())
+        );
+        assert_eq!(public_url_host(""), None);
     }
 }

@@ -13,7 +13,9 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ComputeCluster, ToolchainConfig};
+use crate::resources::{
+    validate_endpoint_host_label, ComputeCluster, ExposeProtocol, PublicEndpoint, ToolchainConfig,
+};
 use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use bon::Builder;
@@ -140,17 +142,6 @@ fn default_failure_threshold() -> u32 {
     3
 }
 
-/// Protocol for exposed ports.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "lowercase")]
-pub enum ExposeProtocol {
-    /// HTTP/HTTPS with TLS termination at load balancer
-    Http,
-    /// TCP passthrough without TLS
-    Tcp,
-}
-
 /// Container port configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -161,6 +152,24 @@ pub struct ContainerPort {
     /// Optional exposure protocol (if None, port is internal-only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeProtocol>,
+    /// Optional DNS label override for generated endpoint hostnames.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_label: Option<String>,
+    /// Whether wildcard subdomains route to this public endpoint.
+    #[serde(default)]
+    pub wildcard_subdomains: bool,
+}
+
+impl ContainerPort {
+    /// Returns this port as a public endpoint when it is exposed.
+    pub fn public_endpoint(&self) -> Option<PublicEndpoint> {
+        self.expose.clone().map(|protocol| PublicEndpoint {
+            port: self.port,
+            protocol,
+            host_label: self.host_label.clone(),
+            wildcard_subdomains: self.wildcard_subdomains,
+        })
+    }
 }
 
 /// Container resource for running long-running container workloads.
@@ -309,6 +318,23 @@ impl Container {
             }));
         }
 
+        for port in &self.ports {
+            if port.expose.is_none() {
+                if port.host_label.is_some() || port.wildcard_subdomains {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: "hostLabel and wildcardSubdomains can only be set on exposed ports"
+                            .to_string(),
+                    }));
+                }
+                continue;
+            }
+
+            if let Some(host_label) = &port.host_label {
+                validate_endpoint_host_label(&self.id, host_label)?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -326,7 +352,12 @@ impl<S: container_builder::State> ContainerBuilder<S> {
 
     /// Adds an internal-only port to the container.
     pub fn port(mut self, port: u16) -> Self {
-        self.ports.push(ContainerPort { port, expose: None });
+        self.ports.push(ContainerPort {
+            port,
+            expose: None,
+            host_label: None,
+            wildcard_subdomains: false,
+        });
         self
     }
 
@@ -339,6 +370,25 @@ impl<S: container_builder::State> ContainerBuilder<S> {
             self.ports.push(ContainerPort {
                 port,
                 expose: Some(protocol),
+                host_label: None,
+                wildcard_subdomains: false,
+            });
+        }
+        self
+    }
+
+    /// Exposes a port publicly with endpoint options.
+    pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
+        if let Some(existing) = self.ports.iter_mut().find(|p| p.port == endpoint.port) {
+            existing.expose = Some(endpoint.protocol);
+            existing.host_label = endpoint.host_label;
+            existing.wildcard_subdomains = endpoint.wildcard_subdomains;
+        } else {
+            self.ports.push(ContainerPort {
+                port: endpoint.port,
+                expose: Some(endpoint.protocol),
+                host_label: endpoint.host_label,
+                wildcard_subdomains: endpoint.wildcard_subdomains,
             });
         }
         self
@@ -641,6 +691,63 @@ mod tests {
         assert_eq!(container.ports[0].port, 3000);
         assert!(container.ports[0].expose.is_some());
         assert!(container.health_check.is_some());
+    }
+
+    #[test]
+    fn test_public_container_endpoint_options() {
+        let container = Container::new("router".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "router:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("gateway".to_string()),
+                wildcard_subdomains: true,
+            })
+            .permissions("router".to_string())
+            .build();
+
+        assert!(container.validate_ports().is_ok());
+        assert_eq!(container.ports.len(), 1);
+        assert_eq!(container.ports[0].host_label.as_deref(), Some("gateway"));
+        assert!(container.ports[0].wildcard_subdomains);
+    }
+
+    #[test]
+    fn test_public_container_rejects_invalid_host_label() {
+        let container = Container::new("router".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "router:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("bad.label".to_string()),
+                wildcard_subdomains: true,
+            })
+            .permissions("router".to_string())
+            .build();
+
+        assert!(container.validate_ports().is_err());
     }
 
     #[test]

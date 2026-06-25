@@ -21,6 +21,7 @@ use utoipa::OpenApi;
     ContainerAutoscaling,
     ContainerPort,
     ExposeProtocol,
+    PublicEndpoint,
     PersistentStorage,
     HealthCheck,
     ResourceSpec,

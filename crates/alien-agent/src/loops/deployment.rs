@@ -427,17 +427,10 @@ mod tests {
     use alien_core::{
         DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, StackSettings,
     };
+    use std::collections::HashMap;
 
-    #[tokio::test]
-    async fn enrich_config_uses_agent_name_for_runtime_deployment_name() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
-            .await
-            .unwrap();
-        db.set_deployment_id("dep_local").await.unwrap();
-
-        let config = DeploymentConfig {
+    fn test_deployment_config() -> DeploymentConfig {
+        DeploymentConfig {
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: None,
@@ -456,7 +449,19 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_config_uses_agent_name_for_runtime_deployment_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_local").await.unwrap();
+
+        let config = test_deployment_config();
         let agent_config = AgentConfig::builder()
             .platform(Platform::Local)
             .agent_name("local-runner")
@@ -482,5 +487,32 @@ mod tests {
             .variables
             .iter()
             .any(|var| var.name == ENV_ALIEN_DEPLOYMENT_ID && var.value == "dep_local"));
+    }
+
+    #[tokio::test]
+    async fn enrich_config_applies_agent_public_urls() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+
+        let config = test_deployment_config();
+        let public_urls = HashMap::from([(
+            "gateway".to_string(),
+            "https://gateway.example.test".to_string(),
+        )]);
+        let agent_config = AgentConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_public_urls(Some(public_urls.clone()))
+            .encryption_key(encryption_key)
+            .build();
+
+        let enriched = enrich_config(config, &agent_config, Platform::Local, &db)
+            .await
+            .unwrap();
+
+        assert_eq!(enriched.public_urls, Some(public_urls));
     }
 }

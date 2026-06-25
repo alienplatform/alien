@@ -162,6 +162,92 @@ fn default_availability_zones() -> u8 {
     2
 }
 
+/// Deployment-time compute choices for Alien-managed compute pools.
+///
+/// Application source declares portable pool requirements. This settings
+/// object stores the concrete choices made for one deployment, such as the
+/// provider machine type and selected machine counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeSettings {
+    /// Selected compute choices keyed by pool ID.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pools: HashMap<String, ComputePoolSelection>,
+}
+
+/// User-selected deployment settings for one compute pool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum ComputePoolSelection {
+    /// Fixed number of machines.
+    Fixed {
+        /// Number of machines to run.
+        machines: u32,
+        /// Provider machine type selected for this deployment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+    },
+    /// Autoscaling machine pool.
+    Autoscale {
+        /// Minimum machine count.
+        min: u32,
+        /// Maximum machine count.
+        max: u32,
+        /// Provider machine type selected for this deployment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+    },
+}
+
+impl ComputePoolSelection {
+    /// Selected provider machine type, when this platform needs one.
+    pub fn machine(&self) -> Option<&str> {
+        match self {
+            Self::Fixed { machine, .. } | Self::Autoscale { machine, .. } => machine.as_deref(),
+        }
+    }
+
+    /// Selected minimum machine count.
+    pub fn min_size(&self) -> u32 {
+        match self {
+            Self::Fixed { machines, .. } => *machines,
+            Self::Autoscale { min, .. } => *min,
+        }
+    }
+
+    /// Selected maximum machine count.
+    pub fn max_size(&self) -> u32 {
+        match self {
+            Self::Fixed { machines, .. } => *machines,
+            Self::Autoscale { max, .. } => *max,
+        }
+    }
+
+    /// Whether the selection has internally valid scale bounds.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        match self {
+            Self::Fixed { machines, .. } => {
+                if *machines == 0 {
+                    Err("fixed compute pools must select at least one machine".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Autoscale { min, max, .. } => {
+                if min > max {
+                    Err(format!(
+                        "autoscaling compute pool minimum ({min}) cannot exceed maximum ({max})"
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 /// Deployment model: how updates are delivered to the remote environment.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -529,6 +615,14 @@ pub struct StackSettings {
     /// Kubernetes runtime substrate configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesSettings>,
+
+    /// Deployment-time compute selections for Alien-managed compute pools.
+    ///
+    /// This is where provider machine names such as EC2 instance types, GCE
+    /// machine types, or Azure VM SKUs belong. Application source should
+    /// declare portable requirements instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute: Option<ComputeSettings>,
 
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.

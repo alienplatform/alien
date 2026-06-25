@@ -1,6 +1,9 @@
 mod worker;
 pub use worker::*;
 
+mod public_endpoint;
+pub use public_endpoint::*;
+
 mod daemon;
 pub use daemon::*;
 

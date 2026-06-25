@@ -56,11 +56,9 @@ pub struct DeploymentRecord {
     pub management_config: Option<ManagementConfig>,
     /// Full config supplied by an external control plane.
     ///
-    /// Platform mode builds deployment config from database-backed domain,
-    /// monitoring, Horizon, and token state. The manager must preserve that
-    /// config instead of reconstructing a standalone config from the flattened
-    /// record fields.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// This can include deployment secrets, so records may deserialize it from
+    /// trusted control-plane responses but never serialize it back to clients.
+    #[serde(default, skip_serializing)]
     pub deployment_config: Option<DeploymentConfig>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
@@ -336,18 +334,6 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         release_id: &str,
-    ) -> Result<(), AlienError>;
-
-    /// Set the externally-supplied `deployment_config` JSON blob on a
-    /// deployment. In production the platform API populates this at create
-    /// time; in standalone mode the CLI POSTs it after the dg-token-driven
-    /// create_deployment. The deployment loop later prefers this over its
-    /// hardcoded fallback (see `loops/deployment.rs:495`).
-    async fn set_deployment_config(
-        &self,
-        caller: &crate::auth::Subject,
-        deployment_id: &str,
-        config: alien_core::DeploymentConfig,
     ) -> Result<(), AlienError>;
 
     /// Set desired_release_id on eligible deployments when a new release is created.

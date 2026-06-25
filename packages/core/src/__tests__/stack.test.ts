@@ -26,6 +26,61 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("builds container and daemon wildcard public endpoint options", () => {
+    const container = new alien.Container("router")
+      .code({ type: "image", image: "nginx:latest" })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution")
+      .exposePort(8080, {
+        protocol: "http",
+        hostLabel: "edge",
+        wildcardSubdomains: true,
+      })
+      .build()
+
+    expect(container.config.ports).toEqual([
+      {
+        port: 8080,
+        expose: "http",
+        hostLabel: "edge",
+        wildcardSubdomains: true,
+      },
+    ])
+
+    const daemon = new alien.Daemon("gateway")
+      .code({ type: "image", image: "registry.example.com/gateway:latest" })
+      .cluster("compute")
+      .permissions("execution")
+      .exposePort(8080, {
+        protocol: "http",
+        hostLabel: "public",
+        wildcardSubdomains: true,
+      })
+      .healthCheck({
+        path: "/health",
+        method: "GET",
+        timeoutSeconds: 1,
+        failureThreshold: 3,
+      })
+      .build()
+
+    expect(daemon.config.ports).toEqual([
+      {
+        port: 8080,
+        protocol: "http",
+        hostLabel: "public",
+        wildcardSubdomains: true,
+      },
+    ])
+    expect(daemon.config.healthCheck).toEqual({
+      path: "/health",
+      method: "GET",
+      timeoutSeconds: 1,
+      failureThreshold: 3,
+    })
+  })
+
   it("builds and validates a complex stack with permissions", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()

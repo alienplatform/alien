@@ -1926,6 +1926,8 @@ mod tests {
             &[ContainerPort {
                 port: 8080,
                 expose: Some(ExposeProtocol::Http),
+                host_label: None,
+                wildcard_subdomains: false,
             }],
             None,
         )

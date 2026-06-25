@@ -97,6 +97,8 @@ export type { ComputeCapacityRecommendation } from "./zod/compute-capacity-recom
 export type { ComputeClusterHeartbeatData } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./zod/compute-cluster-schema.js";
+export type { ComputePoolSelection } from "./zod/compute-pool-selection-schema.js";
+export type { ComputeSettings } from "./zod/compute-settings-schema.js";
 export type { ComputeType } from "./zod/compute-type-schema.js";
 export type { ContainerAutoscaling } from "./zod/container-autoscaling-schema.js";
 export type { ContainerCode } from "./zod/container-code-schema.js";
@@ -249,6 +251,7 @@ export type { PresignedRequestBackend } from "./zod/presigned-request-backend-sc
 export type { PresignedRequest } from "./zod/presigned-request-schema.js";
 export type { ProviderFleetStatus } from "./zod/provider-fleet-status-schema.js";
 export type { ProviderLifecycleState } from "./zod/provider-lifecycle-state-schema.js";
+export type { PublicEndpoint } from "./zod/public-endpoint-schema.js";
 export type { PushProgress } from "./zod/push-progress-schema.js";
 export type { QueueHeartbeatData } from "./zod/queue-heartbeat-data-schema.js";
 export type { QueueHeartbeatStatus } from "./zod/queue-heartbeat-status-schema.js";
@@ -413,6 +416,8 @@ export { ComputeCapacityRecommendationSchema } from "./zod/compute-capacity-reco
 export { ComputeClusterHeartbeatDataSchema } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./zod/compute-cluster-schema.js";
+export { ComputePoolSelectionSchema } from "./zod/compute-pool-selection-schema.js";
+export { ComputeSettingsSchema } from "./zod/compute-settings-schema.js";
 export { ComputeTypeSchema } from "./zod/compute-type-schema.js";
 export { ContainerAutoscalingSchema } from "./zod/container-autoscaling-schema.js";
 export { ContainerCodeSchema } from "./zod/container-code-schema.js";
@@ -565,6 +570,7 @@ export { PresignedRequestBackendSchema } from "./zod/presigned-request-backend-s
 export { PresignedRequestSchema } from "./zod/presigned-request-schema.js";
 export { ProviderFleetStatusSchema } from "./zod/provider-fleet-status-schema.js";
 export { ProviderLifecycleStateSchema } from "./zod/provider-lifecycle-state-schema.js";
+export { PublicEndpointSchema } from "./zod/public-endpoint-schema.js";
 export { PushProgressSchema } from "./zod/push-progress-schema.js";
 export { QueueHeartbeatDataSchema } from "./zod/queue-heartbeat-data-schema.js";
 export { QueueHeartbeatStatusSchema } from "./zod/queue-heartbeat-status-schema.js";

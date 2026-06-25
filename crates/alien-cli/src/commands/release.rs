@@ -807,7 +807,8 @@ fn auto_build_settings_for_platform(
     // Resolve targets in priority order:
     //   1. The caller (release_task) passed an effective_targets list (either
     //      --targets verbatim or a stack-aware default like x86_64-for-nested-virt).
-    //   2. Local has always wanted the current host's OS.
+    //   2. Local releases target Linux install hosts. Same-host development
+    //      builds can still use `alien build --platform local` defaults.
     //   3. Otherwise pass None and let alien-build apply its platform default.
     let targets = if let Some(targets) = effective_targets {
         Some(
@@ -817,7 +818,7 @@ fn auto_build_settings_for_platform(
                 .collect::<Result<Vec<_>>>()?,
         )
     } else if matches!(platform, Platform::Local) {
-        Some(vec![alien_core::BinaryTarget::current_os()])
+        Some(alien_core::BinaryTarget::LINUX.to_vec())
     } else {
         None
     };
@@ -1718,6 +1719,24 @@ mod tests {
                 .map(|plan| plan.platform.as_str())
                 .collect::<Vec<_>>(),
             vec!["gcp", "azure"]
+        );
+    }
+
+    #[test]
+    fn local_release_auto_build_defaults_to_linux_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = auto_build_settings_for_platform(
+            "local",
+            &temp.path().join(".alien"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.targets,
+            Some(alien_core::BinaryTarget::LINUX.to_vec())
         );
     }
 

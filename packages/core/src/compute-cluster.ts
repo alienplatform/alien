@@ -1,7 +1,7 @@
 import {
-  type CapacityGroup,
   type ComputeCluster as ComputeClusterConfig,
   ComputeClusterSchema,
+  type MachineProfile,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
@@ -18,14 +18,42 @@ export {
 } from "./generated/index.js"
 
 /**
- * Capacity-group configuration accepted by `ComputeCluster.capacityGroup()`.
- *
- * `groupId` is supplied as the first arg to `.capacityGroup()`, so this type
- * is the rest of the field set with optional `minSize`/`maxSize` defaults.
+ * Hardware requirements for a compute pool.
  */
-export type CapacityGroupInput = Omit<CapacityGroup, "groupId"> & {
-  minSize?: number
-  maxSize?: number
+export type ComputePoolRequirements = {
+  cpu: number | string
+  memory: string
+  ephemeralStorage?: string
+  architecture?: "arm64" | "x86_64"
+  nestedVirtualization?: boolean
+  accelerators?: Array<{
+    type: string
+    count: number
+  }>
+}
+
+export type ComputeChoiceRange =
+  | number
+  | {
+      min: number
+      max: number
+      default: number
+    }
+
+export type ComputePoolScale =
+  | {
+      type: "fixed"
+      machines: ComputeChoiceRange
+    }
+  | {
+      type: "autoscale"
+      min: ComputeChoiceRange
+      max: ComputeChoiceRange
+    }
+
+export type ComputePoolInput = {
+  requirements: ComputePoolRequirements
+  scale: ComputePoolScale
 }
 
 /**
@@ -36,11 +64,8 @@ export type CapacityGroupInput = Omit<CapacityGroup, "groupId"> & {
  * the cluster has more than one capacity group) a specific group via
  * `daemon.pool(...)`.
  *
- * When omitted from the stack, the preflight auto-generates a ComputeCluster
- * with a single "general" capacity group sized for the workloads in scope.
- * Declare one explicitly when you need hardware constraints — nested
- * virtualization, GPUs, specific instance families — or to pin sizes for
- * cost control.
+ * Application source declares portable pool requirements. Provider machine
+ * names are selected later through deployment settings.
  */
 export class ComputeCluster {
   private _config: Partial<ComputeClusterConfig> = {
@@ -59,20 +84,14 @@ export class ComputeCluster {
     return "compute-cluster"
   }
 
-  /**
-   * Adds a capacity group to the cluster.
-   *
-   * @param groupId Unique identifier for the group within the cluster.
-   * @param config Group-level config: instance type, profile, sizing, and
-   *   the `nestedVirtualization` flag.
-   */
-  public capacityGroup(groupId: string, config: CapacityGroupInput): this {
-    const { minSize = 1, maxSize = 1, ...rest } = config
+  public pool(groupId: string, config: ComputePoolInput): this {
+    const { minSize, maxSize } = selectedScaleBounds(config.scale)
     this._config.capacityGroups!.push({
       groupId,
+      profile: machineProfileFromRequirements(config.requirements),
       minSize,
       maxSize,
-      ...rest,
+      nestedVirtualization: config.requirements.nestedVirtualization,
     })
     return this
   }
@@ -97,4 +116,68 @@ export class ComputeCluster {
       ...config,
     })
   }
+}
+
+function selectedScaleBounds(scale: ComputePoolScale): { minSize: number; maxSize: number } {
+  if (scale.type === "fixed") {
+    const machines = defaultChoice(scale.machines)
+    return { minSize: machines, maxSize: machines }
+  }
+
+  return {
+    minSize: defaultChoice(scale.min),
+    maxSize: defaultChoice(scale.max),
+  }
+}
+
+function defaultChoice(choice: ComputeChoiceRange): number {
+  if (typeof choice === "number") {
+    return choice
+  }
+
+  return choice.default
+}
+
+function machineProfileFromRequirements(requirements: ComputePoolRequirements): MachineProfile {
+  return {
+    cpu: typeof requirements.cpu === "number" ? `${requirements.cpu}` : requirements.cpu,
+    memoryBytes: parseQuantityBytes(requirements.memory),
+    ephemeralStorageBytes: parseQuantityBytes(requirements.ephemeralStorage ?? "20Gi"),
+    gpu: requirements.accelerators?.[0]
+      ? {
+          type: requirements.accelerators[0].type,
+          count: requirements.accelerators[0].count,
+        }
+      : undefined,
+  }
+}
+
+function parseQuantityBytes(value: string): number {
+  const match = value.match(/^([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti|k|M|G|T)?$/)
+  if (!match) {
+    throw new Error(`Invalid memory/storage quantity: ${value}`)
+  }
+
+  const amount = Number(match[1])
+  const suffix = match[2]
+  const multiplier =
+    suffix === "Ti"
+      ? 1024 ** 4
+      : suffix === "Gi"
+        ? 1024 ** 3
+        : suffix === "Mi"
+          ? 1024 ** 2
+          : suffix === "Ki"
+            ? 1024
+            : suffix === "T"
+              ? 1000 ** 4
+              : suffix === "G"
+                ? 1000 ** 3
+                : suffix === "M"
+                  ? 1000 ** 2
+                  : suffix === "k"
+                    ? 1000
+                    : 1
+
+  return Math.round(amount * multiplier)
 }
