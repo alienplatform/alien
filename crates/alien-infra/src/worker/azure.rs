@@ -339,6 +339,12 @@ pub struct AzureWorkerController {
     /// Public URL (if `Ingress::Public`).
     pub(crate) url: Option<String>,
 
+    /// The Container App's own ingress host (`*.azurecontainerapps.io`). `url` may be overridden to
+    /// the public display FQDN (from `public_urls`), but DNS records must target THIS host:
+    /// targeting the public FQDN makes the CNAME self-referential (target == record name) and the
+    /// DNS provider rejects it as a loop. See `build_outputs`.
+    pub(crate) container_app_url: Option<String>,
+
     /// URL returned by Azure ARM for *current* long‑running operation.
     pub(crate) pending_operation_url: Option<String>,
     /// Retry‑after seconds for the current LRO (populated when Azure returns it).
@@ -1983,6 +1989,10 @@ impl AzureWorkerController {
             }
         }
 
+        // Imported workers skip the create flow, so the heartbeat is where they pick up the ingress
+        // host (the DNS CNAME target — see `container_app_url`).
+        self.container_app_url = self.extract_url_from_container_app(&container_app);
+
         // Check for certificate renewal on auto-managed public domains.
         if func_cfg.ingress == Ingress::Public && !self.uses_custom_domain {
             let metadata = ctx
@@ -2324,6 +2334,8 @@ impl AzureWorkerController {
                     info!(name=%container_app_name, "Update provisioning succeeded – updating Dapr components");
 
                     let container_app_url = self.extract_url_from_container_app(&app);
+                    // Capture the ingress host (DNS CNAME target) before `url` is overridden below.
+                    self.container_app_url = container_app_url.clone();
 
                     // Check for URL override in deployment config, otherwise use Container App URL
                     self.url = ctx
@@ -3212,13 +3224,15 @@ impl AzureWorkerController {
     // Implementation of get_outputs trait method
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.resource_id.as_ref().map(|id| {
-            let load_balancer_endpoint =
-                self.url
-                    .as_ref()
-                    .map(|url| alien_core::LoadBalancerEndpoint {
-                        dns_name: dns_name_from_url(url),
-                        hosted_zone_id: None,
-                    });
+            // CNAME target = the ingress host; fall back to `url` when `container_app_url` is unset.
+            let load_balancer_endpoint = self
+                .container_app_url
+                .as_ref()
+                .or(self.url.as_ref())
+                .map(|host| alien_core::LoadBalancerEndpoint {
+                    dns_name: dns_name_from_url(host),
+                    hosted_zone_id: None,
+                });
 
             ResourceOutputs::new(WorkerOutputs {
                 worker_name: self
@@ -3688,6 +3702,7 @@ impl AzureWorkerController {
         self.container_app_name = None;
         self.resource_id = None;
         self.url = None;
+        self.container_app_url = None;
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
         self.dapr_components.clear();
@@ -3702,6 +3717,9 @@ impl AzureWorkerController {
         self.resource_id = app.id.clone();
 
         let container_app_url = self.extract_url_from_container_app(app);
+
+        // Capture the ingress host (DNS CNAME target) before `url` is overridden below.
+        self.container_app_url = container_app_url.clone();
 
         // Check for URL override in deployment config, otherwise use Container App URL
         if let Ok(config) = ctx.desired_resource_config::<Worker>() {
@@ -4519,6 +4537,7 @@ impl AzureWorkerController {
                 function_name
             )),
             url: Some(format!("https://{}.azurecontainerapps.io", function_name)),
+            container_app_url: None,
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
@@ -4613,6 +4632,84 @@ mod tests {
                 .map(|endpoint| endpoint.dns_name.as_str()),
             Some("test-worker.azurecontainerapps.io")
         );
+    }
+
+    #[test]
+    fn dns_target_is_ingress_host_when_url_is_overridden_to_public_fqdn() {
+        // Regression: when `url` is overridden to the public display FQDN (from `public_urls`), the
+        // CNAME target must still be the Container App ingress host. Otherwise the record name (the
+        // public FQDN) and the target collide into a self-referential CNAME, which the DNS provider
+        // rejects — the bug that deadlocked the Azure worker in `waitingForDns`.
+        let mut controller = AzureWorkerController::mock_ready("test-worker");
+        controller.url = Some("https://test-worker.abc123.dev.vpc.direct".to_string());
+        controller.container_app_url =
+            Some("https://test-worker.kindsky.eastus2.azurecontainerapps.io".to_string());
+
+        let outputs = controller.build_outputs().unwrap();
+        let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+
+        // Display URL stays the public FQDN.
+        assert_eq!(
+            worker_outputs.url.as_deref(),
+            Some("https://test-worker.abc123.dev.vpc.direct")
+        );
+        // The CNAME target is the ingress host — and crucially NOT the record's own public FQDN.
+        let dns_name = worker_outputs
+            .load_balancer_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.dns_name.as_str());
+        assert_eq!(
+            dns_name,
+            Some("test-worker.kindsky.eastus2.azurecontainerapps.io")
+        );
+        assert_ne!(dns_name, Some("test-worker.abc123.dev.vpc.direct"));
+    }
+
+    #[tokio::test]
+    async fn imported_worker_heartbeat_rebuilds_ingress_host_for_dns() {
+        // Regression for the create-path-only gap: an imported worker starts Ready with
+        // `container_app_url = None` and `url` = the public display FQDN (the importer skips the
+        // create flow). The heartbeat must rebuild `container_app_url` from the live Container App,
+        // so the DNS CNAME targets the ingress host rather than the self-referential public FQDN.
+        let app_name = "test-imported-worker";
+        let mut mock = MockContainerAppsApi::new();
+        mock.expect_get_container_app()
+            .returning(move |_, _| Ok(create_successful_container_app_response(app_name, true)))
+            .times(0..);
+        let mock_provider = setup_mock_service_provider(Arc::new(mock), None);
+
+        // Imported shape: ingress host unset, url is the public display FQDN.
+        let mut controller = AzureWorkerController::mock_ready(app_name);
+        controller.container_app_url = None;
+        controller.url = Some("https://test-imported-worker.abc123.dev.vpc.direct".to_string());
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
+
+        // The heartbeat rebuilt the ingress host…
+        assert_eq!(
+            controller.container_app_url.as_deref(),
+            Some("https://test-imported-worker.azurecontainerapps.io")
+        );
+        // …so build_outputs targets it, NOT the public display FQDN.
+        let outputs = controller.build_outputs().unwrap();
+        let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        let dns_name = worker_outputs
+            .load_balancer_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.dns_name.as_str());
+        assert_eq!(dns_name, Some("test-imported-worker.azurecontainerapps.io"));
+        assert_ne!(dns_name, Some("test-imported-worker.abc123.dev.vpc.direct"));
     }
 
     #[test]
@@ -5752,6 +5849,7 @@ mod tests {
             container_app_name: None, // This is the key - no container app name set
             resource_id: None,
             url: None,
+            container_app_url: None,
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
