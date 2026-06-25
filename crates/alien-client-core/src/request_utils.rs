@@ -28,9 +28,12 @@ const HTTP_REQUEST_TEXT_CONTEXT_KEY: &str = "http_request_text";
 /// responses — so the body could leak.
 ///
 /// This scrubs both representations across the head and full `source` chain, keeping status, response
-/// text, URL, and chain intact. Order-independent: works whether the HTTP error is still the head
-/// (AWS: redaction before mapping) or already wrapped into the source (GCP/Azure: transport maps
-/// first). Apply to the raw transport result of any request whose body contains a secret.
+/// text, URL, and chain intact. Response text is kept deliberately: RDS / Cloud SQL / Flexible Server
+/// error bodies don't echo the submitted password back, so it stays as a diagnostic — a future caller
+/// wiring this to an API that *does* reflect request fields in its error responses would need to scrub
+/// that too. Order-independent: works whether the HTTP error is still the head (AWS: redaction before
+/// mapping) or already wrapped into the source (GCP/Azure: transport maps first). Apply to the raw
+/// transport result of any request whose body contains a secret.
 pub fn redact_request_body<T>(result: Result<T>) -> Result<T> {
     result.map_err(|mut e| {
         // Head: drop the body from the typed payload when the head itself is the HTTP error...

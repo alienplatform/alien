@@ -171,6 +171,45 @@ fn test_azure_empty_grant_error() {
 }
 
 #[test]
+fn test_azure_empty_list_yields_empty_plan() {
+    // postgres/data-access ships an empty `azure` list by design; the runtime generator must contribute
+    // an empty plan, not fail-fast — otherwise an Azure deployment linking Postgres errors even
+    // though the Terraform emitter skips it.
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let mut permission_set = create_azure_storage_data_read_permission_set();
+    permission_set.id = "postgres/data-access".to_string();
+    permission_set.platforms.azure = Some(Vec::new());
+    let context = create_test_context();
+
+    let result = generator
+        .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+        .expect("empty azure list should yield an empty plan, not an error");
+
+    assert!(result.custom_roles.is_empty());
+    assert!(result.bindings.is_empty());
+}
+
+#[test]
+fn test_azure_role_definition_rejects_empty_azure_list() {
+    // Parity with generate_grant_plan: an empty `azure` list has no role to emit here, so the
+    // single-role path must fail with a specific "grants nothing" error, not the generic "no
+    // residual actions".
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let mut permission_set = create_azure_storage_data_read_permission_set();
+    permission_set.id = "postgres/data-access".to_string();
+    permission_set.platforms.azure = Some(Vec::new());
+    let context = create_test_context();
+
+    let result = generator.generate_role_definition(&permission_set, BindingTarget::Stack, &context);
+
+    let err = result.expect_err("an empty azure list has no custom role to generate");
+    assert!(
+        err.to_string().contains("grants nothing"),
+        "error should explain the empty-azure case: {err}"
+    );
+}
+
+#[test]
 fn test_azure_unknown_predefined_role_error() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let mut permission_set = create_azure_storage_data_read_permission_set();

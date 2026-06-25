@@ -1,0 +1,75 @@
+{
+  "id": "postgres/management",
+  "description": "Allows describing and reconfiguring Postgres databases",
+  "platforms": {
+    "aws": [
+      {
+        "label": "describe-and-modify-aurora",
+        "description": "Read cluster/instance state and apply configuration changes.",
+        "grant": {
+          "actions": [
+            "rds:DescribeDBClusters",
+            "rds:DescribeDBInstances",
+            "rds:DescribeDBSubnetGroups",
+            "rds:ModifyDBCluster",
+            "rds:ModifyDBInstance",
+            "rds:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "describe-and-modify-cloud-sql",
+        "description": "Read instance state and apply configuration changes.",
+        "grant": {
+          "permissions": [
+            "cloudsql.instances.get",
+            "cloudsql.instances.list",
+            "cloudsql.instances.update"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "describe-and-modify-flexible-server",
+        "description": "Read server state and apply configuration changes.",
+        "grant": {
+          "actions": [
+            "Microsoft.DBforPostgreSQL/flexibleServers/read",
+            "Microsoft.DBforPostgreSQL/flexibleServers/write",
+            "Microsoft.DBforPostgreSQL/flexibleServers/configurations/read",
+            "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

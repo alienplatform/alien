@@ -9,22 +9,24 @@ pub mod kubernetes_cluster;
 
 pub use aws::{
     AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
-    AwsKvImportData, AwsNetworkImportData, AwsQueueImportData, AwsRemoteStackManagementImportData,
-    AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData, AwsWorkerImportData,
+    AwsKvImportData, AwsNetworkImportData, AwsPostgresImportData, AwsQueueImportData,
+    AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
+    AwsVaultImportData, AwsWorkerImportData,
 };
 pub use azure::{
     AzureArtifactRegistryImportData, AzureBuildImportData, AzureComputeClusterImportData,
-    AzureContainerAppsEnvironmentImportData, AzureKvImportData, AzureNetworkImportData,
-    AzureQueueImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+    AzureContainerAppsEnvironmentImportData, AzureFlexibleServerPostgresImportData,
+    AzureKvImportData, AzureNetworkImportData, AzureQueueImportData,
+    AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
     AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
     GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
-    GcpKvImportData, GcpNetworkImportData, GcpQueueImportData, GcpRemoteStackManagementImportData,
-    GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
-    GcpVaultImportData, GcpWorkerImportData,
+    GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
+    GcpRemoteStackManagementImportData, GcpServiceAccountImportData, GcpServiceActivationImportData,
+    GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,
@@ -71,6 +73,7 @@ mod schema_snapshots {
             ("aws_function", schema::<AwsWorkerImportData>()),
             ("aws_kv", schema::<AwsKvImportData>()),
             ("aws_network", schema::<AwsNetworkImportData>()),
+            ("aws_postgres", schema::<AwsPostgresImportData>()),
             ("aws_queue", schema::<AwsQueueImportData>()),
             (
                 "aws_remote_stack_management",
@@ -98,6 +101,10 @@ mod schema_snapshots {
             ("azure_function", schema::<AzureWorkerImportData>()),
             ("azure_kv", schema::<AzureKvImportData>()),
             ("azure_network", schema::<AzureNetworkImportData>()),
+            (
+                "azure_postgres",
+                schema::<AzureFlexibleServerPostgresImportData>(),
+            ),
             ("azure_queue", schema::<AzureQueueImportData>()),
             (
                 "azure_remote_stack_management",
@@ -137,6 +144,7 @@ mod schema_snapshots {
             ("gcp_function", schema::<GcpWorkerImportData>()),
             ("gcp_kv", schema::<GcpKvImportData>()),
             ("gcp_network", schema::<GcpNetworkImportData>()),
+            ("gcp_postgres", schema::<GcpPostgresImportData>()),
             ("gcp_queue", schema::<GcpQueueImportData>()),
             (
                 "gcp_remote_stack_management",
