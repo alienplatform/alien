@@ -88,6 +88,16 @@ export class ComputeCluster {
   }
 
   /**
+   * Selects the base OS for the cluster's machine image. Defaults to Flatcar
+   * (the standard immutable host) when not set. Pass `"ubuntu"` to boot the
+   * Ubuntu-based machine-image variant.
+   */
+  public os(os: NonNullable<ComputeClusterConfig["os"]>): this {
+    this._config.os = os
+    return this
+  }
+
+  /**
    * Builds and validates the cluster configuration.
    */
   public build(): Resource {

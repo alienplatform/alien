@@ -1800,7 +1800,7 @@ mod tests {
             "/v2/repo/blobs/uploads/3403bc14-cbcd-3760-a4b1-c678a3c6ea61"
         ));
         assert!(is_oci_upload_session_path(
-            "v2/alien-artifacts/bear-agent-loader/blobs/uploads/abc-123"
+            "v2/alien-artifacts/example-loader/blobs/uploads/abc-123"
         ));
 
         // Other OCI paths.

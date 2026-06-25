@@ -1,0 +1,6 @@
+{
+  "type": "string",
+  "description": "Base operating system for a ComputeCluster's Horizon machine image.\n\nSelects which baked Horizon machine-image variant the cluster's nodes boot.\nWhen unset on the cluster it defaults to [`ComputeOs::Flatcar`], the\nstandard immutable host image. [`ComputeOs::Ubuntu`] selects a mutable,\npackage-manager-friendly host variant — useful for workloads that install\nsoftware on the node at runtime.",
+  "enum": ["flatcar", "ubuntu"],
+  "x-readme-ref-name": "ComputeOs"
+}

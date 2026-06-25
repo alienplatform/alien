@@ -33,7 +33,7 @@ export const CapacityGroupSchema = z
     nestedVirtualization: z
       .boolean()
       .describe(
-        "Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs — needed by workloads that boot VMs inside containers\n(e.g. bear-agent's QEMU sandboxes).\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist."
+        "Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs — needed by workloads that boot VMs inside containers\n(e.g. QEMU/KVM microVM sandboxes).\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist."
       )
       .nullish(),
     get profile() {

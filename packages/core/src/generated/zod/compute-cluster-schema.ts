@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { CapacityGroupSchema } from "./capacity-group-schema.js";
+import { ComputeOsSchema } from "./compute-os-schema.js";
 
 /**
  * @description ComputeCluster resource for running long-running container workloads.\n\nA ComputeCluster provides the setup-owned machine boundary for containers.\nAlien may manage the worker fleet inside that boundary when setup grants\n`compute-cluster/management`.\n\n## Architecture\n\n- **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups\n- **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout\n- **horizond** runs on each machine from the selected Horizon machine image channel\n\n## Example\n\n```rust\nuse alien_core::{ComputeCluster, CapacityGroup};\n\nlet cluster = ComputeCluster::new(\"compute\".to_string())\n    .capacity_group(CapacityGroup {\n        group_id: \"general\".to_string(),\n        instance_type: Some(\"m7g.xlarge\".to_string()),\n        profile: None,\n        min_size: 1,\n        max_size: 5,\n    })\n    .build();\n```
@@ -33,6 +34,9 @@ export const ComputeClusterSchema = z
       .describe(
         "Unique identifier for the container cluster.\nMust contain only alphanumeric characters, hyphens, and underscores."
       ),
+    get os() {
+      return z.union([ComputeOsSchema, z.null()]).optional();
+    },
   })
   .describe(
     'ComputeCluster resource for running long-running container workloads.\n\nA ComputeCluster provides the setup-owned machine boundary for containers.\nAlien may manage the worker fleet inside that boundary when setup grants\n`compute-cluster/management`.\n\n## Architecture\n\n- **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups\n- **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout\n- **horizond** runs on each machine from the selected Horizon machine image channel\n\n## Example\n\n```rust\nuse alien_core::{ComputeCluster, CapacityGroup};\n\nlet cluster = ComputeCluster::new("compute".to_string())\n    .capacity_group(CapacityGroup {\n        group_id: "general".to_string(),\n        instance_type: Some("m7g.xlarge".to_string()),\n        profile: None,\n        min_size: 1,\n        max_size: 5,\n    })\n    .build();\n```'

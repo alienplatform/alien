@@ -73,11 +73,28 @@ pub struct CapacityGroup {
     pub max_size: u32,
     /// Require instance types that expose nested virtualization (VT-x/EPT)
     /// to guest VMs — needed by workloads that boot VMs inside containers
-    /// (e.g. bear-agent's QEMU sandboxes).
+    /// (e.g. QEMU/KVM microVM sandboxes).
     /// When true, the controller's instance-type selector is constrained
     /// to a vetted nested-virt-capable allowlist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nested_virtualization: Option<bool>,
+}
+
+/// Base operating system for a ComputeCluster's Horizon machine image.
+///
+/// Selects which baked Horizon machine-image variant the cluster's nodes boot.
+/// When unset on the cluster it defaults to [`ComputeOs::Flatcar`], the
+/// standard immutable host image. [`ComputeOs::Ubuntu`] selects a mutable,
+/// package-manager-friendly host variant — useful for workloads that install
+/// software on the node at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ComputeOs {
+    /// Flatcar Container Linux — the default, immutable host image.
+    Flatcar,
+    /// Ubuntu — a mutable host image variant.
+    Ubuntu,
 }
 
 /// ComputeCluster resource for running long-running container workloads.
@@ -127,6 +144,12 @@ pub struct ComputeCluster {
     /// Each machine gets a /24 subnet from this range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_cidr: Option<String>,
+
+    /// Base OS for the Horizon machine image this cluster's nodes boot.
+    /// Defaults to Flatcar (the standard immutable host) when unset. Setting
+    /// `Ubuntu` selects the Ubuntu-based machine-image variant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<ComputeOs>,
 }
 
 impl ComputeCluster {
@@ -302,6 +325,28 @@ impl ResourceDefinition for ComputeCluster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_cluster_os_serde_round_trip() {
+        // Explicit Ubuntu opt-in.
+        let c: ComputeCluster =
+            serde_json::from_str(r#"{"id":"c","capacityGroups":[],"os":"ubuntu"}"#)
+                .expect("deserialize os=ubuntu");
+        assert_eq!(c.os, Some(ComputeOs::Ubuntu));
+
+        // No `os` -> None (backward compatible with existing stored configs).
+        let c2: ComputeCluster = serde_json::from_str(r#"{"id":"c","capacityGroups":[]}"#)
+            .expect("deserialize without os");
+        assert_eq!(c2.os, None);
+
+        // Serialization emits lowercase "ubuntu" under key "os"; None is omitted.
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains(r#""os":"ubuntu""#), "got {json}");
+        assert!(!serde_json::to_string(&c2).unwrap().contains("\"os\""));
+
+        // Round-trips.
+        assert_eq!(c, serde_json::from_str(&json).unwrap());
+    }
 
     #[test]
     fn test_compute_cluster_creation() {

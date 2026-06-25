@@ -42,13 +42,6 @@ export const DaemonSchema = z.object({
       "Resource specification with min/desired values."
     ).optional();
   },
-  nestedVirtualization: z.optional(
-    z
-      .boolean()
-      .describe(
-        "When true, the auto-generated ComputeCluster for this daemon is\nconstrained to instance types that expose nested virtualization\n(VT-x/EPT) to guest VMs. Required by workloads that boot QEMU/KVM\ninside the container (e.g. bear-agent's sandboxes).\nDefaults to false; ignored on platforms whose backends don't pick\ninstance types (Kubernetes, Local)."
-      )
-  ),
   permissions: z.string(),
   pool: z
     .string()

@@ -97,6 +97,7 @@ export type { ComputeCapacityRecommendation } from "./compute-capacity-recommend
 export type { ComputeClusterHeartbeatData } from "./compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./compute-cluster-schema.js";
+export type { ComputeOs } from "./compute-os-schema.js";
 export type { ComputeType } from "./compute-type-schema.js";
 export type { ContainerAutoscaling } from "./container-autoscaling-schema.js";
 export type { ContainerCode } from "./container-code-schema.js";
@@ -413,6 +414,7 @@ export { ComputeCapacityRecommendationSchema } from "./compute-capacity-recommen
 export { ComputeClusterHeartbeatDataSchema } from "./compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./compute-cluster-schema.js";
+export { ComputeOsSchema } from "./compute-os-schema.js";
 export { ComputeTypeSchema } from "./compute-type-schema.js";
 export { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 export { ContainerCodeSchema } from "./container-code-schema.js";

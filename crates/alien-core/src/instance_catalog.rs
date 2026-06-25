@@ -1085,7 +1085,7 @@ pub struct WorkloadRequirements {
     pub gpu: Option<GpuSpec>,
     /// If true, only instance types that expose nested virtualization (VT-x/EPT)
     /// to guest VMs are eligible. Required by workloads that run QEMU/KVM
-    /// inside a container (e.g. bear-agent's sandboxes).
+    /// inside a container (e.g. microVM-based sandboxes).
     pub nested_virt: bool,
 }
 

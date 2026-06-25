@@ -89,6 +89,33 @@ pub struct HorizonAzureMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
+/// Alternate OS variant of a Horizon machine image catalog.
+///
+/// Keyed by OS name (matching `ComputeCluster.os`, e.g. `"ubuntu"`) under
+/// [`HorizonMachineImage::os_images`]. Carries its own base image and
+/// per-provider image catalogs, built from the same horizond version as the
+/// default (Flatcar) catalog at the top level of the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonOsImageVariant {
+    /// Base OS image metadata for this variant.
+    pub base_image: HorizonMachineBaseImage,
+    /// AWS image catalog for this variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<HorizonAwsMachineImages>,
+    /// GCP image catalog for this variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp: Option<HorizonGcpMachineImages>,
+    /// Azure image catalog for this variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure: Option<HorizonAzureMachineImages>,
+    /// Whether this variant is experimental and not yet recommended for
+    /// production use. Conveyed for visibility; not enforced at resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental: Option<bool>,
+}
+
 /// Horizon machine image catalog.
 ///
 /// Platform resolves concrete provider images from this catalog during rollout.
@@ -117,6 +144,11 @@ pub struct HorizonMachineImage {
     /// Azure image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure: Option<HorizonAzureMachineImages>,
+    /// Alternate OS image variants, keyed by OS name (matching
+    /// `ComputeCluster.os`, e.g. `"ubuntu"`). Absent on manifests that only
+    /// publish the default (Flatcar) catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_images: Option<HashMap<String, HorizonOsImageVariant>>,
 }
 
 /// Horizon control-plane configuration for container orchestration.
@@ -156,4 +188,56 @@ pub enum ComputeBackend {
     // Kubernetes(KubernetesCredentials),
     // /// AWS ECS Fargate (serverless containers)
     // EcsFargate,
+}
+
+#[cfg(test)]
+mod os_images_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_os_images_round_trip() {
+        let json = r#"{
+            "channel":"dev",
+            "machineImageVersion":"v1",
+            "horizondVersion":"1.0",
+            "gitSha":"abc",
+            "createdAt":"2026-01-01T00:00:00Z",
+            "baseImage":{"name":"flatcar","version":"stable-current"},
+            "aws":{"amis":{"amd64":{"us-east-1":"ami-flat"}}},
+            "osImages":{"ubuntu":{
+                "baseImage":{"name":"ubuntu","version":"24.04-lts"},
+                "experimental":true,
+                "aws":{"amis":{"arm64":{"us-east-1":"ami-ubu"}}}
+            }}
+        }"#;
+        let img: HorizonMachineImage = serde_json::from_str(json).expect("deserialize manifest");
+
+        let ubuntu = img
+            .os_images
+            .as_ref()
+            .expect("os_images present")
+            .get("ubuntu")
+            .expect("ubuntu variant present");
+        assert_eq!(ubuntu.base_image.name, "ubuntu");
+        assert_eq!(ubuntu.experimental, Some(true));
+        assert_eq!(
+            ubuntu.aws.as_ref().unwrap().amis[&HorizonMachineArchitecture::Arm64]["us-east-1"],
+            "ami-ubu"
+        );
+
+        // Round-trips with the camelCase "osImages" key preserved.
+        let back = serde_json::to_string(&img).unwrap();
+        assert!(back.contains("\"osImages\""), "got {back}");
+        assert_eq!(img, serde_json::from_str::<HorizonMachineImage>(&back).unwrap());
+    }
+
+    #[test]
+    fn manifest_without_os_images_is_backward_compatible() {
+        let json = r#"{"channel":"prod","machineImageVersion":"v","horizondVersion":"1","gitSha":"s","createdAt":"t","baseImage":{"name":"flatcar","version":"stable-current"},"aws":{"amis":{"amd64":{"us-east-1":"ami-x"}}}}"#;
+        let img: HorizonMachineImage =
+            serde_json::from_str(json).expect("old manifest still parses");
+        assert!(img.os_images.is_none());
+        // Re-serialization omits osImages entirely.
+        assert!(!serde_json::to_string(&img).unwrap().contains("osImages"));
+    }
 }

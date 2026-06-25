@@ -141,10 +141,6 @@
       },
       "x-readme-ref-name": "ResourceSpec"
     },
-    "nestedVirtualization": {
-      "type": "boolean",
-      "description": "When true, the auto-generated ComputeCluster for this daemon is\nconstrained to instance types that expose nested virtualization\n(VT-x/EPT) to guest VMs. Required by workloads that boot QEMU/KVM\ninside the container (e.g. bear-agent's sandboxes).\nDefaults to false; ignored on platforms whose backends don't pick\ninstance types (Kubernetes, Local)."
-    },
     "permissions": { "type": "string" },
     "pool": {
       "type": ["string", "null"],

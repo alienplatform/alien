@@ -519,8 +519,8 @@ impl Toolchain for RustToolchain {
         // Convention (mirrors the local-platform/from-scratch path): include
         // a top-level `vendor/` directory next to Cargo.toml under `/app/vendor/`
         // in the image. This is how a daemon ships helper binaries or data
-        // files it needs at runtime — e.g. bear-agent-loader bundling the
-        // bear-agent binary it later installs onto the host. Without this,
+        // files it needs at runtime — e.g. a loader binary bundling a second
+        // binary it later installs onto the host. Without this,
         // source-built cloud daemons can't ship vendored assets at all
         // (the local path bundles them; this path silently dropped them).
         let vendor_dir = context.src_dir.join("vendor");

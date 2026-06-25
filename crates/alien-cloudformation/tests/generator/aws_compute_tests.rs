@@ -164,6 +164,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
                     profile: None,
                     min_size: 1,
                     max_size: 3,
+                    nested_virtualization: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

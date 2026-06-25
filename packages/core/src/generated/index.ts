@@ -97,6 +97,7 @@ export type { ComputeCapacityRecommendation } from "./zod/compute-capacity-recom
 export type { ComputeClusterHeartbeatData } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./zod/compute-cluster-schema.js";
+export type { ComputeOs } from "./zod/compute-os-schema.js";
 export type { ComputeType } from "./zod/compute-type-schema.js";
 export type { ContainerAutoscaling } from "./zod/container-autoscaling-schema.js";
 export type { ContainerCode } from "./zod/container-code-schema.js";
@@ -413,6 +414,7 @@ export { ComputeCapacityRecommendationSchema } from "./zod/compute-capacity-reco
 export { ComputeClusterHeartbeatDataSchema } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./zod/compute-cluster-schema.js";
+export { ComputeOsSchema } from "./zod/compute-os-schema.js";
 export { ComputeTypeSchema } from "./zod/compute-type-schema.js";
 export { ContainerAutoscalingSchema } from "./zod/container-autoscaling-schema.js";
 export { ContainerCodeSchema } from "./zod/container-code-schema.js";

@@ -32,7 +32,7 @@
           },
           "nestedVirtualization": {
             "type": ["boolean", "null"],
-            "description": "Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs — needed by workloads that boot VMs inside containers\n(e.g. bear-agent's QEMU sandboxes).\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist."
+            "description": "Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs — needed by workloads that boot VMs inside containers\n(e.g. QEMU/KVM microVM sandboxes).\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist."
           },
           "profile": {
             "oneOf": [
@@ -98,6 +98,17 @@
     "id": {
       "type": "string",
       "description": "Unique identifier for the container cluster.\nMust contain only alphanumeric characters, hyphens, and underscores."
+    },
+    "os": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "description": "Base OS for the Horizon machine image this cluster's nodes boot.\nDefaults to Flatcar (the standard immutable host) when unset. Setting\n`Ubuntu` selects the Ubuntu-based machine-image variant.",
+          "type": "string",
+          "enum": ["flatcar", "ubuntu"],
+          "x-readme-ref-name": "ComputeOs"
+        }
+      ]
     }
   },
   "additionalProperties": false,

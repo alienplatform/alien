@@ -92,6 +92,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
         aws: Some(HorizonAwsMachineImages { amis }),
         gcp: None,
         azure: None,
+        os_images: None,
     })
 }
 
