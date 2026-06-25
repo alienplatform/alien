@@ -503,6 +503,10 @@ impl TestConfig {
                     "ALIEN_E2E_AZURE_APPLICATION_GATEWAY_SUBNET_NAME",
                 )
                 .ok(),
+                private_endpoint_subnet_name: env::var(
+                    "ALIEN_E2E_AZURE_PRIVATE_ENDPOINT_SUBNET_NAME",
+                )
+                .ok(),
             }),
             Platform::Kubernetes | Platform::Local | Platform::Test => {
                 bail!("ALIEN_E2E_NETWORK_MODE=existing is not supported for {platform:?}")
