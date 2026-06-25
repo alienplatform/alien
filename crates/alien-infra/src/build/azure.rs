@@ -116,15 +116,21 @@ impl AzureBuildController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Build>()?;
 
-        // Heartbeat check: Azure Build doesn't create persistent jobs like AWS CodeBuild.
-        // Jobs are created on-demand, so heartbeat is essentially a no-op.
-        // We just verify our managed environment configuration is still valid.
-        if self.managed_environment_id.is_none() || self.managed_identity_id.is_none() {
-            return Err(AlienError::new(ErrorData::ResourceDrift {
-                resource_id: config.id.clone(),
-                message: "Azure Build configuration is missing managed environment or identity"
-                    .to_string(),
-            }));
+        // Azure Build creates no persistent job (unlike AWS CodeBuild); jobs run on-demand, so the
+        // heartbeat resolves the managed environment + identity from their dependencies rather than
+        // inspecting standing infra. Imported (Frozen) builds skip the Provisioning flow that sets
+        // these, so they arrive `None` here and are resolved now, at heartbeat time, as the importer
+        // documents. A genuinely missing dependency still errors (and the executor retries).
+        if self.managed_environment_id.is_none() {
+            self.managed_environment_id = Some(self.get_managed_environment_id(ctx)?);
+        }
+        if self.managed_identity_id.is_none() {
+            let service_account_ref = ResourceRef::new(
+                alien_core::ServiceAccount::RESOURCE_TYPE,
+                format!("{}-sa", config.get_permissions()),
+            );
+            self.managed_identity_id =
+                Some(self.get_managed_identity_id(ctx, &service_account_ref).await?);
         }
 
         emit_azure_build_heartbeat(ctx, &config.id, self);
@@ -552,5 +558,52 @@ mod tests {
         // Run the update flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Regression: an imported (Frozen) Azure build arrives with `managed_environment_id` and
+    /// `managed_identity_id` = `None` (the importer skips the Provisioning flow that sets them).
+    /// The Ready/heartbeat handler must resolve them from their dependencies, not flag
+    /// RESOURCE_DRIFT, which would fail the deployment non-retryably.
+    #[tokio::test]
+    async fn test_imported_build_resolves_env_and_identity_at_heartbeat() {
+        use super::AzureBuildState;
+
+        // Mirrors AzureBuildImporter's output: Frozen import leaves env + identity unresolved.
+        let imported = AzureBuildController {
+            state: AzureBuildState::Ready,
+            managed_environment_id: None,
+            resource_group_name: Some("test-rg".to_string()),
+            build_env_vars: Some(std::collections::HashMap::new()),
+            managed_identity_id: None,
+            resource_prefix: None,
+            _internal_stay_count: None,
+        };
+
+        let mock_provider = Arc::new(MockPlatformServiceProvider::new());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_build())
+            .controller(imported)
+            .platform(Platform::Azure)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        // One heartbeat step resolves env + identity from the dependencies instead of drifting.
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let ctrl = executor
+            .internal_state::<AzureBuildController>()
+            .expect("controller state");
+        assert!(
+            ctrl.managed_environment_id.is_some(),
+            "heartbeat should resolve managed_environment_id for an imported build"
+        );
+        assert!(
+            ctrl.managed_identity_id.is_some(),
+            "heartbeat should resolve managed_identity_id for an imported build"
+        );
     }
 }
