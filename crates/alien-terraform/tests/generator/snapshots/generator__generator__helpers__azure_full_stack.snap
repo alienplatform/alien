@@ -448,10 +448,12 @@ resource "azurerm_log_analytics_workspace" "default_container_apps_environment_l
 }
 
 resource "azurerm_container_app_environment" "default_container_apps_environment" {
-  name                       = replace(lower("${local.resource_prefix}-default_container_apps_environment"), "_", "-")
-  resource_group_name        = var.azure_resource_group_name
-  location                   = var.azure_location
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
+  name                           = replace(lower("${local.resource_prefix}-default_container_apps_environment"), "_", "-")
+  resource_group_name            = var.azure_resource_group_name
+  location                       = var.azure_location
+  log_analytics_workspace_id     = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
+  infrastructure_subnet_id       = azurerm_subnet.default_network_private.id
+  internal_load_balancer_enabled = false
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix
@@ -501,6 +503,18 @@ resource "azurerm_subnet" "default_network_private" {
   address_prefixes = [
     cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
   ]
+
+  delegation {
+    name = "container-apps-environment"
+
+    service_delegation {
+      name = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]

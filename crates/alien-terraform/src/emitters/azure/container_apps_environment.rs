@@ -21,7 +21,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, AzureContainerAppsEnvironment, Result};
+use alien_core::{
+    import::EmitContext, AzureContainerAppsEnvironment, Network, NetworkSettings, Result,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -64,27 +66,43 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             ],
         ));
 
+        let mut env_body = vec![
+            attr(
+                "name",
+                expr::raw(format!(
+                    "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
+                )),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+            attr(
+                "log_analytics_workspace_id",
+                expr::traversal(["azurerm_log_analytics_workspace", &workspace_label, "id"]),
+            ),
+        ];
+
+        // VNet-integrate the environment when the stack has a Network, so Container Apps can reach
+        // private-only resources (a Flexible Server reachable only through its private endpoint).
+        // Without this the environment is public and a worker's connection to the private server
+        // times out. The stack private subnet IS the infrastructure subnet (the network emitter
+        // delegates it to `Microsoft.App/environments`; the postgres private endpoint gets its own
+        // subnet); `internal_load_balancer_enabled = false` keeps public ingress while egressing
+        // through the VNet. Mirrors the runtime controller's `get_vnet_configuration` — a
+        // consumption environment on the /24 private subnet, proven to reach a private server.
+        if let Some(infrastructure_subnet_id) = infrastructure_subnet_id(ctx) {
+            env_body.push(attr("infrastructure_subnet_id", infrastructure_subnet_id));
+            env_body.push(attr("internal_load_balancer_enabled", Expression::Bool(false)));
+        }
+
+        env_body.push(attr("tags", tags(ctx, "container-apps-environment")));
+
         fragment.resource_blocks.push(resource_block(
             "azurerm_container_app_environment",
             label,
-            [
-                attr(
-                    "name",
-                    expr::raw(format!(
-                        "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
-                    )),
-                ),
-                attr(
-                    "resource_group_name",
-                    expr::raw("var.azure_resource_group_name"),
-                ),
-                attr("location", expr::raw("var.azure_location")),
-                attr(
-                    "log_analytics_workspace_id",
-                    expr::traversal(["azurerm_log_analytics_workspace", &workspace_label, "id"]),
-                ),
-                attr("tags", tags(ctx, "container-apps-environment")),
-            ],
+            env_body,
         ));
 
         Ok(fragment)
@@ -216,4 +234,28 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             ),
         ])))
     }
+}
+
+/// The `infrastructure_subnet_id` expression for the environment, or `None` when the stack has no
+/// Network (then the environment stays public, matching the runtime controller's
+/// `get_vnet_configuration` returning `None`).
+///
+/// Resolves to the network emitter's private subnet, matching how the Azure network emitter
+/// materializes it: a managed `azurerm_subnet.<network>_private` in create / use-default mode, a
+/// looked-up `data.azurerm_subnet.<network>_private` in bring-your-own-VNet mode.
+fn infrastructure_subnet_id(ctx: &EmitContext<'_>) -> Option<Expression> {
+    let (network_id, entry) = ctx
+        .stack
+        .resources()
+        .find(|(_id, entry)| entry.config.resource_type() == Network::RESOURCE_TYPE)?;
+    let network = entry.config.downcast_ref::<Network>()?;
+    let network_label = ctx.name_for(network_id)?;
+    let private_subnet_label = format!("{network_label}_private");
+
+    let byo = matches!(network.settings, NetworkSettings::ByoVnetAzure { .. });
+    Some(if byo {
+        expr::traversal(["data", "azurerm_subnet", &private_subnet_label, "id"])
+    } else {
+        expr::traversal(["azurerm_subnet", &private_subnet_label, "id"])
+    })
 }

@@ -123,5 +123,33 @@ fn azure_full_stack_renders_audit_ready_module() {
 
     let module = render(&stack, TerraformTarget::Azure, settings);
     snapshot_module("azure_full_stack", &module);
+
+    // The Container Apps environment must VNet-integrate so workers can reach private-only
+    // resources (e.g. a Flexible Server reachable only via its private endpoint). Assert the
+    // wiring literally — the snapshot's exact `=` alignment shifts whenever a sibling attribute is
+    // added, so these literal checks are what actually guard the integration. Per-line whitespace
+    // is normalized so a future sibling attribute can't silently break them.
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.lines())
+        .flatten()
+        .map(str::trim)
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>();
+    let has = |needle: &str| rendered.iter().any(|line| line == needle);
+
+    assert!(
+        has("infrastructure_subnet_id = azurerm_subnet.default_network_private.id"),
+        "container apps environment must point its infrastructure subnet at the network private subnet"
+    );
+    assert!(
+        has("internal_load_balancer_enabled = false"),
+        "container apps environment must keep a public ingress while egressing through the VNet"
+    );
+    assert!(
+        has("name = \"Microsoft.App/environments\""),
+        "the private subnet must be delegated to Microsoft.App/environments for the env infra subnet"
+    );
+
     assert_terraform_valid(&module, "azure_full_stack");
 }
