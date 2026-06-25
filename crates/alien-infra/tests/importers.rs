@@ -28,7 +28,8 @@ use alien_core::import::{
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
-        GcpBuildImportData, GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
+        GcpStorageImportData,
         KubernetesClusterImportData,
     },
     ImportContext,
@@ -39,7 +40,8 @@ use alien_core::{
     AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
     AzureStorageAccountOutputs, Build, GcpManagementConfig, KubernetesCluster,
     KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
-    KubernetesHeartbeatMode, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
+    KubernetesHeartbeatMode, Kv, ManagementConfig, Network, NetworkSettings, Platform, Queue,
+    RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
     ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
     Worker,
@@ -408,6 +410,47 @@ fn gcp_service_activation_round_trip() {
         &gcp_management_config(),
     );
     assert_running_with_internal_state(&state);
+}
+
+#[test]
+fn gcp_network_import_derives_subnetwork_name() {
+    // Regression: the importer must reconstruct `subnetwork_name` from the subnet self-link.
+    // Without it the live worker's `get_vpc_access` short-circuits and the Cloud Run service gets
+    // no Direct VPC egress — unable to reach a private Cloud SQL PSC endpoint in that subnet.
+    let entry = entry(
+        Network::new("default-network".to_string())
+            .settings(NetworkSettings::UseDefault)
+            .build(),
+    );
+    let data = GcpNetworkImportData {
+        project_id: "my-project".to_string(),
+        vpc_self_link: Some(
+            "https://www.googleapis.com/compute/v1/projects/my-project/global/networks/alien-stack-vpc"
+                .to_string(),
+        ),
+        vpc_name: Some("alien-stack-vpc".to_string()),
+        subnet_self_links: vec![
+            "https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/subnetworks/alien-stack-workload"
+                .to_string(),
+        ],
+        cidr_block: Some("10.0.0.0/20".to_string()),
+        router_self_link: None,
+        nat_name: None,
+        is_byo_vpc: false,
+    };
+    let state = run_through_registry(
+        &Network::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+    assert_eq!(
+        internal_state(&state)["subnetworkName"], "alien-stack-workload",
+        "importer must derive subnetwork_name from the subnet self-link, else the worker gets no VPC egress"
+    );
 }
 
 #[test]
