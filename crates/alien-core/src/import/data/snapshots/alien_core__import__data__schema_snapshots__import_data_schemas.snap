@@ -305,7 +305,7 @@ expression: schemas
   },
   "aws_postgres": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "AWS Postgres (Aurora Serverless v2) registration data: the handles a setup-created Aurora cluster is registered with, as a Frozen Postgres resource — setup owns the cluster, Alien refreshes and heartbeats it. Carries the master password's Secrets Manager ARN, never the password.",
+    "description": "AWS Postgres (Aurora Serverless v2) registration data: the handles by which a setup-created Aurora cluster is registered as a Frozen Postgres resource. Setup owns the cluster, Alien refreshes and heartbeats it. Carries the master password's Secrets Manager ARN, never the password.",
     "properties": {
       "clusterEndpoint": {
         "description": "Cluster writer endpoint (the binding host).",
@@ -767,7 +767,7 @@ expression: schemas
   },
   "azure_postgres": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "Azure Postgres (Flexible Server + Private Endpoint) registration data: the handles a setup-created Flexible Server — with its Private Endpoint, private DNS zone, and the Key Vault secret holding the master password — is registered with, as a Frozen Postgres resource: setup owns the server, Alien refreshes and heartbeats it. The raw password is never carried — only the Key Vault secret URI is.",
+    "description": "Azure Postgres (Flexible Server + Private Endpoint) registration data: the handles by which a setup-created Flexible Server (with its Private Endpoint, private DNS zone, and the Key Vault secret holding the master password) is registered as a Frozen Postgres resource. Setup owns the server, Alien refreshes and heartbeats it. The raw password is never carried, only the Key Vault secret URI.",
     "properties": {
       "database": {
         "description": "Default database name.",
@@ -1408,7 +1408,7 @@ expression: schemas
   },
   "gcp_postgres": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "GCP Postgres (Cloud SQL + Private Service Connect) registration data: the handles a setup-created Cloud SQL instance and its PSC consumer endpoint are registered with, as a Frozen Postgres resource — setup owns the instance, Alien refreshes and heartbeats it.",
+    "description": "GCP Postgres (Cloud SQL + Private Service Connect) registration data: the handles by which a setup-created Cloud SQL instance and its PSC consumer endpoint are registered as a Frozen Postgres resource. Setup owns the instance, Alien refreshes and heartbeats it.",
     "properties": {
       "database": {
         "description": "Default database name.",

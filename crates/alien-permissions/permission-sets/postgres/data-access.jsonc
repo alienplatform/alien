@@ -52,10 +52,12 @@
     ],
     "azure": [
       // Empty by design: on Azure the connection password lives in the shared deployment
-      // "secrets" vault, which every compute resource can already read through the
-      // secrets-vault preflight's vault/data-read (vault-scoped, not resource-group-wide).
-      // A Key Vault grant here would be redundant and over-broad. AWS and GCP differ — each
-      // stores a dedicated, prefix-scoped secret, so they keep the read grants above.
+      // "secrets" vault, which every stack compute resource already reads via the secrets-vault
+      // preflight's vault/data-read. A per-secret Key Vault grant is possible but redundant with
+      // that vault-wide read, so none is added here. The password therefore has the same
+      // stack-wide read scope as every other Azure worker secret; AWS and GCP instead store a
+      // dedicated prefix-scoped secret that only this set reads (hence the grants above).
+      // Narrowing Azure to match is a platform-wide secrets-model decision, not a postgres change.
     ]
   }
 }

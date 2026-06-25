@@ -210,10 +210,10 @@
       }
     ],
     "azure": [
-      // No Key Vault secret grant here: the Azure controller stores the generated password in
-      // the shared deployment "secrets" vault, whose data-plane access is authored — vault-scoped,
-      // not resource-group-wide — by the secrets-vault preflight (management gets vault/data-write
-      // on it). An RG-scoped secret grant here would over-expose every Key Vault in the group.
+      // No Key Vault secret grant here: the Azure controller stores the generated password in the
+      // shared deployment "secrets" vault, whose data-plane writes are authored (vault-scoped) by
+      // the secrets-vault preflight (management gets vault/data-write on it). A separate per-secret
+      // grant would duplicate that write access, so provision relies on the shared-vault path.
       {
         "label": "manage-flexible-server",
         "description": "Create and delete the Flexible Server plus the private-networking it owns: the Private Endpoint and its DNS zone group, the private DNS zone, and the zone's VNet link.",
