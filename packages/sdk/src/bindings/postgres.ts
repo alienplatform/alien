@@ -50,6 +50,10 @@ export interface PostgresConnection {
    * (no public IP, reachable only from same-stack workloads), so the network boundary is the primary
    * control and an on-path MITM would already be inside the stack VPC. Verified TLS (provider CAs) is
    * future defense-in-depth, not a v1 requirement.
+   *
+   * For the `external` (BYO) backend this is always `false`: node-postgres has no `prefer` mode, so
+   * the field stays plaintext while the connection string's `sslmode=prefer` only reaches sslmode-aware
+   * consumers (psql). A BYO database that *requires* TLS must have TLS configured outside this struct.
    */
   ssl: false | { rejectUnauthorized: boolean }
   /**

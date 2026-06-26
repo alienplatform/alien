@@ -772,6 +772,10 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>>;
 
     /// Given a binding identifier, builds a Postgres implementation.
+    ///
+    /// Only the **local** (developer) backend is supported here. Cloud backends (Aurora, CloudSQL,
+    /// Azure Flexible Server) are resolved by the TypeScript SDK only; a Rust worker that requests one
+    /// gets a runtime error from the local resolver, with no compile-time gate.
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>>;
 
     /// Given a binding identifier, builds a Queue implementation.

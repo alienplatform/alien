@@ -464,8 +464,22 @@ impl LocalPostgresManager {
 
     /// Restarts any tracked server whose process has exited.
     async fn restart_exited(&self) {
-        let mut runtimes = self.runtimes.lock().await;
-        for (id, postgres) in runtimes.iter_mut() {
+        // Don't hold `runtimes` across `start().await`: that blocks health-check/delete/create for the
+        // whole batch. Re-acquire per database and re-check, since one may have been removed or
+        // restarted in the meantime.
+        let exited: Vec<String> = {
+            let runtimes = self.runtimes.lock().await;
+            runtimes
+                .iter()
+                .filter(|(_, postgres)| postgres.status() != Status::Started)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in exited {
+            let mut runtimes = self.runtimes.lock().await;
+            let Some(postgres) = runtimes.get_mut(&id) else {
+                continue;
+            };
             if postgres.status() == Status::Started {
                 continue;
             }
@@ -506,8 +520,8 @@ async fn install_pgvector(settings: Settings, resource_id: String) -> Result<()>
         })?;
 
     let install_resource_id = resource_id.clone();
-    tokio::task::spawn_blocking(move || {
-        tokio::runtime::Builder::new_current_thread()
+    let installed = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .into_alien_error()
@@ -515,21 +529,40 @@ async fn install_pgvector(settings: Settings, resource_id: String) -> Result<()>
                 process_id: install_resource_id.clone(),
                 operation: "install_pgvector".to_string(),
                 reason: "Failed to build runtime for pgvector install".to_string(),
-            })?
-            .block_on(postgresql_extensions::install(
-                &settings,
-                PGVECTOR_NAMESPACE,
-                PGVECTOR_EXTENSION,
-                &version,
-            ))
-            .into_alien_error()
-            .context(ErrorData::LocalProcessError {
-                process_id: install_resource_id,
-                operation: "install_pgvector".to_string(),
-                reason: format!(
-                    "Failed to install pgvector {PGVECTOR_VERSION} from the configured release host"
-                ),
-            })
+            })?;
+        runtime.block_on(async move {
+            // pgvector's archive is fetched over the network on every install. Skip only when the
+            // pinned version is already present, so recovery stays off the network while a version
+            // bump still falls through and reinstalls the pin (the read is local, not networked).
+            let already_current = postgresql_extensions::get_installed_extensions(&settings)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalProcessError {
+                    process_id: install_resource_id.clone(),
+                    operation: "install_pgvector".to_string(),
+                    reason: "Failed to read installed extensions".to_string(),
+                })?
+                .iter()
+                .any(|ext| {
+                    ext.namespace() == PGVECTOR_NAMESPACE
+                        && ext.name() == PGVECTOR_EXTENSION
+                        && version.matches(ext.version())
+                });
+            if already_current {
+                return Ok(false);
+            }
+            postgresql_extensions::install(&settings, PGVECTOR_NAMESPACE, PGVECTOR_EXTENSION, &version)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalProcessError {
+                    process_id: install_resource_id,
+                    operation: "install_pgvector".to_string(),
+                    reason: format!(
+                        "Failed to install pgvector {PGVECTOR_VERSION} from the configured release host"
+                    ),
+                })?;
+            Ok(true)
+        })
     })
     .await
     .into_alien_error()
@@ -539,7 +572,11 @@ async fn install_pgvector(settings: Settings, resource_id: String) -> Result<()>
         reason: "pgvector install task panicked".to_string(),
     })??;
 
-    info!(postgres_id = %resource_id, version = PGVECTOR_VERSION, "pgvector installed");
+    if installed {
+        info!(postgres_id = %resource_id, version = PGVECTOR_VERSION, "pgvector installed");
+    } else {
+        debug!(postgres_id = %resource_id, version = PGVECTOR_VERSION, "pgvector already present; skipped download");
+    }
     Ok(())
 }
 
