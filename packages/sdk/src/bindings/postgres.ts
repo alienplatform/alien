@@ -87,11 +87,46 @@ const connectionFields = {
 // unexpected key (a Rust-side rename the SDK doesn't yet know, or env tampering) should fail loudly
 // here rather than being silently dropped. This is the template other connection bindings will copy.
 const postgresBindingSchema = z.discriminatedUnion("service", [
-  z.object({ service: z.literal("aurora"), clusterEndpoint: z.string(), passwordSecretArn: z.string(), ...connectionFields }).strict(),
-  z.object({ service: z.literal("cloud-sql"), host: z.string(), passwordSecretName: z.string(), ...connectionFields }).strict(),
-  z.object({ service: z.literal("flexible-server"), host: z.string(), passwordSecretUri: z.string(), ...connectionFields }).strict(),
-  z.object({ service: z.literal("external"), host: z.string(), password: z.string().min(1), ...connectionFields }).strict(),
-  z.object({ service: z.literal("local-postgres"), host: z.string(), password: z.string().min(1), ...connectionFields }).strict(),
+  z
+    .object({
+      service: z.literal("aurora"),
+      clusterEndpoint: z.string(),
+      passwordSecretArn: z.string(),
+      ...connectionFields,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal("cloud-sql"),
+      host: z.string(),
+      passwordSecretName: z.string(),
+      ...connectionFields,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal("flexible-server"),
+      host: z.string(),
+      passwordSecretUri: z.string(),
+      ...connectionFields,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal("external"),
+      host: z.string(),
+      password: z.string().min(1),
+      ...connectionFields,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal("local-postgres"),
+      host: z.string(),
+      password: z.string().min(1),
+      ...connectionFields,
+    })
+    .strict(),
 ])
 
 /** Matches the Rust `binding_env_var_name`: `ALIEN_<NAME>_BINDING`, hyphens to underscores. */
@@ -109,7 +144,7 @@ type SslMode = "disable" | "prefer" | "require"
 export function encodeUserinfo(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
-    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"),
+    c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
   )
 }
 
@@ -215,15 +250,21 @@ export async function getPostgresConnection(bindingName: string): Promise<Postgr
       return makeConnection(binding.host, binding, binding.password, "prefer", false)
     case "aurora": {
       const password = await readAwsSecret(binding.passwordSecretArn)
-      return makeConnection(binding.clusterEndpoint, binding, password, "require", { rejectUnauthorized: false })
+      return makeConnection(binding.clusterEndpoint, binding, password, "require", {
+        rejectUnauthorized: false,
+      })
     }
     case "cloud-sql": {
       const password = await readGcpSecret(binding.passwordSecretName)
-      return makeConnection(binding.host, binding, password, "require", { rejectUnauthorized: false })
+      return makeConnection(binding.host, binding, password, "require", {
+        rejectUnauthorized: false,
+      })
     }
     case "flexible-server": {
       const password = await readAzureSecret(binding.passwordSecretUri)
-      return makeConnection(binding.host, binding, password, "require", { rejectUnauthorized: false })
+      return makeConnection(binding.host, binding, password, "require", {
+        rejectUnauthorized: false,
+      })
     }
     default:
       return assertNever(binding)
