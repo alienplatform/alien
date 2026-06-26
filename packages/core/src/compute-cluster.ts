@@ -52,15 +52,16 @@ export type ComputePoolScale =
     }
 
 export type ComputePoolInput = {
+  /**
+   * Provider machine selected for this capacity group.
+   *
+   * Most stacks should leave this unset and let deployment settings select a
+   * machine from the portable requirements. Set it when the stack must pin a
+   * catalog-known instance type during build-time preflights.
+   */
+  instanceType?: string
   requirements: ComputePoolRequirements
   scale: ComputePoolScale
-  /**
-   * Provider machine type to pin for this pool (sets `instanceType` on the
-   * capacity group). Required when the cluster is defined manually rather than
-   * auto-generated; portable clusters omit it and let deployment compute
-   * settings select the machine.
-   */
-  machine?: string
 }
 
 /**
@@ -95,7 +96,7 @@ export class ComputeCluster {
     const { minSize, maxSize } = selectedScaleBounds(config.scale)
     this._config.capacityGroups!.push({
       groupId,
-      instanceType: config.machine,
+      instanceType: config.instanceType,
       profile: machineProfileFromRequirements(config.requirements),
       minSize,
       maxSize,

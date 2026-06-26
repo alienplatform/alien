@@ -26,30 +26,55 @@
       "type": "string",
       "description": "Internal DNS name (e.g., \"api.svc\")"
     },
-    "loadBalancerEndpoint": {
-      "oneOf": [
-        { "type": "null" },
-        {
-          "description": "Load balancer endpoint information for DNS management (optional).\nUsed by the DNS controller to create custom domain mappings.",
-          "type": "object",
-          "required": ["dnsName"],
-          "properties": {
-            "dnsName": {
-              "type": "string",
-              "description": "The DNS name of the load balancer endpoint (e.g., ALB DNS, API Gateway domain)."
-            },
-            "hostedZoneId": {
-              "type": ["string", "null"],
-              "description": "AWS Route53 hosted zone ID (for ALIAS records). Only set on AWS."
-            }
-          },
-          "x-readme-ref-name": "LoadBalancerEndpoint"
-        }
-      ]
-    },
     "name": {
       "type": "string",
       "description": "Container name in the managed container backend"
+    },
+    "publicEndpoints": {
+      "type": "object",
+      "description": "Public endpoints resolved for this container.",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Runtime-resolved public endpoint metadata.",
+        "required": ["url", "host"],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Hostname for this endpoint."
+          },
+          "loadBalancerEndpoint": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "description": "Load balancer endpoint information for DNS management.",
+                "type": "object",
+                "required": ["dnsName"],
+                "properties": {
+                  "dnsName": {
+                    "type": "string",
+                    "description": "The DNS name of the load balancer endpoint (e.g., ALB DNS, API Gateway domain)."
+                  },
+                  "hostedZoneId": {
+                    "type": ["string", "null"],
+                    "description": "AWS Route53 hosted zone ID (for ALIAS records). Only set on AWS."
+                  }
+                },
+                "x-readme-ref-name": "LoadBalancerEndpoint"
+              }
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "Base URL for this endpoint."
+          },
+          "wildcardHost": {
+            "type": ["string", "null"],
+            "description": "Wildcard hostname routed to this endpoint, when configured."
+          }
+        },
+        "x-readme-ref-name": "PublicEndpointOutput"
+      },
+      "propertyNames": { "type": "string" }
     },
     "replicas": {
       "type": "array",
@@ -90,10 +115,6 @@
       "type": "string",
       "enum": ["pending", "running", "stopped", "failing"],
       "x-readme-ref-name": "ContainerStatus"
-    },
-    "url": {
-      "type": ["string", "null"],
-      "description": "Public URL (if exposed publicly)"
     }
   },
   "x-readme-ref-name": "ContainerOutputs"

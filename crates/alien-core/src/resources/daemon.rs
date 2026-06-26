@@ -1,9 +1,9 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
-    ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, ResourceSpec, ToolchainConfig,
+    ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, PublicEndpointOutput,
+    ResourceSpec, ToolchainConfig,
 };
-use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct Daemon {
     pub links: Vec<ResourceRef>,
     /// Public endpoints exposed by the daemon.
     #[builder(field)]
-    pub ports: Vec<PublicEndpoint>,
+    pub public_endpoints: Vec<PublicEndpoint>,
     /// HTTP health check for public daemon endpoint load balancers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheck>,
@@ -75,22 +75,34 @@ impl Daemon {
         &self.permissions
     }
 
-    fn validate_ports(&self) -> Result<()> {
-        if self.ports.len() > 1 {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "at most one daemon public endpoint is currently supported".to_string(),
-            }));
-        }
+    fn validate_public_endpoints(&self) -> Result<()> {
+        let mut endpoint_names = std::collections::HashSet::new();
+        let mut backend_ports = std::collections::HashSet::new();
 
-        for endpoint in &self.ports {
+        for endpoint in &self.public_endpoints {
             endpoint.validate_for_resource(&self.id)?;
+            if !endpoint_names.insert(endpoint.name.as_str()) {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!("duplicate public endpoint name '{}'", endpoint.name),
+                }));
+            }
+            backend_ports.insert(endpoint.port);
             if endpoint.protocol != ExposeProtocol::Http {
                 return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                     resource_id: self.id.clone(),
                     reason: "daemon public endpoints currently support only HTTP".to_string(),
                 }));
             }
+        }
+
+        if backend_ports.len() > 1 {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason:
+                    "public endpoints on one daemon must currently route to the same backend port"
+                        .to_string(),
+            }));
         }
 
         Ok(())
@@ -125,18 +137,8 @@ impl<S: daemon_builder::State> DaemonBuilder<S> {
         self
     }
 
-    pub fn expose_port(mut self, port: u16, protocol: ExposeProtocol) -> Self {
-        self.ports.push(PublicEndpoint {
-            port,
-            protocol,
-            host_label: None,
-            wildcard_subdomains: false,
-        });
-        self
-    }
-
     pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
-        self.ports.push(endpoint);
+        self.public_endpoints.push(endpoint);
         self
     }
 }
@@ -184,13 +186,13 @@ impl ResourceDefinition for Daemon {
             }));
         }
 
-        self.validate_ports()?;
-        new_daemon.validate_ports()?;
+        self.validate_public_endpoints()?;
+        new_daemon.validate_public_endpoints()?;
 
-        if self.ports != new_daemon.ports {
+        if self.public_endpoints != new_daemon.public_endpoints {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
-                reason: "the 'ports' field is immutable".to_string(),
+                reason: "the 'publicEndpoints' field is immutable".to_string(),
             }));
         }
 
@@ -224,10 +226,8 @@ impl ResourceDefinition for Daemon {
 pub struct DaemonOutputs {
     pub daemon_name: String,
     pub running: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_balancer_endpoint: Option<LoadBalancerEndpoint>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub public_endpoints: HashMap<String, PublicEndpointOutput>,
 }
 
 impl ResourceOutputsDefinition for DaemonOutputs {
@@ -285,6 +285,7 @@ mod tests {
                 image: "gateway:latest".to_string(),
             })
             .public_endpoint(PublicEndpoint {
+                name: "public".to_string(),
                 port: 8080,
                 protocol: ExposeProtocol::Http,
                 host_label: Some("public".to_string()),
@@ -293,31 +294,52 @@ mod tests {
             .permissions("gateway".to_string())
             .build();
 
-        assert!(daemon.validate_ports().is_ok());
-        assert_eq!(daemon.ports.len(), 1);
-        assert_eq!(daemon.ports[0].host_label.as_deref(), Some("public"));
-        assert!(daemon.ports[0].wildcard_subdomains);
+        assert!(daemon.validate_public_endpoints().is_ok());
+        assert_eq!(daemon.public_endpoints.len(), 1);
+        assert_eq!(
+            daemon.public_endpoints[0].host_label.as_deref(),
+            Some("public")
+        );
+        assert!(daemon.public_endpoints[0].wildcard_subdomains);
     }
 
     #[test]
-    fn daemon_rejects_multiple_or_non_http_public_endpoints() {
+    fn daemon_rejects_multiple_backend_ports_or_non_http_public_endpoints() {
         let multiple = Daemon::new("gateway".to_string())
             .code(DaemonCode::Image {
                 image: "gateway:latest".to_string(),
             })
-            .expose_port(8080, ExposeProtocol::Http)
-            .expose_port(9090, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 9090,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .permissions("gateway".to_string())
             .build();
-        assert!(multiple.validate_ports().is_err());
+        assert!(multiple.validate_public_endpoints().is_err());
 
         let tcp = Daemon::new("gateway".to_string())
             .code(DaemonCode::Image {
                 image: "gateway:latest".to_string(),
             })
-            .expose_port(8080, ExposeProtocol::Tcp)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Tcp,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .permissions("gateway".to_string())
             .build();
-        assert!(tcp.validate_ports().is_err());
+        assert!(tcp.validate_public_endpoints().is_err());
     }
 }

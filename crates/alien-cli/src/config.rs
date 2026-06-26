@@ -68,7 +68,7 @@ impl JavaScriptRuntime {
 /// Load an Alien stack configuration from a file or directory.
 /// Searches for configuration files in directories.
 ///
-/// Resolution order: `alien.ts`, `alien.config.ts`, `alien.js`, `alien.config.js`, `alien.json`.
+/// Resolution order: `alien.ts`, `alien.js`, `alien.json`.
 #[alien_event(AlienEvent::LoadingConfiguration)]
 pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
     info!("Loading configuration from: {}", config_path.display());
@@ -79,13 +79,7 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             config_path.display()
         );
         // Search in priority order
-        let candidates = [
-            "alien.ts",
-            "alien.config.ts",
-            "alien.js",
-            "alien.config.js",
-            "alien.json",
-        ];
+        let candidates = ["alien.ts", "alien.js", "alien.json"];
 
         if let Some(found) = candidates
             .iter()
@@ -102,7 +96,7 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             return Err(alien_error::AlienError::new(
                 ErrorData::ConfigurationError {
                     message: format!(
-                        "Could not find alien.ts, alien.config.ts, alien.js, alien.config.js, or alien.json in {}",
+                        "Could not find alien.ts, alien.js, or alien.json in {}",
                         config_path.display()
                     ),
                 },
@@ -788,9 +782,9 @@ mod tests {
         let temp_path = temp_dir.path();
 
         // Create a config file with unsupported extension
-        fs::write(temp_path.join("alien.config.yaml"), "invalid: config").unwrap();
+        fs::write(temp_path.join("invalid.yaml"), "invalid: config").unwrap();
 
-        let result = load_configuration(temp_path.join("alien.config.yaml")).await;
+        let result = load_configuration(temp_path.join("invalid.yaml")).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

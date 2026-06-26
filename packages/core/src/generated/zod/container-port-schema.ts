@@ -4,26 +4,13 @@
  */
 
 import * as z from "zod";
-import { ExposeProtocolSchema } from "./expose-protocol-schema.js";
 
 /**
  * @description Container port configuration.
  */
 export const ContainerPortSchema = z
   .object({
-    get expose() {
-      return z.union([ExposeProtocolSchema, z.null()]).optional();
-    },
-    hostLabel: z
-      .string()
-      .describe("Optional DNS label override for generated endpoint hostnames.")
-      .nullish(),
     port: z.int().min(0).describe("Port number"),
-    wildcardSubdomains: z.optional(
-      z
-        .boolean()
-        .describe("Whether wildcard subdomains route to this public endpoint.")
-    ),
   })
   .describe("Container port configuration.");
 

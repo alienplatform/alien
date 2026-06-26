@@ -8,7 +8,6 @@ use crate::output;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Args, Subcommand};
 use service_manager::*;
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -68,9 +67,9 @@ pub struct InstallArgs {
     #[arg(long)]
     pub encryption_key: Option<String>,
 
-    /// Generic public URLs for exposed resources, keyed by resource ID.
+    /// Generic public endpoint URLs for exposed resources.
     #[arg(skip)]
-    pub public_urls: Option<HashMap<String, String>>,
+    pub public_endpoints: Option<alien_core::PublicEndpointUrls>,
 }
 
 pub async fn agent_command(args: AgentArgs) -> Result<()> {
@@ -158,26 +157,26 @@ fn install(args: InstallArgs) -> Result<()> {
             ),
         })?;
 
-    let public_urls_path = std::path::Path::new(&data_dir).join("public-urls.json");
-    if let Some(public_urls) = &args.public_urls {
-        let public_urls_json = serde_json::to_vec(public_urls).into_alien_error().context(
-            ErrorData::AgentServiceError {
-                message: "Failed to serialize public URLs".to_string(),
-            },
-        )?;
-        std::fs::write(&public_urls_path, public_urls_json)
+    let public_endpoints_path = std::path::Path::new(&data_dir).join("public-endpoints.json");
+    if let Some(public_endpoints) = &args.public_endpoints {
+        let public_endpoints_json = serde_json::to_vec(public_endpoints)
+            .into_alien_error()
+            .context(ErrorData::AgentServiceError {
+                message: "Failed to serialize public endpoints".to_string(),
+            })?;
+        std::fs::write(&public_endpoints_path, public_endpoints_json)
             .into_alien_error()
             .context(ErrorData::AgentServiceError {
                 message: format!(
-                    "Failed to write public URLs to {}",
-                    public_urls_path.display()
+                    "Failed to write public endpoints to {}",
+                    public_endpoints_path.display()
                 ),
             })?;
-    } else if let Err(e) = std::fs::remove_file(&public_urls_path) {
+    } else if let Err(e) = std::fs::remove_file(&public_endpoints_path) {
         if e.kind() != std::io::ErrorKind::NotFound {
             output::warn(&format!(
-                "Could not remove stale public URLs file {}: {}",
-                public_urls_path.display(),
+                "Could not remove stale public endpoints file {}: {}",
+                public_endpoints_path.display(),
                 e
             ));
         }
@@ -196,9 +195,9 @@ fn install(args: InstallArgs) -> Result<()> {
         OsString::from("--encryption-key-file"),
         OsString::from(&encryption_key_path),
     ];
-    if args.public_urls.is_some() {
-        service_args.push(OsString::from("--public-urls-file"));
-        service_args.push(OsString::from(&public_urls_path));
+    if args.public_endpoints.is_some() {
+        service_args.push(OsString::from("--public-endpoints-file"));
+        service_args.push(OsString::from(&public_endpoints_path));
     }
     let service_args = if let Some(deployment_id) = &args.deployment_id {
         let mut service_args = service_args;

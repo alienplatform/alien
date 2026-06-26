@@ -153,12 +153,29 @@ impl PublicSubnetsRequiredCheck {
                 "worker" => {
                     if let Some(worker) = resource_entry.config.downcast_ref::<alien_core::Worker>()
                     {
-                        if matches!(worker.ingress, alien_core::Ingress::Public) {
+                        if !worker.public_endpoints.is_empty() {
                             return true;
                         }
                     }
                 }
-                // TODO: Check Container resources when implemented
+                "container" => {
+                    if let Some(container) = resource_entry
+                        .config
+                        .downcast_ref::<alien_core::Container>()
+                    {
+                        if !container.public_endpoints.is_empty() {
+                            return true;
+                        }
+                    }
+                }
+                "daemon" => {
+                    if let Some(daemon) = resource_entry.config.downcast_ref::<alien_core::Daemon>()
+                    {
+                        if !daemon.public_endpoints.is_empty() {
+                            return true;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -227,8 +244,8 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
-        Ingress, Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Worker,
-        WorkerCode,
+        Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Worker,
+        WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
 
@@ -254,17 +271,23 @@ mod tests {
         }
     }
 
-    fn create_function_entry(id: &str, ingress: Ingress) -> ResourceEntry {
+    fn create_function_entry(id: &str, public: bool) -> ResourceEntry {
+        let mut worker = Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string());
+
+        if public {
+            worker = worker.public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            });
+        }
+
         ResourceEntry {
-            config: alien_core::Resource::new(
-                Worker::new(id.to_string())
-                    .code(WorkerCode::Image {
-                        image: "test:latest".to_string(),
-                    })
-                    .permissions("default".to_string())
-                    .ingress(ingress)
-                    .build(),
-            ),
+            config: alien_core::Resource::new(worker.build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
@@ -337,7 +360,7 @@ mod tests {
         let mut resources = IndexMap::new();
         resources.insert(
             "my-worker".to_string(),
-            create_function_entry("my-worker", Ingress::Private),
+            create_function_entry("my-worker", false),
         );
         let stack = create_stack(resources);
         assert!(!stack_requires_network(&stack));
@@ -365,7 +388,7 @@ mod tests {
         );
         resources.insert(
             "my-worker".to_string(),
-            create_function_entry("my-worker", Ingress::Public),
+            create_function_entry("my-worker", true),
         );
 
         let stack = create_stack(resources);
@@ -390,7 +413,7 @@ mod tests {
         );
         resources.insert(
             "my-worker".to_string(),
-            create_function_entry("my-worker", Ingress::Public),
+            create_function_entry("my-worker", true),
         );
 
         let stack = create_stack(resources);
@@ -414,7 +437,7 @@ mod tests {
         );
         resources.insert(
             "my-worker".to_string(),
-            create_function_entry("my-worker", Ingress::Private),
+            create_function_entry("my-worker", false),
         );
 
         let stack = create_stack(resources);

@@ -308,10 +308,18 @@ impl TestDeployment {
 
 fn public_url_from_resource_outputs(outputs: &alien_core::ResourceOutputs) -> Option<String> {
     if let Some(worker) = outputs.downcast_ref::<alien_core::WorkerOutputs>() {
-        return worker.url.clone();
+        return worker
+            .public_endpoints
+            .values()
+            .next()
+            .map(|endpoint| endpoint.url.clone());
     }
     if let Some(container) = outputs.downcast_ref::<alien_core::ContainerOutputs>() {
-        return container.url.clone();
+        return container
+            .public_endpoints
+            .values()
+            .next()
+            .map(|endpoint| endpoint.url.clone());
     }
     None
 }
@@ -340,12 +348,19 @@ mod tests {
             current_replicas: 1,
             desired_replicas: 1,
             internal_dns: "api".to_string(),
-            url: Some("https://api.example.com".to_string()),
             replicas: Vec::new(),
-            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
-                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
-                hosted_zone_id: None,
-            }),
+            public_endpoints: std::collections::HashMap::from([(
+                "api".to_string(),
+                alien_core::PublicEndpointOutput {
+                    url: "https://api.example.com".to_string(),
+                    host: "api.example.com".to_string(),
+                    wildcard_host: None,
+                    load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                        dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                        hosted_zone_id: None,
+                    }),
+                },
+            )]),
         });
 
         assert_eq!(
@@ -362,12 +377,8 @@ mod tests {
             current_replicas: 1,
             desired_replicas: 1,
             internal_dns: "api".to_string(),
-            url: None,
             replicas: Vec::new(),
-            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
-                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
-                hosted_zone_id: None,
-            }),
+            public_endpoints: std::collections::HashMap::new(),
         });
 
         assert_eq!(public_url_from_resource_outputs(&outputs), None);

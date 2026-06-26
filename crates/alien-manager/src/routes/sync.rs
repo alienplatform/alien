@@ -23,8 +23,8 @@ use alien_error::AlienError;
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, ReconcileData,
-    ReleaseRecord, TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
+    DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
 };
 
 use super::{auth, AppState};
@@ -42,6 +42,10 @@ pub struct AcquireRequest {
     pub platforms: Option<Vec<Platform>>,
     #[serde(default)]
     pub statuses: Option<Vec<String>>,
+    #[serde(default)]
+    pub setup_method: Option<String>,
+    #[serde(default)]
+    pub acquire_mode: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: u32,
 }
@@ -219,11 +223,23 @@ async fn acquire(
         .into_response();
     }
 
+    let acquire_mode = match req.acquire_mode.as_deref() {
+        None => None,
+        Some("runtime") => Some(DeploymentAcquireMode::Runtime),
+        Some("setup-run") => Some(DeploymentAcquireMode::SetupRun),
+        Some("setup-teardown") => Some(DeploymentAcquireMode::SetupTeardown),
+        Some(other) => {
+            return ErrorData::bad_request(format!("Invalid acquireMode: {other}")).into_response();
+        }
+    };
+
     let filter = DeploymentFilter {
         deployment_group_id: None,
         deployment_ids: req.deployment_ids,
         statuses: req.statuses,
         platforms: req.platforms,
+        setup_method: req.setup_method,
+        acquire_mode,
         limit: Some(req.limit),
         ..DeploymentFilter::default()
     };
@@ -240,8 +256,17 @@ async fn acquire(
     let deployments: Vec<AcquiredDeploymentResponse> = match acquired
         .into_iter()
         .map(|a| {
-            serde_json::to_value(&a.deployment)
-                .map(|deployment| AcquiredDeploymentResponse { deployment })
+            let mut deployment = serde_json::to_value(&a.deployment)?;
+            if let (Some(config), Some(object)) = (
+                a.deployment.deployment_config.as_ref(),
+                deployment.as_object_mut(),
+            ) {
+                object.insert(
+                    "deploymentConfig".to_string(),
+                    serde_json::to_value(config)?,
+                );
+            }
+            Ok::<_, serde_json::Error>(AcquiredDeploymentResponse { deployment })
         })
         .collect::<Result<Vec<_>, _>>()
     {
@@ -653,14 +678,17 @@ mod tests {
     }
 
     #[test]
-    fn target_config_preserves_control_plane_public_urls() {
+    fn target_config_preserves_control_plane_public_endpoints() {
         let mut deployment = deployment_record_with_state("provisioning", None);
-        let public_urls = HashMap::from([(
+        let public_endpoints = HashMap::from([(
             "bear-agent-loader".to_string(),
-            "https://byoc.example.test".to_string(),
+            HashMap::from([(
+                "shares".to_string(),
+                "https://shares.byoc.example.test".to_string(),
+            )]),
         )]);
         deployment.deployment_config = Some(DeploymentConfig {
-            public_urls: Some(public_urls.clone()),
+            public_endpoints: Some(public_endpoints.clone()),
             ..test_deployment_config()
         });
 
@@ -674,7 +702,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(config.public_urls, Some(public_urls));
+        assert_eq!(config.public_endpoints, Some(public_endpoints));
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -706,7 +734,7 @@ mod tests {
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,
-            public_urls: None,
+            public_endpoints: None,
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
@@ -1051,7 +1079,9 @@ fn build_target_deployment_config(
         .maybe_compute_backend(deployment_config.and_then(|config| config.compute_backend.clone()))
         .external_bindings(stack_settings.external_bindings.clone().unwrap_or_default())
         .maybe_base_platform(deployment.base_platform)
-        .maybe_public_urls(deployment_config.and_then(|config| config.public_urls.clone()))
+        .maybe_public_endpoints(
+            deployment_config.and_then(|config| config.public_endpoints.clone()),
+        )
         .maybe_domain_metadata(deployment_config.and_then(|config| config.domain_metadata.clone()))
         .maybe_monitoring(deployment_config.and_then(|config| config.monitoring.clone()))
         .maybe_manager_url(Some(manager_url))

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -111,7 +112,7 @@ impl LocalDaemonController {
 
         let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
-            .add_current_resource_public_endpoint(ctx, &config.id)
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
@@ -119,7 +120,7 @@ impl LocalDaemonController {
             env_builder = env_builder.add_passthrough_transport_env_vars();
         }
 
-        if let Some(endpoint) = config.ports.first() {
+        if let Some(endpoint) = config.public_endpoints.first() {
             env_builder = env_builder.add_env_var("PORT".to_string(), endpoint.port.to_string());
         }
 
@@ -259,27 +260,46 @@ impl LocalDaemonController {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_name.clone(),
                 running: true,
-                url: self.public_url.clone(),
-                load_balancer_endpoint: None,
+                public_endpoints: self
+                    .public_url
+                    .as_ref()
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                url: url.clone(),
+                                host: alien_core::public_url_host(url).unwrap_or_default(),
+                                wildcard_host: None,
+                                load_balancer_endpoint: None,
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
             })
         })
     }
 }
 
 fn local_daemon_public_url(ctx: &ResourceControllerContext<'_>, config: &Daemon) -> Option<String> {
-    local_daemon_public_url_from_config(ctx.deployment_config.public_urls.as_ref(), config)
+    local_daemon_public_url_from_config(ctx.deployment_config.public_endpoints.as_ref(), config)
 }
 
 fn local_daemon_public_url_from_config(
-    public_urls: Option<&HashMap<String, String>>,
+    public_endpoints: Option<&alien_core::PublicEndpointUrls>,
     config: &Daemon,
 ) -> Option<String> {
-    public_urls
-        .and_then(|urls| urls.get(&config.id))
+    public_endpoints
+        .and_then(|resources| resources.get(&config.id))
+        .and_then(|endpoints| {
+            config
+                .public_endpoints
+                .first()
+                .and_then(|endpoint| endpoints.get(&endpoint.name))
+        })
         .cloned()
         .or_else(|| {
             config
-                .ports
+                .public_endpoints
                 .first()
                 .map(|endpoint| format!("http://localhost:{}", endpoint.port))
         })
@@ -337,7 +357,7 @@ fn emit_local_daemon_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{DaemonCode, ExposeProtocol};
+    use alien_core::{DaemonCode, ExposeProtocol, PublicEndpoint};
 
     fn daemon_with_public_port() -> Daemon {
         Daemon::new("gateway".to_string())
@@ -345,20 +365,29 @@ mod tests {
                 image: "gateway:latest".to_string(),
             })
             .permissions("default".to_string())
-            .expose_port(8080, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .build()
     }
 
     #[test]
     fn local_daemon_public_url_prefers_configured_resource_url() {
         let daemon = daemon_with_public_port();
-        let public_urls = HashMap::from([(
+        let public_endpoints = HashMap::from([(
             "gateway".to_string(),
-            "https://gateway.example.test".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
         )]);
 
         assert_eq!(
-            local_daemon_public_url_from_config(Some(&public_urls), &daemon).as_deref(),
+            local_daemon_public_url_from_config(Some(&public_endpoints), &daemon).as_deref(),
             Some("https://gateway.example.test")
         );
     }

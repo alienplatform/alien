@@ -4,10 +4,10 @@
  */
 
 import * as z from "zod";
-import { IngressSchema } from "./ingress-schema.js";
 import { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { WorkerCodeSchema } from "./worker-code-schema.js";
+import { WorkerPublicEndpointSchema } from "./worker-public-endpoint-schema.js";
 import { WorkerTriggerSchema } from "./worker-trigger-schema.js";
 
 /**
@@ -48,9 +48,6 @@ export const WorkerSchema = z
       .describe(
         "Identifier for the worker. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
       ),
-    get ingress() {
-      return IngressSchema.default("private").optional();
-    },
     get links() {
       return z
         .array(
@@ -74,6 +71,15 @@ export const WorkerSchema = z
       .describe(
         "Permission profile name that defines the permissions granted to this worker.\nThis references a profile defined in the stack's permission definitions."
       ),
+    get publicEndpoints() {
+      return z
+        .array(
+          WorkerPublicEndpointSchema.describe(
+            "Public endpoint configuration for Worker resources."
+          )
+        )
+        .describe("Public endpoints exposed by this worker.");
+    },
     get readinessProbe() {
       return z.union([ReadinessProbeSchema, z.null()]).optional();
     },

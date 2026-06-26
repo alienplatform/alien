@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig, EnvironmentVariable,
-    ExposeProtocol, KubernetesCluster, PermissionSet, Platform, ResourceEntry, ResourceLifecycle,
-    Stack, StackState, Worker,
+    KubernetesCluster, PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack,
+    StackState, Worker,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
@@ -32,12 +32,8 @@ fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
 
     for (resource_id, entry) in stack.resources() {
         if let Some(container) = entry.config.downcast_ref::<Container>() {
-            if container
-                .ports
-                .iter()
-                .any(|port| port.expose == Some(ExposeProtocol::Http))
-            {
-                resources.push(format!("container '{}' (exposed HTTP port)", resource_id));
+            if !container.public_endpoints.is_empty() {
+                resources.push(format!("container '{}' (public endpoint)", resource_id));
             }
         }
     }
@@ -371,8 +367,8 @@ mod tests {
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
         DomainMetadata, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-        Ingress, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
-        Storage, Worker, WorkerCode,
+        ExposeProtocol, PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry,
+        ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -395,7 +391,7 @@ mod tests {
             compute_backend: None,
             external_bindings: Default::default(),
             base_platform: None,
-            public_urls: None,
+            public_endpoints: None,
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
@@ -435,6 +431,7 @@ mod tests {
                     private_key: None,
                     issued_at: None,
                     aliases: Vec::new(),
+                    endpoints: HashMap::new(),
                 },
             )]),
         }
@@ -503,7 +500,13 @@ mod tests {
                     })
                     .replicas(1)
                     .permissions("default".to_string())
-                    .expose_port(8080, ExposeProtocol::Http)
+                    .public_endpoint(PublicEndpoint {
+                        name: "api".to_string(),
+                        port: 8080,
+                        protocol: ExposeProtocol::Http,
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
                     .build(),
             ),
             lifecycle: ResourceLifecycle::Live,
@@ -520,7 +523,11 @@ mod tests {
                         image: "test:latest".to_string(),
                     })
                     .permissions("default".to_string())
-                    .ingress(Ingress::Public)
+                    .public_endpoint(WorkerPublicEndpoint {
+                        name: "api".to_string(),
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
                     .build(),
             ),
             lifecycle: ResourceLifecycle::Live,

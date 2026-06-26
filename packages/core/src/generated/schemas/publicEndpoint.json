@@ -1,11 +1,15 @@
 {
   "type": "object",
-  "description": "Public endpoint configuration shared by workload resources.",
-  "required": ["port", "protocol"],
+  "description": "Public endpoint configuration for port-backed workload resources.",
+  "required": ["name", "port", "protocol"],
   "properties": {
     "hostLabel": {
       "type": ["string", "null"],
       "description": "Optional DNS label override for generated endpoint hostnames."
+    },
+    "name": {
+      "type": "string",
+      "description": "Endpoint name within the resource."
     },
     "port": {
       "type": "integer",

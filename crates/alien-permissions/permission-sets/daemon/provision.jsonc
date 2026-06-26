@@ -10,17 +10,12 @@
           "actions": [
             "elasticloadbalancing:CreateLoadBalancer",
             "elasticloadbalancing:CreateTargetGroup",
-            "elasticloadbalancing:CreateListener",
-            "elasticloadbalancing:AddTags"
+            "elasticloadbalancing:CreateListener"
           ]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
-            ],
+            "resources": ["*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -29,16 +24,46 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
-            ],
+            "resources": ["*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "tag-public-load-balancer-on-create",
+        "description": "Allow tags supplied during daemon ALB resource creation. AWS authorizes tag-on-create through AddTags plus elasticloadbalancing:CreateAction.",
+        "grant": {
+          "actions": ["elasticloadbalancing:AddTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
               }
             }
           }
@@ -229,6 +254,31 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "create-elb-service-linked-role",
+        "description": "Allow AWS to create the Elastic Load Balancing service-linked role required the first time an account creates an ELB resource.",
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
           }
         }
       },

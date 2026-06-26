@@ -554,9 +554,20 @@ impl TestWorkerController {
             let url = self.url.as_ref().filter(|u| !u.is_empty());
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: identifier.clone(),
-                url: url.cloned(),
                 identifier: Some(identifier.clone()),
-                load_balancer_endpoint: None, // Test workers don't have load balancers
+                public_endpoints: url
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                url: url.clone(),
+                                host: alien_core::public_url_host(url).unwrap_or_default(),
+                                wildcard_host: None,
+                                load_balancer_endpoint: None,
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
                 commands_push_target: None,
             }))
         } else {

@@ -7,7 +7,7 @@ import * as z from "zod";
 import { ExposeProtocolSchema } from "./expose-protocol-schema.js";
 
 /**
- * @description Public endpoint configuration shared by workload resources.
+ * @description Public endpoint configuration for port-backed workload resources.
  */
 export const PublicEndpointSchema = z
   .object({
@@ -15,6 +15,7 @@ export const PublicEndpointSchema = z
       .string()
       .describe("Optional DNS label override for generated endpoint hostnames.")
       .nullish(),
+    name: z.string().describe("Endpoint name within the resource."),
     port: z
       .int()
       .min(0)
@@ -30,6 +31,8 @@ export const PublicEndpointSchema = z
         .describe("Whether to route wildcard subdomains to this endpoint.")
     ),
   })
-  .describe("Public endpoint configuration shared by workload resources.");
+  .describe(
+    "Public endpoint configuration for port-backed workload resources."
+  );
 
 export type PublicEndpoint = z.infer<typeof PublicEndpointSchema>;

@@ -168,7 +168,6 @@ export type { HorizonWorkloadSchedulingMode } from "./zod/horizon-workload-sched
 export type { HttpMethod } from "./zod/http-method-schema.js";
 export type { ImportSourceKind } from "./zod/import-source-kind-schema.js";
 export type { ImportedResource } from "./zod/imported-resource-schema.js";
-export type { Ingress } from "./zod/ingress-schema.js";
 export type { KubernetesBuildHeartbeatData } from "./zod/kubernetes-build-heartbeat-data-schema.js";
 export type { KubernetesCertificateMode } from "./zod/kubernetes-certificate-mode-schema.js";
 export type { KubernetesCloudReference } from "./zod/kubernetes-cloud-reference-schema.js";
@@ -252,6 +251,7 @@ export type { PresignedRequestBackend } from "./zod/presigned-request-backend-sc
 export type { PresignedRequest } from "./zod/presigned-request-schema.js";
 export type { ProviderFleetStatus } from "./zod/provider-fleet-status-schema.js";
 export type { ProviderLifecycleState } from "./zod/provider-lifecycle-state-schema.js";
+export type { PublicEndpointOutput } from "./zod/public-endpoint-output-schema.js";
 export type { PublicEndpoint } from "./zod/public-endpoint-schema.js";
 export type { PushProgress } from "./zod/push-progress-schema.js";
 export type { QueueHeartbeatData } from "./zod/queue-heartbeat-data-schema.js";
@@ -314,6 +314,7 @@ export type { Vault } from "./zod/vault-schema.js";
 export type { WorkerCode } from "./zod/worker-code-schema.js";
 export type { WorkerHeartbeatData } from "./zod/worker-heartbeat-data-schema.js";
 export type { WorkerOutputs } from "./zod/worker-outputs-schema.js";
+export type { WorkerPublicEndpoint } from "./zod/worker-public-endpoint-schema.js";
 export type { Worker } from "./zod/worker-schema.js";
 export type { WorkerTrigger } from "./zod/worker-trigger-schema.js";
 export type { WorkloadHeartbeatStatus } from "./zod/workload-heartbeat-status-schema.js";
@@ -488,7 +489,6 @@ export { HorizonWorkloadSchedulingModeSchema } from "./zod/horizon-workload-sche
 export { HttpMethodSchema } from "./zod/http-method-schema.js";
 export { ImportSourceKindSchema } from "./zod/import-source-kind-schema.js";
 export { ImportedResourceSchema } from "./zod/imported-resource-schema.js";
-export { IngressSchema } from "./zod/ingress-schema.js";
 export { KubernetesBuildHeartbeatDataSchema } from "./zod/kubernetes-build-heartbeat-data-schema.js";
 export { KubernetesCertificateModeSchema } from "./zod/kubernetes-certificate-mode-schema.js";
 export { KubernetesCloudReferenceSchema } from "./zod/kubernetes-cloud-reference-schema.js";
@@ -572,6 +572,7 @@ export { PresignedRequestBackendSchema } from "./zod/presigned-request-backend-s
 export { PresignedRequestSchema } from "./zod/presigned-request-schema.js";
 export { ProviderFleetStatusSchema } from "./zod/provider-fleet-status-schema.js";
 export { ProviderLifecycleStateSchema } from "./zod/provider-lifecycle-state-schema.js";
+export { PublicEndpointOutputSchema } from "./zod/public-endpoint-output-schema.js";
 export { PublicEndpointSchema } from "./zod/public-endpoint-schema.js";
 export { PushProgressSchema } from "./zod/push-progress-schema.js";
 export { QueueHeartbeatDataSchema } from "./zod/queue-heartbeat-data-schema.js";
@@ -634,6 +635,7 @@ export { VaultSchema } from "./zod/vault-schema.js";
 export { WorkerCodeSchema } from "./zod/worker-code-schema.js";
 export { WorkerHeartbeatDataSchema } from "./zod/worker-heartbeat-data-schema.js";
 export { WorkerOutputsSchema } from "./zod/worker-outputs-schema.js";
+export { WorkerPublicEndpointSchema } from "./zod/worker-public-endpoint-schema.js";
 export { WorkerSchema } from "./zod/worker-schema.js";
 export { WorkerTriggerSchema } from "./zod/worker-trigger-schema.js";
 export { WorkloadHeartbeatStatusSchema } from "./zod/workload-heartbeat-status-schema.js";

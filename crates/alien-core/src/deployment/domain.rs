@@ -60,11 +60,14 @@ pub struct ManagedDomainInfo {
     pub issued_at: Option<String>,
 }
 
+/// Certificate and DNS metadata for a public endpoint.
+pub type PublicEndpointDomainInfo = ManagedDomainInfo;
+
 /// Certificate and DNS metadata for a public resource.
 ///
-/// The direct fields describe the primary generated hostname. `aliases`
-/// contains additional managed hostnames that route directly to the same
-/// resource.
+/// The direct fields describe the primary endpoint hostname. `endpoints`
+/// contains endpoint-scoped metadata keyed by endpoint name. `aliases` contains
+/// additional managed hostnames that route directly to the primary endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -77,9 +80,7 @@ pub struct ResourceDomainInfo {
     pub certificate_status: CertificateStatus,
     /// Current DNS record status
     pub dns_status: DnsRecordStatus,
-    /// Last DNS error message. Present when DNS previously failed, even if status
-    /// was reset to pending for retry. Used to surface actionable error context
-    /// in WaitingForDns failure messages.
+    /// Last DNS error message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_error: Option<String>,
     /// Full PEM certificate chain (only present if status is "issued").
@@ -91,6 +92,9 @@ pub struct ResourceDomainInfo {
     /// ISO 8601 timestamp when certificate was issued (for renewal detection).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_at: Option<String>,
+    /// Endpoint-scoped metadata keyed by endpoint name.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub endpoints: HashMap<String, PublicEndpointDomainInfo>,
     /// Additional managed hostnames for the resource.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<ManagedDomainInfo>,

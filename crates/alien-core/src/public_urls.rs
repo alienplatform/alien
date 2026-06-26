@@ -3,53 +3,69 @@ use alien_error::AlienError;
 use std::collections::HashMap;
 use url::Url;
 
-/// Parse a public URL assignment in `<resource-id>=<absolute-url>` form.
-pub fn parse_public_url_assignment(value: &str) -> Result<(String, String)> {
-    let (resource_id, public_url) = value.split_once('=').ok_or_else(|| {
+/// Public endpoint URL overrides keyed by resource ID, then endpoint name.
+pub type PublicEndpointUrls = HashMap<String, HashMap<String, String>>;
+
+/// Parse a public endpoint assignment in `<resource-id>.<endpoint-name>=<absolute-url>` form.
+pub fn parse_public_endpoint_assignment(value: &str) -> Result<(String, String, String)> {
+    let (key, public_url) = value.split_once('=').ok_or_else(|| {
         AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: "<missing>".to_string(),
-            reason: "expected <resource-id>=<absolute-url>".to_string(),
+            reason: "expected <resource-id>.<endpoint-name>=<absolute-url>".to_string(),
         })
     })?;
-    let resource_id = resource_id.trim();
+    let key = key.trim();
     let public_url = public_url.trim();
-    validate_public_url(resource_id, public_url)?;
-    Ok((resource_id.to_string(), public_url.to_string()))
+    let (resource_id, endpoint_name) = key.split_once('.').ok_or_else(|| {
+        AlienError::new(ErrorData::PublicUrlInvalid {
+            resource_id: key.to_string(),
+            reason: "expected <resource-id>.<endpoint-name> before '='".to_string(),
+        })
+    })?;
+    validate_public_endpoint_url(resource_id, endpoint_name, public_url)?;
+    Ok((
+        resource_id.to_string(),
+        endpoint_name.to_string(),
+        public_url.to_string(),
+    ))
 }
 
-/// Validate a map of externally supplied public URLs keyed by resource ID.
-pub fn validate_public_urls(public_urls: &HashMap<String, String>) -> Result<()> {
-    for (resource_id, public_url) in public_urls {
-        validate_public_url(resource_id, public_url)?;
+/// Validate endpoint URL overrides keyed by resource ID and endpoint name.
+pub fn validate_public_endpoint_urls(public_endpoints: &PublicEndpointUrls) -> Result<()> {
+    for (resource_id, endpoints) in public_endpoints {
+        if endpoints.is_empty() {
+            return Err(AlienError::new(ErrorData::PublicUrlInvalid {
+                resource_id: resource_id.to_string(),
+                reason: "at least one endpoint URL is required when a resource is present"
+                    .to_string(),
+            }));
+        }
+        for (endpoint_name, public_url) in endpoints {
+            validate_public_endpoint_url(resource_id, endpoint_name, public_url)?;
+        }
     }
     Ok(())
 }
 
-/// Validate one externally supplied public URL.
-pub fn validate_public_url(resource_id: &str, public_url: &str) -> Result<()> {
-    if resource_id.trim().is_empty() {
-        return Err(AlienError::new(ErrorData::PublicUrlInvalid {
-            resource_id: "<empty>".to_string(),
-            reason: "resource ID is required".to_string(),
-        }));
-    }
-    if resource_id.trim() != resource_id {
-        return Err(AlienError::new(ErrorData::PublicUrlInvalid {
-            resource_id: resource_id.to_string(),
-            reason: "resource ID must not contain leading or trailing whitespace".to_string(),
-        }));
-    }
+/// Validate one externally supplied endpoint URL.
+pub fn validate_public_endpoint_url(
+    resource_id: &str,
+    endpoint_name: &str,
+    public_url: &str,
+) -> Result<()> {
+    validate_key_part("resource ID", resource_id, resource_id)?;
+    validate_key_part("endpoint name", resource_id, endpoint_name)?;
     if public_url.trim().is_empty() {
         return Err(AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: "URL is required".to_string(),
+            reason: format!("URL is required for endpoint '{endpoint_name}'"),
         }));
     }
 
     let parsed = Url::parse(public_url).map_err(|err| {
         AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: format!("URL must be absolute: {err}"),
+            reason: format!("endpoint '{endpoint_name}' URL must be absolute: {err}"),
         })
     })?;
 
@@ -58,7 +74,9 @@ pub fn validate_public_url(resource_id: &str, public_url: &str) -> Result<()> {
         scheme => {
             return Err(AlienError::new(ErrorData::PublicUrlInvalid {
                 resource_id: resource_id.to_string(),
-                reason: format!("URL scheme must be http or https, got '{scheme}'"),
+                reason: format!(
+                    "endpoint '{endpoint_name}' URL scheme must be http or https, got '{scheme}'"
+                ),
             }));
         }
     }
@@ -66,28 +84,48 @@ pub fn validate_public_url(resource_id: &str, public_url: &str) -> Result<()> {
     let Some(host) = parsed.host_str() else {
         return Err(AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: "URL must include a host".to_string(),
+            reason: format!("endpoint '{endpoint_name}' URL must include a host"),
         }));
     };
     if host.contains('*') {
         return Err(AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: "URL host must be the base resource hostname, not a wildcard".to_string(),
+            reason: format!(
+                "endpoint '{endpoint_name}' URL host must be the base hostname, not a wildcard"
+            ),
         }));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: "URL must not include query parameters or a fragment".to_string(),
+            reason: format!(
+                "endpoint '{endpoint_name}' URL must not include query parameters or a fragment"
+            ),
         }));
     }
     if parsed.path() != "/" {
         return Err(AlienError::new(ErrorData::PublicUrlInvalid {
             resource_id: resource_id.to_string(),
-            reason: "URL path must be empty or '/'".to_string(),
+            reason: format!("endpoint '{endpoint_name}' URL path must be empty or '/'"),
         }));
     }
 
+    Ok(())
+}
+
+fn validate_key_part(label: &str, resource_id: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::PublicUrlInvalid {
+            resource_id: resource_id.to_string(),
+            reason: format!("{label} is required"),
+        }));
+    }
+    if value.trim() != value {
+        return Err(AlienError::new(ErrorData::PublicUrlInvalid {
+            resource_id: resource_id.to_string(),
+            reason: format!("{label} must not contain leading or trailing whitespace"),
+        }));
+    }
     Ok(())
 }
 
@@ -107,29 +145,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_public_url_assignment() {
-        let (resource_id, public_url) =
-            parse_public_url_assignment("gateway=https://gateway.example.test")
+    fn parses_public_endpoint_assignment() {
+        let (resource_id, endpoint_name, public_url) =
+            parse_public_endpoint_assignment("gateway.api=https://api.example.test")
                 .expect("assignment should parse");
 
         assert_eq!(resource_id, "gateway");
-        assert_eq!(public_url, "https://gateway.example.test");
+        assert_eq!(endpoint_name, "api");
+        assert_eq!(public_url, "https://api.example.test");
     }
 
     #[test]
-    fn rejects_invalid_public_urls() {
+    fn rejects_invalid_public_endpoint_urls() {
         for value in [
             "gateway",
-            "=https://gateway.example.test",
-            "gateway=",
-            "gateway=ftp://gateway.example.test",
-            "gateway=https://*.gateway.example.test",
-            "gateway=https://gateway.example.test/path",
-            "gateway=https://gateway.example.test?x=1",
-            "gateway=https://gateway.example.test#frag",
+            "gateway=https://gateway.example.test",
+            ".api=https://gateway.example.test",
+            "gateway.=https://gateway.example.test",
+            "gateway.api=",
+            "gateway.api=ftp://gateway.example.test",
+            "gateway.api=https://*.gateway.example.test",
+            "gateway.api=https://gateway.example.test/path",
+            "gateway.api=https://gateway.example.test?x=1",
+            "gateway.api=https://gateway.example.test#frag",
         ] {
             assert!(
-                parse_public_url_assignment(value).is_err(),
+                parse_public_endpoint_assignment(value).is_err(),
                 "{value} should be invalid"
             );
         }

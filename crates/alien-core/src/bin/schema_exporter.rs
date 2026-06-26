@@ -22,6 +22,8 @@ use utoipa::OpenApi;
     ContainerPort,
     ExposeProtocol,
     PublicEndpoint,
+    WorkerPublicEndpoint,
+    PublicEndpointOutput,
     PersistentStorage,
     HealthCheck,
     ResourceSpec,

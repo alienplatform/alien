@@ -3,30 +3,11 @@
   "description": "Container port configuration.",
   "required": ["port"],
   "properties": {
-    "expose": {
-      "oneOf": [
-        { "type": "null" },
-        {
-          "description": "Optional exposure protocol (if None, port is internal-only)",
-          "type": "string",
-          "enum": ["http", "tcp"],
-          "x-readme-ref-name": "ExposeProtocol"
-        }
-      ]
-    },
-    "hostLabel": {
-      "type": ["string", "null"],
-      "description": "Optional DNS label override for generated endpoint hostnames."
-    },
     "port": {
       "type": "integer",
       "format": "int32",
       "description": "Port number",
       "minimum": 0
-    },
-    "wildcardSubdomains": {
-      "type": "boolean",
-      "description": "Whether wildcard subdomains route to this public endpoint."
     }
   },
   "x-readme-ref-name": "ContainerPort"

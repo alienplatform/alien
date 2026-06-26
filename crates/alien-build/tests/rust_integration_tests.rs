@@ -2,7 +2,7 @@ use alien_build::{
     build_stack,
     settings::{BuildSettings, PlatformBuildSettings},
 };
-use alien_core::{permissions::PermissionProfile, Ingress, ResourceLifecycle, Worker, WorkerCode};
+use alien_core::{permissions::PermissionProfile, ResourceLifecycle, Worker, WorkerCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::path::{Path, PathBuf as StdPathBuf};
@@ -23,7 +23,6 @@ fn create_test_function(name: &str, code: WorkerCode) -> Worker {
         .memory_mb(512)
         .timeout_seconds(60)
         .environment(HashMap::new())
-        .ingress(Ingress::Private)
         .permissions("execution".to_string())
         .build()
 }

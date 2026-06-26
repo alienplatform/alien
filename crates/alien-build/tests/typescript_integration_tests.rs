@@ -3,8 +3,7 @@ use alien_build::{
     settings::{BuildSettings, PlatformBuildSettings, PushSettings},
 };
 use alien_core::{
-    permissions::PermissionProfile, Ingress, Platform, ResourceLifecycle, Storage, Worker,
-    WorkerCode,
+    permissions::PermissionProfile, Platform, ResourceLifecycle, Storage, Worker, WorkerCode,
 };
 use dockdash::{test_utils::setup_local_registry, ClientProtocol, PushOptions, RegistryAuth};
 use std::collections::HashMap;
@@ -74,7 +73,6 @@ fn create_test_function(name: &str, code: WorkerCode) -> Worker {
         .memory_mb(512)
         .timeout_seconds(60)
         .environment(HashMap::new())
-        .ingress(Ingress::Private)
         .permissions("execution".to_string())
         .build()
 }

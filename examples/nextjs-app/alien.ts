@@ -5,7 +5,7 @@ const app = new alien.Container("app")
   .cpu(0.5)
   .memory("512Mi")
   .port(3000)
-  .expose("http")
+  .publicEndpoint("web", 3000, "http")
   // Next's standalone server reads these; HOSTNAME=0.0.0.0 binds all interfaces.
   .environment({ PORT: "3000", HOSTNAME: "0.0.0.0" })
   .permissions("app")

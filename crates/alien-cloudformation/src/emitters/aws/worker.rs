@@ -1,5 +1,5 @@
 //! AWS Worker — Lambda function plus log group, optional fallback role,
-//! and optional API Gateway HTTP API for public ingress.
+//! and optional API Gateway HTTP API for public endpoints.
 //!
 //! Triggers:
 //!
@@ -8,7 +8,7 @@
 //!   is wired by the storage emitter).
 //! * Schedule: `AWS::Events::Rule` + `AWS::Lambda::Permission`.
 //!
-//! `Ingress::Public` adds a private API Gateway HTTP API in front of the
+//! A configured public endpoint adds an API Gateway HTTP API in front of the
 //! Lambda with proxy integration.
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext,
     render_runtime_environment_plan, validate_runtime_environment_user_map,
-    worker_runtime_environment_contract, ErrorData, Ingress, NetworkSettings, Platform, Result,
+    worker_runtime_environment_contract, ErrorData, NetworkSettings, Platform, Result,
     RuntimeEnvironmentBindingEntry, RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer,
     RuntimeEnvironmentValue, Storage, Worker, WorkerCode, WorkerTrigger,
 };
@@ -129,7 +129,7 @@ impl CfEmitter for AwsWorkerEmitter {
         resources.extend(queue_trigger_resources(ctx, function, logical_id)?);
         resources.extend(storage_trigger_permissions(ctx, function, logical_id)?);
         resources.extend(schedule_trigger_resources(function, logical_id)?);
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
             resources.extend(public_api_resources(logical_id));
         }
 
@@ -159,14 +159,30 @@ impl CfEmitter for AwsWorkerEmitter {
                 CfExpression::list(eventbridge_permission_statement_ids(function, logical_id)),
             ),
         ];
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
+            fields.push((
+                "publicEndpoints",
+                CfExpression::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        CfExpression::object([
+                            (
+                                "url",
+                                CfExpression::sub(format!(
+                                    "https://${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
+                                )),
+                            ),
+                            (
+                                "host",
+                                CfExpression::sub(format!(
+                                    "${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
+                                )),
+                            ),
+                        ]),
+                    )
+                })),
+            ));
             fields.extend([
-                (
-                    "url",
-                    CfExpression::sub(format!(
-                        "https://${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
-                    )),
-                ),
                 ("apiId", CfExpression::ref_(format!("{logical_id}Api"))),
                 (
                     "integrationId",
@@ -188,12 +204,28 @@ impl CfEmitter for AwsWorkerEmitter {
             ("functionName", CfExpression::ref_(logical_id)),
             ("region", CfExpression::ref_("AWS::Region")),
         ];
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
             fields.push((
-                "url",
-                CfExpression::sub(format!(
-                    "https://${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
-                )),
+                "publicEndpoints",
+                CfExpression::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        CfExpression::object([
+                            (
+                                "url",
+                                CfExpression::sub(format!(
+                                    "https://${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
+                                )),
+                            ),
+                            (
+                                "host",
+                                CfExpression::sub(format!(
+                                    "${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
+                                )),
+                            ),
+                        ]),
+                    )
+                })),
             ));
         }
 

@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Platform,
-    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, ResourceLifecycle,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -70,7 +70,11 @@ fn aws_function_public_ingress_emits_apigw_v2() {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
-                .ingress(Ingress::Public)
+                .public_endpoint(alien_core::WorkerPublicEndpoint {
+                    name: "api".to_string(),
+                    host_label: None,
+                    wildcard_subdomains: false,
+                })
                 .timeout_seconds(60)
                 .memory_mb(512)
                 .build(),

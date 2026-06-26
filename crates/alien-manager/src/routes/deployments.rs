@@ -751,6 +751,7 @@ async fn retry_deployment(
     }
 
     let retryable_failed_statuses = [
+        "preflights-failed",
         "initial-setup-failed",
         "provisioning-failed",
         "refresh-failed",

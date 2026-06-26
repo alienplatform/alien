@@ -1,7 +1,14 @@
 {
   "type": "object",
   "description": "Represents a serverless worker that executes code in response to triggers or direct invocations.\nWorkers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.",
-  "required": ["id", "links", "triggers", "permissions", "code"],
+  "required": [
+    "id",
+    "links",
+    "triggers",
+    "publicEndpoints",
+    "permissions",
+    "code"
+  ],
   "properties": {
     "code": {
       "description": "Code for the worker, either a pre-built image or source code to be built.",
@@ -106,17 +113,6 @@
       "type": "string",
       "description": "Identifier for the worker. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
     },
-    "ingress": {
-      "oneOf": [
-        {
-          "description": "Controls network accessibility of the worker.",
-          "type": "string",
-          "enum": ["public", "private"],
-          "x-readme-ref-name": "Ingress"
-        }
-      ],
-      "default": "private"
-    },
     "links": {
       "type": "array",
       "items": {
@@ -146,6 +142,30 @@
     "permissions": {
       "type": "string",
       "description": "Permission profile name that defines the permissions granted to this worker.\nThis references a profile defined in the stack's permission definitions."
+    },
+    "publicEndpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "Public endpoint configuration for Worker resources.",
+        "required": ["name"],
+        "properties": {
+          "hostLabel": {
+            "type": ["string", "null"],
+            "description": "Optional DNS label override for generated endpoint hostnames."
+          },
+          "name": {
+            "type": "string",
+            "description": "Endpoint name within the resource."
+          },
+          "wildcardSubdomains": {
+            "type": "boolean",
+            "description": "Whether to route wildcard subdomains to this endpoint."
+          }
+        },
+        "x-readme-ref-name": "WorkerPublicEndpoint"
+      },
+      "description": "Public endpoints exposed by this worker."
     },
     "readinessProbe": {
       "oneOf": [

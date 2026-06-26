@@ -168,7 +168,6 @@ export type { HorizonWorkloadSchedulingMode } from "./horizon-workload-schedulin
 export type { HttpMethod } from "./http-method-schema.js";
 export type { ImportSourceKind } from "./import-source-kind-schema.js";
 export type { ImportedResource } from "./imported-resource-schema.js";
-export type { Ingress } from "./ingress-schema.js";
 export type { KubernetesBuildHeartbeatData } from "./kubernetes-build-heartbeat-data-schema.js";
 export type { KubernetesCertificateMode } from "./kubernetes-certificate-mode-schema.js";
 export type { KubernetesCloudReference } from "./kubernetes-cloud-reference-schema.js";
@@ -252,6 +251,7 @@ export type { PresignedRequestBackend } from "./presigned-request-backend-schema
 export type { PresignedRequest } from "./presigned-request-schema.js";
 export type { ProviderFleetStatus } from "./provider-fleet-status-schema.js";
 export type { ProviderLifecycleState } from "./provider-lifecycle-state-schema.js";
+export type { PublicEndpointOutput } from "./public-endpoint-output-schema.js";
 export type { PublicEndpoint } from "./public-endpoint-schema.js";
 export type { PushProgress } from "./push-progress-schema.js";
 export type { QueueHeartbeatData } from "./queue-heartbeat-data-schema.js";
@@ -314,6 +314,7 @@ export type { Vault } from "./vault-schema.js";
 export type { WorkerCode } from "./worker-code-schema.js";
 export type { WorkerHeartbeatData } from "./worker-heartbeat-data-schema.js";
 export type { WorkerOutputs } from "./worker-outputs-schema.js";
+export type { WorkerPublicEndpoint } from "./worker-public-endpoint-schema.js";
 export type { Worker } from "./worker-schema.js";
 export type { WorkerTrigger } from "./worker-trigger-schema.js";
 export type { WorkloadHeartbeatStatus } from "./workload-heartbeat-status-schema.js";
@@ -488,7 +489,6 @@ export { HorizonWorkloadSchedulingModeSchema } from "./horizon-workload-scheduli
 export { HttpMethodSchema } from "./http-method-schema.js";
 export { ImportSourceKindSchema } from "./import-source-kind-schema.js";
 export { ImportedResourceSchema } from "./imported-resource-schema.js";
-export { IngressSchema } from "./ingress-schema.js";
 export { KubernetesBuildHeartbeatDataSchema } from "./kubernetes-build-heartbeat-data-schema.js";
 export { KubernetesCertificateModeSchema } from "./kubernetes-certificate-mode-schema.js";
 export { KubernetesCloudReferenceSchema } from "./kubernetes-cloud-reference-schema.js";
@@ -572,6 +572,7 @@ export { PresignedRequestBackendSchema } from "./presigned-request-backend-schem
 export { PresignedRequestSchema } from "./presigned-request-schema.js";
 export { ProviderFleetStatusSchema } from "./provider-fleet-status-schema.js";
 export { ProviderLifecycleStateSchema } from "./provider-lifecycle-state-schema.js";
+export { PublicEndpointOutputSchema } from "./public-endpoint-output-schema.js";
 export { PublicEndpointSchema } from "./public-endpoint-schema.js";
 export { PushProgressSchema } from "./push-progress-schema.js";
 export { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
@@ -634,6 +635,7 @@ export { VaultSchema } from "./vault-schema.js";
 export { WorkerCodeSchema } from "./worker-code-schema.js";
 export { WorkerHeartbeatDataSchema } from "./worker-heartbeat-data-schema.js";
 export { WorkerOutputsSchema } from "./worker-outputs-schema.js";
+export { WorkerPublicEndpointSchema } from "./worker-public-endpoint-schema.js";
 export { WorkerSchema } from "./worker-schema.js";
 export { WorkerTriggerSchema } from "./worker-trigger-schema.js";
 export { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";

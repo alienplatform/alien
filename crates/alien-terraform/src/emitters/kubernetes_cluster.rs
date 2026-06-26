@@ -8,9 +8,9 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Network, PermissionProfile,
-    PermissionSetReference, RemoteStackManagement, ResourceLifecycle, Result, Stack, Worker,
+    import::EmitContext, Container, ErrorData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Network, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, ResourceLifecycle, Result, Stack, Worker,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -807,17 +807,12 @@ fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
         entry
             .config
             .downcast_ref::<Worker>()
-            .map(|worker| worker.ingress == Ingress::Public)
+            .map(|worker| !worker.public_endpoints.is_empty())
             .unwrap_or(false)
             || entry
                 .config
                 .downcast_ref::<Container>()
-                .map(|container| {
-                    container
-                        .ports
-                        .iter()
-                        .any(|port| matches!(port.expose, Some(ExposeProtocol::Http)))
-                })
+                .map(|container| !container.public_endpoints.is_empty())
                 .unwrap_or(false)
     })
 }

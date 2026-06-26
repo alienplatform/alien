@@ -15,7 +15,7 @@
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::permissions::{PermissionProfile, PermissionsConfig};
 use alien_core::BinaryTarget;
-use alien_core::{Ingress, ResourceLifecycle, ToolchainConfig, Worker, WorkerCode};
+use alien_core::{ResourceLifecycle, ToolchainConfig, Worker, WorkerCode};
 use alien_local::LocalBindingsProvider;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,7 +47,6 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
         .memory_mb(512)
         .timeout_seconds(60)
         .environment(HashMap::new())
-        .ingress(Ingress::Private)
         .permissions("execution".to_string())
         .build();
 
