@@ -609,15 +609,15 @@ async fn get_deployment_info(
                 "worker" => stack_state
                     .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| o.public_endpoints.values().next().map(|e| e.url.clone())),
                 "container" => stack_state
                     .get_resource_outputs::<ContainerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| o.public_endpoints.values().next().map(|e| e.url.clone())),
                 "daemon" => stack_state
                     .get_resource_outputs::<DaemonOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| o.public_endpoints.values().next().map(|e| e.url.clone())),
                 _ => None,
             };
             resources.insert(
