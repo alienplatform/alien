@@ -4,15 +4,14 @@
 */
 
 import * as z from "zod";
-import { LoadBalancerEndpointSchema } from "./load-balancer-endpoint-schema.js";
+import { PublicEndpointOutputSchema } from "./public-endpoint-output-schema.js";
 
 export const DaemonOutputsSchema = z.object({
     "daemonName": z.string(),
-get "loadBalancerEndpoint"(){
-                return z.union([LoadBalancerEndpointSchema, z.null()]).optional()
-              },
-"running": z.boolean(),
-"url": z.string().nullish()
+"publicEndpoints": z.optional(z.object({
+    
+    }).catchall(z.lazy(() => PublicEndpointOutputSchema).describe("Runtime-resolved public endpoint metadata."))),
+"running": z.boolean()
     })
 
 export type DaemonOutputs = z.infer<typeof DaemonOutputsSchema>

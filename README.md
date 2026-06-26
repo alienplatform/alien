@@ -126,7 +126,7 @@ const api = new alien.Worker("api")
   .code({ type: "source", src: "./api", toolchain: { type: "typescript" } })
   .link(data)
   .link(secrets)
-  .ingress("public")
+  .publicEndpoint("api")
   .build()
 
 export default new alien.Stack("my-app")

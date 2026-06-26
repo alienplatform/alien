@@ -11,20 +11,20 @@ use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    parse_public_url_assignment, validate_public_urls, ClientConfig, ComputeSettings, Container,
-    Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, Ingress,
-    ManagementConfig, NetworkSettings, Platform, ReleaseInfo, Stack, StackSettings, TelemetryMode,
-    UpdatesMode, Worker,
+    parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
+    Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo, Stack,
+    StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
-    loop_contract::{LoopOperation, LoopOutcome},
+    loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
-        acquire_deployment, acquire_setup_delete_deployment, final_reconcile, release_deployment,
-        ManagerApiTransport,
+        acquire_deployment_with_payload, acquire_setup_delete_deployment, final_reconcile,
+        release_deployment, ManagerApiTransport,
     },
-    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
+    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use clap::Parser;
@@ -46,7 +46,7 @@ use std::{
     alien-deploy deploy --token-file /run/alien/token --platform local --experimental
 
     # Deploy a local pull-model workload behind customer-managed ingress
-    alien-deploy deploy --token-file /run/alien/token --platform local --experimental --public-url gateway=https://gateway.example.com
+    alien-deploy deploy --token-file /run/alien/token --platform local --experimental --public-endpoint gateway.api=https://gateway.example.com
 
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
@@ -138,12 +138,12 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
-    /// Public URL for an exposed resource in <resource-id>=<absolute-url> form.
+    /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
     ///
     /// Intended for pull-model deployments where DNS, TLS, and ingress are
-    /// owned outside Alien. Repeat this flag for multiple resources.
-    #[arg(long = "public-url")]
-    pub public_urls: Vec<String>,
+    /// owned outside Alien. Repeat this flag for multiple endpoints.
+    #[arg(long = "public-endpoint")]
+    pub public_endpoints: Vec<String>,
 
     #[command(flatten)]
     pub network: NetworkArgs,
@@ -166,12 +166,8 @@ struct DeployConfigFile {
     telemetry: Option<TelemetryMode>,
     /// Static compute selections for Alien-managed runtime pools.
     compute: Option<ComputeSettings>,
-    /// Generic public URLs for exposed resources in pull-model deployments.
-    ///
-    /// Keyed by Alien resource ID. This is intentionally application-neutral;
-    /// white-labeled deploy packages may present friendlier prompts, but should
-    /// persist the result here rather than adding app-specific Alien fields.
-    public_urls: Option<HashMap<String, String>>,
+    /// Generic public endpoint URLs for pull-model deployments.
+    public_endpoints: Option<PublicEndpointUrls>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -300,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn deploy_config_file_accepts_public_urls() {
+    fn deploy_config_file_accepts_public_endpoints() {
         let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
         writeln!(
             file,
@@ -308,8 +304,8 @@ mod tests {
 	name = "local-gateway"
 	platform = "local"
 
-	[publicUrls]
-	gateway = "https://gateway.example.test"
+	[publicEndpoints.gateway]
+	api = "https://gateway.example.test"
 	"#
         )
         .expect("config should be written");
@@ -327,24 +323,25 @@ mod tests {
         assert_eq!(config.name.as_deref(), Some("local-gateway"));
         assert_eq!(
             config
-                .public_urls
+                .public_endpoints
                 .as_ref()
-                .and_then(|urls| urls.get("gateway"))
+                .and_then(|resources| resources.get("gateway"))
+                .and_then(|endpoints| endpoints.get("api"))
                 .map(String::as_str),
             Some("https://gateway.example.test")
         );
     }
 
     #[test]
-    fn public_url_flag_overrides_config_public_url() {
+    fn public_endpoint_flag_overrides_config_public_endpoint() {
         let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
         writeln!(
             file,
             r#"
 platform = "local"
 
-[publicUrls]
-gateway = "https://old.example.test"
+[publicEndpoints.gateway]
+api = "https://old.example.test"
 "#
         )
         .expect("config should be written");
@@ -353,45 +350,54 @@ gateway = "https://old.example.test"
             "alien-deploy",
             "--config",
             file.path().to_str().expect("temp path should be UTF-8"),
-            "--public-url",
-            "gateway=https://new.example.test",
+            "--public-endpoint",
+            "gateway.api=https://new.example.test",
         ]);
         let config = load_deploy_config(&args)
             .expect("config should load")
             .expect("config should exist");
-        let public_urls = load_public_urls(&args, Platform::Local, Some(&config))
-            .expect("public URLs should load")
-            .expect("public URLs should exist");
+        let public_endpoints = load_public_endpoints(&args, Platform::Local, Some(&config))
+            .expect("public endpoints should load")
+            .expect("public endpoints should exist");
 
         assert_eq!(
-            public_urls.get("gateway").map(String::as_str),
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
             Some("https://new.example.test")
         );
     }
 
     #[test]
-    fn public_url_flag_rejects_cloud_platforms() {
+    fn public_endpoint_flag_rejects_cloud_platforms() {
         let args = UpArgs::parse_from([
             "alien-deploy",
             "--platform",
             "aws",
-            "--public-url",
-            "gateway=https://gateway.example.test",
+            "--public-endpoint",
+            "gateway.api=https://gateway.example.test",
         ]);
 
         let error =
-            load_public_urls(&args, Platform::Aws, None).expect_err("aws should be rejected");
+            load_public_endpoints(&args, Platform::Aws, None).expect_err("aws should be rejected");
         assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
     #[test]
-    fn public_url_resource_ids_must_expose_public_endpoints() {
+    fn public_endpoint_names_must_be_declared() {
         let daemon = alien_core::Daemon::new("gateway".to_string())
             .code(alien_core::DaemonCode::Image {
                 image: "gateway:latest".to_string(),
             })
             .permissions("default".to_string())
-            .expose_port(8080, alien_core::ExposeProtocol::Http)
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .build();
         let stack = Stack::new("test".to_string())
             .add(daemon, alien_core::ResourceLifecycle::Live)
@@ -399,17 +405,22 @@ gateway = "https://old.example.test"
 
         let valid = HashMap::from([(
             "gateway".to_string(),
-            "https://gateway.example.test".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
         )]);
-        validate_public_url_resource_ids(&valid, &stack)
-            .expect("gateway exposes a public endpoint");
+        validate_public_endpoint_names(&valid, &stack).expect("gateway exposes a public endpoint");
 
         let invalid = HashMap::from([(
-            "missing".to_string(),
-            "https://missing.example.test".to_string(),
+            "gateway".to_string(),
+            HashMap::from([(
+                "missing".to_string(),
+                "https://missing.example.test".to_string(),
+            )]),
         )]);
-        let error = validate_public_url_resource_ids(&invalid, &stack)
-            .expect_err("missing resource should fail");
+        let error = validate_public_endpoint_names(&invalid, &stack)
+            .expect_err("missing endpoint should fail");
         assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
@@ -587,7 +598,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })
     })?;
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
-    let public_urls = load_public_urls(&args, platform, deploy_config.as_ref())?;
+    let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
 
     let display_platform = match platform_str.as_str() {
         "aws" => "AWS",
@@ -642,8 +653,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     }
     output::label_value("Manager", &manager_url);
     output::label_value("Name", &name);
-    if let Some(public_urls) = public_urls.as_ref() {
-        output::label_value("Public URLs", &public_urls.len().to_string());
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
+        let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
+        output::label_value("Public endpoints", &endpoint_count.to_string());
     }
     eprintln!();
 
@@ -691,27 +703,29 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })?
         .into_inner();
 
-    if let Some(public_urls) = public_urls.as_ref() {
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
         let release_id = current_deployment
             .desired_release_id
             .as_deref()
             .or(current_deployment.current_release_id.as_deref())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ValidationError {
-                    field: "public-url".to_string(),
-                    message: "Cannot validate public URL resource IDs because the deployment has no release".to_string(),
+                    field: "public-endpoint".to_string(),
+                    message:
+                        "Cannot validate public endpoints because the deployment has no release"
+                            .to_string(),
                 })
             })?;
         let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
-        validate_public_url_resource_ids(public_urls, &stack)?;
+        validate_public_endpoint_names(public_endpoints, &stack)?;
     }
 
-    if current_deployment.status == "running" && public_urls.is_none() {
+    if current_deployment.status == "running" && public_endpoints.is_none() {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
     } else if current_deployment.status == "running" {
-        output::info("Deployment is already active; updating local agent public URL config.");
+        output::info("Deployment is already active; updating local agent public endpoint config.");
     }
 
     match (platform, base_platform) {
@@ -726,7 +740,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &stack_settings,
                 platform,
                 embedded_config,
-                public_urls.as_ref(),
+                public_endpoints.as_ref(),
             )
             .await?;
         }
@@ -832,26 +846,31 @@ async fn fetch_release_stack_by_id(
         })
 }
 
-fn validate_public_url_resource_ids(
-    public_urls: &HashMap<String, String>,
+fn validate_public_endpoint_names(
+    public_endpoints: &PublicEndpointUrls,
     stack: &Stack,
 ) -> Result<()> {
-    let valid_resource_ids = public_endpoint_resource_ids(stack);
-    for resource_id in public_urls.keys() {
-        if !valid_resource_ids.contains(resource_id) {
-            let available = if valid_resource_ids.is_empty() {
+    let valid_endpoints = public_endpoint_names(stack);
+    for (resource_id, endpoints) in public_endpoints {
+        for endpoint_name in endpoints.keys() {
+            let key = format!("{resource_id}.{endpoint_name}");
+            if valid_endpoints.contains(&key) {
+                continue;
+            }
+
+            let available = if valid_endpoints.is_empty() {
                 "none".to_string()
             } else {
-                valid_resource_ids
+                valid_endpoints
                     .iter()
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(", ")
             };
             return Err(AlienError::new(ErrorData::ValidationError {
-                field: "public-url".to_string(),
+                field: "public-endpoint".to_string(),
                 message: format!(
-                    "Resource '{resource_id}' does not expose a public endpoint. Available public endpoint resources: {available}"
+                    "Endpoint '{key}' is not declared by the stack. Available public endpoints: {available}"
                 ),
             }));
         }
@@ -859,26 +878,32 @@ fn validate_public_url_resource_ids(
     Ok(())
 }
 
-fn public_endpoint_resource_ids(stack: &Stack) -> BTreeSet<String> {
+fn public_endpoint_names(stack: &Stack) -> BTreeSet<String> {
     stack
         .resources()
-        .filter_map(|(resource_id, entry)| {
+        .flat_map(|(resource_id, entry)| {
             if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-                if !daemon.ports.is_empty() {
-                    return Some(resource_id.clone());
-                }
+                return daemon
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
             }
             if let Some(container) = entry.config.downcast_ref::<Container>() {
-                if container.ports.iter().any(|port| port.expose.is_some()) {
-                    return Some(resource_id.clone());
-                }
+                return container
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
             }
             if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-                if worker.ingress == Ingress::Public {
-                    return Some(resource_id.clone());
-                }
+                return worker
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
             }
-            None
+            Vec::new()
         })
         .collect()
 }
@@ -935,48 +960,53 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
     Ok(Some(config))
 }
 
-fn load_public_urls(
+fn load_public_endpoints(
     args: &UpArgs,
     platform: Platform,
     deploy_config: Option<&DeployConfigFile>,
-) -> Result<Option<HashMap<String, String>>> {
-    let mut public_urls = deploy_config
-        .and_then(|config| config.public_urls.clone())
+) -> Result<Option<PublicEndpointUrls>> {
+    let mut public_endpoints = deploy_config
+        .and_then(|config| config.public_endpoints.clone())
         .unwrap_or_default();
-    if !public_urls.is_empty() {
-        validate_public_urls(&public_urls).context(ErrorData::ValidationError {
-            field: "publicUrls".to_string(),
-            message: "Invalid public URL in deployment config".to_string(),
+    if !public_endpoints.is_empty() {
+        validate_public_endpoint_urls(&public_endpoints).context(ErrorData::ValidationError {
+            field: "publicEndpoints".to_string(),
+            message: "Invalid public endpoint URL in deployment config".to_string(),
         })?;
     }
 
-    let mut cli_resource_ids = BTreeSet::new();
-    for value in &args.public_urls {
-        let (resource_id, public_url) =
-            parse_public_url_assignment(value).context(ErrorData::ValidationError {
-                field: "public-url".to_string(),
-                message: "Expected --public-url <resource-id>=<absolute-url>".to_string(),
+    let mut cli_endpoints = BTreeSet::new();
+    for value in &args.public_endpoints {
+        let (resource_id, endpoint_name, public_url) = parse_public_endpoint_assignment(value)
+            .context(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: "Expected --public-endpoint <resource-id>.<endpoint-name>=<absolute-url>"
+                    .to_string(),
             })?;
-        if !cli_resource_ids.insert(resource_id.clone()) {
+        let key = format!("{resource_id}.{endpoint_name}");
+        if !cli_endpoints.insert(key.clone()) {
             return Err(AlienError::new(ErrorData::ValidationError {
-                field: "public-url".to_string(),
-                message: format!("Duplicate public URL for resource '{resource_id}'"),
+                field: "public-endpoint".to_string(),
+                message: format!("Duplicate public endpoint URL for '{key}'"),
             }));
         }
-        public_urls.insert(resource_id, public_url);
+        public_endpoints
+            .entry(resource_id)
+            .or_default()
+            .insert(endpoint_name, public_url);
     }
 
-    if public_urls.is_empty() {
+    if public_endpoints.is_empty() {
         return Ok(None);
     }
 
     match platform {
-        Platform::Local => Ok(Some(public_urls)),
+        Platform::Local => Ok(Some(public_endpoints)),
         Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
-                field: "public-url".to_string(),
+                field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-url is currently supported only for local pull-model deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local pull-model deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -1409,7 +1439,7 @@ async fn run_pull_model(
     stack_settings: &StackSettings,
     platform: Platform,
     embedded_config: Option<&DeployCliConfig>,
-    public_urls: Option<&HashMap<String, String>>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     match platform {
         Platform::Kubernetes => {
@@ -1433,7 +1463,7 @@ async fn run_pull_model(
                 deployment_name,
                 &platform.to_string(),
                 embedded_config,
-                public_urls,
+                public_endpoints,
             )
             .await
         }
@@ -1448,7 +1478,7 @@ async fn run_local_pull_model(
     deployment_name: &str,
     platform: &str,
     embedded_config: Option<&DeployCliConfig>,
-    public_urls: Option<&HashMap<String, String>>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     // Find or download the alien-agent binary
     let binary_path = find_or_download_agent_binary(embedded_config).await?;
@@ -1470,7 +1500,7 @@ async fn run_local_pull_model(
             platform,
             &encryption_key,
             args.data_dir.as_deref(),
-            public_urls,
+            public_endpoints,
         )
         .await;
     }
@@ -1487,7 +1517,7 @@ async fn run_local_pull_model(
         platform: platform.to_string(),
         data_dir: None,
         encryption_key: args.encryption_key.clone(),
-        public_urls: public_urls.cloned(),
+        public_endpoints: public_endpoints.cloned(),
     };
 
     super::agent::install_service(install_args)?;
@@ -1509,7 +1539,7 @@ async fn run_agent_foreground(
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
-    public_urls: Option<&HashMap<String, String>>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     use std::io::Write;
 
@@ -1568,17 +1598,17 @@ async fn run_agent_foreground(
         );
     }
 
-    let mut public_urls_file = match public_urls {
-        Some(public_urls) => {
+    let mut public_endpoints_file = match public_endpoints {
+        Some(public_endpoints) => {
             let mut file = tempfile::NamedTempFile::new().into_alien_error().context(
                 ErrorData::ConfigurationError {
-                    message: "Failed to create temp file for public URLs".to_string(),
+                    message: "Failed to create temp file for public endpoints".to_string(),
                 },
             )?;
-            serde_json::to_writer(&mut file, public_urls)
+            serde_json::to_writer(&mut file, public_endpoints)
                 .into_alien_error()
                 .context(ErrorData::ConfigurationError {
-                    message: "Failed to write public URLs".to_string(),
+                    message: "Failed to write public endpoints".to_string(),
                 })?;
             Some(file)
         }
@@ -1604,8 +1634,8 @@ async fn run_agent_foreground(
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
 
-    if let Some(file) = public_urls_file.as_ref() {
-        command.arg("--public-urls-file").arg(file.path());
+    if let Some(file) = public_endpoints_file.as_ref() {
+        command.arg("--public-endpoints-file").arg(file.path());
     }
 
     let status =
@@ -1620,7 +1650,7 @@ async fn run_agent_foreground(
     // Tempfiles drop here, after the child exits.
     drop(sync_token_file);
     drop(encryption_key_file);
-    drop(public_urls_file.take());
+    drop(public_endpoints_file.take());
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -2264,11 +2294,42 @@ pub async fn push_initial_setup(
     // holds the lock, it checks push-mode + Pending and releases immediately.
     // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    acquire_deployment(client, deployment_id, &session)
+    let acquired_deployment = acquire_deployment_with_payload(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock".to_string(),
         })?;
+
+    if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+        config = serde_json::from_value(acquired_config)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize deploymentConfig from acquired deployment"
+                    .to_string(),
+            })?;
+
+        if let Some(net_args) = network_args {
+            let network_platform = base_platform.unwrap_or(platform);
+            let network_override =
+                network::parse_network_settings(net_args, network_platform.as_str()).map_err(
+                    |e| {
+                        AlienError::new(ErrorData::ValidationError {
+                            field: "network".to_string(),
+                            message: e,
+                        })
+                    },
+                )?;
+            if let Some(ns) = network_override {
+                config.stack_settings.network = Some(ns);
+            }
+        }
+
+        config.manager_url = Some(manager_base_url.to_string());
+        config.deployment_token = Some(deployment_token.to_string());
+        config.base_platform = base_platform.or(config.base_platform);
+        let acquired_stack_settings = config.stack_settings.clone();
+        apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
+    }
 
     // Re-fetch the deployment state now that we hold the lock.
     // The manager may have advanced the state while we were waiting.
@@ -2515,35 +2576,61 @@ pub async fn push_deletion(
         delay_threshold: None,
     };
 
-    let runner_result = match shared_run_step_loop(
-        &mut state,
-        &mut config,
-        &client_config,
-        deployment_id,
-        &policy,
-        &transport,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(result)
-            if result.loop_result.outcome == LoopOutcome::Success
-                && state.status == DeploymentStatus::TeardownRequired =>
+    let runner_result = if matches!(
+        state.status,
+        DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
+    ) {
+        alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &client_config,
+            deployment_id,
+            &policy,
+            &transport,
+            None,
+        )
+        .await
+        .map(|setup_result| {
+            setup_result.unwrap_or_else(|| RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::Synced,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: state.status,
+                },
+                steps_executed: 0,
+            })
+        })
+    } else {
+        match shared_run_step_loop(
+            &mut state,
+            &mut config,
+            &client_config,
+            deployment_id,
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
         {
-            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-                &mut state,
-                &mut config,
-                &client_config,
-                deployment_id,
-                &policy,
-                &transport,
-                None,
-            )
-            .await
-            .map(|setup_result| setup_result.unwrap_or(result))
+            Ok(result)
+                if result.loop_result.outcome == LoopOutcome::Success
+                    && state.status == DeploymentStatus::TeardownRequired =>
+            {
+                alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                    &mut state,
+                    &mut config,
+                    &client_config,
+                    deployment_id,
+                    &policy,
+                    &transport,
+                    None,
+                )
+                .await
+                .map(|setup_result| setup_result.unwrap_or(result))
+            }
+            other => other,
         }
-        other => other,
     };
 
     // Always reconcile + release, even on error
@@ -2560,12 +2647,17 @@ pub async fn push_deletion(
             output::success("Deployment deleted successfully.");
             Ok(())
         }
-        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
-            operation: format!(
+        LoopOutcome::Failure => {
+            let operation = format!(
                 "deletion failed at status {}",
                 deployment_status_str(result.loop_result.final_status)
-            ),
-        })),
+            );
+            if let Some(error) = state.error.clone() {
+                Err(error.context(ErrorData::DeploymentFailed { operation }))
+            } else {
+                Err(AlienError::new(ErrorData::DeploymentFailed { operation }))
+            }
+        }
         LoopOutcome::Neutral => Ok(()),
     }
 }

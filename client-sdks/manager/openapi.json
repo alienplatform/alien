@@ -1324,6 +1324,12 @@
           "session"
         ],
         "properties": {
+          "acquireMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "deploymentIds": {
             "type": [
               "array",
@@ -1349,6 +1355,12 @@
           },
           "session": {
             "type": "string"
+          },
+          "setupMethod": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "statuses": {
             "type": [
@@ -5321,6 +5333,92 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "ComputePoolSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Fixed number of machines.",
+            "required": [
+              "machines",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Provider machine type selected for this deployment."
+              },
+              "machines": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of machines to run.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Autoscaling machine pool.",
+            "required": [
+              "min",
+              "max",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Provider machine type selected for this deployment."
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Maximum machine count.",
+                "minimum": 0
+              },
+              "min": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Minimum machine count.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "autoscale"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "User-selected deployment settings for one compute pool."
+      },
+      "ComputeSettings": {
+        "type": "object",
+        "description": "Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.",
+        "properties": {
+          "pools": {
+            "type": "object",
+            "description": "Selected compute choices keyed by pool ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ComputePoolSelection"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -12195,6 +12293,17 @@
         "type": "object",
         "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
         "properties": {
+          "compute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeSettings",
+                "description": "Deployment-time compute selections for Alien-managed compute pools.\n\nThis is where provider machine names such as EC2 instance types, GCE\nmachine types, or Azure VM SKUs belong. Application source should\ndeclare portable requirements instead."
+              }
+            ]
+          },
           "deploymentModel": {
             "$ref": "#/components/schemas/DeploymentModel",
             "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."

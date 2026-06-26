@@ -5,11 +5,11 @@
 //! credentials. This module generates the setup permission set for that first
 //! Frozen-resource phase.
 
-use std::collections::HashSet;
-
 use alien_core::{ownership_policy_for_resource_type, Stack};
 
-use crate::generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator};
+use crate::generators::{
+    ensure_unique_statement_sids, AwsIamPolicy, AwsRuntimePermissionsGenerator,
+};
 use crate::registry::get_permission_set;
 use crate::{BindingTarget, PermissionContext};
 
@@ -107,38 +107,11 @@ pub fn generate_aws_initial_setup_policy(
     })
 }
 
-fn ensure_unique_statement_sids(statements: &mut [crate::generators::AwsIamStatement]) {
-    let mut used = HashSet::new();
-
-    for statement in statements {
-        if used.insert(statement.sid.clone()) {
-            continue;
-        }
-
-        let base = statement.sid.clone();
-        let mut suffix = 2usize;
-        loop {
-            let candidate = suffixed_statement_sid(&base, suffix);
-            if used.insert(candidate.clone()) {
-                statement.sid = candidate;
-                break;
-            }
-            suffix += 1;
-        }
-    }
-}
-
-fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
-    let suffix = suffix.to_string();
-    let max_base_len = 128usize.saturating_sub(suffix.len());
-    let trimmed = base.chars().take(max_base_len).collect::<String>();
-    format!("{trimmed}{suffix}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{ResourceLifecycle, Storage, Worker, WorkerCode};
+    use std::collections::HashSet;
 
     fn test_function(name: &str) -> Worker {
         Worker::new(name.to_string())

@@ -7,10 +7,9 @@ use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::{run_agent_with_cancel_and_debug_loop, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
-use alien_core::{validate_public_urls, Platform};
+use alien_core::{validate_public_endpoint_urls, Platform, PublicEndpointUrls};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -66,11 +65,11 @@ pub struct Args {
     #[arg(long, env = "EXTERNAL_BINDINGS_FILE")]
     pub external_bindings_file: Option<PathBuf>,
 
-    #[arg(long, env = "PUBLIC_URLS")]
-    pub public_urls: Option<String>,
+    #[arg(long, env = "PUBLIC_ENDPOINTS")]
+    pub public_endpoints: Option<String>,
 
-    #[arg(long, env = "PUBLIC_URLS_FILE")]
-    pub public_urls_file: Option<PathBuf>,
+    #[arg(long, env = "PUBLIC_ENDPOINTS_FILE")]
+    pub public_endpoints_file: Option<PathBuf>,
 
     #[arg(long, env = "STACK_SETTINGS")]
     pub stack_settings: Option<String>,
@@ -283,17 +282,18 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         external_bindings_json,
         "external bindings",
     )?;
-    let public_urls_json = load_config_value(
-        args.public_urls,
-        args.public_urls_file.as_deref(),
-        "public URLs",
+    let public_endpoints_json = load_config_value(
+        args.public_endpoints,
+        args.public_endpoints_file.as_deref(),
+        "public endpoints",
         false,
     )
     .await?;
-    let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
-    if let Some(public_urls) = public_urls.as_ref() {
-        validate_public_urls(public_urls).context(ErrorData::ConfigurationError {
-            message: "Invalid public URLs configuration".to_string(),
+    let public_endpoints =
+        parse_json_opt::<PublicEndpointUrls>(public_endpoints_json, "public endpoints")?;
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
+        validate_public_endpoint_urls(public_endpoints).context(ErrorData::ConfigurationError {
+            message: "Invalid public endpoints configuration".to_string(),
         })?;
     }
     let stack_settings_json = load_config_value(
@@ -322,7 +322,7 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
-        .maybe_public_urls(public_urls)
+        .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .build();
 

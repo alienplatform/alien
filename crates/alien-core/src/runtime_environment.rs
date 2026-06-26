@@ -13,8 +13,7 @@ pub const ENV_ALIEN_SECRETS: &str = "ALIEN_SECRETS";
 pub const ENV_ALIEN_TRANSPORT: &str = "ALIEN_TRANSPORT";
 pub const ENV_ALIEN_DEPLOYMENT_ID: &str = "ALIEN_DEPLOYMENT_ID";
 pub const ENV_ALIEN_DEPLOYMENT_NAME: &str = "ALIEN_DEPLOYMENT_NAME";
-pub const ENV_ALIEN_PUBLIC_HOST: &str = "ALIEN_PUBLIC_HOST";
-pub const ENV_ALIEN_PUBLIC_URL: &str = "ALIEN_PUBLIC_URL";
+pub const ENV_ALIEN_PUBLIC_ENDPOINTS_JSON: &str = "ALIEN_PUBLIC_ENDPOINTS_JSON";
 pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENABLED";
 pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
 pub const ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS: &str = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS";
@@ -413,8 +412,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_TOKEN
                 | ENV_ALIEN_DEPLOYMENT_ID
                 | ENV_ALIEN_DEPLOYMENT_NAME
-                | ENV_ALIEN_PUBLIC_HOST
-                | ENV_ALIEN_PUBLIC_URL
+                | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS
                 | ENV_ALIEN_SECRETS
         )
@@ -506,8 +504,7 @@ mod tests {
             ENV_ALIEN_SECRETS,
             ENV_ALIEN_DEPLOYMENT_ID,
             ENV_ALIEN_DEPLOYMENT_NAME,
-            ENV_ALIEN_PUBLIC_HOST,
-            ENV_ALIEN_PUBLIC_URL,
+            ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
         ])
         .unwrap();
 

@@ -5,7 +5,7 @@
 //!
 //! * Image-only (no source-build wiring); customers pin the image at
 //!   the resource level.
-//! * Public ingress maps to `external_enabled = true` with target_port
+//! * Public endpoints map to `external_enabled = true` with target_port
 //!   8080 (the controller's default). Private maps to
 //!   `external_enabled = false`, only reachable from the environment's
 //!   own VNet.
@@ -24,8 +24,8 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Ingress, Result, ServiceAccount,
-    Worker, WorkerCode,
+    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Result, ServiceAccount, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use hcl::{
@@ -113,7 +113,7 @@ impl TfEmitter for AzureWorkerEmitter {
             nested(block("container", container_body)),
         ];
 
-        let public = matches!(function.ingress, Ingress::Public);
+        let public = !function.public_endpoints.is_empty();
         let ingress_body: Vec<Structure> = vec![
             attr("external_enabled", Expression::Bool(public)),
             attr(
@@ -180,10 +180,30 @@ impl TfEmitter for AzureWorkerEmitter {
         let function = downcast::<Worker>(ctx, Worker::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let fqdn = if matches!(function.ingress, Ingress::Public) {
-            expr::traversal(["azurerm_container_app", label, "latest_revision_fqdn"])
+        let public_endpoints = if !function.public_endpoints.is_empty() {
+            expr::object(function.public_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    expr::object([
+                        (
+                            "url",
+                            expr::template(format!(
+                                "https://${{azurerm_container_app.{label}.latest_revision_fqdn}}"
+                            )),
+                        ),
+                        (
+                            "host",
+                            expr::traversal([
+                                "azurerm_container_app",
+                                label,
+                                "latest_revision_fqdn",
+                            ]),
+                        ),
+                    ]),
+                )
+            }))
         } else {
-            Expression::Null
+            expr::object(std::iter::empty::<(&str, Expression)>())
         };
 
         Ok(expr::object([
@@ -193,7 +213,7 @@ impl TfEmitter for AzureWorkerEmitter {
                 "containerAppName",
                 expr::traversal(["azurerm_container_app", label, "name"]),
             ),
-            ("fqdn", fqdn),
+            ("publicEndpoints", public_endpoints),
         ]))
     }
 
@@ -231,12 +251,30 @@ impl TfEmitter for AzureWorkerEmitter {
             ),
             ("privateUrl".to_string(), private_url),
         ];
-        if matches!(function.ingress, Ingress::Public) {
+        if !function.public_endpoints.is_empty() {
             fields.push((
-                "publicUrl".to_string(),
-                expr::template(format!(
-                    "https://${{azurerm_container_app.{label}.latest_revision_fqdn}}"
-                )),
+                "publicEndpoints".to_string(),
+                expr::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        expr::object([
+                            (
+                                "url",
+                                expr::template(format!(
+                                    "https://${{azurerm_container_app.{label}.latest_revision_fqdn}}"
+                                )),
+                            ),
+                            (
+                                "host",
+                                expr::traversal([
+                                    "azurerm_container_app",
+                                    label,
+                                    "latest_revision_fqdn",
+                                ]),
+                            ),
+                        ]),
+                    )
+                })),
             ));
         }
         Ok(Some(expr::object(

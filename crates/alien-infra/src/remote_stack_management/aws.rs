@@ -14,7 +14,9 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
-    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
+    },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
@@ -650,6 +652,7 @@ impl AwsRemoteStackManagementController {
             return Ok(Vec::new());
         }
 
+        ensure_unique_statement_sids(&mut all_statements);
         self.chunk_management_policy_documents(all_statements)
     }
 

@@ -2,10 +2,9 @@
 //!
 //! Configuration can be built from CLI arguments or programmatically via the builder.
 
-use alien_core::{Platform, StackSettings, TelemetryMode, UpdatesMode};
+use alien_core::{Platform, PublicEndpointUrls, StackSettings, TelemetryMode, UpdatesMode};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use url::Url;
 
@@ -79,9 +78,8 @@ pub struct AgentConfig {
     /// Kubernetes namespace (Kubernetes platform only)
     pub namespace: Option<String>,
 
-    /// Public URLs for exposed resources in pull-model deployments.
-    /// Maps resource ID to public URL (e.g., {"api": "https://api.acme.com"}).
-    pub public_urls: Option<HashMap<String, String>>,
+    /// Public endpoint URLs for exposed resources in pull-model deployments.
+    pub public_endpoints: Option<PublicEndpointUrls>,
 
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,

@@ -113,6 +113,10 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         .get("importSource")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
+    let deployment_status = deployment_json
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -154,20 +158,28 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     }
 
     let total_steps = 3;
-    output::step(1, total_steps, "Requesting deployment deletion...");
+    if matches!(deployment_status, "teardown-required" | "teardown-failed") {
+        output::step(
+            1,
+            total_steps,
+            "Deletion already requested; continuing setup teardown...",
+        );
+    } else {
+        output::step(1, total_steps, "Requesting deployment deletion...");
 
-    client
-        .delete_deployment()
-        .id(&deployment_id)
-        .body(alien_manager_api::types::DeleteDeploymentRequest {
-            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-        })
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::DeploymentFailed {
-            operation: "request deletion".to_string(),
-        })?;
+        client
+            .delete_deployment()
+            .id(&deployment_id)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DeploymentFailed {
+                operation: "request deletion".to_string(),
+            })?;
+    }
 
     output::step(
         2,

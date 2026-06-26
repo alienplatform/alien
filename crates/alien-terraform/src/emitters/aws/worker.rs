@@ -1,5 +1,5 @@
 //! AWS Worker — Lambda function plus log group, optional fallback role,
-//! and (when `Ingress::Public`) an API Gateway HTTP API in front.
+//! and optional API Gateway HTTP API for public endpoints.
 
 use crate::{
     block::{attr, resource_block},
@@ -14,7 +14,7 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData,
     NetworkSettings, Platform, Result, Storage, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
@@ -149,7 +149,7 @@ impl TfEmitter for AwsWorkerEmitter {
             .resource_blocks
             .push(resource_block("aws_lambda_function", label, function_body));
 
-        // Triggers + ingress.
+        // Triggers + public endpoints.
         for resource in queue_trigger_resources(ctx, function, label)? {
             fragment.resource_blocks.push(resource);
         }
@@ -159,7 +159,7 @@ impl TfEmitter for AwsWorkerEmitter {
         for resource in schedule_trigger_resources(ctx, function, label)? {
             fragment.resource_blocks.push(resource);
         }
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
             for resource in public_api_resources(label) {
                 fragment.resource_blocks.push(resource);
             }
@@ -197,10 +197,26 @@ impl TfEmitter for AwsWorkerEmitter {
                 Expression::Array(eventbridge_permission_statement_ids(function, label)),
             ),
         ];
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
             fields.push((
-                "url".to_string(),
-                expr::traversal(["aws_apigatewayv2_api", label, "api_endpoint"]),
+                "publicEndpoints".to_string(),
+                expr::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        expr::object([
+                            (
+                                "url",
+                                expr::traversal(["aws_apigatewayv2_api", label, "api_endpoint"]),
+                            ),
+                            (
+                                "host",
+                                expr::raw(format!(
+                                    "trimprefix(aws_apigatewayv2_api.{label}.api_endpoint, \"https://\")"
+                                )),
+                            ),
+                        ]),
+                    )
+                })),
             ));
             fields.push((
                 "apiId".to_string(),
@@ -241,10 +257,26 @@ impl TfEmitter for AwsWorkerEmitter {
                 expr::raw("data.aws_region.current.region"),
             ),
         ];
-        if function.ingress == Ingress::Public {
+        if !function.public_endpoints.is_empty() {
             fields.push((
-                "url".to_string(),
-                expr::traversal(["aws_apigatewayv2_api", label, "api_endpoint"]),
+                "publicEndpoints".to_string(),
+                expr::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        expr::object([
+                            (
+                                "url",
+                                expr::traversal(["aws_apigatewayv2_api", label, "api_endpoint"]),
+                            ),
+                            (
+                                "host",
+                                expr::raw(format!(
+                                    "trimprefix(aws_apigatewayv2_api.{label}.api_endpoint, \"https://\")"
+                                )),
+                            ),
+                        ]),
+                    )
+                })),
             ));
         }
         Ok(Some(expr::object(

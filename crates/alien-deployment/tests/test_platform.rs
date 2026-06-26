@@ -236,7 +236,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         compute_backend: None,
         allow_frozen_changes: false,
         domain_metadata: None,
-        public_urls: None,
+        public_endpoints: None,
         monitoring: None,
         manager_url: None,
         deployment_token: None,

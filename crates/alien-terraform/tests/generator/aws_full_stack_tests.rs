@@ -6,7 +6,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    ArtifactRegistry, Build, Kv, ManagementPermissions, Network, NetworkSettings,
     PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
     StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
@@ -46,7 +46,11 @@ fn aws_full_stack_renders_audit_ready_module() {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .timeout_seconds(60)
         .memory_mb(512)
         .environment([("RUST_LOG".to_string(), "info".to_string())].into())

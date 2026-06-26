@@ -32,7 +32,7 @@ describe("Stack builder validation", () => {
       .cpu(0.25)
       .memory("256Mi")
       .permissions("execution")
-      .exposePort(8080, {
+      .publicEndpoint("api", 8080, {
         protocol: "http",
         hostLabel: "edge",
         wildcardSubdomains: true,
@@ -42,7 +42,13 @@ describe("Stack builder validation", () => {
     expect(container.config.ports).toEqual([
       {
         port: 8080,
-        expose: "http",
+      },
+    ])
+    expect(container.config.publicEndpoints).toEqual([
+      {
+        name: "api",
+        port: 8080,
+        protocol: "http",
         hostLabel: "edge",
         wildcardSubdomains: true,
       },
@@ -52,7 +58,7 @@ describe("Stack builder validation", () => {
       .code({ type: "image", image: "registry.example.com/gateway:latest" })
       .cluster("compute")
       .permissions("execution")
-      .exposePort(8080, {
+      .publicEndpoint("api", 8080, {
         protocol: "http",
         hostLabel: "public",
         wildcardSubdomains: true,
@@ -65,8 +71,9 @@ describe("Stack builder validation", () => {
       })
       .build()
 
-    expect(daemon.config.ports).toEqual([
+    expect(daemon.config.publicEndpoints).toEqual([
       {
+        name: "api",
         port: 8080,
         protocol: "http",
         hostLabel: "public",
@@ -91,7 +98,7 @@ describe("Stack builder validation", () => {
       .memoryMb(512)
       .timeoutSeconds(30)
       .permissions("execution")
-      .ingress("public")
+      .publicEndpoint("api")
       .environment({
         RUST_LOG: "info,alien_runtime_test_server=debug,alien_runtime=debug",
       })
@@ -195,7 +202,6 @@ describe("Stack builder validation", () => {
       })
       .memoryMb(256)
       .timeoutSeconds(15)
-      .ingress("private")
       .permissions("execution")
       .build()
 

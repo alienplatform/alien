@@ -262,7 +262,6 @@ use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -320,8 +319,8 @@ pub struct SingleControllerExecutor {
     environment_variables: EnvironmentVariablesSnapshot,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
-    // Public URL overrides for testing (resource_id -> url)
-    public_urls: Option<HashMap<String, String>>,
+    // Public endpoint URL overrides for testing.
+    public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
     desired_stack: Stack,
     stack_state: StackState,
@@ -380,7 +379,7 @@ impl SingleControllerExecutor {
                 .external_bindings(alien_core::ExternalBindings::default())
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
-                .maybe_public_urls(self.public_urls.clone())
+                .maybe_public_endpoints(self.public_endpoints.clone())
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
@@ -560,7 +559,7 @@ pub struct SingleControllerExecutorBuilder {
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
     domain_metadata: Option<DomainMetadata>,
-    public_urls: Option<HashMap<String, String>>,
+    public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
 }
@@ -580,7 +579,7 @@ impl SingleControllerExecutorBuilder {
                 created_at: String::new(),
             },
             domain_metadata: None,
-            public_urls: None,
+            public_endpoints: None,
             dependencies: Vec::new(),
             service_provider: None,
         }
@@ -616,11 +615,11 @@ impl SingleControllerExecutorBuilder {
         self
     }
 
-    /// Sets public URL overrides for testing (resource_id -> full URL).
+    /// Sets public endpoint URL overrides for testing.
     /// Overrides the FQDN-derived URL from domain_metadata, useful for pointing
     /// readiness probes at mock HTTP servers during tests.
-    pub fn public_urls(mut self, urls: HashMap<String, String>) -> Self {
-        self.public_urls = Some(urls);
+    pub fn public_endpoints(mut self, urls: alien_core::PublicEndpointUrls) -> Self {
+        self.public_endpoints = Some(urls);
         self
     }
 
@@ -1024,7 +1023,7 @@ impl SingleControllerExecutorBuilder {
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
             domain_metadata: self.domain_metadata,
-            public_urls: self.public_urls,
+            public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,
             registry: Arc::new(ResourceRegistry::with_built_ins()),
