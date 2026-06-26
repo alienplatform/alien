@@ -2,7 +2,10 @@
 
 use crate::{
     error::{ErrorData, Result},
-    traits::{ArtifactRegistry, BindingsProviderApi, Build, Kv, Queue, Storage, Vault, Worker},
+    traits::{
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
+        Storage, Vault, Worker,
+    },
 };
 
 use alien_client_config::ClientConfigExt;
@@ -10,7 +13,7 @@ use alien_core::{ClientConfig, Platform, StackState, ENV_ALIEN_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use std::{any::Any, collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 
 /// Direct platform-specific bindings provider.
 /// Routes to appropriate platform implementations based on binding configuration.
@@ -27,6 +30,18 @@ pub struct BindingsProvider {
     /// `"{trait_name}:{binding_name}"` to avoid collisions across types.
     /// Each value is a `Box<Arc<dyn Trait>>` erased via `Any`.
     cache: Arc<RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>>,
+}
+
+/// Environment-backed provider that defers cloud client configuration until the
+/// first binding is actually used.
+///
+/// Long-running HTTP daemons can be wrapped by alien-runtime only for commands,
+/// logs, or future binding access. They should still start when no startup
+/// secret needs loading, even if cloud metadata is temporarily unavailable.
+#[derive(Debug)]
+pub struct LazyEnvBindingsProvider {
+    env: HashMap<String, String>,
+    provider: OnceCell<BindingsProvider>,
 }
 
 impl BindingsProvider {
@@ -85,6 +100,22 @@ impl BindingsProvider {
         let bindings = Self::parse_bindings_from_env(&env)?;
 
         Self::new(client_config, bindings)
+    }
+
+    /// Creates an environment-backed provider without resolving cloud client
+    /// configuration yet.
+    ///
+    /// Startup still validates the platform and binding JSON, but credentials
+    /// are loaded only if application code asks for a binding or runtime-owned
+    /// startup secrets need to be fetched.
+    pub fn from_env_lazy(env: HashMap<String, String>) -> Result<LazyEnvBindingsProvider> {
+        crate::get_platform_from_env(&env)?;
+        Self::parse_bindings_from_env(&env)?;
+
+        Ok(LazyEnvBindingsProvider {
+            env,
+            provider: OnceCell::new(),
+        })
     }
 
     async fn client_config_from_env(
@@ -318,6 +349,62 @@ impl BindingsProvider {
 
         // 5. Create provider using from_stack_state (which extracts bindings from stack_state)
         Self::from_stack_state(&alien_stack_state, client_config)
+    }
+}
+
+impl LazyEnvBindingsProvider {
+    async fn provider(&self) -> Result<&BindingsProvider> {
+        self.provider
+            .get_or_try_init(|| async { BindingsProvider::from_env(self.env.clone()).await })
+            .await
+    }
+}
+
+#[async_trait]
+impl BindingsProviderApi for LazyEnvBindingsProvider {
+    async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
+        self.provider().await?.load_storage(binding_name).await
+    }
+
+    async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
+        self.provider().await?.load_build(binding_name).await
+    }
+
+    async fn load_artifact_registry(
+        &self,
+        binding_name: &str,
+    ) -> Result<Arc<dyn ArtifactRegistry>> {
+        self.provider()
+            .await?
+            .load_artifact_registry(binding_name)
+            .await
+    }
+
+    async fn load_vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
+        self.provider().await?.load_vault(binding_name).await
+    }
+
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
+        self.provider().await?.load_kv(binding_name).await
+    }
+
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+        self.provider().await?.load_queue(binding_name).await
+    }
+
+    async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
+        self.provider().await?.load_worker(binding_name).await
+    }
+
+    async fn load_container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
+        self.provider().await?.load_container(binding_name).await
+    }
+
+    async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>> {
+        self.provider()
+            .await?
+            .load_service_account(binding_name)
+            .await
     }
 }
 
@@ -1695,6 +1782,35 @@ mod tests {
                 "https://login.microsoftonline.com/".to_string(),
             ),
         ])
+    }
+
+    #[tokio::test]
+    async fn lazy_env_provider_defers_cloud_client_config_until_binding_use() {
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("AWS_EC2_METADATA_DISABLED".to_string(), "true".to_string()),
+            (
+                "AWS_PROFILE".to_string(),
+                "__alien_missing_test_profile__".to_string(),
+            ),
+            (
+                "ALIEN_SECRETS_BINDING".to_string(),
+                r#"{"service":"parameter-store","vaultPrefix":"test-secrets"}"#.to_string(),
+            ),
+        ]);
+
+        let provider = BindingsProvider::from_env_lazy(env)
+            .expect("lazy provider construction should validate binding JSON without AWS config");
+
+        let error = provider
+            .load_vault("secrets")
+            .await
+            .expect_err("binding use should still require AWS client config");
+
+        assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
     }
 
     #[tokio::test]

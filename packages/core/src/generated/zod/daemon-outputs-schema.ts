@@ -4,10 +4,15 @@
  */
 
 import * as z from "zod";
+import { LoadBalancerEndpointSchema } from "./load-balancer-endpoint-schema.js";
 
 export const DaemonOutputsSchema = z.object({
   daemonName: z.string(),
+  get loadBalancerEndpoint() {
+    return z.union([LoadBalancerEndpointSchema, z.null()]).optional();
+  },
   running: z.boolean(),
+  url: z.string().nullish(),
 });
 
 export type DaemonOutputs = z.infer<typeof DaemonOutputsSchema>;

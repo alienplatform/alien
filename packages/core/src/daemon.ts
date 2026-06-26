@@ -2,6 +2,9 @@ import {
   type DaemonCode,
   type Daemon as DaemonConfig,
   DaemonSchema,
+  type ExposeProtocol,
+  type HealthCheck,
+  type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
@@ -11,13 +14,25 @@ export type {
   Daemon as DaemonConfig,
   DaemonCode,
   DaemonOutputs,
+  ExposeProtocol,
+  HealthCheck,
+  PublicEndpoint,
   ResourceSpec,
 } from "./generated/index.js"
 export {
   DaemonCodeSchema,
   DaemonSchema as DaemonConfigSchema,
   DaemonOutputsSchema,
+  PublicEndpointSchema,
 } from "./generated/index.js"
+
+export type DaemonPublicEndpointOptions =
+  | ExposeProtocol
+  | {
+      protocol: ExposeProtocol
+      hostLabel?: string
+      wildcardSubdomains?: boolean
+    }
 
 /**
  * Represents a resident process that runs once per eligible machine or node.
@@ -28,6 +43,7 @@ export {
 export class Daemon {
   private _config: Partial<DaemonConfig> = {
     links: [],
+    ports: [],
     environment: {},
     cpu: { min: "0.1", desired: "0.1" },
     memory: { min: "128Mi", desired: "128Mi" },
@@ -102,6 +118,51 @@ export class Daemon {
    */
   public command(command: string[]): this {
     this._config.command = command
+    return this
+  }
+
+  /**
+   * Exposes a daemon port publicly through the platform endpoint layer.
+   */
+  public exposePort(port: number, options: DaemonPublicEndpointOptions): this {
+    if (!this._config.ports) {
+      this._config.ports = []
+    }
+
+    const endpoint =
+      typeof options === "string"
+        ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
+        : options
+
+    const publicEndpoint: PublicEndpoint = {
+      port,
+      protocol: endpoint.protocol,
+      hostLabel: endpoint.hostLabel,
+      wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
+    }
+
+    this._config.ports.push(publicEndpoint)
+    return this
+  }
+
+  /**
+   * Configures the HTTP health check used by public daemon endpoint load balancers.
+   */
+  public healthCheck(config: HealthCheck): this {
+    this._config.healthCheck = config
+    return this
+  }
+
+  /**
+   * Configures readiness probe (alias for healthCheck).
+   */
+  public readinessProbe(config: { method: string; path: string }): this {
+    this._config.healthCheck = {
+      path: config.path,
+      method: config.method,
+      timeoutSeconds: 1,
+      failureThreshold: 3,
+    }
     return this
   }
 

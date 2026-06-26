@@ -4,6 +4,7 @@
  */
 
 import * as z from "zod";
+import { ComputeSettingsSchema } from "./compute-settings-schema.js";
 import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
@@ -17,6 +18,9 @@ import { UpdatesModeSchema } from "./updates-mode-schema.js";
  */
 export const StackSettingsSchema = z
   .object({
+    get compute() {
+      return z.union([ComputeSettingsSchema, z.null()]).optional();
+    },
     get deploymentModel() {
       return DeploymentModelSchema.describe(
         "Deployment model: how updates are delivered to the remote environment."

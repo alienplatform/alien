@@ -5,6 +5,8 @@
 
 import * as z from "zod";
 import { DaemonCodeSchema } from "./daemon-code-schema.js";
+import { HealthCheckSchema } from "./health-check-schema.js";
+import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
 
@@ -29,6 +31,9 @@ export const DaemonSchema = z.object({
     ).optional();
   },
   environment: z.optional(z.object({}).catchall(z.string())),
+  get healthCheck() {
+    return z.union([HealthCheckSchema, z.null()]).optional();
+  },
   id: z.string(),
   get links() {
     return z.array(
@@ -49,6 +54,15 @@ export const DaemonSchema = z.object({
       "Capacity group/pool to run on for backends that expose machine pools."
     )
     .nullish(),
+  get ports() {
+    return z
+      .array(
+        PublicEndpointSchema.describe(
+          "Public endpoint configuration shared by workload resources."
+        )
+      )
+      .describe("Public endpoints exposed by the daemon.");
+  },
 });
 
 export type Daemon = z.infer<typeof DaemonSchema>;

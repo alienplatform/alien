@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "description": "Public endpoint configuration shared by workload resources.",
+  "required": ["port", "protocol"],
+  "properties": {
+    "hostLabel": {
+      "type": ["string", "null"],
+      "description": "Optional DNS label override for generated endpoint hostnames."
+    },
+    "port": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Workload port served by the public endpoint.",
+      "minimum": 0
+    },
+    "protocol": {
+      "description": "Public protocol.",
+      "type": "string",
+      "enum": ["http", "tcp"],
+      "x-readme-ref-name": "ExposeProtocol"
+    },
+    "wildcardSubdomains": {
+      "type": "boolean",
+      "description": "Whether to route wildcard subdomains to this endpoint."
+    }
+  },
+  "x-readme-ref-name": "PublicEndpoint"
+}

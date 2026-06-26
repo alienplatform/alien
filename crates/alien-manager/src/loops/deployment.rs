@@ -47,10 +47,7 @@ const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
-/// the production resolver (platform API) stays in charge. Mirrors
-/// `alien_deploy_cli::commands::up::synthesize_byo_horizon_machine_image`
-/// so both the deploy CLI and the standalone manager produce the same
-/// `compute_backend` when only env vars are available.
+/// the production resolver stays in charge.
 fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineImage> {
     use alien_core::{
         HorizonAwsMachineImages, HorizonMachineArchitecture, HorizonMachineBaseImage,
@@ -62,6 +59,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     if amd64.as_deref().unwrap_or("").is_empty() && arm64.as_deref().unwrap_or("").is_empty() {
         return None;
     }
+
     let region = std::env::var("AWS_REGION")
         .ok()
         .filter(|s| !s.is_empty())
@@ -510,7 +508,10 @@ impl DeploymentLoop {
         let environment_variables = self
             .build_environment_variables(&deployment_id, &deployment)
             .await?;
-        let monitoring = self.build_monitoring_config(&deployment);
+        let provided_config = deployment.deployment_config.as_ref();
+        let monitoring = provided_config
+            .and_then(|config| config.monitoring.clone())
+            .or_else(|| self.build_monitoring_config(&deployment));
 
         // 5. Build deployment config.
         // Management config resolution:
@@ -543,60 +544,44 @@ impl DeploymentLoop {
         )
         .await;
 
-        let mut config = if let Some(mut config) = deployment.deployment_config.clone() {
-            if config.deployment_name.is_none() {
-                config.deployment_name = Some(deployment.name.clone());
-            }
-            if config.management_config.is_none() {
-                config.management_config = management_config;
-            }
-            if config.deployment_token.is_none() {
-                config.deployment_token = deployment.deployment_token.clone();
-            }
-            if config.base_platform.is_none() {
-                config.base_platform = deployment.base_platform;
-            }
-            if config.monitoring.is_none() {
-                config.monitoring = monitoring;
-            }
-            config.manager_url = Some(self.config.base_url());
-            config.native_image_host = native_image_host;
-            config
-        } else {
-            DeploymentConfig {
-                deployment_name: Some(deployment.name.clone()),
-                stack_settings: deployment
-                    .stack_settings
-                    .clone()
-                    .expect("stored deployment carries stack_settings"),
-                management_config,
-                environment_variables,
-                allow_frozen_changes: false,
-                compute_backend: None,
-                external_bindings: deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .external_bindings
-                    .clone()
-                    .unwrap_or_default(),
-                base_platform: deployment.base_platform,
-                public_urls: None,
-                domain_metadata: None,
-                monitoring,
-                manager_url: Some(self.config.base_url()),
-                deployment_token: deployment.deployment_token.clone(),
-                native_image_host,
-            }
+        let stack_settings = deployment
+            .stack_settings
+            .clone()
+            .or_else(|| provided_config.map(|config| config.stack_settings.clone()))
+            .expect("stored deployment carries stack_settings");
+
+        let mut config = DeploymentConfig {
+            deployment_name: Some(deployment.name.clone()),
+            stack_settings: stack_settings.clone(),
+            management_config,
+            environment_variables,
+            allow_frozen_changes: provided_config
+                .map(|config| config.allow_frozen_changes)
+                .unwrap_or(false),
+            compute_backend: provided_config.and_then(|config| config.compute_backend.clone()),
+            external_bindings: deployment
+                .stack_settings
+                .as_ref()
+                .or_else(|| provided_config.map(|config| &config.stack_settings))
+                .expect("stored deployment carries stack_settings")
+                .external_bindings
+                .clone()
+                .unwrap_or_default(),
+            base_platform: provided_config
+                .and_then(|config| config.base_platform)
+                .or(deployment.base_platform),
+            public_urls: provided_config.and_then(|config| config.public_urls.clone()),
+            domain_metadata: provided_config.and_then(|config| config.domain_metadata.clone()),
+            monitoring,
+            manager_url: Some(self.config.base_url()),
+            deployment_token: provided_config
+                .and_then(|config| config.deployment_token.clone())
+                .or_else(|| deployment.deployment_token.clone()),
+            native_image_host,
         };
 
-        // Standalone-mode bridge: inject a BYO horizon `compute_backend` from
-        // env vars (`ALIEN_BYO_HORIZON_*`) when nothing supplied one. Cloud
-        // container deployments need a managed container backend or
-        // preflights reject them; the SaaS path populates this from the
-        // platform API at deployment-create time, but standalone managers
-        // have to read it themselves. Idempotent — no-op when env vars are
-        // unset or `compute_backend` is already set.
+        // Standalone-mode bridge: inject a BYO Horizon backend from env vars
+        // when an external control plane did not supply one.
         if config.compute_backend.is_none() {
             if let (Ok(url), Ok(cluster_id), Ok(token)) = (
                 std::env::var("ALIEN_BYO_HORIZON_URL"),
@@ -966,8 +951,8 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
-            deployment_config: None,
             deployment_token: None,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,

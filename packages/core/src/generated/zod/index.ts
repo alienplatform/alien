@@ -98,6 +98,8 @@ export type { ComputeClusterHeartbeatData } from "./compute-cluster-heartbeat-da
 export type { ComputeClusterHeartbeatStatus } from "./compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./compute-cluster-schema.js";
 export type { ComputeOs } from "./compute-os-schema.js";
+export type { ComputePoolSelection } from "./compute-pool-selection-schema.js";
+export type { ComputeSettings } from "./compute-settings-schema.js";
 export type { ComputeType } from "./compute-type-schema.js";
 export type { ContainerAutoscaling } from "./container-autoscaling-schema.js";
 export type { ContainerCode } from "./container-code-schema.js";
@@ -250,6 +252,7 @@ export type { PresignedRequestBackend } from "./presigned-request-backend-schema
 export type { PresignedRequest } from "./presigned-request-schema.js";
 export type { ProviderFleetStatus } from "./provider-fleet-status-schema.js";
 export type { ProviderLifecycleState } from "./provider-lifecycle-state-schema.js";
+export type { PublicEndpoint } from "./public-endpoint-schema.js";
 export type { PushProgress } from "./push-progress-schema.js";
 export type { QueueHeartbeatData } from "./queue-heartbeat-data-schema.js";
 export type { QueueHeartbeatStatus } from "./queue-heartbeat-status-schema.js";
@@ -415,6 +418,8 @@ export { ComputeClusterHeartbeatDataSchema } from "./compute-cluster-heartbeat-d
 export { ComputeClusterHeartbeatStatusSchema } from "./compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./compute-cluster-schema.js";
 export { ComputeOsSchema } from "./compute-os-schema.js";
+export { ComputePoolSelectionSchema } from "./compute-pool-selection-schema.js";
+export { ComputeSettingsSchema } from "./compute-settings-schema.js";
 export { ComputeTypeSchema } from "./compute-type-schema.js";
 export { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 export { ContainerCodeSchema } from "./container-code-schema.js";
@@ -567,6 +572,7 @@ export { PresignedRequestBackendSchema } from "./presigned-request-backend-schem
 export { PresignedRequestSchema } from "./presigned-request-schema.js";
 export { ProviderFleetStatusSchema } from "./provider-fleet-status-schema.js";
 export { ProviderLifecycleStateSchema } from "./provider-lifecycle-state-schema.js";
+export { PublicEndpointSchema } from "./public-endpoint-schema.js";
 export { PushProgressSchema } from "./push-progress-schema.js";
 export { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
 export { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";

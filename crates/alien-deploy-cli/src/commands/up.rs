@@ -11,9 +11,10 @@ use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    parse_public_url_assignment, validate_public_urls, ClientConfig, ComputeSettings, Container,
+    Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, Ingress,
     ManagementConfig, NetworkSettings, Platform, ReleaseInfo, Stack, StackSettings, TelemetryMode,
-    UpdatesMode,
+    UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome},
@@ -29,94 +30,10 @@ use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResult
 use clap::Parser;
 use serde::Deserialize;
 use std::{
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     str::FromStr,
 };
-
-/// Read `ALIEN_BYO_HORIZON_*` env vars and synthesize a
-/// `ComputeBackend::Horizon`. Returns `None` when the env vars aren't all
-/// set, so non-BYO callers get the production path unchanged.
-///
-/// When `ALIEN_BYO_HORIZON_AMI_AMD64` (and/or `_ARM64`) are also set, the
-/// AMI ID(s) are wired into `horizon_machine_image.aws` so the
-/// `AwsComputeClusterController` has something to bake into the launch
-/// template. Without these vars, `horizon_machine_image` stays `None` and
-/// the controller errors at `RESOURCE_CONFIG_INVALID`.
-fn synthesize_byo_horizon_compute_backend() -> Option<alien_core::ComputeBackend> {
-    let url = std::env::var("ALIEN_BYO_HORIZON_URL").ok()?;
-    let cluster_id = std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID").ok()?;
-    let token = std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN").ok()?;
-    if url.is_empty() || cluster_id.is_empty() || token.is_empty() {
-        return None;
-    }
-    let mut clusters: std::collections::HashMap<String, alien_core::HorizonClusterConfig> =
-        std::collections::HashMap::new();
-    clusters.insert(
-        cluster_id.clone(),
-        alien_core::HorizonClusterConfig {
-            cluster_id,
-            management_token: token,
-        },
-    );
-
-    let horizon_machine_image = synthesize_byo_horizon_machine_image();
-
-    Some(alien_core::ComputeBackend::Horizon(
-        alien_core::HorizonConfig {
-            url,
-            horizon_machine_image,
-            clusters,
-        },
-    ))
-}
-
-/// Build a minimal `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_*` env
-/// vars + `AWS_REGION`. Returns `None` when no AMI env vars are set so the
-/// production resolver (platform API) stays in charge.
-fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineImage> {
-    use alien_core::{
-        HorizonAwsMachineImages, HorizonMachineArchitecture, HorizonMachineBaseImage,
-        HorizonMachineImage,
-    };
-    use std::collections::HashMap;
-
-    let amd64 = std::env::var("ALIEN_BYO_HORIZON_AMI_AMD64").ok();
-    let arm64 = std::env::var("ALIEN_BYO_HORIZON_AMI_ARM64").ok();
-    if amd64.as_deref().unwrap_or("").is_empty() && arm64.as_deref().unwrap_or("").is_empty() {
-        return None;
-    }
-    let region = std::env::var("AWS_REGION")
-        .ok()
-        .unwrap_or_else(|| "us-east-1".to_string());
-
-    let mut amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>> = HashMap::new();
-    if let Some(ami) = amd64.filter(|s| !s.is_empty()) {
-        let mut by_region = HashMap::new();
-        by_region.insert(region.clone(), ami);
-        amis.insert(HorizonMachineArchitecture::Amd64, by_region);
-    }
-    if let Some(ami) = arm64.filter(|s| !s.is_empty()) {
-        let mut by_region = HashMap::new();
-        by_region.insert(region.clone(), ami);
-        amis.insert(HorizonMachineArchitecture::Arm64, by_region);
-    }
-
-    Some(HorizonMachineImage {
-        channel: "byo".to_string(),
-        machine_image_version: "byo-local".to_string(),
-        horizond_version: "byo".to_string(),
-        git_sha: "byo".to_string(),
-        created_at: "1970-01-01T00:00:00Z".to_string(),
-        base_image: HorizonMachineBaseImage {
-            name: "byo".to_string(),
-            version: "byo".to_string(),
-        },
-        aws: Some(HorizonAwsMachineImages { amis }),
-        gcp: None,
-        azure: None,
-        os_images: None,
-    })
-}
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -127,6 +44,9 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
 
     # Deploy using a token file so the token is not exposed in argv
     alien-deploy deploy --token-file /run/alien/token --platform local --experimental
+
+    # Deploy a local pull-model workload behind customer-managed ingress
+    alien-deploy deploy --token-file /run/alien/token --platform local --experimental --public-url gateway=https://gateway.example.com
 
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
@@ -218,6 +138,13 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Public URL for an exposed resource in <resource-id>=<absolute-url> form.
+    ///
+    /// Intended for pull-model deployments where DNS, TLS, and ingress are
+    /// owned outside Alien. Repeat this flag for multiple resources.
+    #[arg(long = "public-url")]
+    pub public_urls: Vec<String>,
+
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -237,6 +164,14 @@ struct DeployConfigFile {
     updates: Option<UpdatesMode>,
     /// Telemetry delivery mode.
     telemetry: Option<TelemetryMode>,
+    /// Static compute selections for Alien-managed runtime pools.
+    compute: Option<ComputeSettings>,
+    /// Generic public URLs for exposed resources in pull-model deployments.
+    ///
+    /// Keyed by Alien resource ID. This is intentionally application-neutral;
+    /// white-labeled deploy packages may present friendlier prompts, but should
+    /// persist the result here rather than adding app-specific Alien fields.
+    public_urls: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -362,6 +297,160 @@ mod tests {
         apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
         assert!(config.external_bindings.has("storage"));
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_public_urls() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+	name = "local-gateway"
+	platform = "local"
+
+	[publicUrls]
+	gateway = "https://gateway.example.test"
+	"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+
+        assert_eq!(config.name.as_deref(), Some("local-gateway"));
+        assert_eq!(
+            config
+                .public_urls
+                .as_ref()
+                .and_then(|urls| urls.get("gateway"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
+    fn public_url_flag_overrides_config_public_url() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[publicUrls]
+gateway = "https://old.example.test"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--public-url",
+            "gateway=https://new.example.test",
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let public_urls = load_public_urls(&args, Platform::Local, Some(&config))
+            .expect("public URLs should load")
+            .expect("public URLs should exist");
+
+        assert_eq!(
+            public_urls.get("gateway").map(String::as_str),
+            Some("https://new.example.test")
+        );
+    }
+
+    #[test]
+    fn public_url_flag_rejects_cloud_platforms() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "aws",
+            "--public-url",
+            "gateway=https://gateway.example.test",
+        ]);
+
+        let error =
+            load_public_urls(&args, Platform::Aws, None).expect_err("aws should be rejected");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn public_url_resource_ids_must_expose_public_endpoints() {
+        let daemon = alien_core::Daemon::new("gateway".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .expose_port(8080, alien_core::ExposeProtocol::Http)
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let valid = HashMap::from([(
+            "gateway".to_string(),
+            "https://gateway.example.test".to_string(),
+        )]);
+        validate_public_url_resource_ids(&valid, &stack)
+            .expect("gateway exposes a public endpoint");
+
+        let invalid = HashMap::from([(
+            "missing".to_string(),
+            "https://missing.example.test".to_string(),
+        )]);
+        let error = validate_public_url_resource_ids(&invalid, &stack)
+            .expect_err("missing resource should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_compute_pool_selection() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "cloud-runtime"
+platform = "aws"
+
+[compute.pools.general]
+mode = "autoscale"
+min = 2
+max = 5
+machine = "m8i.xlarge"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let settings = load_stack_settings(&args, Platform::Aws, Some(&config))
+            .expect("stack settings should load");
+        let selection = settings
+            .compute
+            .as_ref()
+            .and_then(|compute| compute.pools.get("general"))
+            .expect("general compute pool should be configured");
+
+        assert_eq!(selection.machine(), Some("m8i.xlarge"));
+        assert_eq!(selection.min_size(), 2);
+        assert_eq!(selection.max_size(), 5);
     }
 
     #[test]
@@ -498,6 +587,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })
     })?;
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
+    let public_urls = load_public_urls(&args, platform, deploy_config.as_ref())?;
 
     let display_platform = match platform_str.as_str() {
         "aws" => "AWS",
@@ -552,6 +642,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     }
     output::label_value("Manager", &manager_url);
     output::label_value("Name", &name);
+    if let Some(public_urls) = public_urls.as_ref() {
+        output::label_value("Public URLs", &public_urls.len().to_string());
+    }
     eprintln!();
 
     let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
@@ -598,10 +691,27 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })?
         .into_inner();
 
-    if current_deployment.status == "running" {
+    if let Some(public_urls) = public_urls.as_ref() {
+        let release_id = current_deployment
+            .desired_release_id
+            .as_deref()
+            .or(current_deployment.current_release_id.as_deref())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "public-url".to_string(),
+                    message: "Cannot validate public URL resource IDs because the deployment has no release".to_string(),
+                })
+            })?;
+        let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
+        validate_public_url_resource_ids(public_urls, &stack)?;
+    }
+
+    if current_deployment.status == "running" && public_urls.is_none() {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
+    } else if current_deployment.status == "running" {
+        output::info("Deployment is already active; updating local agent public URL config.");
     }
 
     match (platform, base_platform) {
@@ -616,6 +726,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &stack_settings,
                 platform,
                 embedded_config,
+                public_urls.as_ref(),
             )
             .await?;
         }
@@ -688,6 +799,90 @@ fn release_stack_value_for_platform(
     }
 }
 
+async fn fetch_release_stack_by_id(
+    client: &ServerClient,
+    release_id: &str,
+    platform: Platform,
+) -> Result<Stack> {
+    let release = client
+        .get_release()
+        .id(release_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch release '{release_id}' from manager"),
+        })?
+        .into_inner();
+    let stack_value =
+        release_stack_value_for_platform(release.stack, platform).ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Release '{}' has no stack for platform {}",
+                    release_id,
+                    platform.as_str()
+                ),
+            })
+        })?;
+
+    serde_json::from_value(stack_value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to parse release stack from release '{release_id}'"),
+        })
+}
+
+fn validate_public_url_resource_ids(
+    public_urls: &HashMap<String, String>,
+    stack: &Stack,
+) -> Result<()> {
+    let valid_resource_ids = public_endpoint_resource_ids(stack);
+    for resource_id in public_urls.keys() {
+        if !valid_resource_ids.contains(resource_id) {
+            let available = if valid_resource_ids.is_empty() {
+                "none".to_string()
+            } else {
+                valid_resource_ids
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-url".to_string(),
+                message: format!(
+                    "Resource '{resource_id}' does not expose a public endpoint. Available public endpoint resources: {available}"
+                ),
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn public_endpoint_resource_ids(stack: &Stack) -> BTreeSet<String> {
+    stack
+        .resources()
+        .filter_map(|(resource_id, entry)| {
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                if !daemon.ports.is_empty() {
+                    return Some(resource_id.clone());
+                }
+            }
+            if let Some(container) = entry.config.downcast_ref::<Container>() {
+                if container.ports.iter().any(|port| port.expose.is_some()) {
+                    return Some(resource_id.clone());
+                }
+            }
+            if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                if worker.ingress == Ingress::Public {
+                    return Some(resource_id.clone());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 fn parse_base_platform(
     platform: Platform,
     base_platform: Option<&str>,
@@ -738,6 +933,55 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
                 message: format!("Failed to parse deployment config {}", path.display()),
             })?;
     Ok(Some(config))
+}
+
+fn load_public_urls(
+    args: &UpArgs,
+    platform: Platform,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<Option<HashMap<String, String>>> {
+    let mut public_urls = deploy_config
+        .and_then(|config| config.public_urls.clone())
+        .unwrap_or_default();
+    if !public_urls.is_empty() {
+        validate_public_urls(&public_urls).context(ErrorData::ValidationError {
+            field: "publicUrls".to_string(),
+            message: "Invalid public URL in deployment config".to_string(),
+        })?;
+    }
+
+    let mut cli_resource_ids = BTreeSet::new();
+    for value in &args.public_urls {
+        let (resource_id, public_url) =
+            parse_public_url_assignment(value).context(ErrorData::ValidationError {
+                field: "public-url".to_string(),
+                message: "Expected --public-url <resource-id>=<absolute-url>".to_string(),
+            })?;
+        if !cli_resource_ids.insert(resource_id.clone()) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-url".to_string(),
+                message: format!("Duplicate public URL for resource '{resource_id}'"),
+            }));
+        }
+        public_urls.insert(resource_id, public_url);
+    }
+
+    if public_urls.is_empty() {
+        return Ok(None);
+    }
+
+    match platform {
+        Platform::Local => Ok(Some(public_urls)),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-url".to_string(),
+                message: format!(
+                    "--public-url is currently supported only for local pull-model deployments, got '{}'",
+                    platform.as_str()
+                ),
+            }))
+        }
+    }
 }
 
 fn resolve_deployment_info(
@@ -900,6 +1144,9 @@ fn load_stack_settings(
         }
         if let Some(telemetry) = config.telemetry {
             settings.telemetry = telemetry;
+        }
+        if let Some(compute) = config.compute.clone() {
+            settings.compute = Some(compute);
         }
     }
 
@@ -1162,6 +1409,7 @@ async fn run_pull_model(
     stack_settings: &StackSettings,
     platform: Platform,
     embedded_config: Option<&DeployCliConfig>,
+    public_urls: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     match platform {
         Platform::Kubernetes => {
@@ -1185,6 +1433,7 @@ async fn run_pull_model(
                 deployment_name,
                 &platform.to_string(),
                 embedded_config,
+                public_urls,
             )
             .await
         }
@@ -1199,6 +1448,7 @@ async fn run_local_pull_model(
     deployment_name: &str,
     platform: &str,
     embedded_config: Option<&DeployCliConfig>,
+    public_urls: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     // Find or download the alien-agent binary
     let binary_path = find_or_download_agent_binary(embedded_config).await?;
@@ -1220,6 +1470,7 @@ async fn run_local_pull_model(
             platform,
             &encryption_key,
             args.data_dir.as_deref(),
+            public_urls,
         )
         .await;
     }
@@ -1236,6 +1487,7 @@ async fn run_local_pull_model(
         platform: platform.to_string(),
         data_dir: None,
         encryption_key: args.encryption_key.clone(),
+        public_urls: public_urls.cloned(),
     };
 
     super::agent::install_service(install_args)?;
@@ -1257,6 +1509,7 @@ async fn run_agent_foreground(
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
+    public_urls: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     use std::io::Write;
 
@@ -1315,7 +1568,25 @@ async fn run_agent_foreground(
         );
     }
 
-    let status = tokio::process::Command::new(binary_path)
+    let mut public_urls_file = match public_urls {
+        Some(public_urls) => {
+            let mut file = tempfile::NamedTempFile::new().into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to create temp file for public URLs".to_string(),
+                },
+            )?;
+            serde_json::to_writer(&mut file, public_urls)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to write public URLs".to_string(),
+                })?;
+            Some(file)
+        }
+        None => None,
+    };
+
+    let mut command = tokio::process::Command::new(binary_path);
+    command
         .arg("--platform")
         .arg(platform)
         .arg("--sync-url")
@@ -1331,17 +1602,25 @@ async fn run_agent_foreground(
         .arg("--data-dir")
         .arg(&data_dir)
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to run agent: {}", binary_path.display()),
-        })?;
+        .stderr(std::process::Stdio::inherit());
+
+    if let Some(file) = public_urls_file.as_ref() {
+        command.arg("--public-urls-file").arg(file.path());
+    }
+
+    let status =
+        command
+            .status()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to run agent: {}", binary_path.display()),
+            })?;
 
     // Tempfiles drop here, after the child exits.
     drop(sync_token_file);
     drop(encryption_key_file);
+    drop(public_urls_file.take());
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1975,17 +2254,6 @@ pub async fn push_initial_setup(
     config.manager_url = Some(manager_base_url.to_string());
     config.deployment_token = Some(deployment_token.to_string());
     config.base_platform = base_platform;
-
-    // Standalone-mode bridge: when `ALIEN_BYO_HORIZON_*` env vars are set,
-    // synthesize a `ComputeBackend::Horizon` so cloud-container preflights
-    // pass without a SaaS-side platform API pre-populating the field. The
-    // controller's daemon resolver reads the same env vars directly, so no
-    // downstream code needs to change.
-    if config.compute_backend.is_none() {
-        if let Some(backend) = synthesize_byo_horizon_compute_backend() {
-            config.compute_backend = Some(backend);
-        }
-    }
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 

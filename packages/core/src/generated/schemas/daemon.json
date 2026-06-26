@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "required": ["id", "links", "permissions", "code"],
+  "required": ["id", "links", "ports", "permissions", "code"],
   "properties": {
     "cluster": {
       "type": ["string", "null"],
@@ -106,6 +106,44 @@
       "additionalProperties": { "type": "string" },
       "propertyNames": { "type": "string" }
     },
+    "healthCheck": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "description": "HTTP health check for public daemon endpoint load balancers.",
+          "type": "object",
+          "properties": {
+            "failureThreshold": {
+              "type": "integer",
+              "format": "int32",
+              "description": "Number of consecutive failures before marking replica unhealthy",
+              "minimum": 0
+            },
+            "method": {
+              "type": "string",
+              "description": "HTTP method to use for health check"
+            },
+            "path": {
+              "type": "string",
+              "description": "HTTP endpoint path to check (e.g., \"/health\", \"/ready\")"
+            },
+            "port": {
+              "type": ["integer", "null"],
+              "format": "int32",
+              "description": "Port to check (defaults to container port if not specified)",
+              "minimum": 0
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "format": "int32",
+              "description": "Request timeout in seconds (1-5)",
+              "minimum": 0
+            }
+          },
+          "x-readme-ref-name": "HealthCheck"
+        }
+      ]
+    },
     "id": { "type": "string" },
     "links": {
       "type": "array",
@@ -145,6 +183,38 @@
     "pool": {
       "type": ["string", "null"],
       "description": "Capacity group/pool to run on for backends that expose machine pools."
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "Public endpoint configuration shared by workload resources.",
+        "required": ["port", "protocol"],
+        "properties": {
+          "hostLabel": {
+            "type": ["string", "null"],
+            "description": "Optional DNS label override for generated endpoint hostnames."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Workload port served by the public endpoint.",
+            "minimum": 0
+          },
+          "protocol": {
+            "description": "Public protocol.",
+            "type": "string",
+            "enum": ["http", "tcp"],
+            "x-readme-ref-name": "ExposeProtocol"
+          },
+          "wildcardSubdomains": {
+            "type": "boolean",
+            "description": "Whether to route wildcard subdomains to this endpoint."
+          }
+        },
+        "x-readme-ref-name": "PublicEndpoint"
+      },
+      "description": "Public endpoints exposed by the daemon."
     }
   },
   "additionalProperties": false,

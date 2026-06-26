@@ -15,8 +15,8 @@
       "oneOf": [
         { "type": "null" },
         {
-          "description": "Load balancer endpoint information for DNS management (optional).\nUsed by the DNS controller to create custom domain mappings.",
           "type": "object",
+          "description": "Load balancer endpoint information for DNS management (optional).\nUsed by the DNS controller to create custom domain mappings.",
           "required": ["dnsName"],
           "properties": {
             "dnsName": {

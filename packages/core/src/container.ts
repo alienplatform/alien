@@ -11,6 +11,15 @@ import {
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
+export type PublicEndpointOptions =
+  | "http"
+  | "tcp"
+  | {
+      protocol: "http" | "tcp"
+      hostLabel?: string
+      wildcardSubdomains?: boolean
+    }
+
 export type {
   Container as ContainerConfig,
   ContainerOutputs,
@@ -233,20 +242,31 @@ export class Container {
   /**
    * Exposes a specific port publicly via load balancer.
    * @param port Port number to expose.
-   * @param protocol "http" for HTTPS with TLS termination, "tcp" for TCP passthrough.
+   * @param options "http"/"tcp" or endpoint options.
    * @returns The Container builder instance.
    */
-  public exposePort(port: number, protocol: "http" | "tcp"): this {
+  public exposePort(port: number, options: PublicEndpointOptions): this {
     if (!this._config.ports) {
       this._config.ports = []
     }
+    const endpoint =
+      typeof options === "string"
+        ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
+        : options
 
     // Find existing port or add new one
     const existingPort = this._config.ports.find(p => p.port === port)
     if (existingPort) {
-      existingPort.expose = protocol
+      existingPort.expose = endpoint.protocol
+      existingPort.hostLabel = endpoint.hostLabel
+      existingPort.wildcardSubdomains = endpoint.wildcardSubdomains ?? false
     } else {
-      this._config.ports.push({ port, expose: protocol })
+      this._config.ports.push({
+        port,
+        expose: endpoint.protocol,
+        hostLabel: endpoint.hostLabel,
+        wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
+      })
     }
     return this
   }

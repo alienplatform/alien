@@ -1,0 +1,48 @@
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "Fixed number of machines.",
+      "required": ["machines", "mode"],
+      "properties": {
+        "machine": {
+          "type": ["string", "null"],
+          "description": "Provider machine type selected for this deployment."
+        },
+        "machines": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of machines to run.",
+          "minimum": 0
+        },
+        "mode": { "type": "string", "enum": ["fixed"] }
+      }
+    },
+    {
+      "type": "object",
+      "description": "Autoscaling machine pool.",
+      "required": ["min", "max", "mode"],
+      "properties": {
+        "machine": {
+          "type": ["string", "null"],
+          "description": "Provider machine type selected for this deployment."
+        },
+        "max": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Maximum machine count.",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Minimum machine count.",
+          "minimum": 0
+        },
+        "mode": { "type": "string", "enum": ["autoscale"] }
+      }
+    }
+  ],
+  "description": "User-selected deployment settings for one compute pool.",
+  "x-readme-ref-name": "ComputePoolSelection"
+}

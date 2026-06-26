@@ -19,7 +19,7 @@ export const CapacityGroupSchema = z
     instanceType: z
       .string()
       .describe(
-        'Instance type for machines in this group (e.g., "m7g.xlarge", "n2-standard-8")\nAuto-selected if not specified, based on profile requirements.'
+        "Provider machine selected at deployment time.\n`alien.ts` should declare portable requirements; preflight materialization\nfills this field from `StackSettings.compute`."
       )
       .nullish(),
     maxSize: z

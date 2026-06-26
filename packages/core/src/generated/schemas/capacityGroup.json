@@ -9,7 +9,7 @@
     },
     "instanceType": {
       "type": ["string", "null"],
-      "description": "Instance type for machines in this group (e.g., \"m7g.xlarge\", \"n2-standard-8\")\nAuto-selected if not specified, based on profile requirements."
+      "description": "Provider machine selected at deployment time.\n`alien.ts` should declare portable requirements; preflight materialization\nfills this field from `StackSettings.compute`."
     },
     "maxSize": {
       "type": "integer",

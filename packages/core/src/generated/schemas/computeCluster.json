@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "description": "ComputeCluster resource for running long-running container workloads.\n\nA ComputeCluster provides the setup-owned machine boundary for containers.\nAlien may manage the worker fleet inside that boundary when setup grants\n`compute-cluster/management`.\n\n## Architecture\n\n- **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups\n- **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout\n- **horizond** runs on each machine from the selected Horizon machine image channel\n\n## Example\n\n```rust\nuse alien_core::{ComputeCluster, CapacityGroup};\n\nlet cluster = ComputeCluster::new(\"compute\".to_string())\n    .capacity_group(CapacityGroup {\n        group_id: \"general\".to_string(),\n        instance_type: Some(\"m7g.xlarge\".to_string()),\n        profile: None,\n        min_size: 1,\n        max_size: 5,\n    })\n    .build();\n```",
+  "description": "ComputeCluster resource for running long-running container workloads.\n\nA ComputeCluster provides the setup-owned machine boundary for containers.\nAlien may manage the worker fleet inside that boundary when setup grants\n`compute-cluster/management`.\n\n## Architecture\n\n- **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups\n- **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout\n- **horizond** runs on each machine from the selected Horizon machine image channel\n\n## Example\n\n```rust\nuse alien_core::{CapacityGroup, ComputeCluster, MachineProfile};\n\nlet cluster = ComputeCluster::new(\"compute\".to_string())\n    .capacity_group(CapacityGroup {\n        group_id: \"general\".to_string(),\n        instance_type: None,\n        profile: Some(MachineProfile {\n            cpu: \"4.0\".to_string(),\n            memory_bytes: 16 * 1024 * 1024 * 1024,\n            ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,\n            gpu: None,\n        }),\n        min_size: 1,\n        max_size: 5,\n        nested_virtualization: None,\n    })\n    .build();\n```",
   "required": ["id", "capacityGroups"],
   "properties": {
     "capacityGroups": {
@@ -16,7 +16,7 @@
           },
           "instanceType": {
             "type": ["string", "null"],
-            "description": "Instance type for machines in this group (e.g., \"m7g.xlarge\", \"n2-standard-8\")\nAuto-selected if not specified, based on profile requirements."
+            "description": "Provider machine selected at deployment time.\n`alien.ts` should declare portable requirements; preflight materialization\nfills this field from `StackSettings.compute`."
           },
           "maxSize": {
             "type": "integer",

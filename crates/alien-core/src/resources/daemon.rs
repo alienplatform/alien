@@ -1,6 +1,9 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ComputeCluster, ResourceSpec, ToolchainConfig};
+use crate::resources::{
+    ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, ResourceSpec, ToolchainConfig,
+};
+use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,12 @@ pub struct Daemon {
     pub id: String,
     #[builder(field)]
     pub links: Vec<ResourceRef>,
+    /// Public endpoints exposed by the daemon.
+    #[builder(field)]
+    pub ports: Vec<PublicEndpoint>,
+    /// HTTP health check for public daemon endpoint load balancers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<HealthCheck>,
     /// ComputeCluster resource ID that this daemon runs on for Horizon-backed
     /// cloud platforms. Kubernetes and Local runtimes ignore this field.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +74,27 @@ impl Daemon {
     pub fn get_permissions(&self) -> &str {
         &self.permissions
     }
+
+    fn validate_ports(&self) -> Result<()> {
+        if self.ports.len() > 1 {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "at most one daemon public endpoint is currently supported".to_string(),
+            }));
+        }
+
+        for endpoint in &self.ports {
+            endpoint.validate_for_resource(&self.id)?;
+            if endpoint.protocol != ExposeProtocol::Http {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "daemon public endpoints currently support only HTTP".to_string(),
+                }));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn default_commands_enabled() -> bool {
@@ -92,6 +122,21 @@ impl<S: daemon_builder::State> DaemonBuilder<S> {
     {
         let resource_ref: ResourceRef = resource.into();
         self.links.push(resource_ref);
+        self
+    }
+
+    pub fn expose_port(mut self, port: u16, protocol: ExposeProtocol) -> Self {
+        self.ports.push(PublicEndpoint {
+            port,
+            protocol,
+            host_label: None,
+            wildcard_subdomains: false,
+        });
+        self
+    }
+
+    pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
+        self.ports.push(endpoint);
         self
     }
 }
@@ -139,6 +184,16 @@ impl ResourceDefinition for Daemon {
             }));
         }
 
+        self.validate_ports()?;
+        new_daemon.validate_ports()?;
+
+        if self.ports != new_daemon.ports {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'ports' field is immutable".to_string(),
+            }));
+        }
+
         Ok(())
     }
 
@@ -169,6 +224,10 @@ impl ResourceDefinition for Daemon {
 pub struct DaemonOutputs {
     pub daemon_name: String,
     pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_balancer_endpoint: Option<LoadBalancerEndpoint>,
 }
 
 impl ResourceOutputsDefinition for DaemonOutputs {
@@ -217,5 +276,48 @@ mod tests {
         let roundtrip: crate::Resource =
             serde_json::from_value(json).expect("daemon should deserialize");
         assert_eq!(roundtrip.resource_type().as_ref(), "daemon");
+    }
+
+    #[test]
+    fn daemon_accepts_one_public_http_endpoint() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("public".to_string()),
+                wildcard_subdomains: true,
+            })
+            .permissions("gateway".to_string())
+            .build();
+
+        assert!(daemon.validate_ports().is_ok());
+        assert_eq!(daemon.ports.len(), 1);
+        assert_eq!(daemon.ports[0].host_label.as_deref(), Some("public"));
+        assert!(daemon.ports[0].wildcard_subdomains);
+    }
+
+    #[test]
+    fn daemon_rejects_multiple_or_non_http_public_endpoints() {
+        let multiple = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .expose_port(8080, ExposeProtocol::Http)
+            .expose_port(9090, ExposeProtocol::Http)
+            .permissions("gateway".to_string())
+            .build();
+        assert!(multiple.validate_ports().is_err());
+
+        let tcp = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .expose_port(8080, ExposeProtocol::Tcp)
+            .permissions("gateway".to_string())
+            .build();
+        assert!(tcp.validate_ports().is_err());
     }
 }

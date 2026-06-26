@@ -7,7 +7,7 @@ use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::{run_agent_with_cancel_and_debug_loop, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
-use alien_core::Platform;
+use alien_core::{validate_public_urls, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
@@ -291,6 +291,11 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
     )
     .await?;
     let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
+    if let Some(public_urls) = public_urls.as_ref() {
+        validate_public_urls(public_urls).context(ErrorData::ConfigurationError {
+            message: "Invalid public URLs configuration".to_string(),
+        })?;
+    }
     let stack_settings_json = load_config_value(
         args.stack_settings,
         args.stack_settings_file.as_deref(),

@@ -319,11 +319,19 @@
               }
             ]
           },
+          "hostLabel": {
+            "type": ["string", "null"],
+            "description": "Optional DNS label override for generated endpoint hostnames."
+          },
           "port": {
             "type": "integer",
             "format": "int32",
             "description": "Port number",
             "minimum": 0
+          },
+          "wildcardSubdomains": {
+            "type": "boolean",
+            "description": "Whether wildcard subdomains route to this public endpoint."
           }
         },
         "x-readme-ref-name": "ContainerPort"
