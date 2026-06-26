@@ -117,10 +117,15 @@ impl AzureBuildController {
         let config = ctx.desired_resource_config::<Build>()?;
 
         // Azure Build creates no persistent job (unlike AWS CodeBuild); jobs run on-demand, so the
-        // heartbeat resolves the managed environment + identity from their dependencies rather than
+        // heartbeat resolves the managed environment, identity, and resource prefix rather than
         // inspecting standing infra. Imported (Frozen) builds skip the Provisioning flow that sets
         // these, so they arrive `None` here and are resolved now, at heartbeat time, as the importer
-        // documents. A genuinely missing dependency still errors (and the executor retries).
+        // documents. All three are required for `get_binding_params` to emit a binding, so resolving
+        // them here lets an imported build submit jobs without waiting for an update. A genuinely
+        // missing dependency still errors (and the executor retries).
+        if self.resource_prefix.is_none() {
+            self.resource_prefix = Some(ctx.resource_prefix.to_string());
+        }
         if self.managed_environment_id.is_none() {
             self.managed_environment_id = Some(self.get_managed_environment_id(ctx)?);
         }
@@ -470,7 +475,7 @@ mod tests {
     use crate::build::{fixtures::*, AzureBuildController};
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider,
+        MockPlatformServiceProvider, ResourceController,
     };
 
     #[rstest]
@@ -590,7 +595,7 @@ mod tests {
             .await
             .unwrap();
 
-        // One heartbeat step resolves env + identity from the dependencies instead of drifting.
+        // One heartbeat step resolves env, identity, and resource prefix instead of drifting.
         executor.step().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
 
@@ -604,6 +609,18 @@ mod tests {
         assert!(
             ctrl.managed_identity_id.is_some(),
             "heartbeat should resolve managed_identity_id for an imported build"
+        );
+        assert!(
+            ctrl.resource_prefix.is_some(),
+            "heartbeat should resolve resource_prefix for an imported build"
+        );
+        // The point of resolving all three: an imported build must emit binding params (and so be
+        // able to submit jobs) straight after heartbeat, without waiting for an update.
+        assert!(
+            ctrl.get_binding_params()
+                .expect("get_binding_params should not error")
+                .is_some(),
+            "imported build should emit binding params once heartbeat resolves all fields"
         );
     }
 }
