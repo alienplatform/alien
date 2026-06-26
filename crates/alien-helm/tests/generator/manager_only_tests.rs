@@ -7,7 +7,7 @@ use super::{
     test_utils::{self, LinterStatus},
 };
 use alien_core::{
-    Container, ContainerCode, Daemon, DaemonCode, Ingress, KubernetesCertificateMode,
+    Container, ContainerCode, Daemon, DaemonCode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
     Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
@@ -22,7 +22,11 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
             image: "registry.example.com/api:1".to_string(),
         })
         .permissions("runtime".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .build();
     let stack = Stack::new("pure-fn".to_string())
         .permission(
@@ -90,7 +94,11 @@ fn chart_removes_manual_public_ingress_values_and_template() {
             image: "registry.example.com/api:1".to_string(),
         })
         .permissions("runtime".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .build();
     let stack = Stack::new("no-manual-ingress".to_string())
         .permission(

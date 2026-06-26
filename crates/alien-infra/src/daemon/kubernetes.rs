@@ -412,8 +412,7 @@ impl KubernetesDaemonController {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_set_name.clone(),
                 running: true,
-                url: None,
-                load_balancer_endpoint: None,
+                public_endpoints: std::collections::HashMap::new(),
             })
         })
     }

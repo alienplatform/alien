@@ -13,12 +13,12 @@ use super::helpers::{
     snapshot_module,
 };
 use alien_core::{
-    AzureResourceGroup, Container, ContainerCode, Ingress, KubernetesCertificateMode,
-    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-    KubernetesExposureSettings, KubernetesHeartbeatMode, KubernetesIngressRouteProfile,
-    KubernetesRouteProfile, KubernetesSettings, ManagementPermissions, Network, NetworkSettings,
-    PermissionProfile, PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec,
-    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    AzureResourceGroup, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
+    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+    KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
+    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, ServiceAccount,
+    Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_terraform_module, TerraformHelmInstall, TerraformOptions, TerraformRegistration,
@@ -212,7 +212,11 @@ fn eks_overlay_leaves_live_workloads_to_helm() {
             image: "example.com/api:latest".to_string(),
         })
         .permissions("execution-sa".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .link(&storage)
         .build();
     let stack = Stack::new("eks-live-workload".to_string())
@@ -355,7 +359,11 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
                         image: "example.com/api:latest".to_string(),
                     })
                     .permissions("execution".to_string())
-                    .ingress(Ingress::Public)
+                    .public_endpoint(alien_core::WorkerPublicEndpoint {
+                        name: "api".to_string(),
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
                     .build(),
                 ResourceLifecycle::Live,
             );

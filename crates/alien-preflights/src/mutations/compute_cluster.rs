@@ -121,7 +121,8 @@ impl StackMutation for ComputeClusterMutation {
         let stack = if !has_cluster {
             self.create_cluster(stack, stack_state, config).await?
         } else {
-            self.add_missing_capacity_groups(stack, stack_state, config).await?
+            self.add_missing_capacity_groups(stack, stack_state, config)
+                .await?
         };
 
         self.materialize_capacity_groups(stack, stack_state, config)
@@ -472,7 +473,10 @@ fn materialize_group(
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
-            message: format!("Invalid compute selection for '{}': {message}", group.group_id),
+            message: format!(
+                "Invalid compute selection for '{}': {message}",
+                group.group_id
+            ),
             resource_id: None,
         })
     })?;
@@ -497,14 +501,16 @@ fn materialize_group(
         })
     })?;
     if group.nested_virtualization == Some(true) && !spec.is_nested_virt_capable() {
-        return Err(AlienError::new(crate::error::ErrorData::StackMutationFailed {
-            mutation_name: "ComputeClusterMutation".to_string(),
-            message: format!(
+        return Err(AlienError::new(
+            crate::error::ErrorData::StackMutationFailed {
+                mutation_name: "ComputeClusterMutation".to_string(),
+                message: format!(
                 "{} machine '{}' does not support nested virtualization for capacity group '{}'",
                 platform, machine, group.group_id
             ),
-            resource_id: None,
-        }));
+                resource_id: None,
+            },
+        ));
     }
 
     group.instance_type = Some(machine.to_string());
@@ -524,8 +530,8 @@ fn default_min_machines(requirements: &WorkloadRequirements) -> u32 {
 
 fn default_max_machines(requirements: &WorkloadRequirements) -> u32 {
     let min = default_min_machines(requirements);
-    let by_cpu = (requirements.total_cpu_at_max / requirements.max_cpu_per_container.max(1.0))
-        .ceil() as u32;
+    let by_cpu =
+        (requirements.total_cpu_at_max / requirements.max_cpu_per_container.max(1.0)).ceil() as u32;
     let by_mem = requirements
         .total_memory_bytes_at_max
         .div_ceil(requirements.max_memory_per_container.max(1)) as u32;
@@ -657,9 +663,16 @@ fn build_capacity_group_for_id(
         materialize_group(&mut group, platform, config)?;
     } else {
         group.profile = Some(MachineProfile {
-            cpu: format!("{}.0", effective.max_cpu_per_container.max(1.0).ceil() as u32),
-            memory_bytes: effective.max_memory_per_container.max(2 * 1024 * 1024 * 1024),
-            ephemeral_storage_bytes: effective.max_ephemeral_storage_bytes.max(20 * 1024 * 1024 * 1024),
+            cpu: format!(
+                "{}.0",
+                effective.max_cpu_per_container.max(1.0).ceil() as u32
+            ),
+            memory_bytes: effective
+                .max_memory_per_container
+                .max(2 * 1024 * 1024 * 1024),
+            ephemeral_storage_bytes: effective
+                .max_ephemeral_storage_bytes
+                .max(20 * 1024 * 1024 * 1024),
             gpu: effective.gpu,
         });
     }

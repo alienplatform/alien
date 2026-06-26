@@ -3,7 +3,7 @@ import * as alien from "@alienplatform/core"
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
-  .ingress("public")
+  .publicEndpoint("api")
   .permissions("execution")
   .build()
 

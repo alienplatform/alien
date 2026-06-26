@@ -102,7 +102,7 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*"
             ],
             "condition": {
               "StringEquals": {
@@ -113,7 +113,7 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*"
             ],
             "condition": {
               "StringEquals": {

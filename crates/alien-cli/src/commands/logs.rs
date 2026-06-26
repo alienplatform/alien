@@ -367,7 +367,7 @@ async fn resolve_deployment_target(
                 url: None,
             })?
             .into_inner();
-        return target_from_deployment_detail(response, None);
+        return target_from_deployment_detail(client, workspace, response, None).await;
     }
 
     let Some((group_name, deployment_name)) = deployment.split_once('/') else {
@@ -442,20 +442,21 @@ async fn resolve_deployment_target(
             })
         })?;
 
-    let manager_id = deployment
-        .manager_id
-        .clone()
-        .map(String::from)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "Deployment {}/{} does not have a manager assigned yet.",
-                    group_name, deployment_name
-                ),
-            })
-        })?;
     let deployment_id: String = deployment.id.clone().into();
     let deployment_project_id: String = deployment.project_id.clone().into();
+    let manager_id = match deployment.manager_id.clone() {
+        Some(manager_id) => String::from(manager_id),
+        None => {
+            resolve_logs_manager_for_deployment(
+                client,
+                workspace,
+                &deployment_project_id,
+                &deployment.platform.to_string(),
+                &format!("{group_name}/{deployment_name}"),
+            )
+            .await?
+        }
+    };
 
     Ok(ResolvedLogsTarget {
         manager_id,
@@ -467,23 +468,27 @@ async fn resolve_deployment_target(
     })
 }
 
-fn target_from_deployment_detail(
+async fn target_from_deployment_detail(
+    client: &alien_platform_api::Client,
+    workspace: &str,
     deployment: types::DeploymentDetailResponse,
     group_name: Option<String>,
 ) -> Result<ResolvedLogsTarget> {
     let deployment_id: String = deployment.id.clone().into();
-    let manager_id = deployment
-        .manager_id
-        .clone()
-        .map(String::from)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "Deployment {deployment_id} does not have a manager assigned yet."
-                ),
-            })
-        })?;
     let project_id: String = deployment.project_id.clone().into();
+    let manager_id = match deployment.manager_id.clone() {
+        Some(manager_id) => String::from(manager_id),
+        None => {
+            resolve_logs_manager_for_deployment(
+                client,
+                workspace,
+                &project_id,
+                &deployment.platform.to_string(),
+                &deployment_id,
+            )
+            .await?
+        }
+    };
     let deployment_name: String = deployment.name.clone().into();
     let project_name = deployment
         .project
@@ -504,6 +509,48 @@ fn target_from_deployment_detail(
         deployment_name: Some(deployment_name),
         deployment_group_name,
     })
+}
+
+async fn resolve_logs_manager_for_deployment(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    project_id: &str,
+    platform: &str,
+    deployment_label: &str,
+) -> Result<String> {
+    match send_resolve_logs_manager_request(client, workspace, platform, Some(project_id)).await {
+        Ok(manager_id) => Ok(manager_id),
+        Err(_) => send_resolve_logs_manager_request(client, workspace, platform, None)
+            .await
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Failed to resolve logs manager for deployment {deployment_label}"
+                ),
+                url: None,
+            }),
+    }
+}
+
+async fn send_resolve_logs_manager_request(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    platform: &str,
+    project_id: Option<&str>,
+) -> Result<String> {
+    let mut request = client.resolve().workspace(workspace).platform(platform);
+    if let Some(project_id) = project_id {
+        request = request.project(project_id);
+    }
+
+    request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to call /v1/resolve for logs manager".to_string(),
+            url: None,
+        })
+        .map(|response| response.into_inner().manager_id)
 }
 
 async fn resolve_default_manager_target(

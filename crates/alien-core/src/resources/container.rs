@@ -13,10 +13,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{
-    validate_endpoint_host_label, ComputeCluster, ExposeProtocol, PublicEndpoint, ToolchainConfig,
-};
-use crate::LoadBalancerEndpoint;
+use crate::resources::{ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -149,27 +146,6 @@ fn default_failure_threshold() -> u32 {
 pub struct ContainerPort {
     /// Port number
     pub port: u16,
-    /// Optional exposure protocol (if None, port is internal-only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expose: Option<ExposeProtocol>,
-    /// Optional DNS label override for generated endpoint hostnames.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host_label: Option<String>,
-    /// Whether wildcard subdomains route to this public endpoint.
-    #[serde(default)]
-    pub wildcard_subdomains: bool,
-}
-
-impl ContainerPort {
-    /// Returns this port as a public endpoint when it is exposed.
-    pub fn public_endpoint(&self) -> Option<PublicEndpoint> {
-        self.expose.clone().map(|protocol| PublicEndpoint {
-            port: self.port,
-            protocol,
-            host_label: self.host_label.clone(),
-            wildcard_subdomains: self.wildcard_subdomains,
-        })
-    }
 }
 
 /// Container resource for running long-running container workloads.
@@ -181,7 +157,7 @@ impl ContainerPort {
 /// ## Example
 ///
 /// ```rust
-/// use alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, ContainerPort, ExposeProtocol};
+/// use alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, PublicEndpoint, ExposeProtocol};
 ///
 /// let container = Container::new("api".to_string())
 ///     .cluster("compute".to_string())
@@ -191,7 +167,13 @@ impl ContainerPort {
 ///     .cpu(ResourceSpec { min: "0.5".to_string(), desired: "1".to_string() })
 ///     .memory(ResourceSpec { min: "512Mi".to_string(), desired: "1Gi".to_string() })
 ///     .port(8080)
-///     .expose_port(8080, ExposeProtocol::Http)
+///     .public_endpoint(PublicEndpoint {
+///         name: "api".to_string(),
+///         port: 8080,
+///         protocol: ExposeProtocol::Http,
+///         host_label: None,
+///         wildcard_subdomains: false,
+///     })
 ///     .autoscaling(ContainerAutoscaling {
 ///         min: 2,
 ///         desired: 3,
@@ -218,9 +200,13 @@ pub struct Container {
     #[builder(field)]
     pub links: Vec<ResourceRef>,
 
-    /// Container ports to expose (at least one required)
+    /// Internal container ports (at least one required).
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
+
+    /// Public endpoints exposed by the container.
+    #[builder(field)]
+    pub public_endpoints: Vec<PublicEndpoint>,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
@@ -302,37 +288,41 @@ impl Container {
         !self.stateful
     }
 
-    /// Validates the ports configuration.
-    fn validate_ports(&self) -> Result<()> {
-        // At most one HTTP port is allowed
-        let http_ports: Vec<_> = self
-            .ports
-            .iter()
-            .filter(|p| p.expose == Some(ExposeProtocol::Http))
-            .collect();
+    /// Validates the public endpoint configuration.
+    fn validate_public_endpoints(&self) -> Result<()> {
+        let mut endpoint_names = std::collections::HashSet::new();
+        let mut backend_ports = std::collections::HashSet::new();
 
-        if http_ports.len() > 1 {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "at most one port can be exposed with HTTP protocol (multiple TCP ports are allowed)".to_string(),
-            }));
+        for endpoint in &self.public_endpoints {
+            endpoint.validate_for_resource(&self.id)?;
+
+            if !endpoint_names.insert(endpoint.name.as_str()) {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!("duplicate public endpoint name '{}'", endpoint.name),
+                }));
+            }
+
+            backend_ports.insert(endpoint.port);
+
+            if !self.ports.iter().any(|port| port.port == endpoint.port) {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!(
+                        "public endpoint '{}' references undeclared port {}",
+                        endpoint.name, endpoint.port
+                    ),
+                }));
+            }
         }
 
-        for port in &self.ports {
-            if port.expose.is_none() {
-                if port.host_label.is_some() || port.wildcard_subdomains {
-                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                        resource_id: self.id.clone(),
-                        reason: "hostLabel and wildcardSubdomains can only be set on exposed ports"
-                            .to_string(),
-                    }));
-                }
-                continue;
-            }
-
-            if let Some(host_label) = &port.host_label {
-                validate_endpoint_host_label(&self.id, host_label)?;
-            }
+        if backend_ports.len() > 1 {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason:
+                    "public endpoints on one container must currently route to the same backend port"
+                        .to_string(),
+            }));
         }
 
         Ok(())
@@ -352,45 +342,18 @@ impl<S: container_builder::State> ContainerBuilder<S> {
 
     /// Adds an internal-only port to the container.
     pub fn port(mut self, port: u16) -> Self {
-        self.ports.push(ContainerPort {
-            port,
-            expose: None,
-            host_label: None,
-            wildcard_subdomains: false,
-        });
+        self.ports.push(ContainerPort { port });
         self
     }
 
-    /// Exposes a specific port publicly via load balancer.
-    pub fn expose_port(mut self, port: u16, protocol: ExposeProtocol) -> Self {
-        // Find existing port or add new one
-        if let Some(existing) = self.ports.iter_mut().find(|p| p.port == port) {
-            existing.expose = Some(protocol);
-        } else {
-            self.ports.push(ContainerPort {
-                port,
-                expose: Some(protocol),
-                host_label: None,
-                wildcard_subdomains: false,
-            });
-        }
-        self
-    }
-
-    /// Exposes a port publicly with endpoint options.
+    /// Exposes a named public endpoint.
     pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
-        if let Some(existing) = self.ports.iter_mut().find(|p| p.port == endpoint.port) {
-            existing.expose = Some(endpoint.protocol);
-            existing.host_label = endpoint.host_label;
-            existing.wildcard_subdomains = endpoint.wildcard_subdomains;
-        } else {
+        if !self.ports.iter().any(|p| p.port == endpoint.port) {
             self.ports.push(ContainerPort {
                 port: endpoint.port,
-                expose: Some(endpoint.protocol),
-                host_label: endpoint.host_label,
-                wildcard_subdomains: endpoint.wildcard_subdomains,
             });
         }
+        self.public_endpoints.push(endpoint);
         self
     }
 }
@@ -443,15 +406,11 @@ pub struct ContainerOutputs {
     pub desired_replicas: u32,
     /// Internal DNS name (e.g., "api.svc")
     pub internal_dns: String,
-    /// Public URL (if exposed publicly)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    /// Public endpoints resolved for this container.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub public_endpoints: HashMap<String, PublicEndpointOutput>,
     /// Status of each replica
     pub replicas: Vec<ReplicaStatus>,
-    /// Load balancer endpoint information for DNS management (optional).
-    /// Used by the DNS controller to create custom domain mappings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_balancer_endpoint: Option<LoadBalancerEndpoint>,
 }
 
 impl ResourceOutputsDefinition for ContainerOutputs {
@@ -514,8 +473,8 @@ impl ResourceDefinition for Container {
                 })
             })?;
 
-        // Validate the new config's ports
-        new_container.validate_ports()?;
+        // Validate the new config's public endpoints.
+        new_container.validate_public_endpoints()?;
 
         if self.id != new_container.id {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
@@ -545,6 +504,13 @@ impl ResourceDefinition for Container {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
                 reason: "the 'ports' field is immutable".to_string(),
+            }));
+        }
+
+        if self.public_endpoints != new_container.public_endpoints {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'publicEndpoints' field is immutable".to_string(),
             }));
         }
 
@@ -600,7 +566,13 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .port(8080)
-            .expose_port(8080, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .autoscaling(ContainerAutoscaling {
                 min: 2,
                 desired: 3,
@@ -668,7 +640,13 @@ mod tests {
                 desired: "512Mi".to_string(),
             })
             .port(3000)
-            .expose_port(3000, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "web".to_string(),
+                port: 3000,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .autoscaling(ContainerAutoscaling {
                 min: 2,
                 desired: 2,
@@ -689,7 +667,7 @@ mod tests {
             .build();
 
         assert_eq!(container.ports[0].port, 3000);
-        assert!(container.ports[0].expose.is_some());
+        assert_eq!(container.public_endpoints[0].name, "web");
         assert!(container.health_check.is_some());
     }
 
@@ -709,6 +687,7 @@ mod tests {
                 desired: "512Mi".to_string(),
             })
             .public_endpoint(PublicEndpoint {
+                name: "gateway".to_string(),
                 port: 8080,
                 protocol: ExposeProtocol::Http,
                 host_label: Some("gateway".to_string()),
@@ -717,10 +696,14 @@ mod tests {
             .permissions("router".to_string())
             .build();
 
-        assert!(container.validate_ports().is_ok());
+        assert!(container.validate_public_endpoints().is_ok());
         assert_eq!(container.ports.len(), 1);
-        assert_eq!(container.ports[0].host_label.as_deref(), Some("gateway"));
-        assert!(container.ports[0].wildcard_subdomains);
+        assert_eq!(container.public_endpoints.len(), 1);
+        assert_eq!(
+            container.public_endpoints[0].host_label.as_deref(),
+            Some("gateway")
+        );
+        assert!(container.public_endpoints[0].wildcard_subdomains);
     }
 
     #[test]
@@ -739,6 +722,7 @@ mod tests {
                 desired: "512Mi".to_string(),
             })
             .public_endpoint(PublicEndpoint {
+                name: "gateway".to_string(),
                 port: 8080,
                 protocol: ExposeProtocol::Http,
                 host_label: Some("bad.label".to_string()),
@@ -747,7 +731,7 @@ mod tests {
             .permissions("router".to_string())
             .build();
 
-        assert!(container.validate_ports().is_err());
+        assert!(container.validate_public_endpoints().is_err());
     }
 
     #[test]
@@ -890,8 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn test_container_multi_port_validation() {
-        // Valid: Multiple TCP ports
+    fn test_container_multi_endpoint_validation() {
         let container = Container::new("multi-tcp".to_string())
             .cluster("compute".to_string())
             .code(ContainerCode::Image {
@@ -906,16 +889,26 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .port(8080)
-            .expose_port(8080, ExposeProtocol::Tcp)
-            .port(9090)
-            .expose_port(9090, ExposeProtocol::Tcp)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "shares".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("shares".to_string()),
+                wildcard_subdomains: true,
+            })
             .replicas(1)
             .permissions("test".to_string())
             .build();
 
-        assert!(container.validate_ports().is_ok());
+        assert!(container.validate_public_endpoints().is_ok());
 
-        // Invalid: Multiple HTTP ports
         let invalid_container = Container::new("multi-http".to_string())
             .cluster("compute".to_string())
             .code(ContainerCode::Image {
@@ -930,14 +923,26 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .port(8080)
-            .expose_port(8080, ExposeProtocol::Http)
             .port(9090)
-            .expose_port(9090, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 9090,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .replicas(1)
             .permissions("test".to_string())
             .build();
 
-        assert!(invalid_container.validate_ports().is_err());
+        assert!(invalid_container.validate_public_endpoints().is_err());
     }
 
     #[test]
@@ -959,6 +964,6 @@ mod tests {
             .permissions("test".to_string())
             .build();
 
-        assert!(container.validate_ports().is_ok());
+        assert!(container.validate_public_endpoints().is_ok());
     }
 }

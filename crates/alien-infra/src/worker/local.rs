@@ -369,10 +369,17 @@ impl LocalWorkerController {
         self.worker_url.as_ref().map(|url| {
             CoreResourceOutputs::new(WorkerOutputs {
                 worker_name: String::new(), // Not applicable for local
-                url: Some(url.clone()),
                 identifier: None,
-                load_balancer_endpoint: None, // Local workers don't have load balancers
-                commands_push_target: None,   // Local uses polling
+                public_endpoints: std::collections::HashMap::from([(
+                    "default".to_string(),
+                    alien_core::PublicEndpointOutput {
+                        url: url.clone(),
+                        host: alien_core::public_url_host(url).unwrap_or_default(),
+                        wildcard_host: None,
+                        load_balancer_endpoint: None,
+                    },
+                )]),
+                commands_push_target: None, // Local uses polling
             })
         })
     }

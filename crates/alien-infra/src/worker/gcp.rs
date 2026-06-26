@@ -25,9 +25,9 @@ use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Ingress,
-    Network, ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
     WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -605,9 +605,10 @@ impl GcpWorkerController {
         let config = ctx.desired_resource_config::<Worker>()?;
         self.url = ctx
             .deployment_config
-            .public_urls
+            .public_endpoints
             .as_ref()
-            .and_then(|urls| urls.get(&config.id).cloned())
+            .and_then(|resources| resources.get(&config.id))
+            .and_then(|endpoints| endpoints.values().next().cloned())
             .or(cloud_run_url);
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
@@ -615,7 +616,7 @@ impl GcpWorkerController {
         // Branch based on ingress type
         // If public, resolve domain and proceed to certificate/load balancer flow
         // If private, skip directly to push subscriptions
-        if config.ingress == Ingress::Public {
+        if !config.public_endpoints.is_empty() {
             match Self::resolve_domain_info(ctx, &config.id) {
                 Ok(domain_info) => {
                     info!(fqdn=%domain_info.fqdn, "Resolved domain for public worker");
@@ -1746,7 +1747,7 @@ impl GcpWorkerController {
         // public workers would require the PubSub service agent to have
         // roles/iam.serviceAccountTokenCreator on the execution SA, which adds
         // unnecessary complexity.
-        let oidc_token = if cfg.ingress != Ingress::Public {
+        let oidc_token = if cfg.public_endpoints.is_empty() {
             let service_account_id = format!("{}-sa", cfg.get_permissions());
             let service_account_ref = ResourceRef::new(
                 alien_core::ServiceAccount::RESOURCE_TYPE,
@@ -2002,7 +2003,7 @@ impl GcpWorkerController {
         }
 
         // Check for certificate renewal on auto-managed public domains.
-        if worker_config.ingress == Ingress::Public && !self.uses_custom_domain {
+        if !worker_config.public_endpoints.is_empty() && !self.uses_custom_domain {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -2050,7 +2051,7 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
 
-        if cfg.ingress != Ingress::Public || self.uses_custom_domain {
+        if cfg.public_endpoints.is_empty() || self.uses_custom_domain {
             return Ok(HandlerAction::Continue {
                 state: UpdateStart,
                 suggested_delay: None,
@@ -2407,7 +2408,7 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
 
-        if current_config.ingress != Ingress::Public {
+        if current_config.public_endpoints.is_empty() {
             return Ok(HandlerAction::Continue {
                 state: UpdatePushSubscriptions,
                 suggested_delay: None,
@@ -4040,9 +4041,16 @@ impl GcpWorkerController {
                     .service_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
-                url: Some(public_url),
                 identifier: self.service_name.clone(),
-                load_balancer_endpoint,
+                public_endpoints: std::collections::HashMap::from([(
+                    "default".to_string(),
+                    alien_core::PublicEndpointOutput {
+                        host: alien_core::public_url_host(&public_url).unwrap_or_default(),
+                        url: public_url,
+                        wildcard_host: None,
+                        load_balancer_endpoint,
+                    },
+                )]),
                 commands_push_target: self.commands_topic_name.clone(),
             })
         })
@@ -4252,9 +4260,10 @@ impl GcpWorkerController {
                 if self.url.is_none() {
                     self.url = ctx
                         .deployment_config
-                        .public_urls
+                        .public_endpoints
                         .as_ref()
-                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .and_then(|resources| resources.get(resource_id))
+                        .and_then(|endpoints| endpoints.values().next().cloned())
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -4404,10 +4413,10 @@ impl GcpWorkerController {
             .ports(ports)
             .build();
 
-        // Map ingress settings
-        let ingress = match cfg.ingress {
-            Ingress::Public => CloudRunIngress::IngressTrafficAll,
-            Ingress::Private => CloudRunIngress::IngressTrafficInternal,
+        let ingress = if cfg.public_endpoints.is_empty() {
+            CloudRunIngress::IngressTrafficInternal
+        } else {
+            CloudRunIngress::IngressTrafficAll
         };
 
         // Get VPC access configuration if a Network resource exists
@@ -4445,7 +4454,7 @@ impl GcpWorkerController {
         // When ingress is public, disable the IAM invoker check instead of adding
         // allUsers to IAM policy. This works even when the GCP organization has
         // domain-restricted sharing enabled (which blocks allUsers in IAM).
-        let is_public = cfg.ingress == Ingress::Public;
+        let is_public = !cfg.public_endpoints.is_empty();
         let service = Service::builder()
             .description(format!("Runtime worker: {}", cfg.id))
             .labels(HashMap::from([
@@ -5488,7 +5497,7 @@ mod tests {
 
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Ingress, Platform,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Platform,
         ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
@@ -5906,7 +5915,7 @@ mod tests {
         Option<MockServer>,
         Option<DomainMetadata>,
     ) {
-        let has_public_access = worker.ingress == Ingress::Public;
+        let has_public_access = !worker.public_endpoints.is_empty();
         let needs_readiness_probe = has_public_access && worker.readiness_probe.is_some();
 
         // Set up mock server for readiness probe if needed
@@ -6092,7 +6101,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] worker: Worker) {
         let worker_id = worker.id.clone();
-        let worker_ingress = worker.ingress.clone();
+        let worker_is_public = !worker.public_endpoints.is_empty();
         let function_name = format!("test-{}", worker.id);
         let (mock_provider, _mock_server, domain_metadata) =
             setup_mocks_for_function(&worker, &function_name, true);
@@ -6119,11 +6128,15 @@ mod tests {
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.identifier.is_some());
         assert!(function_outputs.worker_name.starts_with("test-"));
-        if worker_ingress == Ingress::Public {
+        if worker_is_public {
             let expected_url = format!("https://{}.test.example.com", worker_id);
-            assert_eq!(function_outputs.url.as_deref(), Some(expected_url.as_str()));
+            let endpoint = function_outputs
+                .public_endpoints
+                .get("default")
+                .expect("public endpoint output should exist");
+            assert_eq!(endpoint.url, expected_url);
             assert_eq!(
-                function_outputs
+                endpoint
                     .load_balancer_endpoint
                     .as_ref()
                     .map(|endpoint| endpoint.dns_name.as_str()),
@@ -6169,7 +6182,7 @@ mod tests {
         let mut ready_controller = GcpWorkerController::mock_ready(&function_name);
 
         // If the target worker has a readiness probe, update the controller URL to point to mock server
-        if to_function.readiness_probe.is_some() && to_function.ingress == Ingress::Public {
+        if to_function.readiness_probe.is_some() && !to_function.public_endpoints.is_empty() {
             if let Some(ref server) = mock_server {
                 ready_controller.url = Some(server.base_url());
             }
@@ -6192,7 +6205,7 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
 
         // Update to the new worker
-        let target_is_public = to_function.ingress == Ingress::Public;
+        let target_is_public = !to_function.public_endpoints.is_empty();
         executor.update(to_function).unwrap();
 
         // Run the update flow
@@ -6219,7 +6232,7 @@ mod tests {
         #[case] service_missing: bool,
     ) {
         let function_name = format!("test-{}", worker.id);
-        let has_public_access = worker.ingress == Ingress::Public;
+        let has_public_access = !worker.public_endpoints.is_empty();
         let mock_cloudrun =
             setup_mock_client_for_best_effort_deletion(&function_name, service_missing);
         let mock_provider = setup_mock_service_provider(mock_cloudrun, None);

@@ -8,7 +8,9 @@ pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,
 };
-pub use aws_runtime::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator};
+pub use aws_runtime::{
+    ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
+};
 pub use azure_runtime::{
     azure_predefined_role_id, dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan,
     AzureRoleAssignment, AzureRoleAssignmentProperties, AzureRoleBinding, AzureRoleDefinition,

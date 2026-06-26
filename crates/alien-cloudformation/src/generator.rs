@@ -8,8 +8,8 @@ use crate::{
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    Ingress, KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result,
-    Stack, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -348,7 +348,7 @@ fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> 
             resource
                 .config
                 .downcast_ref::<Worker>()
-                .is_some_and(|worker| worker.ingress == Ingress::Public)
+                .is_some_and(|worker| !worker.public_endpoints.is_empty())
         })
 }
 

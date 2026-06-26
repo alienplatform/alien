@@ -166,7 +166,20 @@ pub async fn acquire_deployment(
     deployment_id: &str,
     session: &str,
 ) -> Result<(), AlienError> {
-    acquire_deployment_with_statuses(client, deployment_id, session, None).await
+    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None)
+        .await
+        .map(|_| ())
+}
+
+/// Acquire a deployment lock and return the manager's acquired deployment
+/// payload. Callers that need deployment-config fields that are intentionally
+/// redacted from `GET /v1/deployments` should use this helper.
+pub async fn acquire_deployment_with_payload(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<serde_json::Value, AlienError> {
+    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None).await
 }
 
 /// Acquire a deployment lock for a caller that owns setup-time teardown.
@@ -182,6 +195,8 @@ pub async fn acquire_setup_delete_deployment(
         client,
         deployment_id,
         session,
+        Some("setup-teardown".to_string()),
+        Some("cli".to_string()),
         Some(vec![
             "delete-pending".to_string(),
             "deleting".to_string(),
@@ -190,20 +205,25 @@ pub async fn acquire_setup_delete_deployment(
         ]),
     )
     .await
+    .map(|_| ())
 }
 
 async fn acquire_deployment_with_statuses(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    acquire_mode: Option<String>,
+    setup_method: Option<String>,
     statuses: Option<Vec<String>>,
-) -> Result<(), AlienError> {
+) -> Result<serde_json::Value, AlienError> {
     for attempt in 1..=MAX_ACQUIRE_ATTEMPTS {
         let resp = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
+                acquire_mode: acquire_mode.clone(),
                 session: session.to_string(),
                 deployment_ids: Some(vec![deployment_id.to_string()]),
+                setup_method: setup_method.clone(),
                 statuses: statuses.clone(),
                 platforms: None,
                 limit: None,
@@ -215,8 +235,8 @@ async fn acquire_deployment_with_statuses(
                 message: "Failed to acquire sync lock".to_string(),
             })?;
 
-        if !resp.into_inner().deployments.is_empty() {
-            return Ok(());
+        if let Some(deployment) = resp.into_inner().deployments.into_iter().next() {
+            return Ok(deployment.deployment);
         }
 
         if attempt == MAX_ACQUIRE_ATTEMPTS {

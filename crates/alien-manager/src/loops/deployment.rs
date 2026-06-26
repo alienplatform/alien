@@ -569,7 +569,7 @@ impl DeploymentLoop {
             base_platform: provided_config
                 .and_then(|config| config.base_platform)
                 .or(deployment.base_platform),
-            public_urls: provided_config.and_then(|config| config.public_urls.clone()),
+            public_endpoints: provided_config.and_then(|config| config.public_endpoints.clone()),
             domain_metadata: provided_config.and_then(|config| config.domain_metadata.clone()),
             monitoring,
             manager_url: Some(self.config.base_url()),

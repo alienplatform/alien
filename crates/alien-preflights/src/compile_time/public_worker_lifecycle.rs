@@ -49,7 +49,9 @@ impl CompileTimeCheck for PublicWorkerLifecycleCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Ingress, Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode};
+    use alien_core::{
+        Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode, WorkerPublicEndpoint,
+    };
     use indexmap::IndexMap;
 
     fn create_public_function(id: &str) -> Worker {
@@ -58,7 +60,11 @@ mod tests {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .build()
     }
 
@@ -68,7 +74,6 @@ mod tests {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .ingress(Ingress::Private)
             .build()
     }
 

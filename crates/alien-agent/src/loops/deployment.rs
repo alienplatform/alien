@@ -264,7 +264,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
 
 /// Enrich a deployment config with agent-specific settings.
 ///
-/// Applies public_urls, stack_settings from agent config,
+/// Applies public_endpoints and stack_settings from agent config,
 /// and injects commands polling env vars for K8s/Local platforms.
 /// External bindings are part of stack_settings and flow through naturally.
 async fn enrich_config(
@@ -273,9 +273,9 @@ async fn enrich_config(
     platform: Platform,
     db: &AgentDb,
 ) -> Result<DeploymentConfig> {
-    // Pass through public URLs from agent config
-    if agent_config.public_urls.is_some() {
-        config.public_urls = agent_config.public_urls.clone();
+    // Pass through public endpoints from agent config.
+    if agent_config.public_endpoints.is_some() {
+        config.public_endpoints = agent_config.public_endpoints.clone();
     }
 
     // Pass through stack settings from agent config (includes external_bindings)
@@ -443,7 +443,7 @@ mod tests {
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,
-            public_urls: None,
+            public_endpoints: None,
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrich_config_applies_agent_public_urls() {
+    async fn enrich_config_applies_agent_public_endpoints() {
         let temp_dir = tempfile::tempdir().unwrap();
         let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
@@ -498,14 +498,17 @@ mod tests {
             .unwrap();
 
         let config = test_deployment_config();
-        let public_urls = HashMap::from([(
+        let public_endpoints = HashMap::from([(
             "gateway".to_string(),
-            "https://gateway.example.test".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://api.gateway.example.test".to_string(),
+            )]),
         )]);
         let agent_config = AgentConfig::builder()
             .platform(Platform::Local)
             .agent_name("local-runner")
-            .maybe_public_urls(Some(public_urls.clone()))
+            .maybe_public_endpoints(Some(public_endpoints.clone()))
             .encryption_key(encryption_key)
             .build();
 
@@ -513,6 +516,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(enriched.public_urls, Some(public_urls));
+        assert_eq!(enriched.public_endpoints, Some(public_endpoints));
     }
 }

@@ -43,7 +43,7 @@ export type DaemonPublicEndpointOptions =
 export class Daemon {
   private _config: Partial<DaemonConfig> = {
     links: [],
-    ports: [],
+    publicEndpoints: [],
     environment: {},
     cpu: { min: "0.1", desired: "0.1" },
     memory: { min: "128Mi", desired: "128Mi" },
@@ -122,11 +122,11 @@ export class Daemon {
   }
 
   /**
-   * Exposes a daemon port publicly through the platform endpoint layer.
+   * Exposes a named public endpoint for a daemon port.
    */
-  public exposePort(port: number, options: DaemonPublicEndpointOptions): this {
-    if (!this._config.ports) {
-      this._config.ports = []
+  public publicEndpoint(name: string, port: number, options: DaemonPublicEndpointOptions = "http"): this {
+    if (!this._config.publicEndpoints) {
+      this._config.publicEndpoints = []
     }
 
     const endpoint =
@@ -135,13 +135,14 @@ export class Daemon {
         : options
 
     const publicEndpoint: PublicEndpoint = {
+      name,
       port,
       protocol: endpoint.protocol,
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
     }
 
-    this._config.ports.push(publicEndpoint)
+    this._config.publicEndpoints.push(publicEndpoint)
     return this
   }
 

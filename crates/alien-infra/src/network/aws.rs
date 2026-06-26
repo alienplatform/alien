@@ -350,6 +350,10 @@ pub struct AwsNetworkController {
 }
 
 impl AwsNetworkController {
+    pub fn private_subnets_ready_for_runtime(&self) -> bool {
+        self.is_byo_vpc || matches!(self.state, AwsNetworkState::Ready)
+    }
+
     async fn find_security_group_id_by_name(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -2389,6 +2393,14 @@ impl AwsNetworkController {
             is_byo_vpc: false,
             _internal_stay_count: None,
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn mock_waiting_for_private_subnet_egress(vpc_id: &str, az_count: usize) -> Self {
+        let mut controller = Self::mock_ready(vpc_id, az_count);
+        controller.state = AwsNetworkState::WaitingForNatGateway;
+        controller.nat_gateway_id = None;
+        controller
     }
 
     /// Creates a BYO-VPC controller in ready state for testing.

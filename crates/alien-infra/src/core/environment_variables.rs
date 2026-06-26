@@ -6,12 +6,13 @@ use alien_core::{
     passthrough_transport_runtime_environment_plan, public_url_host,
     render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
-    worker_runtime_environment_contract, ResourceRef, ResourceStatus,
-    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue,
+    worker_runtime_environment_contract, Container, Daemon, ResourceRef, ResourceStatus,
+    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
-    ENV_ALIEN_PUBLIC_HOST, ENV_ALIEN_PUBLIC_URL,
+    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Common environment variable preparation for worker controllers.
@@ -97,6 +98,43 @@ impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_>
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicEndpointEnv {
+    url: String,
+    host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wildcard_host: Option<String>,
+}
+
+fn current_resource_wildcard_endpoints(
+    ctx: &ResourceControllerContext<'_>,
+) -> HashMap<String, bool> {
+    if let Some(container) = ctx.desired_config.downcast_ref::<Container>() {
+        return container
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+    if let Some(daemon) = ctx.desired_config.downcast_ref::<Daemon>() {
+        return daemon
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+    if let Some(worker) = ctx.desired_config.downcast_ref::<Worker>() {
+        return worker
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+
+    HashMap::new()
+}
+
 impl EnvironmentVariableBuilder {
     /// Create a new builder starting with the initial environment variables.
     pub fn new(initial_env: &HashMap<String, String>) -> Self {
@@ -150,24 +188,49 @@ impl EnvironmentVariableBuilder {
         mut self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
-    ) -> Self {
-        let Some(public_url) = ctx
+    ) -> Result<Self> {
+        let Some(endpoint_urls) = ctx
             .deployment_config
-            .public_urls
+            .public_endpoints
             .as_ref()
-            .and_then(|urls| urls.get(resource_id))
+            .and_then(|resources| resources.get(resource_id))
         else {
-            return self;
+            return Ok(self);
         };
 
-        self.env_vars
-            .insert(ENV_ALIEN_PUBLIC_URL.to_string(), public_url.clone());
-        if let Some(host) = public_url_host(public_url) {
-            self.env_vars
-                .insert(ENV_ALIEN_PUBLIC_HOST.to_string(), host);
+        let wildcard_endpoints = current_resource_wildcard_endpoints(ctx);
+        let mut env_endpoints = HashMap::new();
+        for (endpoint_name, public_url) in endpoint_urls {
+            let Some(host) = public_url_host(public_url) else {
+                continue;
+            };
+            let wildcard_host = wildcard_endpoints
+                .get(endpoint_name)
+                .copied()
+                .unwrap_or(false)
+                .then(|| format!("*.{host}"));
+            env_endpoints.insert(
+                endpoint_name.clone(),
+                PublicEndpointEnv {
+                    url: public_url.clone(),
+                    host,
+                    wildcard_host,
+                },
+            );
         }
 
-        self
+        if !env_endpoints.is_empty() {
+            let json = serde_json::to_string(&env_endpoints)
+                .into_alien_error()
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "failed to serialize public endpoint environment metadata".to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            self.env_vars
+                .insert(ENV_ALIEN_PUBLIC_ENDPOINTS_JSON.to_string(), json);
+        }
+
+        Ok(self)
     }
 
     /// Add the complete scalar runtime environment for a Worker.

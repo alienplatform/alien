@@ -19,7 +19,7 @@ use bollard::image::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
 
-use alien_core::{Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack, Worker, WorkerCode};
+use alien_core::{Platform, ReadinessProbe, ResourceLifecycle, Stack, Worker, WorkerCode};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::stores::sqlite::{
@@ -60,7 +60,11 @@ fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .memory_mb(256)
         .timeout_seconds(30)
         .commands_enabled(false)
