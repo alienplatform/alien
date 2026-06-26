@@ -34,7 +34,8 @@
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*"
             ]
           }
         }
@@ -222,6 +223,9 @@
           // provision needs write+delete on all of them — including the private DNS zone, its VNet
           // link, and the Private Endpoint's DNS zone group — or teardown leaves orphans. All are
           // management-plane network actions (no dataActions); none expose secret contents.
+          // The network resources omit `/read`: each PE / DNS-zone op is confirmed via
+          // the Azure-AsyncOperation (LRO) header, not a GET (flexibleServers keeps `/read` because
+          // the controller polls server state directly). A GET-based check would need the read added.
           "actions": [
             "Microsoft.DBforPostgreSQL/flexibleServers/write",
             "Microsoft.DBforPostgreSQL/flexibleServers/delete",
