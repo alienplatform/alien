@@ -11,6 +11,10 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { APIError, APIError$inboundSchema } from "./apierror.js";
+import {
+  DeploymentSetupMethod,
+  DeploymentSetupMethod$inboundSchema,
+} from "./deploymentsetupmethod.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const SyncAcquireResponseCurrentReleaseManagementEnum = {
@@ -4748,13 +4752,95 @@ export type SyncAcquireResponseDnsStatus = ClosedEnum<
 >;
 
 /**
+ * Certificate status in the certificate lifecycle
+ */
+export const SyncAcquireResponseEndpointsCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncAcquireResponseEndpointsCertificateStatus = ClosedEnum<
+  typeof SyncAcquireResponseEndpointsCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncAcquireResponseEndpointsDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncAcquireResponseEndpointsDnsStatus = ClosedEnum<
+  typeof SyncAcquireResponseEndpointsDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncAcquireResponseEndpoints = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncAcquireResponseEndpointsCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncAcquireResponseEndpointsDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
  * Certificate and DNS metadata for a public resource.
  *
  * @remarks
  *
- * The direct fields describe the primary generated hostname. `aliases`
- * contains additional managed hostnames that route directly to the same
- * resource.
+ * The direct fields describe the primary endpoint hostname. `endpoints`
+ * contains endpoint-scoped metadata keyed by endpoint name. `aliases` contains
+ * additional managed hostnames that route directly to the primary endpoint.
  */
 export type SyncAcquireResponseDomainMetadataResources = {
   /**
@@ -4774,17 +4860,17 @@ export type SyncAcquireResponseDomainMetadataResources = {
    */
   certificateStatus: SyncAcquireResponseCertificateStatus;
   /**
-   * Last DNS error message. Present when DNS previously failed, even if status
-   *
-   * @remarks
-   * was reset to pending for retry. Used to surface actionable error context
-   * in WaitingForDns failure messages.
+   * Last DNS error message.
    */
   dnsError?: string | null | undefined;
   /**
    * DNS record status in the DNS lifecycle
    */
   dnsStatus: SyncAcquireResponseDnsStatus;
+  /**
+   * Endpoint-scoped metadata keyed by endpoint name.
+   */
+  endpoints?: { [k: string]: SyncAcquireResponseEndpoints } | undefined;
   /**
    * Fully qualified domain name.
    */
@@ -6928,6 +7014,63 @@ export type SyncAcquireResponseMonitoringUnion =
   | SyncAcquireResponseMonitoring
   | any;
 
+export type SyncAcquireResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncAcquireResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncAcquireResponsePoolsUnion =
+  | SyncAcquireResponsePoolsFixed
+  | SyncAcquireResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncAcquireResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | SyncAcquireResponsePoolsFixed
+      | SyncAcquireResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncAcquireResponseComputeUnion = SyncAcquireResponseCompute | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -7917,6 +8060,7 @@ export type SyncAcquireResponseUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type SyncAcquireResponseStackSettings = {
+  compute?: SyncAcquireResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -8069,7 +8213,7 @@ export type SyncAcquireResponseConfig = {
    */
   nativeImageHost?: string | null | undefined;
   /**
-   * Public URLs for exposed resources (optional override).
+   * Public endpoint URLs for exposed resources (optional override).
    *
    * @remarks
    *
@@ -8078,14 +8222,14 @@ export type SyncAcquireResponseConfig = {
    * load balancer outputs so DNS, certificate renewal, and route readiness
    * stay tied to the resource state.
    *
-   * If not set, platforms determine public URLs from other sources:
+   * If not set, platforms determine public endpoint URLs from other sources:
    * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
    * - Local: `http://localhost:{allocated_port}`
-   * - Custom or disabled exposure: no public URL unless a controller reports one
+   * - Custom or disabled exposure: no public endpoint URL unless a controller reports one
    *
-   * Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
+   * Outer key: resource ID. Inner key: endpoint name. Value: public URL.
    */
-  publicUrls?: { [k: string]: string } | null | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -8110,6 +8254,7 @@ export type SyncAcquireResponseDeployment = {
    * Project ID the deployment belongs to
    */
   projectId: string;
+  setupMethod?: DeploymentSetupMethod | undefined;
   /**
    * Current deployment state (includes releases)
    */
@@ -15549,6 +15694,43 @@ export const SyncAcquireResponseDnsStatus$inboundSchema: z.ZodEnum<
 > = z.enum(SyncAcquireResponseDnsStatus);
 
 /** @internal */
+export const SyncAcquireResponseEndpointsCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseEndpointsCertificateStatus> = z.enum(
+    SyncAcquireResponseEndpointsCertificateStatus,
+  );
+
+/** @internal */
+export const SyncAcquireResponseEndpointsDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseEndpointsDnsStatus
+> = z.enum(SyncAcquireResponseEndpointsDnsStatus);
+
+/** @internal */
+export const SyncAcquireResponseEndpoints$inboundSchema: z.ZodType<
+  SyncAcquireResponseEndpoints,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus:
+    SyncAcquireResponseEndpointsCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncAcquireResponseEndpointsDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseEndpointsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseEndpoints, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseEndpoints$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseEndpoints' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseDomainMetadataResources$inboundSchema:
   z.ZodType<SyncAcquireResponseDomainMetadataResources, unknown> = z.object({
     aliases: z.array(z.lazy(() => SyncAcquireResponseAlias$inboundSchema))
@@ -15558,6 +15740,10 @@ export const SyncAcquireResponseDomainMetadataResources$inboundSchema:
     certificateStatus: SyncAcquireResponseCertificateStatus$inboundSchema,
     dnsError: z.nullable(z.string()).optional(),
     dnsStatus: SyncAcquireResponseDnsStatus$inboundSchema,
+    endpoints: z.record(
+      z.string(),
+      z.lazy(() => SyncAcquireResponseEndpoints$inboundSchema),
+    ).optional(),
     fqdn: z.string(),
     issuedAt: z.nullable(z.string()).optional(),
     privateKey: z.nullable(z.string()).optional(),
@@ -19706,6 +19892,106 @@ export function syncAcquireResponseMonitoringUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncAcquireResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncAcquireResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncAcquireResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncAcquireResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCompute$inboundSchema: z.ZodType<
+  SyncAcquireResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncAcquireResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncAcquireResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncAcquireResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseComputeUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCompute$inboundSchema), z.any()]);
+
+export function syncAcquireResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof SyncAcquireResponseDeploymentModel
 > = z.enum(SyncAcquireResponseDeploymentModel);
@@ -21371,6 +21657,9 @@ export const SyncAcquireResponseStackSettings$inboundSchema: z.ZodType<
   SyncAcquireResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: SyncAcquireResponseDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => SyncAcquireResponseDomains$inboundSchema), z.any()]),
@@ -21512,7 +21801,9 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   nativeImageHost: z.nullable(z.string()).optional(),
-  publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
   stackSettings: z.lazy(() => SyncAcquireResponseStackSettings$inboundSchema)
     .optional(),
 });
@@ -21534,6 +21825,7 @@ export const SyncAcquireResponseDeployment$inboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   projectId: z.string(),
+  setupMethod: DeploymentSetupMethod$inboundSchema.optional(),
   current: z.lazy(() => SyncAcquireResponseCurrent$inboundSchema),
   config: z.lazy(() => SyncAcquireResponseConfig$inboundSchema),
 });

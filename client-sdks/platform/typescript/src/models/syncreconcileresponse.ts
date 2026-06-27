@@ -4770,13 +4770,95 @@ export type SyncReconcileResponseDnsStatus = ClosedEnum<
 >;
 
 /**
+ * Certificate status in the certificate lifecycle
+ */
+export const SyncReconcileResponseEndpointsCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncReconcileResponseEndpointsCertificateStatus = ClosedEnum<
+  typeof SyncReconcileResponseEndpointsCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncReconcileResponseEndpointsDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncReconcileResponseEndpointsDnsStatus = ClosedEnum<
+  typeof SyncReconcileResponseEndpointsDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncReconcileResponseEndpoints = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncReconcileResponseEndpointsCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncReconcileResponseEndpointsDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
  * Certificate and DNS metadata for a public resource.
  *
  * @remarks
  *
- * The direct fields describe the primary generated hostname. `aliases`
- * contains additional managed hostnames that route directly to the same
- * resource.
+ * The direct fields describe the primary endpoint hostname. `endpoints`
+ * contains endpoint-scoped metadata keyed by endpoint name. `aliases` contains
+ * additional managed hostnames that route directly to the primary endpoint.
  */
 export type DomainMetadataTargetResources = {
   /**
@@ -4796,17 +4878,17 @@ export type DomainMetadataTargetResources = {
    */
   certificateStatus: SyncReconcileResponseCertificateStatus;
   /**
-   * Last DNS error message. Present when DNS previously failed, even if status
-   *
-   * @remarks
-   * was reset to pending for retry. Used to surface actionable error context
-   * in WaitingForDns failure messages.
+   * Last DNS error message.
    */
   dnsError?: string | null | undefined;
   /**
    * DNS record status in the DNS lifecycle
    */
   dnsStatus: SyncReconcileResponseDnsStatus;
+  /**
+   * Endpoint-scoped metadata keyed by endpoint name.
+   */
+  endpoints?: { [k: string]: SyncReconcileResponseEndpoints } | undefined;
   /**
    * Fully qualified domain name.
    */
@@ -6964,6 +7046,65 @@ export type SyncReconcileResponseMonitoringUnion =
   | SyncReconcileResponseMonitoring
   | any;
 
+export type SyncReconcileResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncReconcileResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncReconcileResponsePoolsUnion =
+  | SyncReconcileResponsePoolsFixed
+  | SyncReconcileResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncReconcileResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | SyncReconcileResponsePoolsFixed
+      | SyncReconcileResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncReconcileResponseComputeUnion =
+  | SyncReconcileResponseCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -7961,6 +8102,7 @@ export type SyncReconcileResponseUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type SyncReconcileResponseStackSettings = {
+  compute?: SyncReconcileResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -8118,7 +8260,7 @@ export type TargetConfig = {
    */
   nativeImageHost?: string | null | undefined;
   /**
-   * Public URLs for exposed resources (optional override).
+   * Public endpoint URLs for exposed resources (optional override).
    *
    * @remarks
    *
@@ -8127,14 +8269,14 @@ export type TargetConfig = {
    * load balancer outputs so DNS, certificate renewal, and route readiness
    * stay tied to the resource state.
    *
-   * If not set, platforms determine public URLs from other sources:
+   * If not set, platforms determine public endpoint URLs from other sources:
    * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
    * - Local: `http://localhost:{allocated_port}`
-   * - Custom or disabled exposure: no public URL unless a controller reports one
+   * - Custom or disabled exposure: no public endpoint URL unless a controller reports one
    *
-   * Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
+   * Outer key: resource ID. Inner key: endpoint name. Value: public URL.
    */
-  publicUrls?: { [k: string]: string } | null | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -16895,6 +17037,43 @@ export const SyncReconcileResponseDnsStatus$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseDnsStatus);
 
 /** @internal */
+export const SyncReconcileResponseEndpointsCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseEndpointsCertificateStatus> = z.enum(
+    SyncReconcileResponseEndpointsCertificateStatus,
+  );
+
+/** @internal */
+export const SyncReconcileResponseEndpointsDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseEndpointsDnsStatus
+> = z.enum(SyncReconcileResponseEndpointsDnsStatus);
+
+/** @internal */
+export const SyncReconcileResponseEndpoints$inboundSchema: z.ZodType<
+  SyncReconcileResponseEndpoints,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus:
+    SyncReconcileResponseEndpointsCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncReconcileResponseEndpointsDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileResponseEndpointsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseEndpoints, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseEndpoints$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseEndpoints' from JSON`,
+  );
+}
+
+/** @internal */
 export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   DomainMetadataTargetResources,
   unknown
@@ -16906,6 +17085,10 @@ export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   certificateStatus: SyncReconcileResponseCertificateStatus$inboundSchema,
   dnsError: z.nullable(z.string()).optional(),
   dnsStatus: SyncReconcileResponseDnsStatus$inboundSchema,
+  endpoints: z.record(
+    z.string(),
+    z.lazy(() => SyncReconcileResponseEndpoints$inboundSchema),
+  ).optional(),
   fqdn: z.string(),
   issuedAt: z.nullable(z.string()).optional(),
   privateKey: z.nullable(z.string()).optional(),
@@ -21210,6 +21393,110 @@ export function syncReconcileResponseMonitoringUnionFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncReconcileResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncReconcileResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncReconcileResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncReconcileResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCompute$inboundSchema: z.ZodType<
+  SyncReconcileResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncReconcileResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseComputeUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseCompute$inboundSchema),
+  z.any(),
+]);
+
+export function syncReconcileResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseDeploymentModel
 > = z.enum(SyncReconcileResponseDeploymentModel);
@@ -22902,6 +23189,12 @@ export const SyncReconcileResponseStackSettings$inboundSchema: z.ZodType<
   SyncReconcileResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseCompute$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: SyncReconcileResponseDeploymentModel$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -23060,7 +23353,9 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
       ]),
     ).optional(),
     nativeImageHost: z.nullable(z.string()).optional(),
-    publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
+    publicEndpoints: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
     stackSettings: z.lazy(() =>
       SyncReconcileResponseStackSettings$inboundSchema
     ).optional(),

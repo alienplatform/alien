@@ -106,6 +106,7 @@ const value: models.DataDaemon = {
     capacityGroup: "<value>",
     commandSupported: true,
     daemonInstances: [],
+    daemonName: "<value>",
     desiredMachines: 665477,
     events: [
       {

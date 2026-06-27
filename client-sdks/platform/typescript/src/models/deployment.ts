@@ -196,6 +196,61 @@ export type DeploymentEnvironmentInfoUnion =
   | DeploymentEnvironmentInfoTest
   | any;
 
+export type DeploymentPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentPoolsUnion =
+  | DeploymentPoolsFixed
+  | DeploymentPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?:
+    | { [k: string]: DeploymentPoolsFixed | DeploymentPoolsAutoscale }
+    | undefined;
+};
+
+export type DeploymentComputeUnion = DeploymentCompute | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1139,6 +1194,7 @@ export type DeploymentUpdates = ClosedEnum<typeof DeploymentUpdates>;
  * User-provided configuration (network, deployment model, approvals)
  */
 export type DeploymentStackSettings = {
+  compute?: DeploymentCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -3141,6 +3197,106 @@ export function deploymentEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentPoolsAutoscale$inboundSchema: z.ZodType<
+  DeploymentPoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function deploymentPoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsFixed$inboundSchema: z.ZodType<
+  DeploymentPoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function deploymentPoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsUnion$inboundSchema: z.ZodType<
+  DeploymentPoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+  z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+]);
+
+export function deploymentPoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCompute$inboundSchema: z.ZodType<
+  DeploymentCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+      z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function deploymentComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputeUnion$inboundSchema: z.ZodType<
+  DeploymentComputeUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]);
+
+export function deploymentComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDeploymentModel$inboundSchema: z.ZodEnum<
   typeof DeploymentDeploymentModel
 > = z.enum(DeploymentDeploymentModel);
@@ -4672,6 +4828,9 @@ export const DeploymentStackSettings$inboundSchema: z.ZodType<
   DeploymentStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: DeploymentDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => DeploymentDomains$inboundSchema), z.any()]),

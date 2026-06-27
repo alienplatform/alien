@@ -185,6 +185,7 @@ run();
 ### [Deployment](docs/sdks/deployment/README.md)
 
 * [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+* [planCompute](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 * [prepareStack](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
@@ -363,6 +364,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+- [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateSetupRegistrationOperation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.

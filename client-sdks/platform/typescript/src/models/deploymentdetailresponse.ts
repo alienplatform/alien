@@ -220,6 +220,65 @@ export type DeploymentDetailResponseEnvironmentInfoUnion =
   | DeploymentDetailResponseEnvironmentInfoTest
   | any;
 
+export type DeploymentDetailResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentDetailResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentDetailResponsePoolsUnion =
+  | DeploymentDetailResponsePoolsFixed
+  | DeploymentDetailResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentDetailResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | DeploymentDetailResponsePoolsFixed
+      | DeploymentDetailResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type DeploymentDetailResponseComputeUnion =
+  | DeploymentDetailResponseCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1218,6 +1277,7 @@ export type DeploymentDetailResponseUpdates = ClosedEnum<
  * User-provided configuration (network, deployment model, approvals)
  */
 export type DeploymentDetailResponseStackSettings = {
+  compute?: DeploymentDetailResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -3317,6 +3377,113 @@ export function deploymentDetailResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function deploymentDetailResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePoolsFixed$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function deploymentDetailResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePoolsUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponsePoolsFixed$inboundSchema),
+  z.lazy(() => DeploymentDetailResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function deploymentDetailResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseCompute$inboundSchema: z.ZodType<
+  DeploymentDetailResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentDetailResponsePoolsFixed$inboundSchema),
+      z.lazy(() => DeploymentDetailResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function deploymentDetailResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseComputeUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseComputeUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponseCompute$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDetailResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponseDeploymentModel
 > = z.enum(DeploymentDetailResponseDeploymentModel);
@@ -5122,6 +5289,12 @@ export const DeploymentDetailResponseStackSettings$inboundSchema: z.ZodType<
   DeploymentDetailResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseCompute$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: DeploymentDetailResponseDeploymentModel$inboundSchema
     .optional(),
   domains: z.nullable(

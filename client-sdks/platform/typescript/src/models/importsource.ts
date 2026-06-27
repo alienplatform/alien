@@ -35,6 +35,61 @@ export const ImportSourcePlatform = {
  */
 export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
 
+export type ImportSourcePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type ImportSourcePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type ImportSourcePoolsUnion =
+  | ImportSourcePoolsFixed
+  | ImportSourcePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type ImportSourceCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?:
+    | { [k: string]: ImportSourcePoolsFixed | ImportSourcePoolsAutoscale }
+    | undefined;
+};
+
+export type ImportSourceComputeUnion = ImportSourceCompute | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -989,6 +1044,7 @@ export type ImportSourceUpdates = ClosedEnum<typeof ImportSourceUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ImportSourceStackSettings = {
+  compute?: ImportSourceCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1188,6 +1244,130 @@ export type ImportSource = {
 export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
   typeof ImportSourcePlatform
 > = z.enum(ImportSourcePlatform);
+
+/** @internal */
+export type ImportSourcePoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const ImportSourcePoolsAutoscale$outboundSchema: z.ZodType<
+  ImportSourcePoolsAutoscale$Outbound,
+  ImportSourcePoolsAutoscale
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function importSourcePoolsAutoscaleToJSON(
+  importSourcePoolsAutoscale: ImportSourcePoolsAutoscale,
+): string {
+  return JSON.stringify(
+    ImportSourcePoolsAutoscale$outboundSchema.parse(importSourcePoolsAutoscale),
+  );
+}
+
+/** @internal */
+export type ImportSourcePoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const ImportSourcePoolsFixed$outboundSchema: z.ZodType<
+  ImportSourcePoolsFixed$Outbound,
+  ImportSourcePoolsFixed
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function importSourcePoolsFixedToJSON(
+  importSourcePoolsFixed: ImportSourcePoolsFixed,
+): string {
+  return JSON.stringify(
+    ImportSourcePoolsFixed$outboundSchema.parse(importSourcePoolsFixed),
+  );
+}
+
+/** @internal */
+export type ImportSourcePoolsUnion$Outbound =
+  | ImportSourcePoolsFixed$Outbound
+  | ImportSourcePoolsAutoscale$Outbound;
+
+/** @internal */
+export const ImportSourcePoolsUnion$outboundSchema: z.ZodType<
+  ImportSourcePoolsUnion$Outbound,
+  ImportSourcePoolsUnion
+> = z.union([
+  z.lazy(() => ImportSourcePoolsFixed$outboundSchema),
+  z.lazy(() => ImportSourcePoolsAutoscale$outboundSchema),
+]);
+
+export function importSourcePoolsUnionToJSON(
+  importSourcePoolsUnion: ImportSourcePoolsUnion,
+): string {
+  return JSON.stringify(
+    ImportSourcePoolsUnion$outboundSchema.parse(importSourcePoolsUnion),
+  );
+}
+
+/** @internal */
+export type ImportSourceCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | ImportSourcePoolsFixed$Outbound
+      | ImportSourcePoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const ImportSourceCompute$outboundSchema: z.ZodType<
+  ImportSourceCompute$Outbound,
+  ImportSourceCompute
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => ImportSourcePoolsFixed$outboundSchema),
+      z.lazy(() => ImportSourcePoolsAutoscale$outboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function importSourceComputeToJSON(
+  importSourceCompute: ImportSourceCompute,
+): string {
+  return JSON.stringify(
+    ImportSourceCompute$outboundSchema.parse(importSourceCompute),
+  );
+}
+
+/** @internal */
+export type ImportSourceComputeUnion$Outbound =
+  | ImportSourceCompute$Outbound
+  | any;
+
+/** @internal */
+export const ImportSourceComputeUnion$outboundSchema: z.ZodType<
+  ImportSourceComputeUnion$Outbound,
+  ImportSourceComputeUnion
+> = z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.any()]);
+
+export function importSourceComputeUnionToJSON(
+  importSourceComputeUnion: ImportSourceComputeUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceComputeUnion$outboundSchema.parse(importSourceComputeUnion),
+  );
+}
 
 /** @internal */
 export const ImportSourceDeploymentModel$outboundSchema: z.ZodEnum<
@@ -3128,6 +3308,7 @@ export const ImportSourceUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ImportSourceStackSettings$Outbound = {
+  compute?: ImportSourceCompute$Outbound | any | null | undefined;
   deploymentModel?: string | undefined;
   domains?: ImportSourceDomains$Outbound | any | null | undefined;
   externalBindings?: ImportSourceExternalBindings$Outbound | null | undefined;
@@ -3151,6 +3332,9 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   ImportSourceStackSettings$Outbound,
   ImportSourceStackSettings
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: ImportSourceDeploymentModel$outboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.any()]),

@@ -3,6 +3,7 @@
  */
 
 import { deploymentGetInfo } from "../funcs/deploymentGetInfo.js";
+import { deploymentPlanCompute } from "../funcs/deploymentPlanCompute.js";
 import { deploymentPrepareStack } from "../funcs/deploymentPrepareStack.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -18,6 +19,20 @@ export class Deployment extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentInfo> {
     return unwrapAsync(deploymentGetInfo(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
+   */
+  async planCompute(
+    request?: operations.PlanDeploymentComputeRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentComputePlan> {
+    return unwrapAsync(deploymentPlanCompute(
       this,
       request,
       options,

@@ -104,7 +104,7 @@ export type ResourceCounts = {
   workers: number;
   containers: number;
   /**
-   * Workers or Containers that need managed public HTTPS endpoint setup
+   * Resources that declare managed public HTTPS endpoint setup
    */
   publicHttpsEndpoints: number;
   /**
@@ -114,12 +114,23 @@ export type ResourceCounts = {
   total: number;
 };
 
+export type PublicEndpoint = {
+  resourceId: string;
+  endpointName: string;
+  hostLabel: string;
+  wildcardSubdomains: boolean;
+};
+
 export type StackSummary = {
   /**
    * Platforms supported by the active release
    */
   platforms: Array<StackSummaryPlatform>;
   resourceCounts: ResourceCounts;
+  /**
+   * Public endpoints declared by the active release stack
+   */
+  publicEndpoints: Array<PublicEndpoint>;
 };
 
 export type DeploymentInfoProject = {
@@ -185,6 +196,10 @@ export type DeploymentInfoCli = {
    * Status of a package build
    */
   status: CliStatus;
+  /**
+   * CLI command name to use in install instructions
+   */
+  commandName: string;
   version?: string | undefined;
   /**
    * Outputs from a CLI package build
@@ -747,10 +762,30 @@ export function resourceCountsFromJSON(
 }
 
 /** @internal */
+export const PublicEndpoint$inboundSchema: z.ZodType<PublicEndpoint, unknown> =
+  z.object({
+    resourceId: z.string(),
+    endpointName: z.string(),
+    hostLabel: z.string(),
+    wildcardSubdomains: z.boolean(),
+  });
+
+export function publicEndpointFromJSON(
+  jsonString: string,
+): SafeParseResult<PublicEndpoint, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PublicEndpoint$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PublicEndpoint' from JSON`,
+  );
+}
+
+/** @internal */
 export const StackSummary$inboundSchema: z.ZodType<StackSummary, unknown> = z
   .object({
     platforms: z.array(StackSummaryPlatform$inboundSchema),
     resourceCounts: z.lazy(() => ResourceCounts$inboundSchema),
+    publicEndpoints: z.array(z.lazy(() => PublicEndpoint$inboundSchema)),
   });
 
 export function stackSummaryFromJSON(
@@ -851,6 +886,7 @@ export const DeploymentInfoCli$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   status: CliStatus$inboundSchema,
+  commandName: z.string(),
   version: z.string().optional(),
   outputs: z.lazy(() => CliOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),

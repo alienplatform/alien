@@ -16,6 +16,7 @@ let value: DataAzure1 = {
       replicaId: "<id>",
     },
   ],
+  daemonName: "<value>",
   desiredMachines: 583805,
   events: [],
   healthyInstances: 986297,
@@ -49,7 +50,7 @@ let value: DataAzure1 = {
 | `capacityGroup`                                                            | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `commandSupported`                                                         | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
 | `daemonInstances`                                                          | [operations.DaemonInstance3](../../models/operations/daemoninstance3.md)[] | :heavy_check_mark:                                                         | N/A                                                                        |
-| `daemonName`                                                               | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `daemonName`                                                               | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `desiredMachines`                                                          | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `events`                                                                   | [operations.Event8](../../models/operations/event8.md)[]                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `healthyInstances`                                                         | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |

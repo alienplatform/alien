@@ -4030,7 +4030,7 @@ export type DataStatus17 = {
 export type DataLocal4 = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4 | any | null | undefined;
-  daemonName?: string | undefined;
+  daemonName: string;
   events: Array<Event10>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -4415,7 +4415,7 @@ export type DataAzure1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<Event8>;
   healthyInstances: number;
@@ -4580,7 +4580,7 @@ export type DataGcp1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<Event7>;
   healthyInstances: number;
@@ -4745,7 +4745,7 @@ export type DataAws1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<Event6>;
   healthyInstances: number;
@@ -6453,12 +6453,6 @@ export type Heartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
-  /**
-   * Alien resource id, such as the `alien.Container` or `alien.Storage`
-   *
-   * @remarks
-   * resource id from the stack.
-   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
@@ -12773,7 +12767,7 @@ export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
     daemonInstance: z.nullable(
       z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]),
     ).optional(),
-    daemonName: z.string().optional(),
+    daemonName: z.string(),
     events: z.array(z.lazy(() => Event10$inboundSchema)),
     exitReason: z.nullable(z.string()).optional(),
     imagePathPresent: z.boolean(),
@@ -13557,7 +13551,7 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance3$inboundSchema)),
-    daemonName: z.string().optional(),
+    daemonName: z.string(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => Event8$inboundSchema)),
     healthyInstances: z.int(),
@@ -13872,7 +13866,7 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance2$inboundSchema)),
-  daemonName: z.string().optional(),
+  daemonName: z.string(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => Event7$inboundSchema)),
   healthyInstances: z.int(),
@@ -14187,7 +14181,7 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance1$inboundSchema)),
-  daemonName: z.string().optional(),
+  daemonName: z.string(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => Event6$inboundSchema)),
   healthyInstances: z.int(),

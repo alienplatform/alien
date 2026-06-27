@@ -46,6 +46,65 @@ export type CreateSetupRegistrationOperationRequestPlatform = ClosedEnum<
   typeof CreateSetupRegistrationOperationRequestPlatform
 >;
 
+export type CreateSetupRegistrationOperationRequestPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type CreateSetupRegistrationOperationRequestPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateSetupRegistrationOperationRequestPoolsUnion =
+  | CreateSetupRegistrationOperationRequestPoolsFixed
+  | CreateSetupRegistrationOperationRequestPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateSetupRegistrationOperationRequestCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateSetupRegistrationOperationRequestPoolsFixed
+      | CreateSetupRegistrationOperationRequestPoolsAutoscale;
+  } | undefined;
+};
+
+export type CreateSetupRegistrationOperationRequestComputeUnion =
+  | CreateSetupRegistrationOperationRequestCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1060,6 +1119,11 @@ export type CreateSetupRegistrationOperationRequestUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateSetupRegistrationOperationRequestStackSettings = {
+  compute?:
+    | CreateSetupRegistrationOperationRequestCompute
+    | any
+    | null
+    | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1285,6 +1349,161 @@ export const CreateSetupRegistrationOperationRequestPlatform$outboundSchema:
   z.ZodEnum<typeof CreateSetupRegistrationOperationRequestPlatform> = z.enum(
     CreateSetupRegistrationOperationRequestPlatform,
   );
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound,
+    CreateSetupRegistrationOperationRequestPoolsAutoscale
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    max: z.int(),
+    min: z.int(),
+    mode: z.literal("autoscale"),
+  });
+
+export function createSetupRegistrationOperationRequestPoolsAutoscaleToJSON(
+  createSetupRegistrationOperationRequestPoolsAutoscale:
+    CreateSetupRegistrationOperationRequestPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchema.parse(
+      createSetupRegistrationOperationRequestPoolsAutoscale,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPoolsFixed$Outbound,
+    CreateSetupRegistrationOperationRequestPoolsFixed
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    machines: z.int(),
+    mode: z.literal("fixed"),
+  });
+
+export function createSetupRegistrationOperationRequestPoolsFixedToJSON(
+  createSetupRegistrationOperationRequestPoolsFixed:
+    CreateSetupRegistrationOperationRequestPoolsFixed,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema.parse(
+      createSetupRegistrationOperationRequestPoolsFixed,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPoolsUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestPoolsFixed$Outbound
+  | CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPoolsUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPoolsUnion$Outbound,
+    CreateSetupRegistrationOperationRequestPoolsUnion
+  > = z.union([
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema
+    ),
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchema
+    ),
+  ]);
+
+export function createSetupRegistrationOperationRequestPoolsUnionToJSON(
+  createSetupRegistrationOperationRequestPoolsUnion:
+    CreateSetupRegistrationOperationRequestPoolsUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPoolsUnion$outboundSchema.parse(
+      createSetupRegistrationOperationRequestPoolsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | CreateSetupRegistrationOperationRequestPoolsFixed$Outbound
+      | CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestCompute$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestCompute$Outbound,
+    CreateSetupRegistrationOperationRequestCompute
+  > = z.object({
+    pools: z.record(
+      z.string(),
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema
+        ),
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchema
+        ),
+      ]),
+    ).optional(),
+  });
+
+export function createSetupRegistrationOperationRequestComputeToJSON(
+  createSetupRegistrationOperationRequestCompute:
+    CreateSetupRegistrationOperationRequestCompute,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestCompute$outboundSchema.parse(
+      createSetupRegistrationOperationRequestCompute,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestComputeUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestCompute$Outbound
+  | any;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestComputeUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestComputeUnion$Outbound,
+    CreateSetupRegistrationOperationRequestComputeUnion
+  > = z.union([
+    z.lazy(() => CreateSetupRegistrationOperationRequestCompute$outboundSchema),
+    z.any(),
+  ]);
+
+export function createSetupRegistrationOperationRequestComputeUnionToJSON(
+  createSetupRegistrationOperationRequestComputeUnion:
+    CreateSetupRegistrationOperationRequestComputeUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestComputeUnion$outboundSchema.parse(
+      createSetupRegistrationOperationRequestComputeUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const CreateSetupRegistrationOperationRequestDeploymentModel$outboundSchema:
@@ -3638,6 +3857,11 @@ export const CreateSetupRegistrationOperationRequestUpdates$outboundSchema:
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
+  compute?:
+    | CreateSetupRegistrationOperationRequestCompute$Outbound
+    | any
+    | null
+    | undefined;
   deploymentModel?: string | undefined;
   domains?:
     | CreateSetupRegistrationOperationRequestDomains$Outbound
@@ -3673,6 +3897,14 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
     CreateSetupRegistrationOperationRequestStackSettings$Outbound,
     CreateSetupRegistrationOperationRequestStackSettings
   > = z.object({
+    compute: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestCompute$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
     deploymentModel:
       CreateSetupRegistrationOperationRequestDeploymentModel$outboundSchema
         .optional(),

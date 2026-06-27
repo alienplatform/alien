@@ -206,6 +206,61 @@ export type SyncListResponseEnvironmentInfoUnion =
   | SyncListResponseEnvironmentInfoTest
   | any;
 
+export type SyncListResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncListResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncListResponsePoolsUnion =
+  | SyncListResponsePoolsFixed
+  | SyncListResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncListResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]: SyncListResponsePoolsFixed | SyncListResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncListResponseComputeUnion = SyncListResponseCompute | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1176,6 +1231,7 @@ export type SyncListResponseUpdates = ClosedEnum<
  * User-provided configuration (network, deployment model, approvals)
  */
 export type SyncListResponseStackSettings = {
+  compute?: SyncListResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -3269,6 +3325,106 @@ export function syncListResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const SyncListResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncListResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncListResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncListResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncListResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncListResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncListResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncListResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCompute$inboundSchema: z.ZodType<
+  SyncListResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncListResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncListResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncListResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncListResponseComputeUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseCompute$inboundSchema), z.any()]);
+
+export function syncListResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof SyncListResponseDeploymentModel
 > = z.enum(SyncListResponseDeploymentModel);
@@ -4858,6 +5014,9 @@ export const SyncListResponseStackSettings$inboundSchema: z.ZodType<
   SyncListResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => SyncListResponseCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: SyncListResponseDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => SyncListResponseDomains$inboundSchema), z.any()]),

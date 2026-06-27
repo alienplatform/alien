@@ -83,6 +83,7 @@ export * from "./listresourceoverview.js";
 export * from "./listworkspacemembers.js";
 export * from "./listworkspaces.js";
 export * from "./pindeploymentrelease.js";
+export * from "./plandeploymentcompute.js";
 export * from "./preparedeploymentstack.js";
 export * from "./provisionmanager.js";
 export * from "./rebuildpackages.js";

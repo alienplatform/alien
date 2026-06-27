@@ -37,6 +37,65 @@ export type PersistImportedDeploymentRequestPlatformEnum = ClosedEnum<
   typeof PersistImportedDeploymentRequestPlatformEnum
 >;
 
+export type PersistImportedDeploymentRequestPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type PersistImportedDeploymentRequestPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type PersistImportedDeploymentRequestPoolsUnion =
+  | PersistImportedDeploymentRequestPoolsFixed
+  | PersistImportedDeploymentRequestPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type PersistImportedDeploymentRequestCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | PersistImportedDeploymentRequestPoolsFixed
+      | PersistImportedDeploymentRequestPoolsAutoscale;
+  } | undefined;
+};
+
+export type PersistImportedDeploymentRequestComputeUnion =
+  | PersistImportedDeploymentRequestCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1048,6 +1107,7 @@ export type PersistImportedDeploymentRequestUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type PersistImportedDeploymentRequestStackSettings = {
+  compute?: PersistImportedDeploymentRequestCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -2684,6 +2744,154 @@ export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestPlatformEnum> = z.enum(
     PersistImportedDeploymentRequestPlatformEnum,
   );
+
+/** @internal */
+export type PersistImportedDeploymentRequestPoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsAutoscale$Outbound,
+    PersistImportedDeploymentRequestPoolsAutoscale
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    max: z.int(),
+    min: z.int(),
+    mode: z.literal("autoscale"),
+  });
+
+export function persistImportedDeploymentRequestPoolsAutoscaleToJSON(
+  persistImportedDeploymentRequestPoolsAutoscale:
+    PersistImportedDeploymentRequestPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsAutoscale,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsFixed$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsFixed$Outbound,
+    PersistImportedDeploymentRequestPoolsFixed
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    machines: z.int(),
+    mode: z.literal("fixed"),
+  });
+
+export function persistImportedDeploymentRequestPoolsFixedToJSON(
+  persistImportedDeploymentRequestPoolsFixed:
+    PersistImportedDeploymentRequestPoolsFixed,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsFixed$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsFixed,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPoolsUnion$Outbound =
+  | PersistImportedDeploymentRequestPoolsFixed$Outbound
+  | PersistImportedDeploymentRequestPoolsAutoscale$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsUnion$Outbound,
+    PersistImportedDeploymentRequestPoolsUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestPoolsFixed$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema),
+  ]);
+
+export function persistImportedDeploymentRequestPoolsUnionToJSON(
+  persistImportedDeploymentRequestPoolsUnion:
+    PersistImportedDeploymentRequestPoolsUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | PersistImportedDeploymentRequestPoolsFixed$Outbound
+      | PersistImportedDeploymentRequestPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCompute$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestCompute$Outbound,
+  PersistImportedDeploymentRequestCompute
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PersistImportedDeploymentRequestPoolsFixed$outboundSchema),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema
+      ),
+    ]),
+  ).optional(),
+});
+
+export function persistImportedDeploymentRequestComputeToJSON(
+  persistImportedDeploymentRequestCompute:
+    PersistImportedDeploymentRequestCompute,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCompute$outboundSchema.parse(
+      persistImportedDeploymentRequestCompute,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestComputeUnion$Outbound =
+  | PersistImportedDeploymentRequestCompute$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestComputeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestComputeUnion$Outbound,
+    PersistImportedDeploymentRequestComputeUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestCompute$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestComputeUnionToJSON(
+  persistImportedDeploymentRequestComputeUnion:
+    PersistImportedDeploymentRequestComputeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestComputeUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestComputeUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const PersistImportedDeploymentRequestDeploymentModel$outboundSchema:
@@ -5008,6 +5216,11 @@ export const PersistImportedDeploymentRequestUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PersistImportedDeploymentRequestStackSettings$Outbound = {
+  compute?:
+    | PersistImportedDeploymentRequestCompute$Outbound
+    | any
+    | null
+    | undefined;
   deploymentModel?: string | undefined;
   domains?:
     | PersistImportedDeploymentRequestDomains$Outbound
@@ -5043,6 +5256,12 @@ export const PersistImportedDeploymentRequestStackSettings$outboundSchema:
     PersistImportedDeploymentRequestStackSettings$Outbound,
     PersistImportedDeploymentRequestStackSettings
   > = z.object({
+    compute: z.nullable(
+      z.union([
+        z.lazy(() => PersistImportedDeploymentRequestCompute$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     deploymentModel:
       PersistImportedDeploymentRequestDeploymentModel$outboundSchema.optional(),
     domains: z.nullable(

@@ -38,6 +38,7 @@ export * from "./deleteapikeysrequest.js";
 export * from "./deletedeploymentrequest.js";
 export * from "./deletedeploymentresponse.js";
 export * from "./deployment.js";
+export * from "./deploymentcomputeplan.js";
 export * from "./deploymentconnectioninfo.js";
 export * from "./deploymentdetailresponse.js";
 export * from "./deploymentgroup.js";

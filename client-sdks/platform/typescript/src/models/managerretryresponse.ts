@@ -37,6 +37,65 @@ export type ManagerRetryResponseSetupConfig = {
   environmentVariables: Array<ManagerRetryResponseEnvironmentVariable>;
 };
 
+export type ManagerRetryResponsePoolsAutoscale3 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type ManagerRetryResponsePoolsFixed3 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type ManagerRetryResponsePoolsUnion3 =
+  | ManagerRetryResponsePoolsFixed3
+  | ManagerRetryResponsePoolsAutoscale3;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type ManagerRetryResponseCompute3 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | ManagerRetryResponsePoolsFixed3
+      | ManagerRetryResponsePoolsAutoscale3;
+  } | undefined;
+};
+
+export type ManagerRetryResponseComputeUnion3 =
+  | ManagerRetryResponseCompute3
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1028,6 +1087,7 @@ export type ManagerRetryResponseUpdates3 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ManagerRetryResponseStackSettings3 = {
+  compute?: ManagerRetryResponseCompute3 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1091,6 +1151,65 @@ export type ManagerRetryResponseSetupTerraform = {
    */
   stackSettings: ManagerRetryResponseStackSettings3;
 };
+
+export type ManagerRetryResponsePoolsAutoscale2 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type ManagerRetryResponsePoolsFixed2 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type ManagerRetryResponsePoolsUnion2 =
+  | ManagerRetryResponsePoolsFixed2
+  | ManagerRetryResponsePoolsAutoscale2;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type ManagerRetryResponseCompute2 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | ManagerRetryResponsePoolsFixed2
+      | ManagerRetryResponsePoolsAutoscale2;
+  } | undefined;
+};
+
+export type ManagerRetryResponseComputeUnion2 =
+  | ManagerRetryResponseCompute2
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -2083,6 +2202,7 @@ export type ManagerRetryResponseUpdates2 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ManagerRetryResponseStackSettings2 = {
+  compute?: ManagerRetryResponseCompute2 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -2141,6 +2261,65 @@ export type ManagerRetryResponseSetupGoogleOauth = {
    */
   stackSettings: ManagerRetryResponseStackSettings2;
 };
+
+export type ManagerRetryResponsePoolsAutoscale1 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type ManagerRetryResponsePoolsFixed1 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type ManagerRetryResponsePoolsUnion1 =
+  | ManagerRetryResponsePoolsFixed1
+  | ManagerRetryResponsePoolsAutoscale1;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type ManagerRetryResponseCompute1 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | ManagerRetryResponsePoolsFixed1
+      | ManagerRetryResponsePoolsAutoscale1;
+  } | undefined;
+};
+
+export type ManagerRetryResponseComputeUnion1 =
+  | ManagerRetryResponseCompute1
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -3133,6 +3312,7 @@ export type ManagerRetryResponseUpdates1 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ManagerRetryResponseStackSettings1 = {
+  compute?: ManagerRetryResponseCompute1 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -3272,6 +3452,110 @@ export function managerRetryResponseSetupConfigFromJSON(
     jsonString,
     (x) => ManagerRetryResponseSetupConfig$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ManagerRetryResponseSetupConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsAutoscale3$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsAutoscale3,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function managerRetryResponsePoolsAutoscale3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsAutoscale3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePoolsAutoscale3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsAutoscale3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsFixed3$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsFixed3,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function managerRetryResponsePoolsFixed3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsFixed3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsFixed3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsFixed3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsUnion3$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponsePoolsFixed3$inboundSchema),
+  z.lazy(() => ManagerRetryResponsePoolsAutoscale3$inboundSchema),
+]);
+
+export function managerRetryResponsePoolsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseCompute3$inboundSchema: z.ZodType<
+  ManagerRetryResponseCompute3,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => ManagerRetryResponsePoolsFixed3$inboundSchema),
+      z.lazy(() => ManagerRetryResponsePoolsAutoscale3$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function managerRetryResponseCompute3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseCompute3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseCompute3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseCompute3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseComputeUnion3$inboundSchema: z.ZodType<
+  ManagerRetryResponseComputeUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseCompute3$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseComputeUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseComputeUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseComputeUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseComputeUnion3' from JSON`,
   );
 }
 
@@ -4953,6 +5237,12 @@ export const ManagerRetryResponseStackSettings3$inboundSchema: z.ZodType<
   ManagerRetryResponseStackSettings3,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseCompute3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: ManagerRetryResponseDeploymentModel3$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -5022,6 +5312,110 @@ export function managerRetryResponseSetupTerraformFromJSON(
     (x) =>
       ManagerRetryResponseSetupTerraform$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ManagerRetryResponseSetupTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsAutoscale2$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsAutoscale2,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function managerRetryResponsePoolsAutoscale2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsAutoscale2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePoolsAutoscale2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsAutoscale2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsFixed2$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsFixed2,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function managerRetryResponsePoolsFixed2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsFixed2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsFixed2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsFixed2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsUnion2$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponsePoolsFixed2$inboundSchema),
+  z.lazy(() => ManagerRetryResponsePoolsAutoscale2$inboundSchema),
+]);
+
+export function managerRetryResponsePoolsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseCompute2$inboundSchema: z.ZodType<
+  ManagerRetryResponseCompute2,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => ManagerRetryResponsePoolsFixed2$inboundSchema),
+      z.lazy(() => ManagerRetryResponsePoolsAutoscale2$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function managerRetryResponseCompute2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseCompute2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseCompute2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseCompute2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseComputeUnion2$inboundSchema: z.ZodType<
+  ManagerRetryResponseComputeUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseCompute2$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseComputeUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseComputeUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseComputeUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseComputeUnion2' from JSON`,
   );
 }
 
@@ -6703,6 +7097,12 @@ export const ManagerRetryResponseStackSettings2$inboundSchema: z.ZodType<
   ManagerRetryResponseStackSettings2,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseCompute2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: ManagerRetryResponseDeploymentModel2$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -6767,6 +7167,110 @@ export function managerRetryResponseSetupGoogleOauthFromJSON(
     (x) =>
       ManagerRetryResponseSetupGoogleOauth$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ManagerRetryResponseSetupGoogleOauth' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsAutoscale1$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsAutoscale1,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function managerRetryResponsePoolsAutoscale1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsAutoscale1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePoolsAutoscale1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsAutoscale1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsFixed1$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsFixed1,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function managerRetryResponsePoolsFixed1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsFixed1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsFixed1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsFixed1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePoolsUnion1$inboundSchema: z.ZodType<
+  ManagerRetryResponsePoolsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponsePoolsFixed1$inboundSchema),
+  z.lazy(() => ManagerRetryResponsePoolsAutoscale1$inboundSchema),
+]);
+
+export function managerRetryResponsePoolsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponsePoolsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponsePoolsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePoolsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseCompute1$inboundSchema: z.ZodType<
+  ManagerRetryResponseCompute1,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => ManagerRetryResponsePoolsFixed1$inboundSchema),
+      z.lazy(() => ManagerRetryResponsePoolsAutoscale1$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function managerRetryResponseCompute1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseCompute1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseCompute1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseCompute1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseComputeUnion1$inboundSchema: z.ZodType<
+  ManagerRetryResponseComputeUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseCompute1$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseComputeUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseComputeUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseComputeUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseComputeUnion1' from JSON`,
   );
 }
 
@@ -8448,6 +8952,12 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
   ManagerRetryResponseStackSettings1,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseCompute1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: ManagerRetryResponseDeploymentModel1$inboundSchema
     .optional(),
   domains: z.nullable(

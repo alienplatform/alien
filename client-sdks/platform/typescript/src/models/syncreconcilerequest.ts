@@ -8368,7 +8368,7 @@ export type HeartbeatStatus17 = {
 export type DataLocal4 = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4 | any | null | undefined;
-  daemonName?: string | undefined;
+  daemonName: string;
   events: Array<SyncReconcileRequestEvent10>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -8753,7 +8753,7 @@ export type DataAzure1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent8>;
   healthyInstances: number;
@@ -8918,7 +8918,7 @@ export type DataGcp1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent7>;
   healthyInstances: number;
@@ -9083,7 +9083,7 @@ export type DataAws1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent6>;
   healthyInstances: number;
@@ -10798,12 +10798,6 @@ export type Heartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
-  /**
-   * Alien resource id, such as the `alien.Container` or `alien.Storage`
-   *
-   * @remarks
-   * resource id from the stack.
-   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
@@ -27071,7 +27065,7 @@ export function heartbeatStatus17ToJSON(
 export type DataLocal4$Outbound = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4$Outbound | any | null | undefined;
-  daemonName?: string | undefined;
+  daemonName: string;
   events: Array<SyncReconcileRequestEvent10$Outbound>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
@@ -27091,7 +27085,7 @@ export const DataLocal4$outboundSchema: z.ZodType<
   daemonInstance: z.nullable(
     z.union([z.lazy(() => DaemonInstance4$outboundSchema), z.any()]),
   ).optional(),
-  daemonName: z.string().optional(),
+  daemonName: z.string(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent10$outboundSchema)),
   exitReason: z.nullable(z.string()).optional(),
   imagePathPresent: z.boolean(),
@@ -28047,7 +28041,7 @@ export type DataAzure1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3$Outbound>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent8$Outbound>;
   healthyInstances: number;
@@ -28070,7 +28064,7 @@ export const DataAzure1$outboundSchema: z.ZodType<
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance3$outboundSchema)),
-  daemonName: z.string().optional(),
+  daemonName: z.string(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent8$outboundSchema)),
   healthyInstances: z.int(),
@@ -28462,7 +28456,7 @@ export type DataGcp1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2$Outbound>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent7$Outbound>;
   healthyInstances: number;
@@ -28483,7 +28477,7 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance2$outboundSchema)),
-    daemonName: z.string().optional(),
+    daemonName: z.string(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => SyncReconcileRequestEvent7$outboundSchema)),
     healthyInstances: z.int(),
@@ -28875,7 +28869,7 @@ export type DataAws1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1$Outbound>;
-  daemonName?: string | undefined;
+  daemonName: string;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent6$Outbound>;
   healthyInstances: number;
@@ -28896,7 +28890,7 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance1$outboundSchema)),
-    daemonName: z.string().optional(),
+    daemonName: z.string(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => SyncReconcileRequestEvent6$outboundSchema)),
     healthyInstances: z.int(),

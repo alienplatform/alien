@@ -7,6 +7,7 @@ import { DataLocal4 } from "@alienplatform/platform-api/models/operations";
 
 let value: DataLocal4 = {
   commandSupported: true,
+  daemonName: "<value>",
   events: [
     {
       kind: "<value>",
@@ -34,7 +35,7 @@ let value: DataLocal4 = {
 | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `commandSupported`                                                 | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
 | `daemonInstance`                                                   | *operations.DaemonInstanceUnion*                                   | :heavy_minus_sign:                                                 | N/A                                                                |
-| `daemonName`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `daemonName`                                                       | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `events`                                                           | [operations.Event10](../../models/operations/event10.md)[]         | :heavy_check_mark:                                                 | N/A                                                                |
 | `exitReason`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `imagePathPresent`                                                 | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
