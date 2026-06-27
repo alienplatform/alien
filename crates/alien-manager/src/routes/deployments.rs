@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
-    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
+    EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings, StackState, WorkerOutputs,
     RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
@@ -188,6 +188,20 @@ pub struct ResourceEntry {
     pub resource_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
+}
+
+fn representative_public_url(
+    endpoints: &std::collections::HashMap<String, PublicEndpointOutput>,
+) -> Option<String> {
+    endpoints
+        .get("api")
+        .map(|endpoint| endpoint.url.clone())
+        .or_else(|| {
+            endpoints
+                .iter()
+                .min_by(|(left, _), (right, _)| left.cmp(right))
+                .map(|(_, endpoint)| endpoint.url.clone())
+        })
 }
 
 // --- Router ---
@@ -609,15 +623,15 @@ async fn get_deployment_info(
                 "worker" => stack_state
                     .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
                 "container" => stack_state
                     .get_resource_outputs::<ContainerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
                 "daemon" => stack_state
                     .get_resource_outputs::<DaemonOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
                 _ => None,
             };
             resources.insert(

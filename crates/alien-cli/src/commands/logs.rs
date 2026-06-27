@@ -1013,7 +1013,8 @@ fn build_logs_query(
     }
     if let Some(deployment_id) = deployment_id {
         filters.push(format!(
-            "resource_attributes.alien.deployment_id:\"{}\"",
+            "{}:\"{}\"",
+            deployment_id_resource_attribute_field(),
             escape_query_string(deployment_id)
         ));
     }
@@ -1038,6 +1039,12 @@ fn severity_range(level: LogLevel) -> (u8, u8) {
 
 fn escape_query_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn deployment_id_resource_attribute_field() -> &'static str {
+    // `alien.deployment_id` is a single OpenTelemetry resource attribute key
+    // nested under `resource_attributes`, not two nested JSON fields.
+    "resource_attributes.alien\\.deployment_id"
 }
 
 fn parse_rfc3339_arg(value: &str) -> std::result::Result<DateTime<Utc>, String> {
@@ -1089,7 +1096,17 @@ mod tests {
 
         assert_eq!(
             query,
-            "(service_name:api) AND ((severity_number:>=13 AND severity_number:<=16) OR (severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien.deployment_id:\"dep_123\""
+            "(service_name:api) AND ((severity_number:>=13 AND severity_number:<=16) OR (severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\""
+        );
+    }
+
+    #[test]
+    fn deployment_filter_escapes_resource_attribute_key_dot() {
+        let query = build_logs_query("*", &[], Some("dep_123")).unwrap();
+
+        assert_eq!(
+            query,
+            "resource_attributes.alien\\.deployment_id:\"dep_123\""
         );
     }
 
