@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { DaemonCodeSchema } from "./daemon-code-schema.js";
+import { DaemonRuntimeSchema } from "./daemon-runtime-schema.js";
 import { HealthCheckSchema } from "./health-check-schema.js";
 import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
@@ -37,6 +38,9 @@ get "memory"(){
 "pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.")
+              },
+get "runtime"(){
+                return z.union([DaemonRuntimeSchema, z.null()]).optional()
               }
     })
 

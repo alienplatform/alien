@@ -1,6 +1,7 @@
 import {
   type DaemonCode,
   type Daemon as DaemonConfig,
+  type DaemonRuntime,
   DaemonSchema,
   type ExposeProtocol,
   type HealthCheck,
@@ -14,6 +15,7 @@ export type {
   Daemon as DaemonConfig,
   DaemonCode,
   DaemonOutputs,
+  DaemonRuntime,
   ExposeProtocol,
   HealthCheck,
   PublicEndpoint,
@@ -118,6 +120,17 @@ export class Daemon {
    */
   public command(command: string[]): this {
     this._config.command = command
+    return this
+  }
+
+  /**
+   * Sets backend runtime options for trusted daemon infrastructure.
+   *
+   * Use this only for daemons that intentionally need host-level access, such
+   * as a privileged loader that installs or supervises a native host process.
+   */
+  public runtime(runtime: DaemonRuntime): this {
+    this._config.runtime = runtime
     return this
   }
 

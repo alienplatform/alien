@@ -24,6 +24,40 @@ pub enum DaemonCode {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRuntimeMount {
+    /// Absolute host path to mount into the daemon container.
+    pub source: String,
+    /// Absolute container path where the source is mounted.
+    pub target: String,
+    /// Optional mount options understood by the backend runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRuntime {
+    /// Run the daemon container with elevated host capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privileged: Option<bool>,
+    /// Process namespace mode. Supported values are `host` and `private`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid_namespace: Option<String>,
+    /// Network mode. Supported values are `host` and `appnet`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_mode: Option<String>,
+    /// Host mounts exposed to the daemon container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<DaemonRuntimeMount>,
+    /// Runtime user, as a numeric uid or uid:gid string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,6 +93,13 @@ pub struct Daemon {
     /// Command to override the image default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+    /// Optional backend runtime settings for trusted daemons.
+    ///
+    /// These settings are intended for daemon-style infrastructure that must
+    /// operate on the host. Backends that do not support a setting may reject
+    /// it during provisioning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<DaemonRuntime>,
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
@@ -103,6 +144,59 @@ impl Daemon {
                     "public endpoints on one daemon must currently route to the same backend port"
                         .to_string(),
             }));
+        }
+
+        Ok(())
+    }
+
+    fn validate_runtime(&self) -> Result<()> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(());
+        };
+
+        if let Some(pid_namespace) = &runtime.pid_namespace {
+            if pid_namespace != "host" && pid_namespace != "private" {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.pidNamespace must be 'host' or 'private'".to_string(),
+                }));
+            }
+        }
+
+        if let Some(network_mode) = &runtime.network_mode {
+            if network_mode != "host" && network_mode != "appnet" {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.networkMode must be 'host' or 'appnet'".to_string(),
+                }));
+            }
+        }
+
+        if let Some(user) = &runtime.user {
+            let valid = match user.split_once(':') {
+                Some((uid, gid)) => {
+                    !uid.is_empty()
+                        && !gid.is_empty()
+                        && uid.chars().all(|c| c.is_ascii_digit())
+                        && gid.chars().all(|c| c.is_ascii_digit())
+                }
+                None => !user.is_empty() && user.chars().all(|c| c.is_ascii_digit()),
+            };
+            if !valid {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.user must be a numeric uid or uid:gid".to_string(),
+                }));
+            }
+        }
+
+        for mount in &runtime.mounts {
+            if !mount.source.starts_with('/') || !mount.target.starts_with('/') {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime mount source and target must be absolute paths".to_string(),
+                }));
+            }
         }
 
         Ok(())
@@ -188,6 +282,8 @@ impl ResourceDefinition for Daemon {
 
         self.validate_public_endpoints()?;
         new_daemon.validate_public_endpoints()?;
+        self.validate_runtime()?;
+        new_daemon.validate_runtime()?;
 
         if self.public_endpoints != new_daemon.public_endpoints {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {

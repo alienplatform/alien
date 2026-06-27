@@ -650,11 +650,12 @@ mod tests {
             .get_resource_outputs::<WorkerOutputs>("test-alien-worker")
             .unwrap();
 
-        let worker_url = worker_outputs
-            .url
-            .as_ref()
-            .ok_or_else(|| "Worker URL not found in stack state")
-            .unwrap();
+        let worker_url = &worker_outputs
+            .public_endpoints
+            .get("api")
+            .ok_or_else(|| "Worker API endpoint not found in stack state")
+            .unwrap()
+            .url;
 
         assert_eq!(worker_url, "https://test.lambda-url.us-east-1.on.aws/");
     }

@@ -135,6 +135,41 @@ fn current_resource_wildcard_endpoints(
     HashMap::new()
 }
 
+fn current_resource_public_endpoint_urls(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> HashMap<String, String> {
+    if let Some(endpoint_urls) = ctx
+        .deployment_config
+        .public_endpoints
+        .as_ref()
+        .and_then(|resources| resources.get(resource_id))
+    {
+        return endpoint_urls.clone();
+    }
+
+    let Some(resource) = ctx
+        .deployment_config
+        .domain_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.resources.get(resource_id))
+    else {
+        return HashMap::new();
+    };
+
+    if !resource.endpoints.is_empty() {
+        return resource
+            .endpoints
+            .iter()
+            .map(|(endpoint_name, endpoint)| {
+                (endpoint_name.clone(), format!("https://{}", endpoint.fqdn))
+            })
+            .collect();
+    }
+
+    HashMap::from([("default".to_string(), format!("https://{}", resource.fqdn))])
+}
+
 impl EnvironmentVariableBuilder {
     /// Create a new builder starting with the initial environment variables.
     pub fn new(initial_env: &HashMap<String, String>) -> Self {
@@ -189,18 +224,14 @@ impl EnvironmentVariableBuilder {
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<Self> {
-        let Some(endpoint_urls) = ctx
-            .deployment_config
-            .public_endpoints
-            .as_ref()
-            .and_then(|resources| resources.get(resource_id))
-        else {
+        let endpoint_urls = current_resource_public_endpoint_urls(ctx, resource_id);
+        if endpoint_urls.is_empty() {
             return Ok(self);
-        };
+        }
 
         let wildcard_endpoints = current_resource_wildcard_endpoints(ctx);
         let mut env_endpoints = HashMap::new();
-        for (endpoint_name, public_url) in endpoint_urls {
+        for (endpoint_name, public_url) in &endpoint_urls {
             let Some(host) = public_url_host(public_url) else {
                 continue;
             };

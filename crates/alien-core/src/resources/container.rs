@@ -549,6 +549,7 @@ impl ResourceDefinition for Container {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::ExposeProtocol;
 
     #[test]
     fn test_container_creation_with_autoscaling() {
