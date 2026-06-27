@@ -2393,6 +2393,7 @@ fn cloudformation_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config: Some(management_config),
+        input_values: Default::default(),
         resources,
     })
 }
@@ -2586,6 +2587,7 @@ fn terraform_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config,
+        input_values: Default::default(),
         resources,
     })
 }

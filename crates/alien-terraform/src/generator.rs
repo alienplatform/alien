@@ -26,8 +26,9 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteStackManagement, Result, Stack, StackSettings, TelemetryMode,
-    UpdatesMode,
+    NetworkSettings, RemoteStackManagement, Result, Stack, StackInputDefaultValue,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputSetupMethod,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -189,6 +190,8 @@ pub fn generate_terraform_module(
             availability_zones: 2,
         });
     }
+    let stack_inputs = stack_inputs_for_terraform(stack, target);
+    validate_stack_inputs_for_terraform(&stack_inputs)?;
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
     let mut registration_resources: Vec<Expression> = Vec::new();
@@ -303,6 +306,7 @@ pub fn generate_terraform_module(
             &deployment_name_default,
             needs_azure_management_inputs,
             &options.supported_aws_regions,
+            &stack_inputs,
         )?)?,
     );
     files.insert(
@@ -348,6 +352,7 @@ pub fn generate_terraform_module(
             target,
             options.registration.as_ref(),
             &import_depends_on,
+            terraform_input_values_expression(&stack_inputs),
         ))?,
     );
     if let Some(helm_install) = options
@@ -376,6 +381,7 @@ pub fn generate_terraform_module(
             options.display_name.as_deref(),
             &stack_settings,
             options.helm_install.as_ref(),
+            &stack_inputs,
         ),
     );
 
@@ -801,6 +807,78 @@ fn provider_decl_attr(source: &str, version: &str) -> Expression {
     ])
 }
 
+fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<StackInputDefinition> {
+    let platform = target.deployment_platform();
+    stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input.provided_by.contains(&StackInputProvider::Deployer)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input
+                    .setup_methods
+                    .as_ref()
+                    .is_none_or(|methods| methods.contains(&StackInputSetupMethod::Terraform))
+        })
+        .cloned()
+        .collect()
+}
+
+fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
+    let secret_inputs: Vec<&str> = inputs
+        .iter()
+        .filter(|input| input.kind == StackInputKind::Secret)
+        .map(|input| input.id.as_str())
+        .collect();
+    if secret_inputs.is_empty() {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::OperationNotSupported {
+        operation: "generate_terraform_module".to_string(),
+        reason: format!(
+            "Terraform deployer-provided secret stack inputs are not enabled because this provider cannot prove values stay out of Terraform state yet. Use the deployment portal, CloudFormation, or deploy CLI for secret inputs, or move these inputs out of the Terraform setup path: {}",
+            secret_inputs.join(", ")
+        ),
+    }))
+}
+
+fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
+    format!("input_{}", snake_case_identifier(&input.id))
+}
+
+fn snake_case_identifier(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_separator = true;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && !previous_was_separator && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !output.ends_with('_') {
+            output.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let output = output.trim_matches('_').to_string();
+    if output.is_empty() {
+        "value".to_string()
+    } else if output
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_digit())
+    {
+        format!("value_{output}")
+    } else {
+        output
+    }
+}
+
 fn variables_body(
     target: TerraformTarget,
     network_vars: &NetworkVariables,
@@ -810,6 +888,7 @@ fn variables_body(
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
     supported_aws_regions: &[String],
+    stack_inputs: &[StackInputDefinition],
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
@@ -1162,6 +1241,9 @@ fn variables_body(
             default.clone(),
         )));
     }
+    for input in stack_inputs {
+        blocks.push(nested(stack_input_variable_block(input)));
+    }
 
     Ok(Body::from(blocks))
 }
@@ -1472,6 +1554,158 @@ fn variable_block(
         labels: vec![BlockLabel::String(name.to_string())],
         body: Body::from(body),
     }
+}
+
+fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
+    let variable_name = terraform_stack_input_variable_name(input);
+    let mut body: Vec<Structure> = vec![
+        attr("type", stack_input_terraform_type(input)),
+        attr(
+            "description",
+            Expression::String(format!("{} {}", input.label, input.description)),
+        ),
+    ];
+    if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {
+        body.push(attr("default", default));
+    } else if !input.required {
+        body.push(attr("default", expr::raw("null")));
+        body.push(attr("nullable", Expression::Bool(true)));
+    }
+    if input.kind == StackInputKind::Secret {
+        body.push(attr("sensitive", Expression::Bool(true)));
+    }
+    for condition in stack_input_validation_conditions(input, &variable_name) {
+        body.push(nested(block(
+            "validation",
+            [
+                attr("condition", expr::raw(condition)),
+                attr(
+                    "error_message",
+                    Expression::String(stack_input_validation_message(input)),
+                ),
+            ],
+        )));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(variable_name)],
+        body: Body::from(body),
+    }
+}
+
+fn stack_input_terraform_type(input: &StackInputDefinition) -> Expression {
+    match input.kind {
+        StackInputKind::Number | StackInputKind::Integer => expr::raw("number"),
+        StackInputKind::Boolean => expr::raw("bool"),
+        StackInputKind::StringList => expr::raw("list(string)"),
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+            expr::raw("string")
+        }
+    }
+}
+
+fn stack_input_default_expression(default: &StackInputDefaultValue) -> Expression {
+    match default {
+        StackInputDefaultValue::String(value) => Expression::String(value.clone()),
+        StackInputDefaultValue::Number(value) => expr::raw(value),
+        StackInputDefaultValue::Boolean(value) => Expression::Bool(*value),
+        StackInputDefaultValue::StringList(values) => {
+            Expression::Array(values.iter().cloned().map(Expression::String).collect())
+        }
+    }
+}
+
+fn stack_input_validation_conditions(
+    input: &StackInputDefinition,
+    variable_name: &str,
+) -> Vec<String> {
+    let mut conditions = Vec::new();
+    let variable = format!("var.{variable_name}");
+    let optional_prefix = (!input.required && input.default.is_none())
+        .then(|| format!("{variable} == null || "))
+        .unwrap_or_default();
+
+    if input.kind == StackInputKind::Integer {
+        conditions.push(format!("{optional_prefix}floor({variable}) == {variable}"));
+    }
+
+    if let Some(validation) = &input.validation {
+        add_stack_input_validation_conditions(
+            validation,
+            input,
+            &variable,
+            &optional_prefix,
+            &mut conditions,
+        );
+    }
+
+    conditions
+}
+
+fn add_stack_input_validation_conditions(
+    validation: &StackInputValidation,
+    input: &StackInputDefinition,
+    variable: &str,
+    optional_prefix: &str,
+    conditions: &mut Vec<String>,
+) {
+    if let Some(values) = &validation.values {
+        let allowed = hcl_string_array(values);
+        conditions.push(format!("{optional_prefix}contains({allowed}, {variable})"));
+    }
+    if let Some(pattern) = &validation.pattern {
+        let whole_pattern = format!("^(?:{pattern})$");
+        conditions.push(format!(
+            "{optional_prefix}can(regex({}, {variable}))",
+            hcl_string(&whole_pattern)
+        ));
+    }
+    if matches!(
+        input.kind,
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum
+    ) {
+        if let Some(min) = validation.min_length {
+            conditions.push(format!("{optional_prefix}length({variable}) >= {min}"));
+        }
+        if let Some(max) = validation.max_length {
+            conditions.push(format!("{optional_prefix}length({variable}) <= {max}"));
+        }
+    }
+    if matches!(input.kind, StackInputKind::Number | StackInputKind::Integer) {
+        if let Some(min) = &validation.min {
+            conditions.push(format!("{optional_prefix}{variable} >= {min}"));
+        }
+        if let Some(max) = &validation.max {
+            conditions.push(format!("{optional_prefix}{variable} <= {max}"));
+        }
+    }
+    if input.kind == StackInputKind::StringList {
+        if let Some(min) = validation.min_items {
+            conditions.push(format!("{optional_prefix}length({variable}) >= {min}"));
+        }
+        if let Some(max) = validation.max_items {
+            conditions.push(format!("{optional_prefix}length({variable}) <= {max}"));
+        }
+    }
+}
+
+fn stack_input_validation_message(input: &StackInputDefinition) -> String {
+    format!("{} is invalid. {}", input.label, input.description)
+}
+
+fn hcl_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing string literal should not fail")
+}
+
+fn hcl_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| hcl_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn custom_domain_certificate_arn_variable_block(default: String) -> Block {
@@ -1993,6 +2227,7 @@ fn registration_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
+    input_values: Expression,
 ) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -2038,6 +2273,9 @@ fn registration_body(
             ),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
+        if !expression_is_empty_object(&input_values) {
+            body.push(attr("input_values", input_values));
+        }
         if let Some(release_id) = &registration.release_id {
             body.push(attr("release_id", Expression::String(release_id.clone())));
         }
@@ -2102,6 +2340,7 @@ fn registration_body(
                 ),
                 ("stack_settings", expr::raw("local.deployment_settings")),
                 ("resources", expr::raw("local.deployment_resources")),
+                ("inputValues", input_values),
             ]
             .into_iter()
             .chain(
@@ -2120,6 +2359,37 @@ fn registration_body(
         "deployment_registration",
         body,
     ))])
+}
+
+fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Expression {
+    if inputs.is_empty() {
+        return expr::raw("{}");
+    }
+
+    let mut required_entries = Vec::new();
+    let mut optional_maps = Vec::new();
+    for input in inputs {
+        let variable = format!("var.{}", terraform_stack_input_variable_name(input));
+        let entry = format!("{} = {variable}", input.id);
+        if input.required || input.default.is_some() {
+            required_entries.push(entry);
+        } else {
+            optional_maps.push(format!("{variable} == null ? {{}} : {{ {entry} }}"));
+        }
+    }
+
+    let required_map = format!("{{ {} }}", required_entries.join(", "));
+    if optional_maps.is_empty() {
+        expr::raw(required_map)
+    } else {
+        let mut maps = vec![required_map];
+        maps.extend(optional_maps);
+        expr::raw(format!("merge({})", maps.join(", ")))
+    }
+}
+
+fn expression_is_empty_object(expression: &Expression) -> bool {
+    matches!(expression, Expression::Object(object) if object.is_empty())
 }
 
 fn helm_install_body(
@@ -2308,6 +2578,7 @@ fn readme_md(
     display_name: Option<&str>,
     stack_settings: &StackSettings,
     helm_install: Option<&TerraformHelmInstall>,
+    stack_inputs: &[StackInputDefinition],
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -2348,6 +2619,9 @@ fn readme_md(
             registration.is_some(),
             helm_install,
         ));
+    }
+    if !stack_inputs.is_empty() {
+        input_sections.push(readme_stack_inputs(stack_inputs));
     }
     let kubernetes_operations = target
         .is_kubernetes()
@@ -2391,6 +2665,24 @@ fn readme_required_inputs(has_registration: bool) -> String {
 
 fn readme_common_inputs() -> String {
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.".to_string()
+}
+
+fn readme_stack_inputs(inputs: &[StackInputDefinition]) -> String {
+    let mut lines = vec!["Application inputs:".to_string()];
+    for input in inputs {
+        let required = if input.required {
+            "required"
+        } else {
+            "optional"
+        };
+        lines.push(format!(
+            "- `{}`: {} ({required}). {}",
+            terraform_stack_input_variable_name(input),
+            input.label,
+            input.description
+        ));
+    }
+    lines.join("\n")
 }
 
 fn readme_aws_inputs() -> String {

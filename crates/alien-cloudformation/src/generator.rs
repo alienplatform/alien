@@ -9,7 +9,8 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
-    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputSetupMethod, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -243,8 +244,10 @@ pub fn generate_cloudformation_template(
     };
 
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
+    let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
     add_standard_parameters(&mut template, &stack_settings, supports_custom_domain);
+    add_stack_input_parameters(&mut template, &stack_inputs);
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
@@ -255,7 +258,12 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         supports_custom_domain,
     );
-    add_console_interface_metadata(&mut template, &stack_settings, supports_custom_domain);
+    add_console_interface_metadata(
+        &mut template,
+        &stack_settings,
+        supports_custom_domain,
+        &stack_inputs,
+    );
 
     let mut registration_resources = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -325,6 +333,7 @@ pub fn generate_cloudformation_template(
             stack_settings.clone(),
             &options,
             resources.clone(),
+            stack_input_values_expression(&stack_inputs),
             options.registration.callback_url(),
         );
     }
@@ -350,6 +359,112 @@ fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> 
                 .downcast_ref::<Worker>()
                 .is_some_and(|worker| !worker.public_endpoints.is_empty())
         })
+}
+
+fn stack_inputs_for_cloudformation(
+    stack: &Stack,
+    target: CloudFormationTarget,
+) -> Vec<StackInputDefinition> {
+    let platform = target.deployment_platform();
+    stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input.provided_by.contains(&StackInputProvider::Deployer)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input
+                    .setup_methods
+                    .as_ref()
+                    .is_none_or(|methods| methods.contains(&StackInputSetupMethod::CloudFormation))
+        })
+        .cloned()
+        .collect()
+}
+
+fn stack_input_parameter_name(input: &StackInputDefinition) -> String {
+    format!("Input{}", sanitize_logical_id(&input.id))
+}
+
+fn add_stack_input_parameters(template: &mut CfTemplate, inputs: &[StackInputDefinition]) {
+    for input in inputs {
+        template.parameters.insert(
+            stack_input_parameter_name(input),
+            stack_input_parameter(input),
+        );
+    }
+}
+
+fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
+    let validation = input.validation.as_ref();
+    let mut parameter = CfParameter {
+        parameter_type: match input.kind {
+            StackInputKind::Number => "Number".to_string(),
+            StackInputKind::StringList => "CommaDelimitedList".to_string(),
+            StackInputKind::String
+            | StackInputKind::Secret
+            | StackInputKind::Integer
+            | StackInputKind::Boolean
+            | StackInputKind::Enum => "String".to_string(),
+        },
+        description: Some(input.description.clone()),
+        default: input.default.as_ref().map(stack_input_default_expression),
+        allowed_values: validation
+            .and_then(|validation| validation.values.as_ref())
+            .map(|values| values.iter().cloned().map(CfExpression::from).collect()),
+        allowed_pattern: validation
+            .and_then(|validation| validation.pattern.clone())
+            .or_else(|| {
+                matches!(input.kind, StackInputKind::Integer).then(|| "^-?[0-9]+$".to_string())
+            }),
+        min_length: validation.and_then(|validation| validation.min_length),
+        max_length: validation.and_then(|validation| validation.max_length),
+        min_value: validation
+            .and_then(|validation| validation.min.as_deref())
+            .map(number_constraint_expression),
+        max_value: validation
+            .and_then(|validation| validation.max.as_deref())
+            .map(number_constraint_expression),
+        no_echo: matches!(input.kind, StackInputKind::Secret).then_some(true),
+    };
+
+    if matches!(input.kind, StackInputKind::Boolean) {
+        parameter.allowed_values = Some(vec![
+            CfExpression::from("true"),
+            CfExpression::from("false"),
+        ]);
+    }
+
+    parameter
+}
+
+fn number_constraint_expression(value: &str) -> CfExpression {
+    value
+        .parse::<i64>()
+        .map(CfExpression::Integer)
+        .or_else(|_| value.parse::<f64>().map(CfExpression::Number))
+        .unwrap_or_else(|_| CfExpression::from(value))
+}
+
+fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpression {
+    match default {
+        StackInputDefaultValue::String(value) | StackInputDefaultValue::Number(value) => {
+            CfExpression::from(value.clone())
+        }
+        StackInputDefaultValue::Boolean(value) => CfExpression::from(value.to_string()),
+        StackInputDefaultValue::StringList(values) => CfExpression::from(values.join(",")),
+    }
+}
+
+fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
+    CfExpression::object(inputs.iter().map(|input| {
+        (
+            input.id.clone(),
+            CfExpression::ref_(stack_input_parameter_name(input)),
+        )
+    }))
 }
 
 fn regional_service_token(
@@ -934,6 +1049,7 @@ fn add_console_interface_metadata(
     template: &mut CfTemplate,
     settings: &StackSettings,
     supports_custom_domain: bool,
+    stack_inputs: &[StackInputDefinition],
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let mut parameter_groups = vec![json!({
@@ -954,6 +1070,15 @@ fn add_console_interface_metadata(
         parameter_groups.push(json!({
             "Label": { "default": "Custom domain" },
             "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
+        }));
+    }
+    if !stack_inputs.is_empty() {
+        parameter_groups.push(json!({
+            "Label": { "default": "Application inputs" },
+            "Parameters": stack_inputs
+                .iter()
+                .map(stack_input_parameter_name)
+                .collect::<Vec<_>>()
         }));
     }
     parameter_groups.push(json!({
@@ -1001,6 +1126,13 @@ fn add_console_interface_metadata(
             &mut parameter_labels,
             PARAM_CERTIFICATE_ARN,
             "Certificate ARN",
+        );
+    }
+    for input in stack_inputs {
+        insert_parameter_label(
+            &mut parameter_labels,
+            &stack_input_parameter_name(input),
+            &input.label,
         );
     }
     insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
@@ -1052,6 +1184,7 @@ fn add_custom_resource(
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: CfExpression,
+    input_values: CfExpression,
     callback_url: Option<&str>,
 ) {
     let depends_on = template
@@ -1085,6 +1218,11 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if !matches!(&input_values, CfExpression::Object(values) if values.is_empty()) {
+        resource
+            .properties
+            .insert("InputValues".to_string(), input_values);
+    }
     if let Some(base_platform) = options.target.base_platform() {
         resource.properties.insert(
             "BasePlatform".to_string(),
@@ -1593,6 +1731,10 @@ fn string_parameter_with_allowed_pattern(
         default: default.map(CfExpression::from),
         allowed_values,
         allowed_pattern,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: no_echo.then_some(true),
     }
 }
@@ -1608,6 +1750,10 @@ fn number_parameter(
         default: Some(CfExpression::from(default)),
         allowed_values,
         allowed_pattern: None,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: None,
     }
 }
@@ -1619,6 +1765,10 @@ fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter 
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
         allowed_pattern: None,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: None,
     }
 }

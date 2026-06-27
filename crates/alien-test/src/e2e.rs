@@ -1146,8 +1146,7 @@ pub async fn run_alien_deploy_up(
         .arg(&manager.url)
         .arg("--platform")
         .arg(platform.as_str())
-        .arg("-y")
-        .arg("--experimental");
+        .arg("-y");
 
     if foreground {
         // In foreground mode the process runs indefinitely. Inherit stdio

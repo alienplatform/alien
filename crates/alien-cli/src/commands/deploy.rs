@@ -26,6 +26,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::info;
 use uuid::Uuid;
@@ -61,10 +62,6 @@ pub struct DeployArgs {
     /// Omit to let the manager generate one.
     #[arg(long, value_parser = parse_resource_prefix)]
     pub resource_prefix: Option<String>,
-
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
 
     /// Disable heartbeat capability
     #[arg(long)]
@@ -115,19 +112,6 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     if let ExecutionMode::Dev { port } = ctx {
         return deploy_local_dev_task(args, port).await;
-    }
-
-    // Check for experimental platforms
-    if let Ok(platform) = Platform::from_str(&args.platform) {
-        if platform.is_experimental() && !args.experimental {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!(
-                    "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                    args.platform
-                ),
-            }));
-        }
     }
 
     info!("Starting deploy command");
@@ -249,6 +233,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
                     };
                     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+                        compute: None,
                         deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
@@ -308,6 +293,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             environment_variables: None,
                             deployment_group_id: None,
                             environment_info: None,
+                            input_values: HashMap::new(),
                             setup_method: None,
                             setup_metadata: None,
                         })

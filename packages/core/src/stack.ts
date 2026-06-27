@@ -4,8 +4,10 @@ import {
   type ResourceEntry,
   type ResourceLifecycle,
   type Stack as StackConfig,
+  type StackInputDefinition,
   StackSchema,
 } from "./generated/index.js"
+import { type StackInputCollection, getStackInputDefinitions } from "./input.js"
 import type { Resource } from "./resource.js"
 
 /**
@@ -29,6 +31,14 @@ export type {
   PermissionSet,
   ManagementPermissions,
   PermissionsConfig,
+  StackInputDefaultValue,
+  StackInputDefinition,
+  StackInputEnvironmentMapping,
+  StackInputEnvironmentVariableType,
+  StackInputKind,
+  StackInputProvider,
+  StackInputSetupMethod,
+  StackInputValidation,
 } from "./generated/index.js"
 export {
   StackSchema,
@@ -92,6 +102,16 @@ export class Stack {
    */
   public permissions(config: PermissionsConfig): this {
     this._config.permissions = config
+    return this
+  }
+
+  /**
+   * Configure values that must be provided before setup or deployment can proceed.
+   * @param inputs Stack input definitions created with alien.inputs({...}).
+   * @returns The Stack builder instance.
+   */
+  public inputs(inputs: StackInputCollection | readonly StackInputDefinition[]): this {
+    this._config.inputs = getStackInputDefinitions(inputs)
     return this
   }
 

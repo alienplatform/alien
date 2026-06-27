@@ -467,6 +467,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -855,6 +856,7 @@ mod tests {
                 management: ManagementPermissions::Extend(extend_profile),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -917,6 +919,7 @@ mod tests {
                 management: ManagementPermissions::Override(override_profile.clone()),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -987,6 +990,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Create stack state with Pull model. Permission derivation is model
@@ -1087,6 +1091,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1142,6 +1147,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1200,6 +1206,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Create stack state with Push model (Manager deploys remotely)
@@ -1266,6 +1273,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1337,6 +1345,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let result_stack_gcp = mutation
@@ -1396,6 +1405,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Disable heartbeat
@@ -1460,6 +1470,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Disable telemetry
@@ -1525,6 +1536,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Require approval for telemetry - permissions should still be created

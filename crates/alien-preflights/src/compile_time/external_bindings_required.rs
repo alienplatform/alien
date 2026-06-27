@@ -118,6 +118,7 @@ mod tests {
             resources,
             permissions: PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 

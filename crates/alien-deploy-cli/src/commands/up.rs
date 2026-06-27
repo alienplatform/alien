@@ -14,7 +14,8 @@ use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
     ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo, Stack,
-    StackSettings, TelemetryMode, UpdatesMode, Worker,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputSetupMethod, StackSettings,
+    TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -31,6 +32,7 @@ use clap::Parser;
 use serde::Deserialize;
 use std::{
     collections::{BTreeSet, HashMap},
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -43,10 +45,10 @@ use std::{
     alien-deploy deploy --token ax_dg_abc123... --platform aws
 
     # Deploy using a token file so the token is not exposed in argv
-    alien-deploy deploy --token-file /run/alien/token --platform local --experimental
+    alien-deploy deploy --token-file /run/alien/token --platform local
 
     # Deploy a local pull-model workload behind customer-managed ingress
-    alien-deploy deploy --token-file /run/alien/token --platform local --experimental --public-endpoint gateway.api=https://gateway.example.com
+    alien-deploy deploy --token-file /run/alien/token --platform local --public-endpoint gateway.api=https://gateway.example.com
 
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
@@ -87,10 +89,6 @@ pub struct UpArgs {
     /// Base cloud platform for managed Kubernetes setup (aws, gcp, azure).
     #[arg(long, env = "ALIEN_BASE_PLATFORM")]
     pub base_platform: Option<String>,
-
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
 
     /// Deployment name (for tracking)
     #[arg(long)]
@@ -138,6 +136,14 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Stack input value for setup (id=value).
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Secret stack input value for setup (id=value).
+    #[arg(long = "secret-input")]
+    pub secret_input_values: Vec<String>,
+
     /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
     ///
     /// Intended for pull-model deployments where DNS, TLS, and ingress are
@@ -168,6 +174,10 @@ struct DeployConfigFile {
     compute: Option<ComputeSettings>,
     /// Generic public endpoint URLs for pull-model deployments.
     public_endpoints: Option<PublicEndpointUrls>,
+    /// Deployer-provided stack inputs.
+    inputs: Option<HashMap<String, String>>,
+    /// Secret deployer-provided stack inputs.
+    secret_inputs: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -535,7 +545,6 @@ machine = "m8i.xlarge"
             token_file.path().to_str().expect("utf8 path"),
             "--platform",
             "local",
-            "--experimental",
         ])
         .expect("parse deploy");
         let crate::Commands::Deploy(args) = cli.command else {
@@ -557,7 +566,6 @@ machine = "m8i.xlarge"
             token_file.path().to_str().expect("utf8 path"),
             "--platform",
             "local",
-            "--experimental",
         ])
         .expect("parse deploy");
         let crate::Commands::Deploy(args) = cli.command else {
@@ -566,6 +574,141 @@ machine = "m8i.xlarge"
 
         let error = resolve_token(&args, None).expect_err("empty token file should fail");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    fn stack_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind,
+            provided_by: vec![StackInputProvider::Deployer],
+            required,
+            label: id.to_string(),
+            description: "Test input".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            setup_methods: Some(vec![StackInputSetupMethod::Cli]),
+            validation: None,
+            env: vec![],
+        }
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_stack_inputs() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[inputs]
+region = "us-east-1"
+
+[secretInputs]
+apiKey = "secret-value"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let values = collect_deployer_input_values(
+            &[
+                stack_input("region", StackInputKind::String, true),
+                stack_input("apiKey", StackInputKind::Secret, true),
+            ],
+            &[],
+            &[],
+            Some(&config),
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("region"), Some(&serde_json::json!("us-east-1")));
+        assert_eq!(
+            values.get("apiKey"),
+            Some(&serde_json::json!("secret-value"))
+        );
+    }
+
+    #[test]
+    fn stack_input_flags_override_config_values() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[inputs]
+region = "old"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--input",
+            "region=new",
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let values = collect_deployer_input_values(
+            &[stack_input("region", StackInputKind::String, true)],
+            &args.input_values,
+            &args.secret_input_values,
+            Some(&config),
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("region"), Some(&serde_json::json!("new")));
+    }
+
+    #[test]
+    fn required_stack_inputs_fail_non_interactively() {
+        let error = collect_deployer_input_values(
+            &[stack_input("apiKey", StackInputKind::Secret, true)],
+            &[],
+            &[],
+            None,
+        )
+        .expect_err("missing required input should fail");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("Missing deployer input"));
+    }
+
+    #[test]
+    fn stack_input_values_are_typed() {
+        let values = collect_deployer_input_values(
+            &[
+                stack_input("replicas", StackInputKind::Integer, true),
+                stack_input("enabled", StackInputKind::Boolean, true),
+                stack_input("hosts", StackInputKind::StringList, true),
+            ],
+            &[
+                "replicas=3".to_string(),
+                "enabled=true".to_string(),
+                "hosts=a.example.com,b.example.com".to_string(),
+            ],
+            &[],
+            None,
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("replicas"), Some(&serde_json::json!(3)));
+        assert_eq!(values.get("enabled"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            values.get("hosts"),
+            Some(&serde_json::json!(["a.example.com", "b.example.com"]))
+        );
     }
 }
 
@@ -578,19 +721,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let base_platform_str = resolved.base_platform;
     let name = resolved.name;
 
-    // Check for experimental platforms
-    if let Ok(p) = Platform::from_str(&platform_str) {
-        if p.is_experimental() && !args.experimental {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!(
-                    "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                    platform_str
-                ),
-            }));
-        }
-    }
-
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -599,6 +729,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     })?;
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
+    let deployer_inputs =
+        fetch_deployer_inputs(&resolved.base_url, &token, platform, StackInputSetupMethod::Cli)
+            .await
+            .unwrap_or_else(|error| {
+                if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
+                    output::warn(&format!(
+                        "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
+                    ));
+                }
+                Vec::new()
+            });
+    let stack_input_values = collect_deployer_input_values(
+        &deployer_inputs,
+        &args.input_values,
+        &args.secret_input_values,
+        deploy_config.as_ref(),
+    )?;
 
     let display_platform = match platform_str.as_str() {
         "aws" => "AWS",
@@ -672,6 +819,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         base_platform,
         &name,
         &stack_settings,
+        stack_input_values,
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -1196,6 +1344,367 @@ fn load_stack_settings(
     Ok(settings)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoResponse {
+    setup_config: Option<DeploymentInfoSetupConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoSetupConfig {
+    inputs: Option<Vec<StackInputDefinition>>,
+}
+
+async fn fetch_deployer_inputs(
+    base_url: &str,
+    token: &str,
+    platform: Platform,
+    setup_method: StackInputSetupMethod,
+) -> Result<Vec<StackInputDefinition>> {
+    let http_client = {
+        use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Invalid token format".to_string(),
+                })?,
+        );
+        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to build HTTP client".to_string(),
+            })?
+    };
+
+    let url = format!("{}/v1/deployment-info", base_url.trim_end_matches('/'));
+    let response = http_client
+        .get(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to fetch deployment info from platform API".to_string(),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch deployment info (HTTP {status}): {body}"),
+        }));
+    }
+
+    let info: DeploymentInfoResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse deployment info response".to_string(),
+            })?;
+
+    Ok(info
+        .setup_config
+        .and_then(|setup_config| setup_config.inputs)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|input| stack_input_matches_context(input, platform, setup_method.clone()))
+        .collect())
+}
+
+fn stack_input_matches_context(
+    input: &StackInputDefinition,
+    platform: Platform,
+    setup_method: StackInputSetupMethod,
+) -> bool {
+    if !input.provided_by.contains(&StackInputProvider::Deployer) {
+        return false;
+    }
+    if let Some(platforms) = &input.platforms {
+        if !platforms.contains(&platform) {
+            return false;
+        }
+    }
+    if let Some(setup_methods) = &input.setup_methods {
+        if !setup_methods.contains(&setup_method) {
+            return false;
+        }
+    }
+    true
+}
+
+fn collect_deployer_input_values(
+    inputs: &[StackInputDefinition],
+    input_values: &[String],
+    secret_input_values: &[String],
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<HashMap<String, serde_json::Value>> {
+    let mut raw_values = HashMap::<String, String>::new();
+
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            raw_values.insert(id.clone(), value.clone());
+        }
+    }
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.secret_inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            raw_values.insert(id.clone(), value.clone());
+        }
+    }
+    for input in input_values {
+        let (id, value) = parse_stack_input_arg(input, "--input")?;
+        raw_values.insert(id, value);
+    }
+    for input in secret_input_values {
+        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
+        raw_values.insert(id, value);
+    }
+
+    if inputs.is_empty() {
+        return Ok(raw_values
+            .into_iter()
+            .map(|(id, value)| (id, serde_json::Value::String(value)))
+            .collect());
+    }
+
+    for id in raw_values.keys() {
+        if !inputs.iter().any(|input| input.id == *id) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("Unknown or unavailable deployer stack input '{id}'."),
+            }));
+        }
+    }
+
+    for input in inputs.iter().filter(|input| input.required) {
+        if raw_values.contains_key(&input.id) {
+            continue;
+        }
+        if !can_prompt() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!(
+                    "Missing deployer input: {}. Pass {} {}=... or add [{}] to deployment.toml.",
+                    input.label,
+                    if matches!(input.kind, StackInputKind::Secret) {
+                        "--secret-input"
+                    } else {
+                        "--input"
+                    },
+                    input.id,
+                    if matches!(input.kind, StackInputKind::Secret) {
+                        "secretInputs"
+                    } else {
+                        "inputs"
+                    }
+                ),
+            }));
+        }
+        let value = prompt_input_value(input)?;
+        raw_values.insert(input.id.clone(), value);
+    }
+
+    let mut values = HashMap::new();
+    for input in inputs {
+        let Some(raw_value) = raw_values.get(&input.id) else {
+            continue;
+        };
+        values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
+    }
+    Ok(values)
+}
+
+fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+        }));
+    };
+    if id.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id is required"),
+        }));
+    }
+    Ok((id.trim().to_string(), value.to_string()))
+}
+
+fn parse_stack_input_value(input: &StackInputDefinition, value: &str) -> Result<serde_json::Value> {
+    match input.kind {
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+            validate_string_stack_input(input, value)?;
+            Ok(serde_json::Value::String(value.to_string()))
+        }
+        StackInputKind::Number => {
+            let number = value.parse::<f64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a number.", input.label),
+                })
+            })?;
+            serde_json::Number::from_f64(number)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: input.id.clone(),
+                        message: format!("{} must be a finite number.", input.label),
+                    })
+                })
+        }
+        StackInputKind::Integer => {
+            let number = value.parse::<i64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a whole number.", input.label),
+                })
+            })?;
+            Ok(serde_json::Value::Number(number.into()))
+        }
+        StackInputKind::Boolean => {
+            let parsed = value.parse::<bool>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be true or false.", input.label),
+                })
+            })?;
+            Ok(serde_json::Value::Bool(parsed))
+        }
+        StackInputKind::StringList => {
+            let values = value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| serde_json::Value::String(item.to_string()))
+                .collect::<Vec<_>>();
+            Ok(serde_json::Value::Array(values))
+        }
+    }
+}
+
+fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Result<()> {
+    if let Some(validation) = &input.validation {
+        if let Some(values) = &validation.values {
+            if !values.iter().any(|candidate| candidate == value) {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be one of: {}.", input.label, values.join(", ")),
+                }));
+            }
+        }
+        if let Some(min) = validation.min_length {
+            if value.len() < min as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too short.", input.label),
+                }));
+            }
+        }
+        if let Some(max) = validation.max_length {
+            if value.len() > max as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too long.", input.label),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn can_prompt() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+fn prompt_input_value(input: &StackInputDefinition) -> Result<String> {
+    let mut stderr = std::io::stderr();
+    let prompt = if matches!(input.kind, StackInputKind::Secret) {
+        format!("{} (secret): ", input.label)
+    } else if let Some(placeholder) = input.placeholder.as_deref() {
+        format!("{} [{}]: ", input.label, placeholder)
+    } else {
+        format!("{}: ", input.label)
+    };
+    stderr
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stderr.flush())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write input prompt".to_string(),
+        })?;
+
+    let value = if matches!(input.kind, StackInputKind::Secret) {
+        read_secret_line()?
+    } else {
+        let mut value = String::new();
+        std::io::stdin()
+            .read_line(&mut value)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to read input value".to_string(),
+            })?;
+        value
+    };
+    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        if let Some(placeholder) = input.placeholder.as_deref() {
+            return Ok(placeholder.to_string());
+        }
+    }
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn read_secret_line() -> Result<String> {
+    use std::os::fd::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    let original = unsafe {
+        if libc::tcgetattr(fd, termios.as_mut_ptr()) != 0 {
+            return read_line_with_echo();
+        }
+        termios.assume_init()
+    };
+    let mut hidden = original;
+    hidden.c_lflag &= !libc::ECHO;
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &hidden);
+    }
+
+    let result = read_line_with_echo();
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &original);
+    }
+    eprintln!();
+    result
+}
+
+#[cfg(not(unix))]
+fn read_secret_line() -> Result<String> {
+    read_line_with_echo()
+}
+
+fn read_line_with_echo() -> Result<String> {
+    let mut value = String::new();
+    std::io::stdin()
+        .read_line(&mut value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to read input value".to_string(),
+        })?;
+    Ok(value)
+}
+
 struct ManagerInstallContext {
     manager_url: String,
     management_config: Option<ManagementConfig>,
@@ -1378,12 +1887,14 @@ async fn initialize_deployment(
     base_platform: Option<Platform>,
     name: &str,
     stack_settings: &StackSettings,
+    input_values: HashMap<String, serde_json::Value>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
+        input_values: input_values.into_iter().collect(),
     };
 
     let response = client

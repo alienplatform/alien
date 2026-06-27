@@ -11,6 +11,7 @@ export * from "./kv.js"
 export * from "./queue.js"
 export * from "./service-account.js"
 export * from "./stack.js"
+export * from "./input.js"
 export * from "./get-resource-outputs.js"
 export * from "./error.js"
 export * from "./common-errors.js"
@@ -178,6 +179,14 @@ export {
   ResourceLifecycleSchema,
   ResourceRefSchema,
   StackStateSchema,
+  StackInputDefaultValueSchema,
+  StackInputDefinitionSchema,
+  StackInputEnvironmentMappingSchema,
+  StackInputEnvironmentVariableTypeSchema,
+  StackInputKindSchema,
+  StackInputProviderSchema,
+  StackInputSetupMethodSchema,
+  StackInputValidationSchema,
   AwsArtifactRegistryImportDataSchema,
   AwsBuildImportDataSchema,
   AwsComputeClusterImportDataSchema,

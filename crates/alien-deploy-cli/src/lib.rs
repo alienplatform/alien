@@ -111,7 +111,6 @@ mod tests {
             "/run/alien/token",
             "--platform",
             "local",
-            "--experimental",
         ])
         .unwrap();
 

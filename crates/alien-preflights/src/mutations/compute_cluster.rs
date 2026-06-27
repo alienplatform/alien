@@ -933,6 +933,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1015,6 +1016,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1060,6 +1062,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1114,6 +1117,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1191,6 +1195,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1256,6 +1261,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1332,6 +1338,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1386,6 +1393,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1441,6 +1449,7 @@ mod tests {
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
                 supported_platforms: None,
+                inputs: vec![],
             };
 
             let stack_state = StackState {
@@ -1553,6 +1562,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
         let stack_state = StackState {
             platform: Platform::Aws,
@@ -1670,6 +1680,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState {
@@ -1745,6 +1756,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
         let stack_state = StackState {
             platform: Platform::Aws,
@@ -1835,6 +1847,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
         let stack_state = StackState {
             platform: Platform::Aws,

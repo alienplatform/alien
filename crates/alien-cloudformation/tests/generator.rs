@@ -18,4 +18,5 @@ mod generator {
     pub mod output_chunking_tests;
     pub mod plugin_tests;
     pub mod registration_tests;
+    pub mod stack_input_tests;
 }

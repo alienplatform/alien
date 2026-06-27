@@ -97,6 +97,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PublicWorkerLifecycleCheck;
@@ -126,6 +127,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PublicWorkerLifecycleCheck;
@@ -154,6 +156,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PublicWorkerLifecycleCheck;
@@ -183,6 +186,7 @@ mod tests {
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PublicWorkerLifecycleCheck;

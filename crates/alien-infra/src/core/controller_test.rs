@@ -970,6 +970,7 @@ impl SingleControllerExecutorBuilder {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Set resource prefix in stack state

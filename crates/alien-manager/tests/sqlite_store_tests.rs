@@ -74,6 +74,7 @@ async fn create_test_deployment(
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                input_values: Default::default(),
                 deployment_token: None,
             },
         )

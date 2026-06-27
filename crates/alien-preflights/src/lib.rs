@@ -247,6 +247,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::CapacityGroupProfileCheck));
         registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
+        registry.add_compile_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
 
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time

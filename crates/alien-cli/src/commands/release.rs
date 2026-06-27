@@ -69,10 +69,6 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
-
     /// Base cloud platform for Kubernetes auto-builds. This keeps the release
     /// stack under Kubernetes while using the managed cluster's default
     /// architecture when auto-building missing artifacts.
@@ -203,7 +199,6 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
 
-    // In dev mode, default platforms to ["local"] and skip experimental gating
     let is_dev = ctx.is_dev();
 
     // Load stack config (needed for supported_platforms validation and auto-build)
@@ -219,22 +214,6 @@ async fn load_release_config(
     // 3. stack.supported_platforms if declared
     // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
-        // Validate explicit platforms against experimental gating (skip in dev mode)
-        if !args.experimental && !is_dev {
-            for p in platforms {
-                if let Ok(platform) = Platform::from_str(p) {
-                    if platform.is_experimental() {
-                        return Err(AlienError::new(ErrorData::ValidationError {
-                            field: "platforms".to_string(),
-                            message: format!(
-                                "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                                p
-                            ),
-                        }));
-                    }
-                }
-            }
-        }
         // Validate against stack's supported platforms
         validate_platforms_against_stack(platforms, &stack)?;
         platforms.clone()
@@ -245,7 +224,7 @@ async fn load_release_config(
         // Use declared supported platforms from alien.ts
         supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if !discovered.is_empty() {
             discovered
         } else {
@@ -286,7 +265,7 @@ async fn load_release_config(
         // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if discovered.is_empty() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "build output".to_string(),
@@ -659,23 +638,14 @@ async fn create_platform_release(
 }
 
 /// Discover which platforms have been built
-fn discover_built_platforms(
-    output_dir: &PathBuf,
-    include_experimental: bool,
-) -> Result<Vec<String>> {
+fn discover_built_platforms(output_dir: &PathBuf) -> Result<Vec<String>> {
     let build_dir = output_dir.join("build");
     if !build_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let search_platforms = if include_experimental {
-        Platform::DEPLOYABLE
-    } else {
-        Platform::STABLE
-    };
-
     let mut platforms = Vec::new();
-    for platform in search_platforms {
+    for platform in Platform::DEPLOYABLE {
         let stack_file = build_dir.join(platform.as_str()).join("stack.json");
         if stack_file.exists() {
             platforms.push(platform.as_str().to_string());

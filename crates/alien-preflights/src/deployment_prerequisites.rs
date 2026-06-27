@@ -454,6 +454,7 @@ mod tests {
                 PermissionProfile::new().global(["storage/data-read"]),
             ),
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 

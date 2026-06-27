@@ -543,6 +543,7 @@ mod tests {
             .collect(),
             permissions: crate::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 

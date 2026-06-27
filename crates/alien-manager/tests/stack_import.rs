@@ -260,6 +260,7 @@ fn aws_s3_import_request(
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
@@ -328,6 +329,7 @@ fn aws_remote_management_import_request(
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -360,6 +362,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: "kubernetes".to_string(),
             resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
@@ -402,6 +405,7 @@ fn gcp_remote_management_import_request(
         management_config: Some(ManagementConfig::Gcp(GcpManagementConfig {
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -446,6 +450,7 @@ fn azure_remote_management_import_request(
             oidc_issuer: "https://issuer.example".to_string(),
             oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -835,6 +840,7 @@ async fn native_deployment_blocks_imported_name() {
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                input_values: Default::default(),
                 deployment_token: None,
             },
         )

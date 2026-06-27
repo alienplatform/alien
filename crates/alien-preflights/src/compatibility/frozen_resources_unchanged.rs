@@ -126,6 +126,7 @@ mod tests {
             resources: old_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -133,6 +134,7 @@ mod tests {
             resources: new_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -182,6 +184,7 @@ mod tests {
             resources: old_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -189,6 +192,7 @@ mod tests {
             resources: new_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -235,6 +239,7 @@ mod tests {
             resources: old_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -242,6 +247,7 @@ mod tests {
             resources: new_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -283,6 +289,7 @@ mod tests {
             resources: old_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -290,6 +297,7 @@ mod tests {
             resources: new_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -322,6 +330,7 @@ mod tests {
             resources: old_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -329,6 +338,7 @@ mod tests {
             resources: new_resources,
             permissions: PermissionsConfig::new(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = FrozenResourcesUnchangedCheck;

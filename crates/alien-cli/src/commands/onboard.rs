@@ -2,8 +2,10 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
+use alien_core::{Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
+use std::collections::HashMap;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -30,6 +32,14 @@ pub struct OnboardArgs {
     /// Secret environment variables for deployments created from this link (KEY=VALUE or KEY=VALUE:target1,target2)
     #[arg(long = "secret")]
     pub secret_vars: Vec<String>,
+
+    /// Stack input value provided before creating the deployment link (id=value)
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Secret stack input value provided before creating the deployment link (id=value)
+    #[arg(long = "secret-input")]
+    pub secret_input_values: Vec<String>,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -64,9 +74,17 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
     let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
     let client = ctx.sdk_client().await?;
+    let developer_inputs = fetch_developer_stack_inputs(&client, &workspace, &project_id).await?;
+    let stack_input_values = collect_stack_input_values(
+        &developer_inputs,
+        &args.input_values,
+        &args.secret_input_values,
+        args.json,
+    )?;
 
     if !args.json {
         println!("{}", contextual_heading("Onboarding", &name, &[]));
+        print_required_developer_inputs(&developer_inputs);
     }
     let steps = if args.json {
         None
@@ -153,6 +171,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
                 ),
+                input_values: Some(stack_input_values),
             },
         )
         .send()
@@ -254,7 +273,245 @@ fn platform_onboard_deployment_setup_config(
             }),
         },
         environment_variables,
+        input_values: None,
     }
+}
+
+#[cfg(feature = "platform")]
+async fn fetch_developer_stack_inputs(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    project_id: &str,
+) -> Result<Vec<StackInputDefinition>> {
+    use alien_platform_api::SdkResultExt;
+
+    let releases = client
+        .list_releases()
+        .workspace(workspace)
+        .project(project_id)
+        .limit(std::num::NonZeroU64::new(1).expect("1 is non-zero"))
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch active release stack inputs".to_string(),
+            url: None,
+        })?;
+
+    let Some(release) = releases.items.first() else {
+        return Ok(Vec::new());
+    };
+
+    let mut inputs_by_id = HashMap::new();
+    for stack_value in [
+        release.stack.aws.as_ref(),
+        release.stack.gcp.as_ref(),
+        release.stack.azure.as_ref(),
+        release.stack.kubernetes.as_ref(),
+        release.stack.local.as_ref(),
+        release.stack.test.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let stack: Stack = serde_json::from_value(stack_value.clone()).map_err(|error| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "release.stack".to_string(),
+                message: format!("Failed to parse release stack input metadata: {error}"),
+            })
+        })?;
+        for input in stack.inputs {
+            if input.provided_by.contains(&StackInputProvider::Developer) {
+                inputs_by_id.entry(input.id.clone()).or_insert(input);
+            }
+        }
+    }
+
+    let mut inputs = inputs_by_id.into_values().collect::<Vec<_>>();
+    inputs.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+    Ok(inputs)
+}
+
+#[cfg(feature = "platform")]
+fn collect_stack_input_values(
+    inputs: &[StackInputDefinition],
+    input_values: &[String],
+    secret_input_values: &[String],
+    json: bool,
+) -> Result<alien_platform_api::types::StackInputValuesRequest> {
+    use alien_platform_api::types;
+
+    let mut raw_values = HashMap::<String, String>::new();
+    for input in input_values {
+        let (id, value) = parse_stack_input_arg(input, "--input")?;
+        raw_values.insert(id, value);
+    }
+    for input in secret_input_values {
+        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
+        raw_values.insert(id, value);
+    }
+
+    for id in raw_values.keys() {
+        if !inputs.iter().any(|input| input.id == *id) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("Unknown or unavailable developer stack input '{id}'."),
+            }));
+        }
+    }
+
+    for input in inputs.iter().filter(|input| input.required) {
+        if !raw_values.contains_key(&input.id) {
+            if json || !can_prompt() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!(
+                        "Missing developer input: {}. Pass {} {}=...",
+                        input.label,
+                        if matches!(input.kind, StackInputKind::Secret) {
+                            "--secret-input"
+                        } else {
+                            "--input"
+                        },
+                        input.id
+                    ),
+                }));
+            }
+            let value = prompt_text(&input.label, input.placeholder.as_deref())?;
+            raw_values.insert(input.id.clone(), value);
+        }
+    }
+
+    let mut values = HashMap::<String, types::StackInputValueRequest>::new();
+    for input in inputs {
+        let Some(value) = raw_values.get(&input.id) else {
+            continue;
+        };
+        values.insert(input.id.clone(), parse_stack_input_value(input, value)?);
+    }
+
+    Ok(types::StackInputValuesRequest(values))
+}
+
+#[cfg(feature = "platform")]
+fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+        }));
+    };
+    if id.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id is required"),
+        }));
+    }
+    Ok((id.trim().to_string(), value.to_string()))
+}
+
+#[cfg(feature = "platform")]
+fn parse_stack_input_value(
+    input: &StackInputDefinition,
+    value: &str,
+) -> Result<alien_platform_api::types::StackInputValueRequest> {
+    use alien_platform_api::types;
+
+    match input.kind {
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+            validate_string_stack_input(input, value)?;
+            Ok(types::StackInputValueRequest::Variant0(value.to_string()))
+        }
+        StackInputKind::Number => {
+            let number = value.parse::<f64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a number.", input.label),
+                })
+            })?;
+            Ok(types::StackInputValueRequest::Variant1(number))
+        }
+        StackInputKind::Integer => {
+            let number = value.parse::<i64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a whole number.", input.label),
+                })
+            })?;
+            Ok(types::StackInputValueRequest::Variant1(number as f64))
+        }
+        StackInputKind::Boolean => {
+            let parsed = value.parse::<bool>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be true or false.", input.label),
+                })
+            })?;
+            Ok(types::StackInputValueRequest::Variant2(parsed))
+        }
+        StackInputKind::StringList => {
+            let values = value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            Ok(types::StackInputValueRequest::Variant3(values))
+        }
+    }
+}
+
+#[cfg(feature = "platform")]
+fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Result<()> {
+    if let Some(validation) = &input.validation {
+        if let Some(values) = &validation.values {
+            if !values.iter().any(|candidate| candidate == value) {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be one of: {}.", input.label, values.join(", ")),
+                }));
+            }
+        }
+        if let Some(min) = validation.min_length {
+            if value.len() < min as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too short.", input.label),
+                }));
+            }
+        }
+        if let Some(max) = validation.max_length {
+            if value.len() > max as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too long.", input.label),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "platform")]
+fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
+    let required = inputs
+        .iter()
+        .filter(|input| input.required)
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        return;
+    }
+
+    println!("{}", dim_label("Required developer inputs"));
+    for input in required {
+        let kind = if matches!(input.kind, StackInputKind::Secret) {
+            "secret"
+        } else {
+            "plain"
+        };
+        println!("  {}  required  {}", input.label, kind);
+    }
+    println!();
 }
 
 #[cfg(feature = "platform")]
@@ -436,4 +693,77 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     );
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "platform"))]
+mod tests {
+    use super::*;
+
+    fn input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind,
+            provided_by: vec![StackInputProvider::Developer],
+            required,
+            label: "Control plane API key".to_string(),
+            description: "API key issued by the control plane.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            setup_methods: None,
+            validation: None,
+            env: vec![],
+        }
+    }
+
+    #[test]
+    fn parse_stack_input_arg_requires_id_value() {
+        let parsed = parse_stack_input_arg("controlPlaneApiKey=secret", "--secret-input")
+            .expect("valid input should parse");
+        assert_eq!(
+            parsed,
+            ("controlPlaneApiKey".to_string(), "secret".to_string())
+        );
+
+        let err = parse_stack_input_arg("controlPlaneApiKey", "--secret-input")
+            .expect_err("missing equals should fail");
+        assert!(err.to_string().contains("Invalid --secret-input format"));
+    }
+
+    #[test]
+    fn collect_stack_input_values_rejects_missing_required_in_json_mode() {
+        let err = collect_stack_input_values(
+            &[input("controlPlaneApiKey", StackInputKind::Secret, true)],
+            &[],
+            &[],
+            true,
+        )
+        .expect_err("missing required input should fail");
+
+        assert!(err.to_string().contains("Missing developer input"));
+        assert!(err
+            .to_string()
+            .contains("--secret-input controlPlaneApiKey=..."));
+    }
+
+    #[test]
+    fn collect_stack_input_values_parses_typed_values() {
+        let values = collect_stack_input_values(
+            &[
+                input("region", StackInputKind::String, true),
+                input("replicas", StackInputKind::Integer, true),
+                input("enabled", StackInputKind::Boolean, true),
+            ],
+            &[
+                "region=us-east-1".to_string(),
+                "replicas=3".to_string(),
+                "enabled=true".to_string(),
+            ],
+            &[],
+            true,
+        )
+        .expect("typed values should parse");
+
+        assert_eq!(values.len(), 3);
+    }
 }

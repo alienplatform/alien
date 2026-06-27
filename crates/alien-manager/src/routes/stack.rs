@@ -329,6 +329,7 @@ pub async fn stack_import(
         setup_fingerprint_version: req.setup_fingerprint_version,
         deployment_token: Some(raw_token.clone()),
         management_config: req.management_config.clone(),
+        input_values: req.input_values.clone(),
     };
 
     let created = match state

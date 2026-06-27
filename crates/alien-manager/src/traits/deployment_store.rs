@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -131,6 +133,8 @@ pub struct CreateDeploymentParams {
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    /// Stack input values collected before deployment creation.
+    pub input_values: HashMap<String, serde_json::Value>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,
 }
@@ -160,6 +164,8 @@ pub struct CreateImportedDeploymentParams {
     pub setup_fingerprint_version: u32,
     pub deployment_token: Option<String>,
     pub management_config: Option<ManagementConfig>,
+    /// Stack input values collected by setup artifacts.
+    pub input_values: HashMap<String, serde_json::Value>,
 }
 
 /// A deployment group record.

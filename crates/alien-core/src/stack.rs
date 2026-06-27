@@ -1,5 +1,5 @@
 use crate::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
-use crate::{Platform, Resource, ResourceLifecycle, ResourceRef};
+use crate::{Platform, Resource, ResourceLifecycle, ResourceRef, StackInputDefinition};
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,10 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_platforms: Option<Vec<Platform>>,
+    /// Input definitions required before setup or deployment can proceed.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<StackInputDefinition>,
 }
 
 impl Stack {
@@ -82,6 +86,11 @@ impl Stack {
     /// Returns the supported platforms, or None if all platforms are supported.
     pub fn supported_platforms(&self) -> Option<&[Platform]> {
         self.supported_platforms.as_deref()
+    }
+
+    /// Returns stack input definitions.
+    pub fn inputs(&self) -> &[StackInputDefinition] {
+        &self.inputs
     }
 
     /// Returns true if the given platform is supported by this stack.
@@ -173,6 +182,12 @@ impl StackBuilder {
     /// Sets the supported platforms for this stack.
     pub fn platforms(mut self, platforms: Vec<Platform>) -> Self {
         self.supported_platforms = Some(platforms);
+        self
+    }
+
+    /// Sets stack input definitions.
+    pub fn inputs(mut self, inputs: Vec<StackInputDefinition>) -> Self {
+        self.inputs = inputs;
         self
     }
 

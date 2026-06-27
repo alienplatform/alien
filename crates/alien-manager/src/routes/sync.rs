@@ -144,6 +144,11 @@ pub struct InitializeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
     pub stack_settings: Option<alien_core::StackSettings>,
+    /// Deployer-provided stack inputs. Embedded platform managers resolve
+    /// these before creating the deployment; standalone managers accept the
+    /// field so generated setup clients have one stable initialize contract.
+    #[serde(default)]
+    pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1316,6 +1321,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,
+                        input_values: req.input_values,
                         deployment_token: dep_token,
                     },
                 )
