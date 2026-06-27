@@ -53,10 +53,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ]
           }
         }
       },
@@ -187,10 +191,7 @@
         // secrets outside its own deployment.
         "description": "Version and delete the generated connection-password secret.",
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.delete",
-            "secretmanager.versions.add"
-          ]
+          "permissions": ["secretmanager.secrets.delete", "secretmanager.versions.add"]
         },
         "binding": {
           "stack": {
