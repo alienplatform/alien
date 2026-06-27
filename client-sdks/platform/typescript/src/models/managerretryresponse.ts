@@ -11,6 +11,10 @@ import {
   DeploymentSetupPolicy,
   DeploymentSetupPolicy$inboundSchema,
 } from "./deploymentsetuppolicy.js";
+import {
+  EncryptedStackInputValue,
+  EncryptedStackInputValue$inboundSchema,
+} from "./encryptedstackinputvalue.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ManagerRetryDeploymentResponse,
@@ -34,6 +38,7 @@ export type ManagerRetryResponseEnvironmentVariable = {
 export type ManagerRetryResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
+  inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
   environmentVariables: Array<ManagerRetryResponseEnvironmentVariable>;
 };
 
@@ -3440,6 +3445,8 @@ export const ManagerRetryResponseSetupConfig$inboundSchema: z.ZodType<
 > = z.object({
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
+  inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
   environmentVariables: z.array(
     z.lazy(() => ManagerRetryResponseEnvironmentVariable$inboundSchema),
   ),

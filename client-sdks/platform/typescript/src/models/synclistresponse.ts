@@ -1581,6 +1581,272 @@ export type SyncListResponseStackState = {
   resources: { [k: string]: SyncListResponseStackStateResources };
 };
 
+export const SyncListResponseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncListResponseTypeStringList = ClosedEnum<
+  typeof SyncListResponseTypeStringList
+>;
+
+export type SyncListResponseDefaultStringList = {
+  type: SyncListResponseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncListResponseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncListResponseTypeBoolean = ClosedEnum<
+  typeof SyncListResponseTypeBoolean
+>;
+
+export type SyncListResponseDefaultBoolean = {
+  type: SyncListResponseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncListResponseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncListResponseTypeNumber = ClosedEnum<
+  typeof SyncListResponseTypeNumber
+>;
+
+export type SyncListResponseDefaultNumber = {
+  type: SyncListResponseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncListResponseTypeString = {
+  String: "string",
+} as const;
+export type SyncListResponseTypeString = ClosedEnum<
+  typeof SyncListResponseTypeString
+>;
+
+export type SyncListResponseDefaultString = {
+  type: SyncListResponseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncListResponseDefaultUnion =
+  | SyncListResponseDefaultString
+  | SyncListResponseDefaultNumber
+  | SyncListResponseDefaultBoolean
+  | SyncListResponseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncListResponseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncListResponseTypeEnvEnum = ClosedEnum<
+  typeof SyncListResponseTypeEnvEnum
+>;
+
+export type SyncListResponseTypeUnion = SyncListResponseTypeEnvEnum | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncListResponseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncListResponseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncListResponseKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncListResponseKind = ClosedEnum<typeof SyncListResponseKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncListResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncListResponsePreparedStackPlatform = ClosedEnum<
+  typeof SyncListResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncListResponseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncListResponseProvidedBy = ClosedEnum<
+  typeof SyncListResponseProvidedBy
+>;
+
+/**
+ * Setup methods that can collect deployer-provided input values.
+ */
+export const SyncListResponsePreparedStackSetupMethod = {
+  Cli: "cli",
+  Terraform: "terraform",
+  CloudFormation: "cloud-formation",
+  Helm: "helm",
+  GoogleOauth: "google-oauth",
+} as const;
+/**
+ * Setup methods that can collect deployer-provided input values.
+ */
+export type SyncListResponsePreparedStackSetupMethod = ClosedEnum<
+  typeof SyncListResponsePreparedStackSetupMethod
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncListResponseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncListResponseValidationUnion = SyncListResponseValidation | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncListResponseInput = {
+  default?:
+    | SyncListResponseDefaultString
+    | SyncListResponseDefaultNumber
+    | SyncListResponseDefaultBoolean
+    | SyncListResponseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncListResponseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncListResponseKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<SyncListResponsePreparedStackPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncListResponseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  /**
+   * Setup methods where this input applies.
+   */
+  setupMethods?:
+    | Array<SyncListResponsePreparedStackSetupMethod>
+    | null
+    | undefined;
+  validation?: SyncListResponseValidation | any | null | undefined;
+};
+
 export const SyncListResponseManagementEnum = {
   Auto: "auto",
 } as const;
@@ -2755,6 +3021,10 @@ export type SyncListResponsePreparedStack = {
    * Unique identifier for the stack
    */
   id: string;
+  /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncListResponseInput> | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -5355,6 +5625,272 @@ export function syncListResponseStackStateFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseTypeStringList$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeStringList
+> = z.enum(SyncListResponseTypeStringList);
+
+/** @internal */
+export const SyncListResponseDefaultStringList$inboundSchema: z.ZodType<
+  SyncListResponseDefaultStringList,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function syncListResponseDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeBoolean
+> = z.enum(SyncListResponseTypeBoolean);
+
+/** @internal */
+export const SyncListResponseDefaultBoolean$inboundSchema: z.ZodType<
+  SyncListResponseDefaultBoolean,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function syncListResponseDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeNumber$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeNumber
+> = z.enum(SyncListResponseTypeNumber);
+
+/** @internal */
+export const SyncListResponseDefaultNumber$inboundSchema: z.ZodType<
+  SyncListResponseDefaultNumber,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function syncListResponseDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeString$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeString
+> = z.enum(SyncListResponseTypeString);
+
+/** @internal */
+export const SyncListResponseDefaultString$inboundSchema: z.ZodType<
+  SyncListResponseDefaultString,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function syncListResponseDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseDefaultUnion$inboundSchema: z.ZodType<
+  SyncListResponseDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseDefaultString$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeEnvEnum
+> = z.enum(SyncListResponseTypeEnvEnum);
+
+/** @internal */
+export const SyncListResponseTypeUnion$inboundSchema: z.ZodType<
+  SyncListResponseTypeUnion,
+  unknown
+> = z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]);
+
+export function syncListResponseTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseEnv$inboundSchema: z.ZodType<
+  SyncListResponseEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function syncListResponseEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseKind$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseKind
+> = z.enum(SyncListResponseKind);
+
+/** @internal */
+export const SyncListResponsePreparedStackPlatform$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackPlatform
+> = z.enum(SyncListResponsePreparedStackPlatform);
+
+/** @internal */
+export const SyncListResponseProvidedBy$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProvidedBy
+> = z.enum(SyncListResponseProvidedBy);
+
+/** @internal */
+export const SyncListResponsePreparedStackSetupMethod$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackSetupMethod
+> = z.enum(SyncListResponsePreparedStackSetupMethod);
+
+/** @internal */
+export const SyncListResponseValidation$inboundSchema: z.ZodType<
+  SyncListResponseValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function syncListResponseValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseValidationUnion$inboundSchema: z.ZodType<
+  SyncListResponseValidationUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]);
+
+export function syncListResponseValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseInput$inboundSchema: z.ZodType<
+  SyncListResponseInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseDefaultString$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => SyncListResponseEnv$inboundSchema)).optional(),
+  id: z.string(),
+  kind: SyncListResponseKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncListResponsePreparedStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(SyncListResponseProvidedBy$inboundSchema),
+  required: z.boolean(),
+  setupMethods: z.nullable(
+    z.array(SyncListResponsePreparedStackSetupMethod$inboundSchema),
+  ).optional(),
+  validation: z.nullable(
+    z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function syncListResponseInputFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseInput' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof SyncListResponseManagementEnum
 > = z.enum(SyncListResponseManagementEnum);
@@ -6982,6 +7518,7 @@ export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => SyncListResponseInput$inboundSchema)).optional(),
   permissions: z.lazy(() => SyncListResponsePermissions$inboundSchema)
     .optional(),
   resources: z.record(

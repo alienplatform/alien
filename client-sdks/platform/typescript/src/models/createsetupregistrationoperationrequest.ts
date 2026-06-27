@@ -27,6 +27,11 @@ import {
   SetupRegistrationCloudFormationTarget$Outbound,
   SetupRegistrationCloudFormationTarget$outboundSchema,
 } from "./setupregistrationcloudformationtarget.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 /**
  * Cloud platform of the imported stack
@@ -1336,6 +1341,7 @@ export type CreateSetupRegistrationOperationRequest = {
   action: SetupRegistrationAction;
   sourceKind: ImportSourceKind;
   source?: CreateSetupRegistrationOperationRequestSource | null | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
   /**
    * Unique identifier for the deployment.
    */
@@ -4227,6 +4233,7 @@ export type CreateSetupRegistrationOperationRequest$Outbound = {
     | CreateSetupRegistrationOperationRequestSource$Outbound
     | null
     | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
   deploymentId?: string | null | undefined;
   idempotencyKey?: string | undefined;
   cloudFormation?:
@@ -4245,6 +4252,8 @@ export const CreateSetupRegistrationOperationRequest$outboundSchema: z.ZodType<
   source: z.nullable(
     z.lazy(() => CreateSetupRegistrationOperationRequestSource$outboundSchema),
   ).optional(),
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
   deploymentId: z.nullable(z.string()).optional(),
   idempotencyKey: z.string().optional(),
   cloudFormation: z.nullable(

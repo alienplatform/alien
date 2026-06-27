@@ -44,6 +44,15 @@ export type StackImportRequest = {
    * `name` attribute on the `alien_deployment` resource.
    */
   deploymentName: string;
+  /**
+   * Deployer-provided stack input values collected by generated setup
+   *
+   * @remarks
+   * surfaces. Platform-backed managers resolve these into runtime
+   * environment variables before deployment creation; standalone managers
+   * accept the field for setup package compatibility.
+   */
+  inputValues?: { [k: string]: any } | undefined;
   managementConfig?: ManagementConfig | null | undefined;
   /**
    * Represents the target cloud platform.
@@ -116,6 +125,7 @@ export type StackImportRequest$Outbound = {
   basePlatform?: string | null | undefined;
   deploymentGroupToken: string;
   deploymentName: string;
+  inputValues?: { [k: string]: any } | undefined;
   managementConfig?: ManagementConfig$Outbound | null | undefined;
   platform: string;
   region: string;
@@ -139,6 +149,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupToken: z.string(),
   deploymentName: z.string(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   managementConfig: z.nullable(ManagementConfig$outboundSchema).optional(),
   platform: PlatformEnum$outboundSchema,
   region: z.string(),

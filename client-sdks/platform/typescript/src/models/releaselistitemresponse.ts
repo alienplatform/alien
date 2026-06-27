@@ -40,10 +40,6 @@ export type ReleaseListItemResponse = {
   createdAt: Date;
   stack: StackByPlatform;
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
-  /**
-   * Version string for this release
-   */
-  version: string;
   rootDirectory?: string | null | undefined;
   workspaceId: string;
   /**
@@ -82,7 +78,6 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   stack: StackByPlatform$inboundSchema,
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
-  version: z.string(),
   rootDirectory: z.nullable(z.string()).optional(),
   workspaceId: z.string(),
   project: z.nullable(

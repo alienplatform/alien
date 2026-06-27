@@ -9,6 +9,11 @@ import {
   ImportSource$Outbound,
   ImportSource$outboundSchema,
 } from "./importsource.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 export const ForwardImportRequestMode = {
   Forward: "forward",
@@ -35,6 +40,7 @@ export type ForwardImportRequest = {
    * Resolved setup import payload
    */
   source: ImportSource;
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
 /** @internal */
@@ -49,6 +55,7 @@ export type ForwardImportRequest$Outbound = {
   deploymentGroupId?: string | undefined;
   managerId?: string | undefined;
   source: ImportSource$Outbound;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
 /** @internal */
@@ -61,6 +68,8 @@ export const ForwardImportRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.string().optional(),
   managerId: z.string().optional(),
   source: ImportSource$outboundSchema,
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
 });
 
 export function forwardImportRequestToJSON(

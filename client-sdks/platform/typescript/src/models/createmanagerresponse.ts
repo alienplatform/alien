@@ -11,6 +11,10 @@ import {
   DeploymentSetupPolicy,
   DeploymentSetupPolicy$inboundSchema,
 } from "./deploymentsetuppolicy.js";
+import {
+  EncryptedStackInputValue,
+  EncryptedStackInputValue$inboundSchema,
+} from "./encryptedstackinputvalue.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const CreateManagerResponseSetupStatus = {
@@ -37,6 +41,7 @@ export type CreateManagerResponseEnvironmentVariable = {
 export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
+  inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
   environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
 };
 
@@ -3462,6 +3467,8 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
 > = z.object({
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
+  inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
   environmentVariables: z.array(
     z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
   ),

@@ -24,6 +24,275 @@ export type PreparedDeploymentStackPlatform = ClosedEnum<
   typeof PreparedDeploymentStackPlatform
 >;
 
+export const PreparedDeploymentStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type PreparedDeploymentStackTypeStringList = ClosedEnum<
+  typeof PreparedDeploymentStackTypeStringList
+>;
+
+export type PreparedDeploymentStackDefaultStringList = {
+  type: PreparedDeploymentStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const PreparedDeploymentStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type PreparedDeploymentStackTypeBoolean = ClosedEnum<
+  typeof PreparedDeploymentStackTypeBoolean
+>;
+
+export type PreparedDeploymentStackDefaultBoolean = {
+  type: PreparedDeploymentStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const PreparedDeploymentStackTypeNumber = {
+  Number: "number",
+} as const;
+export type PreparedDeploymentStackTypeNumber = ClosedEnum<
+  typeof PreparedDeploymentStackTypeNumber
+>;
+
+export type PreparedDeploymentStackDefaultNumber = {
+  type: PreparedDeploymentStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const PreparedDeploymentStackTypeString = {
+  String: "string",
+} as const;
+export type PreparedDeploymentStackTypeString = ClosedEnum<
+  typeof PreparedDeploymentStackTypeString
+>;
+
+export type PreparedDeploymentStackDefaultString = {
+  type: PreparedDeploymentStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type PreparedDeploymentStackDefaultUnion =
+  | PreparedDeploymentStackDefaultString
+  | PreparedDeploymentStackDefaultNumber
+  | PreparedDeploymentStackDefaultBoolean
+  | PreparedDeploymentStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const PreparedDeploymentStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type PreparedDeploymentStackTypeEnvEnum = ClosedEnum<
+  typeof PreparedDeploymentStackTypeEnvEnum
+>;
+
+export type PreparedDeploymentStackTypeUnion =
+  | PreparedDeploymentStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type PreparedDeploymentStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: PreparedDeploymentStackTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const PreparedDeploymentStackKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type PreparedDeploymentStackKind = ClosedEnum<
+  typeof PreparedDeploymentStackKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const PreparedDeploymentStackStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type PreparedDeploymentStackStackPlatform = ClosedEnum<
+  typeof PreparedDeploymentStackStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const PreparedDeploymentStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type PreparedDeploymentStackProvidedBy = ClosedEnum<
+  typeof PreparedDeploymentStackProvidedBy
+>;
+
+/**
+ * Setup methods that can collect deployer-provided input values.
+ */
+export const PreparedDeploymentStackSetupMethod = {
+  Cli: "cli",
+  Terraform: "terraform",
+  CloudFormation: "cloud-formation",
+  Helm: "helm",
+  GoogleOauth: "google-oauth",
+} as const;
+/**
+ * Setup methods that can collect deployer-provided input values.
+ */
+export type PreparedDeploymentStackSetupMethod = ClosedEnum<
+  typeof PreparedDeploymentStackSetupMethod
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type PreparedDeploymentStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type PreparedDeploymentStackValidationUnion =
+  | PreparedDeploymentStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type PreparedDeploymentStackInput = {
+  default?:
+    | PreparedDeploymentStackDefaultString
+    | PreparedDeploymentStackDefaultNumber
+    | PreparedDeploymentStackDefaultBoolean
+    | PreparedDeploymentStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<PreparedDeploymentStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: PreparedDeploymentStackKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<PreparedDeploymentStackStackPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<PreparedDeploymentStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  /**
+   * Setup methods where this input applies.
+   */
+  setupMethods?: Array<PreparedDeploymentStackSetupMethod> | null | undefined;
+  validation?: PreparedDeploymentStackValidation | any | null | undefined;
+};
+
 export const PreparedDeploymentStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1215,6 +1484,10 @@ export type PreparedDeploymentStackStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<PreparedDeploymentStackInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: PreparedDeploymentStackPermissions | undefined;
@@ -1244,6 +1517,290 @@ export type PreparedDeploymentStack = {
 export const PreparedDeploymentStackPlatform$inboundSchema: z.ZodEnum<
   typeof PreparedDeploymentStackPlatform
 > = z.enum(PreparedDeploymentStackPlatform);
+
+/** @internal */
+export const PreparedDeploymentStackTypeStringList$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackTypeStringList
+> = z.enum(PreparedDeploymentStackTypeStringList);
+
+/** @internal */
+export const PreparedDeploymentStackDefaultStringList$inboundSchema: z.ZodType<
+  PreparedDeploymentStackDefaultStringList,
+  unknown
+> = z.object({
+  type: PreparedDeploymentStackTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function preparedDeploymentStackDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackTypeBoolean
+> = z.enum(PreparedDeploymentStackTypeBoolean);
+
+/** @internal */
+export const PreparedDeploymentStackDefaultBoolean$inboundSchema: z.ZodType<
+  PreparedDeploymentStackDefaultBoolean,
+  unknown
+> = z.object({
+  type: PreparedDeploymentStackTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function preparedDeploymentStackDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackTypeNumber$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackTypeNumber
+> = z.enum(PreparedDeploymentStackTypeNumber);
+
+/** @internal */
+export const PreparedDeploymentStackDefaultNumber$inboundSchema: z.ZodType<
+  PreparedDeploymentStackDefaultNumber,
+  unknown
+> = z.object({
+  type: PreparedDeploymentStackTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function preparedDeploymentStackDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackTypeString$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackTypeString
+> = z.enum(PreparedDeploymentStackTypeString);
+
+/** @internal */
+export const PreparedDeploymentStackDefaultString$inboundSchema: z.ZodType<
+  PreparedDeploymentStackDefaultString,
+  unknown
+> = z.object({
+  type: PreparedDeploymentStackTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function preparedDeploymentStackDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackDefaultUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PreparedDeploymentStackDefaultString$inboundSchema),
+  z.lazy(() => PreparedDeploymentStackDefaultNumber$inboundSchema),
+  z.lazy(() => PreparedDeploymentStackDefaultBoolean$inboundSchema),
+  z.lazy(() => PreparedDeploymentStackDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function preparedDeploymentStackDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackTypeEnvEnum
+> = z.enum(PreparedDeploymentStackTypeEnvEnum);
+
+/** @internal */
+export const PreparedDeploymentStackTypeUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackTypeUnion,
+  unknown
+> = z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.any()]);
+
+export function preparedDeploymentStackTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackEnv$inboundSchema: z.ZodType<
+  PreparedDeploymentStackEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function preparedDeploymentStackEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackKind$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackKind
+> = z.enum(PreparedDeploymentStackKind);
+
+/** @internal */
+export const PreparedDeploymentStackStackPlatform$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackStackPlatform
+> = z.enum(PreparedDeploymentStackStackPlatform);
+
+/** @internal */
+export const PreparedDeploymentStackProvidedBy$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackProvidedBy
+> = z.enum(PreparedDeploymentStackProvidedBy);
+
+/** @internal */
+export const PreparedDeploymentStackSetupMethod$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackSetupMethod
+> = z.enum(PreparedDeploymentStackSetupMethod);
+
+/** @internal */
+export const PreparedDeploymentStackValidation$inboundSchema: z.ZodType<
+  PreparedDeploymentStackValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function preparedDeploymentStackValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackValidationUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackValidationUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),
+  z.any(),
+]);
+
+export function preparedDeploymentStackValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
+  PreparedDeploymentStackInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => PreparedDeploymentStackDefaultString$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackDefaultNumber$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackDefaultBoolean$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => PreparedDeploymentStackEnv$inboundSchema))
+    .optional(),
+  id: z.string(),
+  kind: PreparedDeploymentStackKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(PreparedDeploymentStackStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(PreparedDeploymentStackProvidedBy$inboundSchema),
+  required: z.boolean(),
+  setupMethods: z.nullable(
+    z.array(PreparedDeploymentStackSetupMethod$inboundSchema),
+  ).optional(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function preparedDeploymentStackInputFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackInput' from JSON`,
+  );
+}
 
 /** @internal */
 export const PreparedDeploymentStackManagementEnum$inboundSchema: z.ZodEnum<
@@ -3081,6 +3638,8 @@ export const PreparedDeploymentStackStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => PreparedDeploymentStackInput$inboundSchema))
+    .optional(),
   permissions: z.lazy(() => PreparedDeploymentStackPermissions$inboundSchema)
     .optional(),
   resources: z.record(

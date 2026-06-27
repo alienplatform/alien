@@ -14,6 +14,11 @@ import {
   EnvironmentVariableConfig$Outbound,
   EnvironmentVariableConfig$outboundSchema,
 } from "./environmentvariableconfig.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 /**
  * Target platform for the deployment
@@ -1296,6 +1301,10 @@ export type NewDeploymentRequest = {
   resourcePrefix?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  /**
+   * Stack input values provided by the deployment creator.
+   */
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
 /** @internal */
@@ -3801,6 +3810,7 @@ export type NewDeploymentRequest$Outbound = {
   resourcePrefix?: string | undefined;
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
 /** @internal */
@@ -3832,6 +3842,8 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   resourcePrefix: z.string().optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
 });
 
 export function newDeploymentRequestToJSON(
