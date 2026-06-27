@@ -261,7 +261,7 @@
           }
         }
       },
-      // Containers own their ALB security group, but public Horizon-backed
+      // Containers own their ALB security group, but public managed-compute
       // containers also need to add/remove one ingress rule on the setup-owned
       // ComputeCluster security group so the ALB can reach host ports.
       {

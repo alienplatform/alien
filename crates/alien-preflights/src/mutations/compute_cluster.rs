@@ -44,8 +44,8 @@ impl StackMutation for ComputeClusterMutation {
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "container");
-        // Also fire for daemons that reference a cluster on Horizon-backed
-        // cloud platforms. Local daemons ignore `.cluster(...)`, so a daemon-only
+        // Also fire for daemons that reference a managed compute cluster on cloud
+        // platforms. Local daemons ignore `.cluster(...)`, so a daemon-only
         // local stack must not grow a Docker-backed ComputeCluster during
         // deployment preflights.
         let daemon_cluster_ids =
@@ -1037,16 +1037,16 @@ mod tests {
     async fn test_should_not_run_for_local_daemon_cluster_ref() {
         let mut resources = IndexMap::new();
 
-        let daemon = Daemon::new("bear-agent-loader".to_string())
-            .cluster("bear-runtime".to_string())
+        let daemon = Daemon::new("host-loader".to_string())
+            .cluster("host-runtime".to_string())
             .permissions("loader".to_string())
             .code(alien_core::DaemonCode::Image {
-                image: "registry.example.com/bear-agent-loader:latest".to_string(),
+                image: "registry.example.com/host-loader:latest".to_string(),
             })
             .build();
 
         resources.insert(
-            "bear-agent-loader".to_string(),
+            "host-loader".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(daemon),
                 lifecycle: ResourceLifecycle::Live,

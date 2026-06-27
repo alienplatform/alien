@@ -215,7 +215,7 @@
       },
       {
         "label": "manage-compute-cluster-ingress",
-        "description": "Add and remove the ALB-to-Horizon host-port rule on the setup-owned ComputeCluster security group.",
+        "description": "Add and remove the ALB-to-managed-compute host-port rule on the setup-owned ComputeCluster security group.",
         "grant": {
           "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"]
         },

@@ -73,8 +73,8 @@ pub struct Daemon {
     /// HTTP health check for public daemon endpoint load balancers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheck>,
-    /// ComputeCluster resource ID that this daemon runs on for Horizon-backed
-    /// cloud platforms. Kubernetes and Local runtimes ignore this field.
+    /// ComputeCluster resource ID that this daemon runs on for managed cloud
+    /// compute backends. Kubernetes and Local runtimes ignore this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
     pub permissions: String,

@@ -1477,9 +1477,9 @@ mod tests {
 
     #[test]
     fn extract_repo_names_includes_daemon_image_resources() {
-        let daemon = Daemon::new("bear-agent-loader".to_string())
+        let daemon = Daemon::new("host-loader".to_string())
             .code(DaemonCode::Image {
-                image: "manager.example.com/artifacts/prj_test:bear-agent-loader-v1".to_string(),
+                image: "manager.example.com/artifacts/prj_test:host-loader-v1".to_string(),
             })
             .permissions("execution".to_string())
             .build();
@@ -1800,7 +1800,7 @@ mod tests {
             "/v2/repo/blobs/uploads/3403bc14-cbcd-3760-a4b1-c678a3c6ea61"
         ));
         assert!(is_oci_upload_session_path(
-            "v2/alien-artifacts/bear-agent-loader/blobs/uploads/abc-123"
+            "v2/alien-artifacts/host-loader/blobs/uploads/abc-123"
         ));
 
         // Other OCI paths.

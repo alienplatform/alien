@@ -681,7 +681,7 @@ mod tests {
     fn target_config_preserves_control_plane_public_endpoints() {
         let mut deployment = deployment_record_with_state("provisioning", None);
         let public_endpoints = HashMap::from([(
-            "bear-agent-loader".to_string(),
+            "host-loader".to_string(),
             HashMap::from([(
                 "shares".to_string(),
                 "https://shares.byoc.example.test".to_string(),
