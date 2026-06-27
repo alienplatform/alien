@@ -898,10 +898,10 @@ mod tests {
                 wildcard_subdomains: false,
             })
             .public_endpoint(PublicEndpoint {
-                name: "shares".to_string(),
+                name: "wildcard".to_string(),
                 port: 8080,
                 protocol: ExposeProtocol::Http,
-                host_label: Some("shares".to_string()),
+                host_label: Some("wildcard".to_string()),
                 wildcard_subdomains: true,
             })
             .replicas(1)

@@ -683,8 +683,8 @@ mod tests {
         let public_endpoints = HashMap::from([(
             "host-loader".to_string(),
             HashMap::from([(
-                "shares".to_string(),
-                "https://shares.byoc.example.test".to_string(),
+                "wildcard".to_string(),
+                "https://wildcard.byoc.example.test".to_string(),
             )]),
         )]);
         deployment.deployment_config = Some(DeploymentConfig {

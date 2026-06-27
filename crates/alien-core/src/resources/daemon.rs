@@ -191,10 +191,16 @@ impl Daemon {
         }
 
         for mount in &runtime.mounts {
+            if mount.source.is_empty() || mount.target.is_empty() {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.mounts source and target must be non-empty".to_string(),
+                }));
+            }
             if !mount.source.starts_with('/') || !mount.target.starts_with('/') {
                 return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                     resource_id: self.id.clone(),
-                    reason: "runtime mount source and target must be absolute paths".to_string(),
+                    reason: "runtime.mounts source and target must be absolute paths".to_string(),
                 }));
             }
         }

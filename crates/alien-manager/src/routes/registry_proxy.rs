@@ -37,7 +37,7 @@ use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
 };
 use alien_bindings::BindingsProviderApi;
-use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Platform, Worker, WorkerCode};
+use alien_core::Platform;
 
 use super::AppState;
 use crate::auth::{Scope, Subject};
@@ -1419,7 +1419,7 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{ResourceLifecycle, Stack};
+    use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
