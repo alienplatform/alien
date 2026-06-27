@@ -14,10 +14,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ]
           }
         }
       }
