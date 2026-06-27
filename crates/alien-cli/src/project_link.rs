@@ -224,7 +224,7 @@ pub async fn create_new_project(
         None => {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message:
-                    "Project creation needs a name. Pass `alien link --name <project-name>` or run `alien link` in a real terminal."
+                    "Project creation needs a name. Pass `alien link --project <project-name>` or run `alien link` in a real terminal."
                         .to_string(),
             }))
         }
