@@ -1,5 +1,5 @@
 //! Validates that ComputeCluster capacity groups have instance_type and profile set
-//! for cloud platforms.
+//! for cloud platforms after deployment-time compute materialization.
 //!
 //! This is a defense-in-depth check. For auto-generated clusters, the
 //! ComputeClusterMutation always populates these fields. This check catches the
@@ -8,14 +8,13 @@
 //! the managed container cluster or launch instances.
 //!
 //! NOTE: This check runs on the mutated stack (after mutations), so it validates
-//! both user-defined and auto-generated clusters. It is registered as a runtime
-//! check would be, but since it doesn't need cloud access, it runs at compile time
-//! on the post-mutation stack. In practice, it is registered as a compile-time check
-//! that runs on the mutated stack during deployment preflights.
+//! both user-defined and auto-generated clusters. It must not run during build
+//! or template generation, because release stacks are intentionally provider
+//! portable and do not yet contain deployment-specific machine selections.
 
 use crate::error::Result;
-use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{ComputeCluster, Platform, Stack};
+use crate::{CheckResult, CompileTimeCheck, DeploymentPrerequisiteCheck};
+use alien_core::{ComputeCluster, DeploymentConfig, Platform, Stack, StackState};
 
 /// Validates that all ComputeCluster capacity groups have instance_type and profile
 /// set for cloud platforms (AWS, GCP, Azure).
@@ -85,6 +84,31 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
     }
 }
 
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for CapacityGroupProfileCheck {
+    fn description(&self) -> &'static str {
+        <Self as CompileTimeCheck>::description(self)
+    }
+
+    fn should_run(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        <Self as CompileTimeCheck>::should_run(self, stack, stack_state.platform)
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        <Self as CompileTimeCheck>::check(self, stack, stack_state.platform).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,7 +157,9 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let result = CompileTimeCheck::check(&check, &stack, Platform::Aws)
+            .await
+            .unwrap();
         assert!(result.success, "should pass: {:?}", result.errors);
     }
 
@@ -157,7 +183,9 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let result = CompileTimeCheck::check(&check, &stack, Platform::Aws)
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.errors[0].contains("instance_type is not set"));
     }
@@ -180,7 +208,9 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let result = CompileTimeCheck::check(&check, &stack, Platform::Aws)
+            .await
+            .unwrap();
         assert!(result.success, "should pass: {:?}", result.errors);
     }
 
@@ -201,7 +231,9 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let result = CompileTimeCheck::check(&check, &stack, Platform::Aws)
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.errors[0].contains("not in the"));
         assert!(result.errors[0].contains("instance catalog"));
@@ -222,7 +254,15 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        assert!(!check.should_run(&stack, Platform::Local));
-        assert!(!check.should_run(&stack, Platform::Kubernetes));
+        assert!(!CompileTimeCheck::should_run(
+            &check,
+            &stack,
+            Platform::Local
+        ));
+        assert!(!CompileTimeCheck::should_run(
+            &check,
+            &stack,
+            Platform::Kubernetes
+        ));
     }
 }

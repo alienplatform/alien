@@ -245,7 +245,6 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
-        registry.add_compile_time_check(Box::new(compile_time::CapacityGroupProfileCheck));
         registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
         registry.add_compile_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
 
@@ -264,6 +263,8 @@ impl PreflightRegistry {
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::TargetResourcesResolveCheck,
         ));
+        registry
+            .add_deployment_prerequisite_check(Box::new(compile_time::CapacityGroupProfileCheck));
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
