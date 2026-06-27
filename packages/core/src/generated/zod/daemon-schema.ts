@@ -12,7 +12,7 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
 
 export const DaemonSchema = z.object({
-    "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for Horizon-backed\ncloud platforms. Kubernetes and Local runtimes ignore this field.").nullish(),
+    "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
 get "code"(){
                 return DaemonCodeSchema
               },

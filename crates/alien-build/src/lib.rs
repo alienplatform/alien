@@ -2968,7 +2968,7 @@ mod tests {
 
     #[test]
     fn local_build_strips_daemon_only_compute_cluster() {
-        let cluster = alien_core::ComputeCluster::new("bear-runtime".to_string())
+        let cluster = alien_core::ComputeCluster::new("host-runtime".to_string())
             .capacity_group(alien_core::CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m8i.xlarge".to_string()),
@@ -2978,24 +2978,24 @@ mod tests {
                 nested_virtualization: Some(true),
             })
             .build();
-        let daemon = Daemon::new("bear-agent-loader".to_string())
-            .cluster("bear-runtime".to_string())
+        let daemon = Daemon::new("host-loader".to_string())
+            .cluster("host-runtime".to_string())
             .permissions("loader".to_string())
             .code(DaemonCode::Image {
-                image: "registry.example.com/bear-agent-loader:latest".to_string(),
+                image: "registry.example.com/host-loader:latest".to_string(),
             })
             .build();
-        let mut stack = Stack::new("bear-agent-stack".to_string())
+        let mut stack = Stack::new("host-loader-stack".to_string())
             .add(cluster, alien_core::ResourceLifecycle::Frozen)
             .add(daemon, alien_core::ResourceLifecycle::Live)
             .build();
 
         strip_local_daemon_only_compute_clusters(&mut stack, Platform::Local);
 
-        assert!(!stack.resources.contains_key("bear-runtime"));
+        assert!(!stack.resources.contains_key("host-runtime"));
         let daemon = stack
             .resources()
-            .find(|(id, _)| *id == "bear-agent-loader")
+            .find(|(id, _)| *id == "host-loader")
             .and_then(|(_, entry)| entry.config.downcast_ref::<Daemon>())
             .expect("daemon should remain");
         assert_eq!(daemon.cluster, None);

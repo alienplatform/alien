@@ -73,8 +73,8 @@ pub struct CapacityGroup {
     /// Maximum number of machines (must be ≤ 10)
     pub max_size: u32,
     /// Require instance types that expose nested virtualization (VT-x/EPT)
-    /// to guest VMs — needed by workloads that boot VMs inside containers
-    /// (e.g. bear-agent's QEMU sandboxes).
+    /// to guest VMs. This is needed by workloads that boot nested VMs inside
+    /// containers.
     /// When true, the controller's instance-type selector is constrained
     /// to a vetted nested-virt-capable allowlist.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,8 +90,9 @@ pub struct CapacityGroup {
 /// ## Architecture
 ///
 /// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
-/// - **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout
-/// - **horizond** runs on each machine from the selected Horizon machine image channel
+/// - **Alien** manages allowed fleet operations: machine count and runtime
+///   machine image rollout
+/// - A node agent runs on each machine from the selected runtime image channel
 ///
 /// ## Example
 ///
