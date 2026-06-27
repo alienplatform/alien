@@ -187,7 +187,7 @@ managerServiceAccount:
 services:
   {}
 
-publicUrls: {}
+publicEndpoints: {}
 
 persistentStorage:
   storageClassName: ""
@@ -609,7 +609,13 @@ ephemeralStorage:
         }
       }
     },
-    "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
+    "publicEndpoints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
     "persistentStorage": { "type": "object" },
     "ephemeralStorage": { "type": "object" }
   },
@@ -910,7 +916,7 @@ data:
 {{ .Files.Get "files/stack.json" | indent 4 }}
   stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
   services.json: {{ toJson .Values.services | quote }}
-  public-urls.json: {{ toJson (default dict .Values.publicUrls) | quote }}
+  public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 
 === templates/deployment.yaml ===
 apiVersion: apps/v1
@@ -1024,8 +1030,8 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            - name: PUBLIC_URLS_FILE
-              value: /etc/deployment/config/public-urls.json
+            - name: PUBLIC_ENDPOINTS_FILE
+              value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
