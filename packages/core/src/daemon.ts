@@ -137,7 +137,11 @@ export class Daemon {
   /**
    * Exposes a named public endpoint for a daemon port.
    */
-  public publicEndpoint(name: string, port: number, options: DaemonPublicEndpointOptions = "http"): this {
+  public publicEndpoint(
+    name: string,
+    port: number,
+    options: DaemonPublicEndpointOptions = "http",
+  ): this {
     if (!this._config.publicEndpoints) {
       this._config.publicEndpoints = []
     }
