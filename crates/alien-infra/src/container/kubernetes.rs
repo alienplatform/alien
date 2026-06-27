@@ -1124,7 +1124,10 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
-            container_outputs.url.as_deref(),
+            container_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("https://container.example.test")
         );
     }
@@ -1156,7 +1159,10 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
-            container_outputs.url.as_deref(),
+            container_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("http://k8s-container.example.elb.amazonaws.com")
         );
     }

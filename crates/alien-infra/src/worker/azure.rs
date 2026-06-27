@@ -4572,7 +4572,7 @@ mod tests {
 
     use alien_azure_clients::models::container_apps::{
         Configuration, ConfigurationActiveRevisionsMode, ContainerApp, ContainerAppProperties,
-        ContainerAppPropertiesProvisioningStateTransport, TrafficWeight,
+        ContainerAppPropertiesProvisioningState, TrafficWeight,
     };
     use alien_azure_clients::{
         container_apps::MockContainerAppsApi,
@@ -4617,13 +4617,17 @@ mod tests {
 
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
-            Some("https://test-worker.azurecontainerapps.io")
+            endpoint.url.as_str(),
+            "https://test-worker.azurecontainerapps.io"
         );
         assert_eq!(
-            worker_outputs
+            endpoint
                 .load_balancer_endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.dns_name.as_str()),
@@ -5543,12 +5547,11 @@ mod tests {
         // Verify URL is in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_some());
-        assert!(function_outputs
-            .url
-            .as_ref()
-            .unwrap()
-            .contains("azurecontainerapps.io"));
+        let endpoint = function_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
+        assert!(endpoint.url.contains("azurecontainerapps.io"));
     }
 
     /// Test that verifies private workers don't get URL in outputs
@@ -5601,7 +5604,7 @@ mod tests {
         // Verify no URL in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_none());
+        assert!(function_outputs.public_endpoints.is_empty());
     }
 
     /// Test that verifies correct container app configuration parameters

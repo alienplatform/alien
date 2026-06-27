@@ -1899,7 +1899,7 @@ fn aws_hosted_zone_id(profile: &KubernetesIngressRouteProfile) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ContainerPort, ExposeProtocol};
+    use alien_core::{ExposeProtocol, PublicEndpoint};
     use httpmock::prelude::*;
 
     fn endpoint_target() -> KubernetesPublicEndpointTarget<'static> {
@@ -1918,17 +1918,19 @@ mod tests {
 
     #[test]
     fn container_target_is_public_only_for_http_exposed_port() {
+        let public_endpoints = [PublicEndpoint {
+            name: "default".to_string(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        }];
         let target = container_public_endpoint_target(
             "api",
             "api",
             "default",
             BTreeMap::new(),
-            &[ContainerPort {
-                port: 8080,
-                expose: Some(ExposeProtocol::Http),
-                host_label: None,
-                wildcard_subdomains: false,
-            }],
+            &public_endpoints,
             None,
         )
         .expect("target");
