@@ -450,6 +450,48 @@ impl SingleControllerExecutor {
         Ok(())
     }
 
+    /// Runs the controller until it reaches the expected status.
+    pub async fn run_until_status(&mut self, expected: ResourceStatus) -> Result<()> {
+        let max_steps = 100;
+        let mut step_count = 0;
+
+        while self.controller.get_status() != expected {
+            if self.is_synced() {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Controller reached terminal status {:?} before expected status {:?}",
+                        self.controller.get_status(),
+                        expected
+                    ),
+                    operation: Some("run_until_status".to_string()),
+                    resource_id: Some(self.resource_id.clone()),
+                }));
+            }
+
+            if step_count >= max_steps {
+                return Err(AlienError::new(ErrorData::ExecutionMaxStepsReached {
+                    max_steps: max_steps as u64,
+                    pending_resources: vec![self.resource_id.clone()],
+                }));
+            }
+
+            let step_result = self.step().await?;
+            if self.controller.get_status() != expected {
+                if let Some(delay) = step_result.suggested_delay {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    tokio::time::sleep(delay).await;
+                } else {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+
+            step_count += 1;
+        }
+
+        Ok(())
+    }
+
     /// Checks if the controller has reached its desired state.
     ///
     /// Returns true when:
@@ -520,6 +562,19 @@ impl SingleControllerExecutor {
             .context(ErrorData::InfrastructureError {
                 message: "Failed to transition controller to delete state".to_string(),
                 operation: Some("delete_transition".to_string()),
+                resource_id: Some(self.resource_id.clone()),
+            })?;
+
+        Ok(())
+    }
+
+    /// Transitions a resource from teardown-required into its teardown flow.
+    pub fn teardown(&mut self) -> Result<()> {
+        self.controller
+            .transition_to_teardown_start()
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to transition controller to teardown state".to_string(),
+                operation: Some("teardown_transition".to_string()),
                 resource_id: Some(self.resource_id.clone()),
             })?;
 
