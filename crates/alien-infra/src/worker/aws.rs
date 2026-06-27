@@ -4010,8 +4010,8 @@ mod tests {
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, ResourceDomainInfo,
-        ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, PublicEndpointUrls,
+        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -4054,6 +4054,7 @@ mod tests {
                     "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
                         .to_string(),
                 ),
+                endpoints: HashMap::new(),
                 aliases: Vec::new(),
                 issued_at: Some("2024-01-01T00:00:00Z".to_string()),
             },
@@ -4429,7 +4430,7 @@ mod tests {
         Arc<MockPlatformServiceProvider>,
         Option<MockServer>,
         Option<DomainMetadata>,
-        Option<HashMap<String, String>>,
+        Option<PublicEndpointUrls>,
     ) {
         let has_url = !worker.public_endpoints.is_empty();
         let needs_readiness_probe = has_url && worker.readiness_probe.is_some();
@@ -4603,7 +4604,12 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         if target_is_public {
-            let url = function_outputs.url.as_deref().unwrap();
+            let url = function_outputs
+                .public_endpoints
+                .get("default")
+                .expect("default public endpoint")
+                .url
+                .as_str();
             assert!(url.starts_with("http://") || url.starts_with("https://"));
             assert!(!url.contains("lambda-url"));
         }
@@ -4811,7 +4817,7 @@ mod tests {
         // Verify URL is in outputs (derived from domain_metadata FQDN)
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_some());
+        assert!(function_outputs.public_endpoints.contains_key("default"));
     }
 
     /// Test that verifies private workers don't get URL creation
@@ -4869,7 +4875,7 @@ mod tests {
         // Verify no URL in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_none());
+        assert!(function_outputs.public_endpoints.is_empty());
     }
 
     /// Test that verifies correct worker configuration parameters

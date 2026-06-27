@@ -808,7 +808,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("https://worker.example.test")
         );
     }
@@ -838,7 +841,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("http://k8s-worker.example.elb.amazonaws.com")
         );
     }

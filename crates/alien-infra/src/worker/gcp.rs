@@ -5607,6 +5607,7 @@ mod tests {
                     "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
                         .to_string(),
                 ),
+                endpoints: HashMap::new(),
                 issued_at: Some("2024-01-01T00:00:00Z".to_string()),
                 aliases: Vec::new(),
             },
@@ -6216,7 +6217,13 @@ mod tests {
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         if target_is_public {
             let expected_url = format!("https://{}.test.example.com", worker_id);
-            assert_eq!(function_outputs.url.as_deref(), Some(expected_url.as_str()));
+            assert_eq!(
+                function_outputs
+                    .public_endpoints
+                    .get("default")
+                    .map(|endpoint| endpoint.url.as_str()),
+                Some(expected_url.as_str())
+            );
         }
     }
 
@@ -6356,7 +6363,7 @@ mod tests {
         // Verify URL is in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_some());
+        assert!(function_outputs.public_endpoints.contains_key("default"));
     }
 
     /// Test that verifies private workers handle resource-scoped permissions correctly
@@ -6436,7 +6443,7 @@ mod tests {
         // Verify URL is still available for private workers (internal access)
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_some());
+        assert!(function_outputs.public_endpoints.contains_key("default"));
     }
 
     /// Test that verifies correct service configuration parameters
