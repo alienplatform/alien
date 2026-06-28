@@ -1659,6 +1659,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 1,
+                scale_policy: None,
                 nested_virtualization: None,
             })
             .build();
@@ -1682,6 +1683,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 1,
+                scale_policy: None,
                 nested_virtualization: Some(true),
             })
             .build();

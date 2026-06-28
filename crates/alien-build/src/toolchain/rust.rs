@@ -1,8 +1,8 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
 use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
-use alien_core::AlienEvent;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_core::{AlienEvent, CargoBuildStrategy};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -229,6 +229,44 @@ impl Toolchain for RustToolchain {
                 info!("Successfully installed {}", package);
             } else {
                 info!("{} already installed", package);
+            }
+        }
+
+        if matches!(strategy, CargoBuildStrategy::Zigbuild) {
+            match Command::new("zig")
+                .arg("version")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    info!("Using zig {}", version.trim());
+                }
+                Ok(output) => {
+                    return Err(image_build_error_with_output(
+                        self.binary_name.clone(),
+                        "zig is required for cargo zigbuild but `zig version` failed",
+                        &output,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                        resource_name: self.binary_name.clone(),
+                        reason: "zig is required to build Linux musl Rust resources. Install zig and rerun `alien release`.".to_string(),
+                        build_output: None,
+                    }));
+                }
+                Err(error) => {
+                    return Err(error
+                        .into_alien_error()
+                        .context(ErrorData::ImageBuildFailed {
+                            resource_name: self.binary_name.clone(),
+                            reason: "Failed to execute `zig version`".to_string(),
+                            build_output: None,
+                        }));
+                }
             }
         }
 
