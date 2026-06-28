@@ -401,7 +401,18 @@ impl EnvironmentVariableBuilder {
                                 alien_core::ExternalBinding::ContainerAppsEnvironment(b) => {
                                     serde_json::to_value(b)
                                 }
-                                alien_core::ExternalBinding::Postgres(b) => serde_json::to_value(b),
+                                alien_core::ExternalBinding::Postgres(b) => {
+                                    // External (Remote Access) Postgres on the local platform: the
+                                    // binding inlines a raw password with no local manager to
+                                    // re-resolve it, so it would persist into worker metadata.
+                                    if ctx.platform == alien_core::Platform::Local {
+                                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                                            message: "external (Remote Access) Postgres is not supported on the local platform".to_string(),
+                                            resource_id: Some(binding_name.to_string()),
+                                        }));
+                                    }
+                                    serde_json::to_value(b)
+                                }
                             }
                             .into_alien_error()
                             .context(

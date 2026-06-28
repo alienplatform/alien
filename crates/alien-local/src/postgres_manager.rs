@@ -267,6 +267,25 @@ impl LocalPostgresManager {
         ))
     }
 
+    /// Like `get_binding`, but returns `Ok(None)` when no metadata exists for `id` — i.e. the link
+    /// isn't a managed local Postgres, so the caller skips it. A present-but-unreadable file still
+    /// errors: the existence check is the absent-vs-error boundary (fail-fast on a real read failure).
+    pub fn try_get_binding(&self, id: &str) -> Result<Option<PostgresBinding>> {
+        let path = self.metadata_path(id);
+        if !path
+            .try_exists()
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: path.display().to_string(),
+                operation: "stat".to_string(),
+                reason: "Failed to check Postgres metadata existence".to_string(),
+            })?
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.get_binding(id)?))
+    }
+
     // ───────────────────────── internals ─────────────────────────
 
     /// Builds + starts a `PostgreSQL` from metadata and ensures the database exists.
@@ -716,4 +735,42 @@ fn allocate_port(id: &str) -> Result<u16> {
         })?
         .port();
     Ok(port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_get_binding_some_for_fixture_none_for_absent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manager = LocalPostgresManager::new(tmp.path().to_path_buf());
+
+        // No metadata for the id → not a managed local Postgres → None (caller skips it).
+        assert!(manager.try_get_binding("absent").expect("ok").is_none());
+
+        // Write a metadata fixture under the manager's layout; it then resolves with the password.
+        let id = "pgdb";
+        let meta = PostgresMetadata {
+            resource_id: id.to_string(),
+            version: "17".to_string(),
+            port: 54321,
+            username: "postgres".to_string(),
+            password: "s3cr3t".to_string(),
+            database: "pgdb".to_string(),
+            data_dir: tmp.path().join("data"),
+        };
+        let dir = tmp.path().join("postgres").join(id);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("metadata.json"),
+            serde_json::to_string(&meta).expect("serialize metadata"),
+        )
+        .expect("write metadata");
+
+        let binding = manager.try_get_binding(id).expect("ok").expect("some binding");
+        let env = alien_core::bindings::serialize_binding_as_env_var(id, &binding)
+            .expect("serialize binding env");
+        assert!(env.values().any(|v| v.contains("s3cr3t")));
+    }
 }

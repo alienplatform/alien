@@ -286,6 +286,31 @@ impl LocalBindingsProvider {
 
 #[async_trait]
 impl BindingsProviderApi for LocalBindingsProvider {
+    /// `try_get_binding` is `None` for any name that isn't a managed local Postgres; the password is
+    /// read live from the manager's 0600 metadata each call. (External/Remote-Access Postgres is
+    /// rejected upstream on the local platform, so it never reaches here.)
+    async fn resolve_runtime_only_binding_env(
+        &self,
+        binding_name: &str,
+    ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
+        match self.postgres_manager.try_get_binding(binding_name).context(
+            BindingsErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                reason: "Failed to read the local Postgres metadata".to_string(),
+            },
+        )? {
+            Some(binding) => Ok(Some(
+                alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding).context(
+                    BindingsErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        reason: "Failed to serialize local Postgres binding".to_string(),
+                    },
+                )?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     async fn load_storage(
         &self,
         binding_name: &str,
