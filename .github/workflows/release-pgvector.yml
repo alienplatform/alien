@@ -62,7 +62,8 @@ jobs:
           V="${{ steps.pg.outputs.version }}"
           curl -fsSL -o pg.tar.gz \
             "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-${{ matrix.target.triple }}.tar.gz"
-          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          # theseus tarballs wrap everything in a top-level postgresql-<ver>-<triple>/ dir; strip it
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist --strip-components=1
           echo "PG_CONFIG=$PWD/pgdist/bin/pg_config" >> "$GITHUB_ENV"
 
       - name: Build & install pgvector
@@ -109,7 +110,8 @@ jobs:
           V="${{ steps.pg.outputs.version }}"
           curl -fsSL -o pg.tar.gz \
             "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-aarch64-apple-darwin.tar.gz"
-          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          # theseus tarballs wrap everything in a top-level postgresql-<ver>-<triple>/ dir; strip it
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist --strip-components=1
           echo "PG_CONFIG=$PWD/pgdist/bin/pg_config" >> "$GITHUB_ENV"
 
       - name: Build & install pgvector
@@ -158,7 +160,8 @@ jobs:
           V="${{ steps.pg.outputs.version }}"
           curl -fsSL -o pg.tar.gz \
             "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-x86_64-pc-windows-msvc.tar.gz"
-          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist
+          # theseus tarballs wrap everything in a top-level postgresql-<ver>-<triple>/ dir; strip it
+          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist --strip-components=1
           echo "PGROOT=$PWD/pgdist" >> "$GITHUB_ENV"
 
       - name: Build pgvector (MSVC nmake)
