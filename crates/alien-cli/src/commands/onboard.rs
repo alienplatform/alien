@@ -521,11 +521,31 @@ fn collect_stack_input_values(
     }
 
     for id in raw_values.keys() {
-        if !inputs.iter().any(|input| input.id == *id) {
+        let Some(input) = inputs.iter().find(|input| input.id == *id) else {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
                 message: format!("Unknown or unavailable developer stack input '{id}'."),
             }));
+        };
+        if let Some(input_platforms) = &input.platforms {
+            if let Some(unavailable_platform) = selected_platforms
+                .iter()
+                .find(|platform| !input_platforms.contains(platform))
+            {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!(
+                        "Developer stack input '{}' is not available for platform '{}'. Create a separate deployment link or narrow this link with --platforms {}.",
+                        id,
+                        unavailable_platform.as_str(),
+                        input_platforms
+                            .iter()
+                            .map(|platform| platform.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                }));
+            }
         }
     }
 
@@ -990,5 +1010,26 @@ mod tests {
             .to_string()
             .contains("--secret-input tailscaleAuthKey=..."));
         assert!(err.to_string().contains("--platforms aws"));
+    }
+
+    #[test]
+    fn provided_platform_scoped_input_rejects_mixed_platform_link() {
+        let err = collect_stack_input_values(
+            &[platform_input(
+                "tailscaleAuthKey",
+                StackInputKind::Secret,
+                true,
+                vec![Platform::Local],
+            )],
+            &[],
+            &["tailscaleAuthKey=tskey-auth-test".to_string()],
+            &[Platform::Aws, Platform::Local],
+            true,
+        )
+        .expect_err("local-only input should fail for mixed platform link");
+
+        assert!(err.to_string().contains("not available for platform 'aws'"));
+        assert!(err.to_string().contains("separate deployment link"));
+        assert!(err.to_string().contains("--platforms local"));
     }
 }
