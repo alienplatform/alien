@@ -37,7 +37,6 @@ export type {
   StackInputEnvironmentVariableType,
   StackInputKind,
   StackInputProvider,
-  StackInputSetupMethod,
   StackInputValidation,
 } from "./generated/index.js"
 export {

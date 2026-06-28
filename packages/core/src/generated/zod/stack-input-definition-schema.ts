@@ -9,7 +9,6 @@ import { StackInputDefaultValueSchema } from "./stack-input-default-value-schema
 import { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
 import { StackInputKindSchema } from "./stack-input-kind-schema.js";
 import { StackInputProviderSchema } from "./stack-input-provider-schema.js";
-import { StackInputSetupMethodSchema } from "./stack-input-setup-method-schema.js";
 import { StackInputValidationSchema } from "./stack-input-validation-schema.js";
 
 /**
@@ -36,9 +35,6 @@ get "providedBy"(){
                 return z.array(StackInputProviderSchema.describe("Who can provide a stack input value.")).describe("Who can provide this value.")
               },
 "required": z.boolean().describe("Whether a resolved value is required before deployment can proceed."),
-get "setupMethods"(){
-                return z.array(StackInputSetupMethodSchema.describe("Setup methods that can collect deployer-provided input values.")).describe("Setup methods where this input applies.").nullish()
-              },
 get "validation"(){
                 return z.union([StackInputValidationSchema, z.null()]).optional()
               }

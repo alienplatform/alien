@@ -6,7 +6,7 @@
 import { ProfileGpu } from "@alienplatform/platform-api/models";
 
 let value: ProfileGpu = {
-  gpuType: "<value>",
+  type: "<value>",
   count: 113709,
 };
 ```
@@ -15,5 +15,5 @@ let value: ProfileGpu = {
 
 | Field              | Type               | Required           | Description        |
 | ------------------ | ------------------ | ------------------ | ------------------ |
-| `gpuType`          | *string*           | :heavy_check_mark: | N/A                |
+| `type`             | *string*           | :heavy_check_mark: | N/A                |
 | `count`            | *number*           | :heavy_check_mark: | N/A                |

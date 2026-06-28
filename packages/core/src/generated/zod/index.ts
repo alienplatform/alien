@@ -1,6 +1,7 @@
 export type { AgentStatus } from "./agent-status-schema.js";
 export type { AlienError } from "./alien-error-schema.js";
 export type { AlienEvent } from "./alien-event-schema.js";
+export type { Architecture } from "./architecture-schema.js";
 export type { ArtifactRegistryHeartbeatData } from "./artifact-registry-heartbeat-data-schema.js";
 export type { ArtifactRegistryHeartbeatStatus } from "./artifact-registry-heartbeat-status-schema.js";
 export type { ArtifactRegistryOutputs } from "./artifact-registry-outputs-schema.js";
@@ -86,6 +87,7 @@ export type { BuildHeartbeatStatus } from "./build-heartbeat-status-schema.js";
 export type { BuildOutputs } from "./build-outputs-schema.js";
 export type { Build } from "./build-schema.js";
 export type { BuildStatus } from "./build-status-schema.js";
+export type { CapacityGroupScalePolicy } from "./capacity-group-scale-policy-schema.js";
 export type { CapacityGroup } from "./capacity-group-schema.js";
 export type { CommandResponse } from "./command-response-schema.js";
 export type { CommandState } from "./command-state-schema.js";
@@ -94,6 +96,7 @@ export type { ComputeCapacityBlockerCategory } from "./compute-capacity-blocker-
 export type { ComputeCapacityBlocker } from "./compute-capacity-blocker-schema.js";
 export type { ComputeCapacityGroupStatus } from "./compute-capacity-group-status-schema.js";
 export type { ComputeCapacityRecommendation } from "./compute-capacity-recommendation-schema.js";
+export type { ComputeChoiceRange } from "./compute-choice-range-schema.js";
 export type { ComputeClusterHeartbeatData } from "./compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./compute-cluster-schema.js";
@@ -293,7 +296,6 @@ export type { StackInputEnvironmentMapping } from "./stack-input-environment-map
 export type { StackInputEnvironmentVariableType } from "./stack-input-environment-variable-type-schema.js";
 export type { StackInputKind } from "./stack-input-kind-schema.js";
 export type { StackInputProvider } from "./stack-input-provider-schema.js";
-export type { StackInputSetupMethod } from "./stack-input-setup-method-schema.js";
 export type { StackInputValidation } from "./stack-input-validation-schema.js";
 export type { StackRef } from "./stack-ref-schema.js";
 export type { StackResourceState } from "./stack-resource-state-schema.js";
@@ -331,6 +333,7 @@ export type { WorkloadReplicaStatus } from "./workload-replica-status-schema.js"
 export { AgentStatusSchema } from "./agent-status-schema.js";
 export { AlienErrorSchema } from "./alien-error-schema.js";
 export { AlienEventSchema } from "./alien-event-schema.js";
+export { ArchitectureSchema } from "./architecture-schema.js";
 export { ArtifactRegistryHeartbeatDataSchema } from "./artifact-registry-heartbeat-data-schema.js";
 export { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
 export { ArtifactRegistryOutputsSchema } from "./artifact-registry-outputs-schema.js";
@@ -416,6 +419,7 @@ export { BuildHeartbeatStatusSchema } from "./build-heartbeat-status-schema.js";
 export { BuildOutputsSchema } from "./build-outputs-schema.js";
 export { BuildSchema } from "./build-schema.js";
 export { BuildStatusSchema } from "./build-status-schema.js";
+export { CapacityGroupScalePolicySchema } from "./capacity-group-scale-policy-schema.js";
 export { CapacityGroupSchema } from "./capacity-group-schema.js";
 export { CommandResponseSchema } from "./command-response-schema.js";
 export { CommandStateSchema } from "./command-state-schema.js";
@@ -424,6 +428,7 @@ export { ComputeCapacityBlockerCategorySchema } from "./compute-capacity-blocker
 export { ComputeCapacityBlockerSchema } from "./compute-capacity-blocker-schema.js";
 export { ComputeCapacityGroupStatusSchema } from "./compute-capacity-group-status-schema.js";
 export { ComputeCapacityRecommendationSchema } from "./compute-capacity-recommendation-schema.js";
+export { ComputeChoiceRangeSchema } from "./compute-choice-range-schema.js";
 export { ComputeClusterHeartbeatDataSchema } from "./compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./compute-cluster-schema.js";
@@ -623,7 +628,6 @@ export { StackInputEnvironmentMappingSchema } from "./stack-input-environment-ma
 export { StackInputEnvironmentVariableTypeSchema } from "./stack-input-environment-variable-type-schema.js";
 export { StackInputKindSchema } from "./stack-input-kind-schema.js";
 export { StackInputProviderSchema } from "./stack-input-provider-schema.js";
-export { StackInputSetupMethodSchema } from "./stack-input-setup-method-schema.js";
 export { StackInputValidationSchema } from "./stack-input-validation-schema.js";
 export { StackRefSchema } from "./stack-ref-schema.js";
 export { StackResourceStateSchema } from "./stack-resource-state-schema.js";

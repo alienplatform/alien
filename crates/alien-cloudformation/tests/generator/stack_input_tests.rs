@@ -5,7 +5,7 @@ use alien_cloudformation::{
 };
 use alien_core::{
     ResourceLifecycle, Stack, StackInputDefinition, StackInputEnvironmentMapping, StackInputKind,
-    StackInputProvider, StackInputSetupMethod, StackInputValidation, StackSettings,
+    StackInputProvider, StackInputValidation, StackSettings,
 };
 
 fn stack_with_inputs() -> Stack {
@@ -21,7 +21,6 @@ fn stack_with_inputs() -> Stack {
                 placeholder: None,
                 default: None,
                 platforms: None,
-                setup_methods: Some(vec![StackInputSetupMethod::CloudFormation]),
                 validation: Some(StackInputValidation {
                     min_length: Some(8),
                     max_length: Some(200),
@@ -49,7 +48,6 @@ fn stack_with_inputs() -> Stack {
                 placeholder: None,
                 default: None,
                 platforms: None,
-                setup_methods: Some(vec![StackInputSetupMethod::CloudFormation]),
                 validation: None,
                 env: vec![],
             },
@@ -111,7 +109,10 @@ fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
         input_values,
         &CfExpression::object([
             ("apiBaseUrl", CfExpression::ref_("InputApiBaseUrl")),
-            ("tailScaleAuthKey", CfExpression::ref_("InputTailScaleAuthKey")),
+            (
+                "tailScaleAuthKey",
+                CfExpression::ref_("InputTailScaleAuthKey")
+            ),
         ])
     );
 

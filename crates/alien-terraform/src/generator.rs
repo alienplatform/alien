@@ -27,8 +27,8 @@ use alien_core::{
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteStackManagement, Result, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputSetupMethod,
-    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
+    TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -818,10 +818,6 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
                     .platforms
                     .as_ref()
                     .is_none_or(|platforms| platforms.contains(&platform))
-                && input
-                    .setup_methods
-                    .as_ref()
-                    .is_none_or(|methods| methods.contains(&StackInputSetupMethod::Terraform))
         })
         .cloned()
         .collect()

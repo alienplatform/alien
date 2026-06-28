@@ -1678,23 +1678,6 @@ export const DeploymentProvidedBy = {
 export type DeploymentProvidedBy = ClosedEnum<typeof DeploymentProvidedBy>;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const DeploymentPreparedStackSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type DeploymentPreparedStackSetupMethod = ClosedEnum<
-  typeof DeploymentPreparedStackSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type DeploymentValidation = {
@@ -1786,10 +1769,6 @@ export type DeploymentInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?: Array<DeploymentPreparedStackSetupMethod> | null | undefined;
   validation?: DeploymentValidation | any | null | undefined;
 };
 
@@ -3278,10 +3257,7 @@ export type Deployment = {
     | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -5577,11 +5553,6 @@ export const DeploymentProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentProvidedBy);
 
 /** @internal */
-export const DeploymentPreparedStackSetupMethod$inboundSchema: z.ZodEnum<
-  typeof DeploymentPreparedStackSetupMethod
-> = z.enum(DeploymentPreparedStackSetupMethod);
-
-/** @internal */
 export const DeploymentValidation$inboundSchema: z.ZodType<
   DeploymentValidation,
   unknown
@@ -5647,9 +5618,6 @@ export const DeploymentInput$inboundSchema: z.ZodType<
     .optional(),
   providedBy: z.array(DeploymentProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(DeploymentPreparedStackSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([z.lazy(() => DeploymentValidation$inboundSchema), z.any()]),
   ).optional(),
@@ -7415,7 +7383,7 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     ).optional(),
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    managerId: z.nullable(z.string()).optional(),
+    managerId: z.string(),
     workspaceId: z.string(),
   });
 

@@ -32,9 +32,6 @@ export type ForwardImportRequest = {
    * Required for user-session callers. Deployment-group tokens use their own group automatically.
    */
   deploymentGroupId?: string | undefined;
-  /**
-   * Manager ID. If omitted, the first suitable manager for the source platform is used.
-   */
   managerId?: string | undefined;
   /**
    * Resolved setup import payload

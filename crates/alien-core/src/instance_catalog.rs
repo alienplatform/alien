@@ -10,6 +10,7 @@
 //! and `CapacityGroup.profile` based on the containers in a stack.
 
 use crate::{GpuSpec, MachineProfile, Platform};
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Resource quantity parsing
@@ -117,7 +118,9 @@ pub enum InstanceFamily {
 }
 
 /// CPU architecture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum Architecture {
     Arm64,
     X86_64,
@@ -179,6 +182,7 @@ impl InstanceTypeSpec {
             cpu: format!("{}.0", self.vcpu),
             memory_bytes: self.memory_bytes,
             ephemeral_storage_bytes: self.ephemeral_storage_bytes,
+            architecture: Some(self.architecture),
             gpu: self.gpu.map(|g| GpuSpec {
                 gpu_type: g.gpu_type.to_string(),
                 count: g.count,
@@ -1123,6 +1127,8 @@ pub struct WorkloadRequirements {
     pub max_ephemeral_storage_bytes: u64,
     /// GPU requirement (if any container needs GPU)
     pub gpu: Option<GpuSpec>,
+    /// Required CPU architecture, when source explicitly constrains it.
+    pub architecture: Option<Architecture>,
     /// If true, only instance types that expose nested virtualization (VT-x/EPT)
     /// to guest VMs are eligible. Required by workloads that run QEMU/KVM
     /// inside a container.
@@ -1199,6 +1205,10 @@ pub fn select_instance_type(
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
         .filter(|spec| spec.platform == platform && spec.family == family)
+        .filter(|spec| match requirements.architecture {
+            Some(architecture) => spec.architecture == architecture,
+            None => true,
+        })
         .filter(|spec| {
             if requirements.nested_virt {
                 spec.is_nested_virt_capable()
@@ -1559,6 +1569,7 @@ mod tests {
             max_memory_per_container: 1 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1578,6 +1589,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1597,6 +1609,7 @@ mod tests {
             max_memory_per_container: 2 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1615,6 +1628,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 500 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1636,6 +1650,7 @@ mod tests {
                 gpu_type: "nvidia-a100".to_string(),
                 count: 1,
             }),
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1655,6 +1670,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
@@ -1675,6 +1691,7 @@ mod tests {
             max_memory_per_container: 2 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1695,6 +1712,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Gcp, &req).unwrap();
@@ -1724,6 +1742,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 20 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Gcp, &req).unwrap();
@@ -1749,6 +1768,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: true,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1777,6 +1797,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1798,6 +1819,7 @@ mod tests {
             max_memory_per_container: 4 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1820,6 +1842,7 @@ mod tests {
                 gpu_type: "amd-mi300".to_string(),
                 count: 1,
             }),
+            architecture: None,
             nested_virt: false,
         };
         let result = select_instance_type(Platform::Aws, &req);

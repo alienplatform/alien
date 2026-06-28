@@ -176,23 +176,6 @@ export type PreparedDeploymentStackProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const PreparedDeploymentStackSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type PreparedDeploymentStackSetupMethod = ClosedEnum<
-  typeof PreparedDeploymentStackSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type PreparedDeploymentStackValidation = {
@@ -286,10 +269,6 @@ export type PreparedDeploymentStackInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?: Array<PreparedDeploymentStackSetupMethod> | null | undefined;
   validation?: PreparedDeploymentStackValidation | any | null | undefined;
 };
 
@@ -1705,11 +1684,6 @@ export const PreparedDeploymentStackProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(PreparedDeploymentStackProvidedBy);
 
 /** @internal */
-export const PreparedDeploymentStackSetupMethod$inboundSchema: z.ZodEnum<
-  typeof PreparedDeploymentStackSetupMethod
-> = z.enum(PreparedDeploymentStackSetupMethod);
-
-/** @internal */
 export const PreparedDeploymentStackValidation$inboundSchema: z.ZodType<
   PreparedDeploymentStackValidation,
   unknown
@@ -1781,9 +1755,6 @@ export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
   ).optional(),
   providedBy: z.array(PreparedDeploymentStackProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(PreparedDeploymentStackSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),

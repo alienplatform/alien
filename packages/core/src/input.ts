@@ -6,7 +6,6 @@ import type {
   StackInputEnvironmentVariableType,
   StackInputKind,
   StackInputProvider,
-  StackInputSetupMethod,
   StackInputValidation,
 } from "./generated/index.js"
 
@@ -33,7 +32,6 @@ interface CommonInputOptions<TDefault extends StackInputValue> {
   placeholder?: string
   default?: TDefault
   platforms?: readonly Platform[]
-  setupMethods?: readonly StackInputSetupMethod[]
   env?: OneOrMany<StackInputEnvMapping>
 }
 
@@ -116,7 +114,6 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       placeholder: draft.options.placeholder,
       default: toDefaultValue(draft.kind, draft.options.default),
       platforms: draft.options.platforms ? [...draft.options.platforms] : undefined,
-      setupMethods: draft.options.setupMethods ? [...draft.options.setupMethods] : undefined,
       validation: Object.keys(draft.validation).length > 0 ? draft.validation : undefined,
       env: normalizeEnv(draft.options.env),
     })
@@ -271,13 +268,6 @@ function validateDraft(id: string, draft: StackInputDraft): void {
 
   if (draft.options.required && !draft.options.description.trim()) {
     throw new Error(`Stack input '${id}' must include a description when required is true`)
-  }
-
-  if (
-    draft.options.setupMethods &&
-    !normalizeArray(draft.options.providedBy).includes("deployer")
-  ) {
-    throw new Error(`Stack input '${id}' setupMethods require providedBy to include deployer`)
   }
 
   validateValidation(id, draft.kind, draft.validation)

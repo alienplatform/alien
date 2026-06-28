@@ -187,23 +187,6 @@ export type DeploymentInfoSetupConfigProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const DeploymentInfoSetupConfigSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type DeploymentInfoSetupConfigSetupMethod = ClosedEnum<
-  typeof DeploymentInfoSetupConfigSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type DeploymentInfoSetupConfigValidation = {
@@ -297,10 +280,6 @@ export type DeploymentInfoSetupConfigInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?: Array<DeploymentInfoSetupConfigSetupMethod> | null | undefined;
   validation?: DeploymentInfoSetupConfigValidation | any | null | undefined;
 };
 
@@ -527,11 +506,6 @@ export const DeploymentInfoSetupConfigProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentInfoSetupConfigProvidedBy);
 
 /** @internal */
-export const DeploymentInfoSetupConfigSetupMethod$inboundSchema: z.ZodEnum<
-  typeof DeploymentInfoSetupConfigSetupMethod
-> = z.enum(DeploymentInfoSetupConfigSetupMethod);
-
-/** @internal */
 export const DeploymentInfoSetupConfigValidation$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigValidation,
   unknown
@@ -609,9 +583,6 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   ).optional(),
   providedBy: z.array(DeploymentInfoSetupConfigProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(DeploymentInfoSetupConfigSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoSetupConfigValidation$inboundSchema),

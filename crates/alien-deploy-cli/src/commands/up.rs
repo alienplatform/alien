@@ -14,13 +14,13 @@ use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
     ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo, Stack,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputSetupMethod, StackSettings,
-    TelemetryMode, UpdatesMode, Worker,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, TelemetryMode,
+    UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
-        acquire_deployment_with_payload, acquire_setup_delete_deployment, final_reconcile,
+        acquire_setup_delete_deployment, acquire_setup_run_deployment, final_reconcile,
         release_deployment, ManagerApiTransport,
     },
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
@@ -111,6 +111,14 @@ pub struct UpArgs {
     /// Defaults to ~/.alien/agent-data.
     #[arg(long)]
     pub data_dir: Option<String>,
+
+    /// Enable Local runtime debug commands and shells on the installed agent service.
+    #[arg(long)]
+    pub enable_local_debug: bool,
+
+    /// Override the shell command used by Local runtime debug shells.
+    #[arg(long)]
+    pub local_debug_shell_command: Option<String>,
 
     /// Kubernetes namespace for Helm installs.
     #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
@@ -587,7 +595,6 @@ machine = "m8i.xlarge"
             placeholder: None,
             default: None,
             platforms: None,
-            setup_methods: Some(vec![StackInputSetupMethod::Cli]),
             validation: None,
             env: vec![],
         }
@@ -729,17 +736,16 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     })?;
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let deployer_inputs =
-        fetch_deployer_inputs(&resolved.base_url, &token, platform, StackInputSetupMethod::Cli)
-            .await
-            .unwrap_or_else(|error| {
-                if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
-                    output::warn(&format!(
-                        "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
-                    ));
-                }
-                Vec::new()
-            });
+    let deployer_inputs = fetch_deployer_inputs(&resolved.base_url, &token, platform)
+        .await
+        .unwrap_or_else(|error| {
+            if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
+                output::warn(&format!(
+                    "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
+                ));
+            }
+            Vec::new()
+        });
     let stack_input_values = collect_deployer_input_values(
         &deployer_inputs,
         &args.input_values,
@@ -1360,7 +1366,6 @@ async fn fetch_deployer_inputs(
     base_url: &str,
     token: &str,
     platform: Platform,
-    setup_method: StackInputSetupMethod,
 ) -> Result<Vec<StackInputDefinition>> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -1416,25 +1421,16 @@ async fn fetch_deployer_inputs(
         .and_then(|setup_config| setup_config.inputs)
         .unwrap_or_default()
         .into_iter()
-        .filter(|input| stack_input_matches_context(input, platform, setup_method.clone()))
+        .filter(|input| stack_input_matches_context(input, platform))
         .collect())
 }
 
-fn stack_input_matches_context(
-    input: &StackInputDefinition,
-    platform: Platform,
-    setup_method: StackInputSetupMethod,
-) -> bool {
+fn stack_input_matches_context(input: &StackInputDefinition, platform: Platform) -> bool {
     if !input.provided_by.contains(&StackInputProvider::Deployer) {
         return false;
     }
     if let Some(platforms) = &input.platforms {
         if !platforms.contains(&platform) {
-            return false;
-        }
-    }
-    if let Some(setup_methods) = &input.setup_methods {
-        if !setup_methods.contains(&setup_method) {
             return false;
         }
     }
@@ -2012,6 +2008,8 @@ async fn run_local_pull_model(
             &encryption_key,
             args.data_dir.as_deref(),
             public_endpoints,
+            args.enable_local_debug,
+            args.local_debug_shell_command.as_deref(),
         )
         .await;
     }
@@ -2029,6 +2027,8 @@ async fn run_local_pull_model(
         data_dir: None,
         encryption_key: args.encryption_key.clone(),
         public_endpoints: public_endpoints.cloned(),
+        enable_local_debug: args.enable_local_debug,
+        local_debug_shell_command: args.local_debug_shell_command.clone(),
     };
 
     super::agent::install_service(install_args)?;
@@ -2051,6 +2051,8 @@ async fn run_agent_foreground(
     encryption_key: &str,
     data_dir_override: Option<&str>,
     public_endpoints: Option<&PublicEndpointUrls>,
+    enable_local_debug: bool,
+    local_debug_shell_command: Option<&str>,
 ) -> Result<()> {
     use std::io::Write;
 
@@ -2147,6 +2149,14 @@ async fn run_agent_foreground(
 
     if let Some(file) = public_endpoints_file.as_ref() {
         command.arg("--public-endpoints-file").arg(file.path());
+    }
+    if enable_local_debug {
+        command.arg("--enable-local-debug");
+    }
+    if let Some(shell_command) = local_debug_shell_command {
+        command
+            .arg("--local-debug-shell-command")
+            .arg(shell_command);
     }
 
     let status =
@@ -2649,6 +2659,8 @@ pub async fn push_initial_setup(
     network_args: Option<&NetworkArgs>,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
 ) -> Result<()> {
+    let setup_management_config = management_config.clone();
+
     // Get deployment from manager
     let deployment = client
         .get_deployment()
@@ -2805,7 +2817,7 @@ pub async fn push_initial_setup(
     // holds the lock, it checks push-mode + Pending and releases immediately.
     // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    let acquired_deployment = acquire_deployment_with_payload(client, deployment_id, &session)
+    let acquired_deployment = acquire_setup_run_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock".to_string(),
@@ -2837,6 +2849,7 @@ pub async fn push_initial_setup(
 
         config.manager_url = Some(manager_base_url.to_string());
         config.deployment_token = Some(deployment_token.to_string());
+        config.management_config = setup_management_config.clone();
         config.base_platform = base_platform.or(config.base_platform);
         let acquired_stack_settings = config.stack_settings.clone();
         apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);

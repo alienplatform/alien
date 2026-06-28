@@ -1729,23 +1729,6 @@ export type SyncListResponseProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const SyncListResponsePreparedStackSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type SyncListResponsePreparedStackSetupMethod = ClosedEnum<
-  typeof SyncListResponsePreparedStackSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type SyncListResponseValidation = {
@@ -1837,13 +1820,6 @@ export type SyncListResponseInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<SyncListResponsePreparedStackSetupMethod>
-    | null
-    | undefined;
   validation?: SyncListResponseValidation | any | null | undefined;
 };
 
@@ -3383,10 +3359,7 @@ export type SyncListResponseDeployment = {
   error?: SyncListResponseError | null | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -5801,11 +5774,6 @@ export const SyncListResponseProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(SyncListResponseProvidedBy);
 
 /** @internal */
-export const SyncListResponsePreparedStackSetupMethod$inboundSchema: z.ZodEnum<
-  typeof SyncListResponsePreparedStackSetupMethod
-> = z.enum(SyncListResponsePreparedStackSetupMethod);
-
-/** @internal */
 export const SyncListResponseValidation$inboundSchema: z.ZodType<
   SyncListResponseValidation,
   unknown
@@ -5872,9 +5840,6 @@ export const SyncListResponseInput$inboundSchema: z.ZodType<
   ).optional(),
   providedBy: z.array(SyncListResponseProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(SyncListResponsePreparedStackSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]),
   ).optional(),
@@ -7801,7 +7766,7 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
     .optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string(),
   workspaceId: z.string(),
   userEnvironmentVariables: z.nullable(
     z.array(EnvironmentVariableConfig$inboundSchema),

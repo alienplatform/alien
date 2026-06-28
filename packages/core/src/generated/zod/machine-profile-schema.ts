@@ -4,13 +4,17 @@
 */
 
 import * as z from "zod";
+import { ArchitectureSchema } from "./architecture-schema.js";
 import { GpuSpecSchema } from "./gpu-spec-schema.js";
 
 /**
  * @description Machine resource profile for a capacity group.\n\nRepresents the hardware specifications for machines in a capacity group.\nThese are hardware totals (what the instance type advertises), not allocatable\ncapacity. The managed container scheduler internally subtracts system reserves for planning.
  */
 export const MachineProfileSchema = z.object({
-    "cpu": z.string().describe("CPU cores per machine (hardware total) - stored as string to preserve precision\n(e.g., \"8.0\", \"4.5\")"),
+    get "architecture"(){
+                return z.union([ArchitectureSchema, z.null()]).optional()
+              },
+"cpu": z.string().describe("CPU cores per machine (hardware total) - stored as string to preserve precision\n(e.g., \"8.0\", \"4.5\")"),
 "ephemeralStorageBytes": z.int().min(0).describe("Ephemeral storage in bytes (hardware total)"),
 get "gpu"(){
                 return z.union([GpuSpecSchema, z.null()]).optional()

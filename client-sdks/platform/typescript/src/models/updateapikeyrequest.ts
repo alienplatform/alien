@@ -3,6 +3,11 @@
  */
 
 import * as z from "zod/v4";
+import {
+  UpdateDeploymentSetupPolicy,
+  UpdateDeploymentSetupPolicy$Outbound,
+  UpdateDeploymentSetupPolicy$outboundSchema,
+} from "./updatedeploymentsetuppolicy.js";
 
 /**
  * Request schema for updating an API key
@@ -10,12 +15,22 @@ import * as z from "zod/v4";
 export type UpdateAPIKeyRequest = {
   enabled?: boolean | undefined;
   description?: string | null | undefined;
+  /**
+   * Editable part of a deployment link's setup config. Locked env vars and input values are preserved.
+   */
+  deploymentSetupConfig?: UpdateDeploymentSetupPolicy | undefined;
+  /**
+   * Optional expiration date for the API key
+   */
+  expiresAt?: Date | null | undefined;
 };
 
 /** @internal */
 export type UpdateAPIKeyRequest$Outbound = {
   enabled?: boolean | undefined;
   description?: string | null | undefined;
+  deploymentSetupConfig?: UpdateDeploymentSetupPolicy$Outbound | undefined;
+  expiresAt?: string | null | undefined;
 };
 
 /** @internal */
@@ -25,6 +40,8 @@ export const UpdateAPIKeyRequest$outboundSchema: z.ZodType<
 > = z.object({
   enabled: z.boolean().optional(),
   description: z.nullable(z.string()).optional(),
+  deploymentSetupConfig: UpdateDeploymentSetupPolicy$outboundSchema.optional(),
+  expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
 });
 
 export function updateAPIKeyRequestToJSON(

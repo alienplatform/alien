@@ -6,7 +6,7 @@
 import { RequirementsGpu } from "@alienplatform/platform-api/models";
 
 let value: RequirementsGpu = {
-  gpuType: "<value>",
+  type: "<value>",
   count: 378768,
 };
 ```
@@ -15,5 +15,5 @@ let value: RequirementsGpu = {
 
 | Field              | Type               | Required           | Description        |
 | ------------------ | ------------------ | ------------------ | ------------------ |
-| `gpuType`          | *string*           | :heavy_check_mark: | N/A                |
+| `type`             | *string*           | :heavy_check_mark: | N/A                |
 | `count`            | *number*           | :heavy_check_mark: | N/A                |

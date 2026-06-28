@@ -1796,23 +1796,6 @@ export type DeploymentDetailResponseProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const DeploymentDetailResponsePreparedStackSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type DeploymentDetailResponsePreparedStackSetupMethod = ClosedEnum<
-  typeof DeploymentDetailResponsePreparedStackSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type DeploymentDetailResponseValidation = {
@@ -1909,13 +1892,6 @@ export type DeploymentDetailResponseInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<DeploymentDetailResponsePreparedStackSetupMethod>
-    | null
-    | undefined;
   validation?: DeploymentDetailResponseValidation | any | null | undefined;
 };
 
@@ -3453,10 +3429,7 @@ export type DeploymentDetailResponse = {
     | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -6153,12 +6126,6 @@ export const DeploymentDetailResponseProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentDetailResponseProvidedBy);
 
 /** @internal */
-export const DeploymentDetailResponsePreparedStackSetupMethod$inboundSchema:
-  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackSetupMethod> = z.enum(
-    DeploymentDetailResponsePreparedStackSetupMethod,
-  );
-
-/** @internal */
 export const DeploymentDetailResponseValidation$inboundSchema: z.ZodType<
   DeploymentDetailResponseValidation,
   unknown
@@ -6236,9 +6203,6 @@ export const DeploymentDetailResponseInput$inboundSchema: z.ZodType<
   ).optional(),
   providedBy: z.array(DeploymentDetailResponseProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(DeploymentDetailResponsePreparedStackSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponseValidation$inboundSchema),
@@ -8384,7 +8348,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string(),
   workspaceId: z.string(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),

@@ -1,5 +1,2 @@
-# Speakeasy SDK output.
-docs/** linguist-generated=true
-src/** linguist-generated=true
-esm/** linguist-generated=true
-.speakeasy/** linguist-generated=true
+# This allows generated code to be indexed correctly
+*.ts linguist-generated=false

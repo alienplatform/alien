@@ -150,6 +150,7 @@ export * from "./updatecommandrequest.js";
 export * from "./updatedebugsessionrequest.js";
 export * from "./updatedeploymentenvironmentvariablesrequest.js";
 export * from "./updatedeploymentgrouprequest.js";
+export * from "./updatedeploymentsetuppolicy.js";
 export * from "./updatemanagerdomainbinding.js";
 export * from "./updatemanagerrequest.js";
 export * from "./updateproject.js";

@@ -185,6 +185,7 @@ oci-tar-builder = "0.4"
 sha2 = "0.10"
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
 cacache = { version = "13.1", default-features = false, features = ["tokio-runtime"] }
+strip-ansi-escapes = "0.2.1"
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.40"
 wasm-bindgen-test = "0.3.0"

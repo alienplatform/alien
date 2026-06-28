@@ -185,7 +185,6 @@ export {
   StackInputEnvironmentVariableTypeSchema,
   StackInputKindSchema,
   StackInputProviderSchema,
-  StackInputSetupMethodSchema,
   StackInputValidationSchema,
   AwsArtifactRegistryImportDataSchema,
   AwsBuildImportDataSchema,

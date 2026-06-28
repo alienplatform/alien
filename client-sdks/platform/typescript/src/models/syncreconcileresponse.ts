@@ -168,23 +168,6 @@ export type SyncReconcileResponseCurrentReleaseProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const SyncReconcileResponseCurrentReleaseSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type SyncReconcileResponseCurrentReleaseSetupMethod = ClosedEnum<
-  typeof SyncReconcileResponseCurrentReleaseSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type SyncReconcileResponseCurrentReleaseValidation = {
@@ -281,13 +264,6 @@ export type SyncReconcileResponseCurrentReleaseInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<SyncReconcileResponseCurrentReleaseSetupMethod>
-    | null
-    | undefined;
   validation?:
     | SyncReconcileResponseCurrentReleaseValidation
     | any
@@ -1954,23 +1930,6 @@ export type SyncReconcileResponsePreparedStackProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const SyncReconcileResponsePreparedStackSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type SyncReconcileResponsePreparedStackSetupMethod = ClosedEnum<
-  typeof SyncReconcileResponsePreparedStackSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type SyncReconcileResponsePreparedStackValidation = {
@@ -2067,13 +2026,6 @@ export type SyncReconcileResponsePreparedStackInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<SyncReconcileResponsePreparedStackSetupMethod>
-    | null
-    | undefined;
   validation?:
     | SyncReconcileResponsePreparedStackValidation
     | any
@@ -3859,23 +3811,6 @@ export type SyncReconcileResponseTargetReleaseProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const SyncReconcileResponseTargetReleaseSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type SyncReconcileResponseTargetReleaseSetupMethod = ClosedEnum<
-  typeof SyncReconcileResponseTargetReleaseSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type SyncReconcileResponseTargetReleaseValidation = {
@@ -3972,13 +3907,6 @@ export type SyncReconcileResponseTargetReleaseInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<SyncReconcileResponseTargetReleaseSetupMethod>
-    | null
-    | undefined;
   validation?:
     | SyncReconcileResponseTargetReleaseValidation
     | any
@@ -9235,21 +9163,6 @@ export const ReleaseInfoProvidedBy = {
 export type ReleaseInfoProvidedBy = ClosedEnum<typeof ReleaseInfoProvidedBy>;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const ReleaseInfoSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type ReleaseInfoSetupMethod = ClosedEnum<typeof ReleaseInfoSetupMethod>;
-
-/**
  * Portable stack input validation constraints.
  */
 export type ValidationReleaseInfo = {
@@ -9341,10 +9254,6 @@ export type ReleaseInfoInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?: Array<ReleaseInfoSetupMethod> | null | undefined;
   validation?: ValidationReleaseInfo | any | null | undefined;
 };
 
@@ -10832,12 +10741,6 @@ export const SyncReconcileResponseCurrentReleaseProvidedBy$inboundSchema:
   );
 
 /** @internal */
-export const SyncReconcileResponseCurrentReleaseSetupMethod$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseSetupMethod> = z.enum(
-    SyncReconcileResponseCurrentReleaseSetupMethod,
-  );
-
-/** @internal */
 export const SyncReconcileResponseCurrentReleaseValidation$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseValidation, unknown> = z.object({
     format: z.nullable(z.string()).optional(),
@@ -10928,9 +10831,6 @@ export const SyncReconcileResponseCurrentReleaseInput$inboundSchema: z.ZodType<
     SyncReconcileResponseCurrentReleaseProvidedBy$inboundSchema,
   ),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(SyncReconcileResponseCurrentReleaseSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponseCurrentReleaseValidation$inboundSchema),
@@ -13563,12 +13463,6 @@ export const SyncReconcileResponsePreparedStackProvidedBy$inboundSchema:
   );
 
 /** @internal */
-export const SyncReconcileResponsePreparedStackSetupMethod$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponsePreparedStackSetupMethod> = z.enum(
-    SyncReconcileResponsePreparedStackSetupMethod,
-  );
-
-/** @internal */
 export const SyncReconcileResponsePreparedStackValidation$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackValidation, unknown> = z.object({
     format: z.nullable(z.string()).optional(),
@@ -13659,9 +13553,6 @@ export const SyncReconcileResponsePreparedStackInput$inboundSchema: z.ZodType<
     SyncReconcileResponsePreparedStackProvidedBy$inboundSchema,
   ),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(SyncReconcileResponsePreparedStackSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponsePreparedStackValidation$inboundSchema),
@@ -16436,12 +16327,6 @@ export const SyncReconcileResponseTargetReleaseProvidedBy$inboundSchema:
   );
 
 /** @internal */
-export const SyncReconcileResponseTargetReleaseSetupMethod$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseSetupMethod> = z.enum(
-    SyncReconcileResponseTargetReleaseSetupMethod,
-  );
-
-/** @internal */
 export const SyncReconcileResponseTargetReleaseValidation$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseValidation, unknown> = z.object({
     format: z.nullable(z.string()).optional(),
@@ -16532,9 +16417,6 @@ export const SyncReconcileResponseTargetReleaseInput$inboundSchema: z.ZodType<
     SyncReconcileResponseTargetReleaseProvidedBy$inboundSchema,
   ),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(SyncReconcileResponseTargetReleaseSetupMethod$inboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponseTargetReleaseValidation$inboundSchema),
@@ -25646,11 +25528,6 @@ export const ReleaseInfoProvidedBy$inboundSchema: z.ZodEnum<
 > = z.enum(ReleaseInfoProvidedBy);
 
 /** @internal */
-export const ReleaseInfoSetupMethod$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoSetupMethod
-> = z.enum(ReleaseInfoSetupMethod);
-
-/** @internal */
 export const ValidationReleaseInfo$inboundSchema: z.ZodType<
   ValidationReleaseInfo,
   unknown
@@ -25715,8 +25592,6 @@ export const ReleaseInfoInput$inboundSchema: z.ZodType<
   platforms: z.nullable(z.array(ReleaseInfoPlatform$inboundSchema)).optional(),
   providedBy: z.array(ReleaseInfoProvidedBy$inboundSchema),
   required: z.boolean(),
-  setupMethods: z.nullable(z.array(ReleaseInfoSetupMethod$inboundSchema))
-    .optional(),
   validation: z.nullable(
     z.union([z.lazy(() => ValidationReleaseInfo$inboundSchema), z.any()]),
   ).optional(),

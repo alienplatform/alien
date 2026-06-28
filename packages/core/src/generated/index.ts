@@ -1,6 +1,7 @@
 export type { AgentStatus } from "./zod/agent-status-schema.js";
 export type { AlienError } from "./zod/alien-error-schema.js";
 export type { AlienEvent } from "./zod/alien-event-schema.js";
+export type { Architecture } from "./zod/architecture-schema.js";
 export type { ArtifactRegistryHeartbeatData } from "./zod/artifact-registry-heartbeat-data-schema.js";
 export type { ArtifactRegistryHeartbeatStatus } from "./zod/artifact-registry-heartbeat-status-schema.js";
 export type { ArtifactRegistryOutputs } from "./zod/artifact-registry-outputs-schema.js";
@@ -86,6 +87,7 @@ export type { BuildHeartbeatStatus } from "./zod/build-heartbeat-status-schema.j
 export type { BuildOutputs } from "./zod/build-outputs-schema.js";
 export type { Build } from "./zod/build-schema.js";
 export type { BuildStatus } from "./zod/build-status-schema.js";
+export type { CapacityGroupScalePolicy } from "./zod/capacity-group-scale-policy-schema.js";
 export type { CapacityGroup } from "./zod/capacity-group-schema.js";
 export type { CommandResponse } from "./zod/command-response-schema.js";
 export type { CommandState } from "./zod/command-state-schema.js";
@@ -94,6 +96,7 @@ export type { ComputeCapacityBlockerCategory } from "./zod/compute-capacity-bloc
 export type { ComputeCapacityBlocker } from "./zod/compute-capacity-blocker-schema.js";
 export type { ComputeCapacityGroupStatus } from "./zod/compute-capacity-group-status-schema.js";
 export type { ComputeCapacityRecommendation } from "./zod/compute-capacity-recommendation-schema.js";
+export type { ComputeChoiceRange } from "./zod/compute-choice-range-schema.js";
 export type { ComputeClusterHeartbeatData } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export type { ComputeClusterHeartbeatStatus } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export type { ComputeCluster } from "./zod/compute-cluster-schema.js";
@@ -293,7 +296,6 @@ export type { StackInputEnvironmentMapping } from "./zod/stack-input-environment
 export type { StackInputEnvironmentVariableType } from "./zod/stack-input-environment-variable-type-schema.js";
 export type { StackInputKind } from "./zod/stack-input-kind-schema.js";
 export type { StackInputProvider } from "./zod/stack-input-provider-schema.js";
-export type { StackInputSetupMethod } from "./zod/stack-input-setup-method-schema.js";
 export type { StackInputValidation } from "./zod/stack-input-validation-schema.js";
 export type { StackRef } from "./zod/stack-ref-schema.js";
 export type { StackResourceState } from "./zod/stack-resource-state-schema.js";
@@ -331,6 +333,7 @@ export type { WorkloadReplicaStatus } from "./zod/workload-replica-status-schema
 export { AgentStatusSchema } from "./zod/agent-status-schema.js";
 export { AlienErrorSchema } from "./zod/alien-error-schema.js";
 export { AlienEventSchema } from "./zod/alien-event-schema.js";
+export { ArchitectureSchema } from "./zod/architecture-schema.js";
 export { ArtifactRegistryHeartbeatDataSchema } from "./zod/artifact-registry-heartbeat-data-schema.js";
 export { ArtifactRegistryHeartbeatStatusSchema } from "./zod/artifact-registry-heartbeat-status-schema.js";
 export { ArtifactRegistryOutputsSchema } from "./zod/artifact-registry-outputs-schema.js";
@@ -416,6 +419,7 @@ export { BuildHeartbeatStatusSchema } from "./zod/build-heartbeat-status-schema.
 export { BuildOutputsSchema } from "./zod/build-outputs-schema.js";
 export { BuildSchema } from "./zod/build-schema.js";
 export { BuildStatusSchema } from "./zod/build-status-schema.js";
+export { CapacityGroupScalePolicySchema } from "./zod/capacity-group-scale-policy-schema.js";
 export { CapacityGroupSchema } from "./zod/capacity-group-schema.js";
 export { CommandResponseSchema } from "./zod/command-response-schema.js";
 export { CommandStateSchema } from "./zod/command-state-schema.js";
@@ -424,6 +428,7 @@ export { ComputeCapacityBlockerCategorySchema } from "./zod/compute-capacity-blo
 export { ComputeCapacityBlockerSchema } from "./zod/compute-capacity-blocker-schema.js";
 export { ComputeCapacityGroupStatusSchema } from "./zod/compute-capacity-group-status-schema.js";
 export { ComputeCapacityRecommendationSchema } from "./zod/compute-capacity-recommendation-schema.js";
+export { ComputeChoiceRangeSchema } from "./zod/compute-choice-range-schema.js";
 export { ComputeClusterHeartbeatDataSchema } from "./zod/compute-cluster-heartbeat-data-schema.js";
 export { ComputeClusterHeartbeatStatusSchema } from "./zod/compute-cluster-heartbeat-status-schema.js";
 export { ComputeClusterSchema } from "./zod/compute-cluster-schema.js";
@@ -623,7 +628,6 @@ export { StackInputEnvironmentMappingSchema } from "./zod/stack-input-environmen
 export { StackInputEnvironmentVariableTypeSchema } from "./zod/stack-input-environment-variable-type-schema.js";
 export { StackInputKindSchema } from "./zod/stack-input-kind-schema.js";
 export { StackInputProviderSchema } from "./zod/stack-input-provider-schema.js";
-export { StackInputSetupMethodSchema } from "./zod/stack-input-setup-method-schema.js";
 export { StackInputValidationSchema } from "./zod/stack-input-validation-schema.js";
 export { StackRefSchema } from "./zod/stack-ref-schema.js";
 export { StackResourceStateSchema } from "./zod/stack-resource-state-schema.js";

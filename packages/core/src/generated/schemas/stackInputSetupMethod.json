@@ -1,1 +1,0 @@
-{"type":"string","description":"Setup methods that can collect deployer-provided input values.","enum":["cli","terraform","cloud-formation","helm","google-oauth"],"x-readme-ref-name":"StackInputSetupMethod"}

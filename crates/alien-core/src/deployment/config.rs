@@ -110,6 +110,16 @@ pub struct DeploymentConfig {
     pub native_image_host: Option<String>,
 }
 
+/// Resource-attribute key marking OTLP telemetry as Alien system-component
+/// output (infrastructure daemons and internal runtimes) rather than user
+/// workload. Log consumers — the CLI log viewer and the dashboard — hide
+/// telemetry carrying this attribute by default. The value is the string
+/// `"true"`.
+///
+/// System components set this on their own telemetry's resource attributes so
+/// consumers can filter generically, without enumerating component names.
+pub const ALIEN_SYSTEM_RESOURCE_ATTRIBUTE: &str = "alien.system";
+
 /// OTLP log export configuration for a deployment.
 ///
 /// When set, injected compute runtimes export captured application logs

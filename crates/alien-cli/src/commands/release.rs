@@ -6,8 +6,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack, Worker,
-    WorkerCode,
+    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack,
+    StackInputDefinition, StackInputKind, StackInputProvider, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -170,6 +170,7 @@ struct ReleaseConfig {
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
+    stack: Stack,
 }
 
 #[derive(Clone)]
@@ -312,6 +313,7 @@ async fn load_release_config(
         project_link,
         git_metadata,
         platforms,
+        stack,
     })
 }
 
@@ -323,6 +325,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         .await?;
 
     let platforms_label = format_platform_summary(&config.platforms);
+    let onboard_hint = onboard_command_hint(&config);
     println!(
         "{}",
         contextual_heading(
@@ -336,12 +339,9 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
     println!("{}", success_line("Release created."));
     println!("{} {}", dim_label("Release"), release_id);
     if !is_dev {
-        println!(
-            "{} run {} for a new customer, or {} to check existing deployments.",
-            dim_label("Next"),
-            command("alien onboard <customer-name>"),
-            command("alien deployments ls")
-        );
+        println!("{}", dim_label("Next create a deployment link:"));
+        println!("  {}", command(&onboard_hint));
+        println!("{} {}", dim_label("Then"), command("alien deployments ls"));
     }
     Ok(release_id)
 }
@@ -362,6 +362,7 @@ async fn release_task_core(
         project_link,
         git_metadata,
         platforms: platforms_to_release,
+        stack: _stack,
         ..
     } = config;
     // Process each platform: load stack, push images, collect pushed stacks
@@ -1124,6 +1125,64 @@ fn display_platform_name(platform: &str) -> &str {
         "kubernetes" => "Kubernetes",
         "local" => "Local",
         other => other,
+    }
+}
+
+fn onboard_command_hint(config: &ReleaseConfig) -> String {
+    let selected_platforms = config
+        .platforms
+        .iter()
+        .filter_map(|platform| Platform::from_str(platform).ok())
+        .collect::<Vec<_>>();
+    let mut command_parts = vec!["alien onboard <customer-name>".to_string()];
+
+    if !config.platforms.is_empty() {
+        command_parts.push(format!("--platforms {}", config.platforms.join(",")));
+    }
+
+    let required_inputs = config
+        .stack
+        .inputs
+        .iter()
+        .filter(|input| input.required)
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
+        .collect::<Vec<_>>();
+
+    for input in required_inputs.iter().take(3) {
+        command_parts.push(format!(
+            "{} {}={}",
+            if matches!(input.kind, StackInputKind::Secret) {
+                "--secret-input"
+            } else {
+                "--input"
+            },
+            input.id,
+            stack_input_placeholder(input),
+        ));
+    }
+
+    if required_inputs.len() > 3 {
+        command_parts.push("...".to_string());
+    }
+
+    command_parts.join(" ")
+}
+
+fn input_applies_to_any_platform(input: &StackInputDefinition, platforms: &[Platform]) -> bool {
+    let Some(input_platforms) = &input.platforms else {
+        return true;
+    };
+    platforms
+        .iter()
+        .any(|platform| input_platforms.contains(platform))
+}
+
+fn stack_input_placeholder(input: &StackInputDefinition) -> &'static str {
+    if matches!(input.kind, StackInputKind::Boolean) {
+        "true"
+    } else {
+        "..."
     }
 }
 

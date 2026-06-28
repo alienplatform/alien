@@ -4,11 +4,20 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export const RequirementsArchitecture = {
+  Arm64: "arm64",
+  X8664: "x86_64",
+} as const;
+export type RequirementsArchitecture = ClosedEnum<
+  typeof RequirementsArchitecture
+>;
+
 export type RequirementsGpu = {
-  gpuType: string;
+  type: string;
   count: number;
 };
 
@@ -16,8 +25,40 @@ export type Requirements = {
   cpu: string;
   memoryBytes: number;
   ephemeralStorageBytes: number;
+  architecture?: RequirementsArchitecture | null | undefined;
   gpu?: RequirementsGpu | null | undefined;
 };
+
+export type Min = {
+  min: number;
+  max: number;
+  default: number;
+};
+
+export type Max = {
+  min: number;
+  max: number;
+  default: number;
+};
+
+export type ScaleAutoscale = {
+  type: "autoscale";
+  min: Min;
+  max: Max;
+};
+
+export type Machines = {
+  min: number;
+  max: number;
+  default: number;
+};
+
+export type ScaleFixed = {
+  type: "fixed";
+  machines: Machines;
+};
+
+export type Scale = ScaleFixed | ScaleAutoscale;
 
 export type SelectedAutoscale = {
   mode: "autoscale";
@@ -49,8 +90,14 @@ export type RecommendedFixed = {
 
 export type Recommended = RecommendedFixed | RecommendedAutoscale;
 
+export const ProfileArchitecture = {
+  Arm64: "arm64",
+  X8664: "x86_64",
+} as const;
+export type ProfileArchitecture = ClosedEnum<typeof ProfileArchitecture>;
+
 export type ProfileGpu = {
-  gpuType: string;
+  type: string;
   count: number;
 };
 
@@ -58,6 +105,7 @@ export type DeploymentComputePlanProfile = {
   cpu: string;
   memoryBytes: number;
   ephemeralStorageBytes: number;
+  architecture?: ProfileArchitecture | null | undefined;
   gpu?: ProfileGpu | null | undefined;
 };
 
@@ -71,6 +119,7 @@ export type Pool = {
   poolId: string;
   workloads: Array<string>;
   requirements: Requirements;
+  scale: ScaleFixed | ScaleAutoscale;
   selected: SelectedFixed | SelectedAutoscale;
   recommended: RecommendedFixed | RecommendedAutoscale;
   machines: Array<Machine>;
@@ -82,11 +131,16 @@ export type DeploymentComputePlan = {
 };
 
 /** @internal */
+export const RequirementsArchitecture$inboundSchema: z.ZodEnum<
+  typeof RequirementsArchitecture
+> = z.enum(RequirementsArchitecture);
+
+/** @internal */
 export const RequirementsGpu$inboundSchema: z.ZodType<
   RequirementsGpu,
   unknown
 > = z.object({
-  gpuType: z.string(),
+  type: z.string(),
   count: z.int(),
 });
 
@@ -106,6 +160,7 @@ export const Requirements$inboundSchema: z.ZodType<Requirements, unknown> = z
     cpu: z.string(),
     memoryBytes: z.int(),
     ephemeralStorageBytes: z.int(),
+    architecture: z.nullable(RequirementsArchitecture$inboundSchema).optional(),
     gpu: z.nullable(z.lazy(() => RequirementsGpu$inboundSchema)).optional(),
   });
 
@@ -116,6 +171,108 @@ export function requirementsFromJSON(
     jsonString,
     (x) => Requirements$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'Requirements' from JSON`,
+  );
+}
+
+/** @internal */
+export const Min$inboundSchema: z.ZodType<Min, unknown> = z.object({
+  min: z.int(),
+  max: z.int(),
+  default: z.int(),
+});
+
+export function minFromJSON(
+  jsonString: string,
+): SafeParseResult<Min, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Min$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Min' from JSON`,
+  );
+}
+
+/** @internal */
+export const Max$inboundSchema: z.ZodType<Max, unknown> = z.object({
+  min: z.int(),
+  max: z.int(),
+  default: z.int(),
+});
+
+export function maxFromJSON(
+  jsonString: string,
+): SafeParseResult<Max, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Max$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Max' from JSON`,
+  );
+}
+
+/** @internal */
+export const ScaleAutoscale$inboundSchema: z.ZodType<ScaleAutoscale, unknown> =
+  z.object({
+    type: z.literal("autoscale"),
+    min: z.lazy(() => Min$inboundSchema),
+    max: z.lazy(() => Max$inboundSchema),
+  });
+
+export function scaleAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<ScaleAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ScaleAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ScaleAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const Machines$inboundSchema: z.ZodType<Machines, unknown> = z.object({
+  min: z.int(),
+  max: z.int(),
+  default: z.int(),
+});
+
+export function machinesFromJSON(
+  jsonString: string,
+): SafeParseResult<Machines, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Machines$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Machines' from JSON`,
+  );
+}
+
+/** @internal */
+export const ScaleFixed$inboundSchema: z.ZodType<ScaleFixed, unknown> = z
+  .object({
+    type: z.literal("fixed"),
+    machines: z.lazy(() => Machines$inboundSchema),
+  });
+
+export function scaleFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<ScaleFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ScaleFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ScaleFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const Scale$inboundSchema: z.ZodType<Scale, unknown> = z.union([
+  z.lazy(() => ScaleFixed$inboundSchema),
+  z.lazy(() => ScaleAutoscale$inboundSchema),
+]);
+
+export function scaleFromJSON(
+  jsonString: string,
+): SafeParseResult<Scale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Scale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Scale' from JSON`,
   );
 }
 
@@ -233,9 +390,14 @@ export function recommendedFromJSON(
 }
 
 /** @internal */
+export const ProfileArchitecture$inboundSchema: z.ZodEnum<
+  typeof ProfileArchitecture
+> = z.enum(ProfileArchitecture);
+
+/** @internal */
 export const ProfileGpu$inboundSchema: z.ZodType<ProfileGpu, unknown> = z
   .object({
-    gpuType: z.string(),
+    type: z.string(),
     count: z.int(),
   });
 
@@ -257,6 +419,7 @@ export const DeploymentComputePlanProfile$inboundSchema: z.ZodType<
   cpu: z.string(),
   memoryBytes: z.int(),
   ephemeralStorageBytes: z.int(),
+  architecture: z.nullable(ProfileArchitecture$inboundSchema).optional(),
   gpu: z.nullable(z.lazy(() => ProfileGpu$inboundSchema)).optional(),
 });
 
@@ -292,6 +455,10 @@ export const Pool$inboundSchema: z.ZodType<Pool, unknown> = z.object({
   poolId: z.string(),
   workloads: z.array(z.string()),
   requirements: z.lazy(() => Requirements$inboundSchema),
+  scale: z.union([
+    z.lazy(() => ScaleFixed$inboundSchema),
+    z.lazy(() => ScaleAutoscale$inboundSchema),
+  ]),
   selected: z.union([
     z.lazy(() => SelectedFixed$inboundSchema),
     z.lazy(() => SelectedAutoscale$inboundSchema),

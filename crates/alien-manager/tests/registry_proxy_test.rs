@@ -857,3 +857,101 @@ async fn test_proxy_push_then_pull() {
 
     println!("End-to-end push→pull through proxy succeeded!");
 }
+
+/// End-to-end: push a large, poorly-compressible layer through the local
+/// registry proxy. This catches body-size limits in the proxy path while
+/// staying fully local.
+#[tokio::test]
+async fn test_proxy_push_large_layer() {
+    let s = setup().await;
+    push_large_layer(
+        &s.manager_url,
+        "artifacts/proxy-large-layer",
+        s.admin_token.clone(),
+        dockdash::ClientProtocol::Http,
+    )
+    .await;
+}
+
+/// Manual diagnostic for externally running manager instances. This is useful
+/// for local HTTPS/ngrok paths that are not part of the normal test harness.
+///
+/// Required env:
+/// - `ALIEN_REGISTRY_PROXY_TEST_URL`
+/// - `ALIEN_REGISTRY_PROXY_TEST_TOKEN`
+/// - `ALIEN_REGISTRY_PROXY_TEST_REPO`
+#[tokio::test]
+#[ignore]
+async fn test_external_proxy_push_large_layer() {
+    let manager_url = std::env::var("ALIEN_REGISTRY_PROXY_TEST_URL")
+        .expect("ALIEN_REGISTRY_PROXY_TEST_URL is required");
+    let token = std::env::var("ALIEN_REGISTRY_PROXY_TEST_TOKEN")
+        .expect("ALIEN_REGISTRY_PROXY_TEST_TOKEN is required");
+    let repo = std::env::var("ALIEN_REGISTRY_PROXY_TEST_REPO")
+        .expect("ALIEN_REGISTRY_PROXY_TEST_REPO is required");
+    let protocol = match manager_url.as_str() {
+        url if url.starts_with("https://") => dockdash::ClientProtocol::Https,
+        _ => dockdash::ClientProtocol::Http,
+    };
+
+    push_large_layer(&manager_url, &repo, token, protocol).await;
+}
+
+async fn push_large_layer(
+    manager_url: &str,
+    repo: &str,
+    token: String,
+    protocol: dockdash::ClientProtocol,
+) {
+    let content = deterministic_bytes(34 * 1024 * 1024);
+
+    let layer = dockdash::Layer::builder()
+        .unwrap()
+        .data("app/large.bin", &content, None)
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager_host = manager_url
+        .strip_prefix("http://")
+        .or_else(|| manager_url.strip_prefix("https://"))
+        .unwrap_or(manager_url);
+    let proxy_image_name = format!("{}/{}:v1", manager_host.trim_end_matches('/'), repo);
+    let output_file = temp_dir.path().join("proxy-large-layer.oci.tar");
+
+    let (image, _) = dockdash::Image::builder()
+        .platform("linux", &dockdash::Arch::Amd64)
+        .layer(layer)
+        .cmd(vec!["cat".to_string(), "/app/large.bin".to_string()])
+        .output_to(output_file)
+        .output_name_and_tag(&proxy_image_name)
+        .build()
+        .await
+        .unwrap();
+
+    let push_opts = dockdash::PushOptions {
+        auth: dockdash::RegistryAuth::Basic("admin".to_string(), token),
+        protocol,
+        ..Default::default()
+    };
+
+    image
+        .push(&proxy_image_name, &push_opts)
+        .await
+        .expect("Large layer push through local proxy should succeed");
+}
+
+fn deterministic_bytes(len: usize) -> Vec<u8> {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        out.extend_from_slice(&state.to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}

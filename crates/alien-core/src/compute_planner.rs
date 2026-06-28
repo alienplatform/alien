@@ -6,8 +6,8 @@
 
 use crate::{
     instance_catalog::{self, WorkloadRequirements},
-    ComputePoolSelection, Container, Daemon, ErrorData, GpuSpec, MachineProfile, Platform,
-    ResourceSpec, Stack,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
+    Daemon, ErrorData, GpuSpec, MachineProfile, Platform, ResourceSpec, Stack,
 };
 use alien_error::{AlienError, Result};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ pub struct ComputePoolPlan {
     pub workloads: Vec<String>,
     /// Aggregated requirements used for machine selection.
     pub requirements: MachineProfile,
+    /// Allowed scale policy declared by source or derived for generated pools.
+    pub scale: CapacityGroupScalePolicy,
     /// Recommended or user-selected deployment choice.
     pub selected: ComputePoolSelection,
     /// Planner-recommended default.
@@ -74,16 +76,22 @@ pub fn plan_compute(
         let group = groups.remove(&pool_id).expect("pool id came from map keys");
         let requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
-        let recommended =
-            recommended_selection(platform, &requirements, group.min_size, group.max_size)?;
+        let recommended = recommended_selection(platform, &requirements, &group.scale)?;
         let selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
-        let errors = validate_selection(platform, &pool_id, &selected_choice, &requirements);
+        let errors = validate_compute_pool_selection(
+            platform,
+            &pool_id,
+            &selected_choice,
+            &requirements,
+            &group.scale,
+        );
         let machines = machine_options(platform, &requirements, selected_choice.machine())?;
 
         pools.push(ComputePoolPlan {
             pool_id,
             workloads: group.workloads,
             requirements: requirements_to_profile(&requirements),
+            scale: group.scale,
             selected: selected_choice,
             recommended,
             machines,
@@ -98,8 +106,7 @@ pub fn plan_compute(
 struct PlannedGroup {
     workloads: Vec<String>,
     requirements: WorkloadRequirements,
-    min_size: u32,
-    max_size: u32,
+    scale: CapacityGroupScalePolicy,
 }
 
 fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup>, ErrorData> {
@@ -130,12 +137,13 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
     let mut planned = HashMap::new();
     for (pool_id, workloads) in groups {
         let requirements = aggregate_workloads(&workloads);
+        let min_size = default_min_machines(&requirements);
+        let max_size = default_max_machines(&requirements);
         planned.insert(
             pool_id,
             PlannedGroup {
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
-                min_size: default_min_machines(&requirements),
-                max_size: default_max_machines(&requirements),
+                scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
             },
         );
@@ -146,8 +154,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             "general".to_string(),
             PlannedGroup {
                 workloads: Vec::new(),
-                min_size: 1,
-                max_size: 1,
+                scale: CapacityGroupScalePolicy::from_selected_bounds(1, 1),
                 requirements,
             },
         );
@@ -164,18 +171,24 @@ fn merge_explicit_compute_groups(
             continue;
         };
         for group in &cluster.capacity_groups {
-            groups.entry(group.group_id.clone()).or_insert_with(|| {
-                let requirements = profile_to_requirements(
-                    group.profile.as_ref(),
-                    group.nested_virtualization.unwrap_or(false),
-                );
-                PlannedGroup {
-                    workloads: Vec::new(),
-                    min_size: group.min_size,
-                    max_size: group.max_size,
-                    requirements,
-                }
+            let explicit_requirements = profile_to_requirements(
+                group.profile.as_ref(),
+                group.nested_virtualization.unwrap_or(false),
+            );
+            let scale = group.scale_policy.clone().unwrap_or_else(|| {
+                CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
             });
+            groups
+                .entry(group.group_id.clone())
+                .and_modify(|planned| {
+                    merge_requirements(&mut planned.requirements, &explicit_requirements);
+                    planned.scale = merge_scale_policy(&planned.scale, &scale);
+                })
+                .or_insert_with(|| PlannedGroup {
+                    workloads: Vec::new(),
+                    scale,
+                    requirements: explicit_requirements,
+                });
         }
     }
     Ok(())
@@ -184,8 +197,7 @@ fn merge_explicit_compute_groups(
 fn recommended_selection(
     platform: Platform,
     requirements: &WorkloadRequirements,
-    min_size: u32,
-    max_size: u32,
+    scale: &CapacityGroupScalePolicy,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
@@ -201,29 +213,34 @@ fn recommended_selection(
         Platform::Local | Platform::Kubernetes | Platform::Test => None,
     };
 
-    if min_size == max_size {
-        Ok(ComputePoolSelection::Fixed {
-            machines: min_size.max(1),
+    match scale {
+        CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {
+            machines: machines.default.max(1),
             machine,
-        })
-    } else {
-        Ok(ComputePoolSelection::Autoscale {
-            min: min_size,
-            max: max_size.max(min_size),
+        }),
+        CapacityGroupScalePolicy::Autoscale { min, max } => Ok(ComputePoolSelection::Autoscale {
+            min: min.default,
+            max: max.default.max(min.default),
             machine,
-        })
+        }),
     }
 }
 
-fn validate_selection(
+/// Validate one selected compute pool against platform machine requirements and
+/// source-declared scale bounds.
+pub fn validate_compute_pool_selection(
     platform: Platform,
     pool_id: &str,
     selection: &ComputePoolSelection,
     requirements: &WorkloadRequirements,
+    scale: &CapacityGroupScalePolicy,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     if let Err(message) = selection.validate() {
         errors.push(message);
+    }
+    if let Err(message) = validate_selection_against_scale(selection, scale) {
+        errors.push(format!("Pool '{pool_id}' {message}"));
     }
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         match selection.machine() {
@@ -248,6 +265,14 @@ fn validate_selection(
         }
     }
     errors
+}
+
+/// Convert a capacity group declaration into planner requirements.
+pub fn capacity_group_requirements(group: &CapacityGroup) -> WorkloadRequirements {
+    profile_to_requirements(
+        group.profile.as_ref(),
+        group.nested_virtualization.unwrap_or(false),
+    )
 }
 
 fn machine_options(
@@ -284,6 +309,11 @@ fn instance_satisfies(
     spec: &instance_catalog::InstanceTypeSpec,
     requirements: &WorkloadRequirements,
 ) -> bool {
+    if let Some(architecture) = requirements.architecture {
+        if spec.architecture != architecture {
+            return false;
+        }
+    }
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
         return false;
     }
@@ -439,6 +469,7 @@ fn default_requirements() -> WorkloadRequirements {
         max_memory_per_container: 2 * 1024 * 1024 * 1024,
         max_ephemeral_storage_bytes: 0,
         gpu: None,
+        architecture: None,
         nested_virt: false,
     }
 }
@@ -463,7 +494,37 @@ fn profile_to_requirements(
         max_memory_per_container: profile.memory_bytes,
         max_ephemeral_storage_bytes: profile.ephemeral_storage_bytes,
         gpu: profile.gpu.clone(),
+        architecture: profile.architecture,
         nested_virt,
+    }
+}
+
+fn merge_requirements(existing: &mut WorkloadRequirements, declared: &WorkloadRequirements) {
+    existing.total_cpu_at_desired = existing
+        .total_cpu_at_desired
+        .max(declared.total_cpu_at_desired);
+    existing.total_memory_bytes_at_desired = existing
+        .total_memory_bytes_at_desired
+        .max(declared.total_memory_bytes_at_desired);
+    existing.total_cpu_at_max = existing.total_cpu_at_max.max(declared.total_cpu_at_max);
+    existing.total_memory_bytes_at_max = existing
+        .total_memory_bytes_at_max
+        .max(declared.total_memory_bytes_at_max);
+    existing.max_cpu_per_container = existing
+        .max_cpu_per_container
+        .max(declared.max_cpu_per_container);
+    existing.max_memory_per_container = existing
+        .max_memory_per_container
+        .max(declared.max_memory_per_container);
+    existing.max_ephemeral_storage_bytes = existing
+        .max_ephemeral_storage_bytes
+        .max(declared.max_ephemeral_storage_bytes);
+    if existing.gpu.is_none() {
+        existing.gpu = declared.gpu.clone();
+    }
+    existing.nested_virt |= declared.nested_virt;
+    if existing.architecture.is_none() {
+        existing.architecture = declared.architecture;
     }
 }
 
@@ -472,7 +533,86 @@ fn requirements_to_profile(requirements: &WorkloadRequirements) -> MachineProfil
         cpu: requirements.max_cpu_per_container.to_string(),
         memory_bytes: requirements.max_memory_per_container,
         ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
+        architecture: requirements.architecture,
         gpu: requirements.gpu.clone(),
+    }
+}
+
+fn merge_scale_policy(
+    existing: &CapacityGroupScalePolicy,
+    declared: &CapacityGroupScalePolicy,
+) -> CapacityGroupScalePolicy {
+    match (existing, declared) {
+        (
+            CapacityGroupScalePolicy::Fixed {
+                machines: existing_machines,
+            },
+            CapacityGroupScalePolicy::Fixed {
+                machines: declared_machines,
+            },
+        ) => CapacityGroupScalePolicy::Fixed {
+            machines: merge_choice_range(existing_machines, declared_machines),
+        },
+        (_, declared) => declared.clone(),
+    }
+}
+
+fn merge_choice_range(
+    existing: &ComputeChoiceRange,
+    declared: &ComputeChoiceRange,
+) -> ComputeChoiceRange {
+    ComputeChoiceRange {
+        min: existing.min.max(declared.min),
+        max: existing.max.max(declared.max),
+        default: declared.default,
+    }
+}
+
+fn validate_selection_against_scale(
+    selection: &ComputePoolSelection,
+    scale: &CapacityGroupScalePolicy,
+) -> std::result::Result<(), String> {
+    match (selection, scale) {
+        (
+            ComputePoolSelection::Fixed { machines, .. },
+            CapacityGroupScalePolicy::Fixed { machines: allowed },
+        ) => {
+            if allowed.contains(*machines) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "fixed machine count {machines} is outside the allowed range {}-{}",
+                    allowed.min, allowed.max
+                ))
+            }
+        }
+        (
+            ComputePoolSelection::Autoscale { min, max, .. },
+            CapacityGroupScalePolicy::Autoscale {
+                min: allowed_min,
+                max: allowed_max,
+            },
+        ) => {
+            if !allowed_min.contains(*min) {
+                return Err(format!(
+                    "autoscale minimum {min} is outside the allowed range {}-{}",
+                    allowed_min.min, allowed_min.max
+                ));
+            }
+            if !allowed_max.contains(*max) {
+                return Err(format!(
+                    "autoscale maximum {max} is outside the allowed range {}-{}",
+                    allowed_max.min, allowed_max.max
+                ));
+            }
+            Ok(())
+        }
+        (ComputePoolSelection::Fixed { .. }, CapacityGroupScalePolicy::Autoscale { .. }) => {
+            Err("must use autoscale mode".to_string())
+        }
+        (ComputePoolSelection::Autoscale { .. }, CapacityGroupScalePolicy::Fixed { .. }) => {
+            Err("must use fixed mode".to_string())
+        }
     }
 }
 
@@ -510,7 +650,9 @@ fn default_max_machines(requirements: &WorkloadRequirements) -> u32 {
 mod tests {
     use super::*;
     use crate::{
-        ComputeSettings, ContainerCode, Resource, ResourceEntry, ResourceLifecycle, Stack,
+        instance_catalog::Architecture, CapacityGroup, CapacityGroupScalePolicy,
+        ComputeChoiceRange, ComputeCluster, ComputeSettings, ContainerCode, DaemonCode, Resource,
+        ResourceEntry, ResourceLifecycle, Stack,
     };
 
     fn stack_with_container() -> Stack {
@@ -566,9 +708,8 @@ mod tests {
         let settings = ComputeSettings {
             pools: [(
                 "general".to_string(),
-                ComputePoolSelection::Autoscale {
-                    min: 2,
-                    max: 4,
+                ComputePoolSelection::Fixed {
+                    machines: 1,
                     machine: Some("m7g.xlarge".to_string()),
                 },
             )]
@@ -581,6 +722,156 @@ mod tests {
         let pool = plan.pools.first().expect("general pool should exist");
         assert_eq!(pool.selected.machine(), Some("m7g.xlarge"));
         assert!(pool.errors.is_empty());
+    }
+
+    #[test]
+    fn explicit_capacity_group_requirements_are_merged_with_workloads() {
+        let mut stack = stack_with_container();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "4".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
+                    gpu: None,
+                }),
+                min_size: 2,
+                max_size: 5,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        let machine = pool
+            .selected
+            .machine()
+            .expect("AWS selection should include a machine");
+        let spec = instance_catalog::find_instance_type(Platform::Aws, machine)
+            .expect("selected machine should exist in the catalog");
+        assert!(spec.is_nested_virt_capable());
+        assert_eq!(pool.selected.min_size(), 2);
+        assert_eq!(pool.selected.max_size(), 5);
+        assert!(pool.errors.is_empty());
+    }
+
+    #[test]
+    fn nested_x86_fixed_range_pool_preserves_bounds_and_rejects_graviton() {
+        let daemon = Daemon::new("bear-agent-loader".to_string())
+            .code(DaemonCode::Image {
+                image: "example.com/bear:latest".to_string(),
+            })
+            .cluster("bear-runtime".to_string())
+            .cpu(ResourceSpec {
+                min: "2".to_string(),
+                desired: "2".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "4Gi".to_string(),
+                desired: "4Gi".to_string(),
+            })
+            .permissions("loader".to_string())
+            .build();
+        let cluster = ComputeCluster::new("bear-runtime".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "4".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: Some(Architecture::X86_64),
+                    gpu: None,
+                }),
+                min_size: 2,
+                max_size: 2,
+                scale_policy: Some(CapacityGroupScalePolicy::Fixed {
+                    machines: ComputeChoiceRange {
+                        min: 1,
+                        max: 5,
+                        default: 2,
+                    },
+                }),
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let stack = Stack {
+            id: "bear".to_string(),
+            resources: [
+                (
+                    "bear-agent-loader".to_string(),
+                    ResourceEntry {
+                        config: Resource::new(daemon),
+                        lifecycle: ResourceLifecycle::Live,
+                        dependencies: Vec::new(),
+                        remote_access: false,
+                    },
+                ),
+                (
+                    "bear-runtime".to_string(),
+                    ResourceEntry {
+                        config: Resource::new(cluster),
+                        lifecycle: ResourceLifecycle::Frozen,
+                        dependencies: Vec::new(),
+                        remote_access: false,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            permissions: crate::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert_eq!(pool.recommended.machine(), Some("m8i.2xlarge"));
+        assert_eq!(pool.recommended.min_size(), 2);
+        assert_eq!(pool.recommended.max_size(), 2);
+        assert_eq!(
+            pool.scale,
+            CapacityGroupScalePolicy::Fixed {
+                machines: ComputeChoiceRange {
+                    min: 1,
+                    max: 5,
+                    default: 2,
+                },
+            }
+        );
+        assert!(!pool
+            .machines
+            .iter()
+            .any(|option| option.machine == "m7g.2xlarge"));
+
+        let invalid_settings = ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("m7g.2xlarge".to_string()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let invalid_plan = plan_compute(&stack, Platform::Aws, Some(&invalid_settings))
+            .expect("plan should build");
+        assert!(!invalid_plan.pools[0].errors.is_empty());
     }
 
     #[test]

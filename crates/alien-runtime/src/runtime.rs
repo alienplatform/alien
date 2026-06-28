@@ -738,8 +738,9 @@ async fn stream_output(
                     eprintln!("{}", line);
                 }
 
-                // Emit via OpenTelemetry SDK (batched, proper protobuf format)
-                crate::otlp::emit_log(stream_name, &line, timestamp_nanos);
+                // Emit normalized text via OpenTelemetry SDK (batched, proper protobuf format).
+                let body = crate::log_text::normalize_log_body(&line);
+                crate::otlp::emit_log(stream_name, &body, timestamp_nanos);
             }
 
             tracing::debug!("OTLP log streaming ended");

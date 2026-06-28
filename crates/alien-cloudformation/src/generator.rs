@@ -7,10 +7,11 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
+    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
     StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackInputSetupMethod, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -246,7 +247,12 @@ pub fn generate_cloudformation_template(
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
     let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
-    add_standard_parameters(&mut template, &stack_settings, supports_custom_domain);
+    add_standard_parameters(
+        &mut template,
+        stack,
+        &stack_settings,
+        supports_custom_domain,
+    );
     add_stack_input_parameters(&mut template, &stack_inputs);
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
@@ -260,6 +266,7 @@ pub fn generate_cloudformation_template(
     );
     add_console_interface_metadata(
         &mut template,
+        stack,
         &stack_settings,
         supports_custom_domain,
         &stack_inputs,
@@ -317,6 +324,7 @@ pub fn generate_cloudformation_template(
     let management_config = management_config_expression(options.target);
     let stack_settings = stack_settings_expression(
         options.target,
+        stack,
         &stack_settings,
         kubernetes_namespace.clone(),
         supports_custom_domain,
@@ -375,10 +383,6 @@ fn stack_inputs_for_cloudformation(
                     .platforms
                     .as_ref()
                     .is_none_or(|platforms| platforms.contains(&platform))
-                && input
-                    .setup_methods
-                    .as_ref()
-                    .is_none_or(|methods| methods.contains(&StackInputSetupMethod::CloudFormation))
         })
         .cloned()
         .collect()
@@ -748,6 +752,7 @@ fn apply_resource_dependencies(
 
 fn add_standard_parameters(
     template: &mut CfTemplate,
+    stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
 ) {
@@ -780,6 +785,7 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, settings.network.as_ref());
+    add_compute_parameters(template, stack, settings.compute.as_ref());
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
@@ -830,11 +836,7 @@ fn add_standard_parameters(
         string_parameter(
             "Telemetry collection behavior.",
             Some(telemetry_mode(settings.telemetry).to_string()),
-            Some(vec![
-                CfExpression::from("off"),
-                CfExpression::from("auto"),
-                CfExpression::from("approval-required"),
-            ]),
+            Some(vec![CfExpression::from(telemetry_mode(settings.telemetry))]),
             false,
         ),
     );
@@ -883,7 +885,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
                 PARAM_AVAILABILITY_ZONES.to_string(),
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
-                    defaults.availability_zones,
+                    u32::from(defaults.availability_zones),
                     Some(vec![
                         CfExpression::from(1u8),
                         CfExpression::from(2u8),
@@ -923,6 +925,95 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             );
         }
         None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
+    }
+}
+
+fn add_compute_parameters(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) {
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let machine_parameter = compute_machine_parameter_name(&group.group_id);
+        template.parameters.insert(
+            machine_parameter,
+            string_parameter(
+                &format!(
+                    "Provider machine type for runtime compute pool '{}'.",
+                    group.group_id
+                ),
+                selection.machine().map(ToString::to_string),
+                None,
+                false,
+            ),
+        );
+
+        let scale = group.scale_policy.as_ref().cloned().unwrap_or_else(|| {
+            CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
+        });
+        match (selection, scale) {
+            (
+                ComputePoolSelection::Fixed { machines, .. },
+                CapacityGroupScalePolicy::Fixed { machines: range },
+            ) => {
+                let mut parameter = number_parameter(
+                    &format!(
+                        "Fixed machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *machines,
+                    None,
+                );
+                parameter.min_value = Some(CfExpression::from(range.min));
+                parameter.max_value = Some(CfExpression::from(range.max));
+                template.parameters.insert(
+                    compute_fixed_machines_parameter_name(&group.group_id),
+                    parameter,
+                );
+            }
+            (
+                ComputePoolSelection::Autoscale { min, max, .. },
+                CapacityGroupScalePolicy::Autoscale {
+                    min: min_range,
+                    max: max_range,
+                },
+            ) => {
+                let mut min_parameter = number_parameter(
+                    &format!(
+                        "Minimum machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *min,
+                    None,
+                );
+                min_parameter.min_value = Some(CfExpression::from(min_range.min));
+                min_parameter.max_value = Some(CfExpression::from(min_range.max));
+                template.parameters.insert(
+                    compute_autoscale_min_parameter_name(&group.group_id),
+                    min_parameter,
+                );
+
+                let mut max_parameter = number_parameter(
+                    &format!(
+                        "Maximum machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *max,
+                    None,
+                );
+                max_parameter.min_value = Some(CfExpression::from(max_range.min));
+                max_parameter.max_value = Some(CfExpression::from(max_range.max));
+                template.parameters.insert(
+                    compute_autoscale_max_parameter_name(&group.group_id),
+                    max_parameter,
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1047,11 +1138,13 @@ fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
 
 fn add_console_interface_metadata(
     template: &mut CfTemplate,
+    stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
     stack_inputs: &[StackInputDefinition],
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
+    let compute_parameters = compute_parameter_names(stack, settings.compute.as_ref());
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
         "Parameters": [
@@ -1079,6 +1172,12 @@ fn add_console_interface_metadata(
                 .iter()
                 .map(stack_input_parameter_name)
                 .collect::<Vec<_>>()
+        }));
+    }
+    if !compute_parameters.is_empty() {
+        parameter_groups.push(json!({
+            "Label": { "default": "Runtime compute" },
+            "Parameters": compute_parameters
         }));
     }
     parameter_groups.push(json!({
@@ -1135,6 +1234,9 @@ fn add_console_interface_metadata(
             &input.label,
         );
     }
+    for (parameter, label) in compute_parameter_labels(stack, settings.compute.as_ref()) {
+        insert_parameter_label(&mut parameter_labels, &parameter, &label);
+    }
     insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
     insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
     insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
@@ -1166,6 +1268,177 @@ fn network_parameter_names(network: Option<&NetworkSettings>) -> Vec<&'static st
         None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             Vec::new()
         }
+    }
+}
+
+fn compute_capacity_groups(stack: &Stack) -> Vec<&CapacityGroup> {
+    let mut groups: Vec<&CapacityGroup> = stack
+        .resources()
+        .filter_map(|(_resource_id, resource)| resource.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| cluster.capacity_groups.iter())
+        .collect();
+    groups.sort_by(|left, right| left.group_id.cmp(&right.group_id));
+    groups
+}
+
+fn compute_parameter_names(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Vec<String> {
+    let mut parameters = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        parameters.push(compute_machine_parameter_name(&group.group_id));
+        match selection {
+            ComputePoolSelection::Fixed { .. } => {
+                parameters.push(compute_fixed_machines_parameter_name(&group.group_id));
+            }
+            ComputePoolSelection::Autoscale { .. } => {
+                parameters.push(compute_autoscale_min_parameter_name(&group.group_id));
+                parameters.push(compute_autoscale_max_parameter_name(&group.group_id));
+            }
+        }
+    }
+    parameters
+}
+
+fn compute_parameter_labels(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Vec<(String, String)> {
+    let mut labels = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let label_prefix = compute_pool_label(&group.group_id);
+        labels.push((
+            compute_machine_parameter_name(&group.group_id),
+            format!("{label_prefix} machine"),
+        ));
+        match selection {
+            ComputePoolSelection::Fixed { .. } => labels.push((
+                compute_fixed_machines_parameter_name(&group.group_id),
+                format!("{label_prefix} machines"),
+            )),
+            ComputePoolSelection::Autoscale { .. } => {
+                labels.push((
+                    compute_autoscale_min_parameter_name(&group.group_id),
+                    format!("{label_prefix} minimum machines"),
+                ));
+                labels.push((
+                    compute_autoscale_max_parameter_name(&group.group_id),
+                    format!("{label_prefix} maximum machines"),
+                ));
+            }
+        }
+    }
+    labels
+}
+
+fn compute_settings_expression(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Option<CfExpression> {
+    let mut pools = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let machine = (
+            "machine",
+            CfExpression::ref_(compute_machine_parameter_name(&group.group_id)),
+        );
+        let expression = match selection {
+            ComputePoolSelection::Fixed { .. } => CfExpression::object([
+                ("mode", CfExpression::from("fixed")),
+                (
+                    "machines",
+                    CfExpression::ref_(compute_fixed_machines_parameter_name(&group.group_id)),
+                ),
+                machine,
+            ]),
+            ComputePoolSelection::Autoscale { .. } => CfExpression::object([
+                ("mode", CfExpression::from("autoscale")),
+                (
+                    "min",
+                    CfExpression::ref_(compute_autoscale_min_parameter_name(&group.group_id)),
+                ),
+                (
+                    "max",
+                    CfExpression::ref_(compute_autoscale_max_parameter_name(&group.group_id)),
+                ),
+                machine,
+            ]),
+        };
+        pools.push((group.group_id.as_str(), expression));
+    }
+    if pools.is_empty() {
+        return None;
+    }
+    Some(CfExpression::object([(
+        "pools",
+        CfExpression::object(pools),
+    )]))
+}
+
+fn compute_machine_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Machine", pascal_identifier(pool_id))
+}
+
+fn compute_fixed_machines_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Machines", pascal_identifier(pool_id))
+}
+
+fn compute_autoscale_min_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Min", pascal_identifier(pool_id))
+}
+
+fn compute_autoscale_max_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Max", pascal_identifier(pool_id))
+}
+
+fn compute_pool_label(pool_id: &str) -> String {
+    pool_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn pascal_identifier(value: &str) -> String {
+    let mut output = String::new();
+    let mut uppercase_next = true;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if uppercase_next {
+                output.push(character.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                output.push(character);
+            }
+        } else {
+            uppercase_next = true;
+        }
+    }
+    if output.is_empty() {
+        "Pool".to_string()
+    } else if matches!(output.chars().next(), Some(character) if character.is_ascii_digit()) {
+        format!("Pool{output}")
+    } else {
+        output
     }
 }
 
@@ -1436,6 +1709,7 @@ fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression
 
 fn stack_settings_expression(
     target: CloudFormationTarget,
+    stack: &Stack,
     settings: &StackSettings,
     kubernetes_namespace: Option<CfExpression>,
     supports_custom_domain: bool,
@@ -1455,6 +1729,9 @@ fn stack_settings_expression(
             "kubernetes",
             kubernetes_settings_expression(settings.kubernetes.as_ref(), kubernetes_namespace),
         ));
+    }
+    if let Some(compute) = compute_settings_expression(stack, settings.compute.as_ref()) {
+        values.push(("compute", compute));
     }
     CfExpression::object(values)
 }
@@ -1741,7 +2018,7 @@ fn string_parameter_with_allowed_pattern(
 
 fn number_parameter(
     description: &str,
-    default: u8,
+    default: u32,
     allowed_values: Option<Vec<CfExpression>>,
 ) -> CfParameter {
     CfParameter {

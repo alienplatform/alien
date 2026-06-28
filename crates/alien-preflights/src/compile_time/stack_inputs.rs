@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     Container, Daemon, Platform, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackInputValidation, Worker,
+    StackInputKind, StackInputValidation, Worker,
 };
 
 /// Validates stack input definitions before release/package generation.
@@ -81,13 +81,6 @@ fn validate_input(
 
     if let Some(default) = &input.default {
         validate_default_matches_kind(input, default, errors);
-    }
-
-    if input.setup_methods.is_some() && !input.provided_by.contains(&StackInputProvider::Deployer) {
-        errors.push(format!(
-            "Stack input '{}': setupMethods require providedBy to include deployer",
-            input.id
-        ));
     }
 
     if let Some(validation) = &input.validation {
@@ -330,7 +323,8 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle,
-        StackInputEnvironmentMapping, StackInputEnvironmentVariableType, Worker, WorkerCode,
+        StackInputEnvironmentMapping, StackInputEnvironmentVariableType, StackInputProvider,
+        Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -373,7 +367,6 @@ mod tests {
             placeholder: None,
             default: None,
             platforms: None,
-            setup_methods: None,
             validation: Some(StackInputValidation {
                 min_length: Some(3),
                 max_length: Some(64),

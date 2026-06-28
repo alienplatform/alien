@@ -61,6 +61,8 @@ pub enum DebugSessionResponse {
     /// emits is forwarded over the tunnel for the manager to re-sign with
     /// the impersonated identity.
     PushTunnel(PushTunnelDebugSession),
+    /// Runtime shell/exec session via an agent-hosted process tunnel.
+    RuntimeTunnel(RuntimeTunnelDebugSession),
 }
 
 impl DebugSessionResponse {
@@ -73,8 +75,120 @@ impl DebugSessionResponse {
             Self::Pull(p) => p.expires_at.as_deref(),
             Self::Pending(_) => None,
             Self::PushTunnel(p) => p.expires_at.as_deref(),
+            Self::RuntimeTunnel(p) => p.expires_at.as_deref(),
         }
     }
+}
+
+/// What kind of debug session the caller is requesting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DebugSessionKind {
+    /// Existing behavior: run local commands with deployment context.
+    Context,
+    /// Open an interactive shell in the deployment runtime.
+    RuntimeShell,
+    /// Run one non-interactive command in the deployment runtime.
+    RuntimeExec,
+}
+
+impl Default for DebugSessionKind {
+    fn default() -> Self {
+        Self::Context
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTunnelDebugSession {
+    /// Server-assigned session id.
+    pub session_id: String,
+    /// `local` for v1.
+    pub platform: String,
+    /// Absolute `wss://…/v1/debug/sessions/<sid>/runtime-client` URL.
+    pub tunnel_url: String,
+    /// Bearer the CLI presents on the WebSocket upgrade.
+    pub client_token: String,
+    /// Runtime operation this tunnel accepts.
+    pub kind: DebugSessionKind,
+    /// Runtime frame protocol version.
+    pub protocol_version: u32,
+    /// RFC3339 expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+/// Client-to-agent runtime debug frames, relayed by the manager.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RuntimeClientFrame {
+    /// Start an interactive shell with an optional initial terminal size.
+    StartShell {
+        /// Terminal columns.
+        cols: u16,
+        /// Terminal rows.
+        rows: u16,
+    },
+    /// Start a non-interactive command.
+    StartExec {
+        /// Executable and argv to run on the remote host.
+        command: Vec<String>,
+        /// Optional timeout in milliseconds.
+        timeout_ms: Option<u64>,
+    },
+    /// Standard input bytes, base64-encoded.
+    Stdin {
+        /// Base64-encoded bytes.
+        data_b64: String,
+    },
+    /// Resize the interactive terminal.
+    Resize {
+        /// Terminal columns.
+        cols: u16,
+        /// Terminal rows.
+        rows: u16,
+    },
+    /// Close stdin for the remote process.
+    CloseStdin,
+    /// Cancel the remote process.
+    Cancel,
+}
+
+/// Agent-to-client runtime debug frames, relayed by the manager.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RuntimeAgentFrame {
+    /// The process has started.
+    Started {
+        /// Optional process id where available.
+        pid: Option<u32>,
+        /// Human-readable account or shell description.
+        detail: Option<String>,
+    },
+    /// Standard output bytes, base64-encoded.
+    Stdout {
+        /// Base64-encoded bytes.
+        data_b64: String,
+    },
+    /// Standard error bytes, base64-encoded.
+    Stderr {
+        /// Base64-encoded bytes.
+        data_b64: String,
+    },
+    /// The process exited.
+    Exit {
+        /// Process exit code. `None` means signal/unknown.
+        code: Option<i32>,
+        /// Whether the process was terminated by the runtime timeout.
+        timed_out: bool,
+        /// Whether output was truncated.
+        output_truncated: bool,
+    },
+    /// The remote runtime failed before producing an exit code.
+    Error {
+        /// Safe, user-facing error message.
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

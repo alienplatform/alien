@@ -2,10 +2,11 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_core::{Stack, StackInputDefinition, StackInputKind, StackInputProvider};
+use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -40,6 +41,10 @@ pub struct OnboardArgs {
     /// Secret stack input value provided before creating the deployment link (id=value)
     #[arg(long = "secret-input")]
     pub secret_input_values: Vec<String>,
+
+    /// Platforms this deployment link can create deployments for (comma-separated). Defaults to every platform in the active release.
+    #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
+    pub platforms: Vec<String>,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -74,16 +79,32 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
     let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
     let client = ctx.sdk_client().await?;
-    let developer_inputs = fetch_developer_stack_inputs(&client, &workspace, &project_id).await?;
+    let release_inputs =
+        fetch_active_release_stack_inputs(&client, &workspace, &project_id).await?;
+    let selected_platforms = select_onboard_platforms(
+        &args.platforms,
+        &release_inputs.supported_platforms,
+        args.json,
+    )?;
+    let developer_inputs = developer_inputs_for_platforms(&release_inputs, &selected_platforms);
     let stack_input_values = collect_stack_input_values(
         &developer_inputs,
         &args.input_values,
         &args.secret_input_values,
+        &selected_platforms,
         args.json,
     )?;
 
     if !args.json {
-        println!("{}", contextual_heading("Onboarding", &name, &[]));
+        let platforms_label = selected_platforms
+            .iter()
+            .map(|platform| platform.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "{}",
+            contextual_heading("Onboarding", &name, &[("platforms", &platforms_label)])
+        );
         print_required_developer_inputs(&developer_inputs);
     }
     let steps = if args.json {
@@ -170,6 +191,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 expires_at: None,
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
+                    &selected_platforms,
                 ),
                 input_values: Some(stack_input_values),
             },
@@ -190,6 +212,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "name": name,
             "deploymentLink": deployment_link,
             "maxDeployments": args.max_deployments,
+            "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
         }))?;
         return Ok(());
     }
@@ -218,22 +241,39 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
 }
 
 #[cfg(feature = "platform")]
+struct ActiveReleaseStackInputs {
+    supported_platforms: Vec<Platform>,
+    inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
+}
+
+#[cfg(feature = "platform")]
 fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
+    platforms: &[Platform],
 ) -> alien_platform_api::types::DeploymentSetupConfig {
     use alien_platform_api::types;
+
+    let allowed_platforms = if platforms.is_empty() {
+        vec![
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
+        ]
+    } else {
+        platforms
+            .iter()
+            .map(platform_to_setup_policy_platform)
+            .collect::<Result<Vec<_>>>()
+            .expect("selected onboarding platforms are validated before setup config creation")
+    };
 
     types::DeploymentSetupConfig {
         metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
         policy: types::DeploymentSetupPolicy {
             allow_release_pinning: None,
-            allowed_platforms: vec![
-                types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
-                types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
-                types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
-                types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
-                types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
-            ],
+            allowed_platforms,
             allowed_setup_methods: vec![
                 types::DeploymentSetupMethod::Cloudformation,
                 types::DeploymentSetupMethod::GoogleOauth,
@@ -278,11 +318,30 @@ fn platform_onboard_deployment_setup_config(
 }
 
 #[cfg(feature = "platform")]
-async fn fetch_developer_stack_inputs(
+fn platform_to_setup_policy_platform(
+    platform: &Platform,
+) -> Result<alien_platform_api::types::DeploymentSetupPolicyAllowedPlatformsItem> {
+    use alien_platform_api::types::DeploymentSetupPolicyAllowedPlatformsItem;
+
+    match platform {
+        Platform::Aws => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Aws),
+        Platform::Gcp => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Gcp),
+        Platform::Azure => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Azure),
+        Platform::Kubernetes => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes),
+        Platform::Local => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Local),
+        Platform::Test => Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, or local.".to_string(),
+        })),
+    }
+}
+
+#[cfg(feature = "platform")]
+async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
     workspace: &str,
     project_id: &str,
-) -> Result<Vec<StackInputDefinition>> {
+) -> Result<ActiveReleaseStackInputs> {
     use alien_platform_api::SdkResultExt;
 
     let releases = client
@@ -299,20 +358,23 @@ async fn fetch_developer_stack_inputs(
         })?;
 
     let Some(release) = releases.items.first() else {
-        return Ok(Vec::new());
+        return Ok(ActiveReleaseStackInputs {
+            supported_platforms: Vec::new(),
+            inputs_by_platform: Vec::new(),
+        });
     };
 
-    let mut inputs_by_id = HashMap::new();
-    for stack_value in [
-        release.stack.aws.as_ref(),
-        release.stack.gcp.as_ref(),
-        release.stack.azure.as_ref(),
-        release.stack.kubernetes.as_ref(),
-        release.stack.local.as_ref(),
-        release.stack.test.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
+    let stack_values = [
+        (Platform::Aws, release.stack.aws.as_ref()),
+        (Platform::Gcp, release.stack.gcp.as_ref()),
+        (Platform::Azure, release.stack.azure.as_ref()),
+        (Platform::Kubernetes, release.stack.kubernetes.as_ref()),
+        (Platform::Local, release.stack.local.as_ref()),
+    ];
+    let mut inputs_by_platform = Vec::new();
+    for (platform, stack_value) in stack_values
+        .into_iter()
+        .filter_map(|(platform, stack)| stack.map(|stack_value| (platform, stack_value)))
     {
         let stack: Stack = serde_json::from_value(stack_value.clone()).map_err(|error| {
             AlienError::new(ErrorData::ValidationError {
@@ -320,16 +382,122 @@ async fn fetch_developer_stack_inputs(
                 message: format!("Failed to parse release stack input metadata: {error}"),
             })
         })?;
-        for input in stack.inputs {
-            if input.provided_by.contains(&StackInputProvider::Developer) {
-                inputs_by_id.entry(input.id.clone()).or_insert(input);
-            }
+        inputs_by_platform.push((platform, stack.inputs));
+    }
+
+    Ok(ActiveReleaseStackInputs {
+        supported_platforms: inputs_by_platform
+            .iter()
+            .map(|(platform, _)| platform.clone())
+            .collect(),
+        inputs_by_platform,
+    })
+}
+
+#[cfg(feature = "platform")]
+fn select_onboard_platforms(
+    requested: &[String],
+    supported: &[Platform],
+    json: bool,
+) -> Result<Vec<Platform>> {
+    if requested.is_empty() && supported.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let default = supported
+        .iter()
+        .map(|platform| platform.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let raw_platforms = if !requested.is_empty() {
+        requested.to_vec()
+    } else if !json && can_prompt() && supported.len() > 1 {
+        prompt_text("Platforms", Some(&default))?
+            .split(',')
+            .map(str::trim)
+            .filter(|platform| !platform.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        supported
+            .iter()
+            .map(|platform| platform.as_str().to_string())
+            .collect()
+    };
+
+    let mut selected = Vec::new();
+    for raw in raw_platforms {
+        let platform = Platform::from_str(&raw).map_err(|message| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platforms".to_string(),
+                message,
+            })
+        })?;
+        platform_to_setup_policy_platform(&platform)?;
+        if !supported.is_empty() && !supported.contains(&platform) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platforms".to_string(),
+                message: format!(
+                    "Platform '{}' is not in the active release. Available platforms: {}.",
+                    platform.as_str(),
+                    supported
+                        .iter()
+                        .map(|platform| platform.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }));
+        }
+        if !selected.contains(&platform) {
+            selected.push(platform);
         }
     }
 
+    if selected.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "Select at least one platform for the deployment link.".to_string(),
+        }));
+    }
+
+    Ok(selected)
+}
+
+#[cfg(feature = "platform")]
+fn developer_inputs_for_platforms(
+    release_inputs: &ActiveReleaseStackInputs,
+    platforms: &[Platform],
+) -> Vec<StackInputDefinition> {
+    let selected = if platforms.is_empty() {
+        &release_inputs.supported_platforms
+    } else {
+        platforms
+    };
+    let mut inputs_by_id = HashMap::new();
+    for (platform, inputs) in &release_inputs.inputs_by_platform {
+        if !selected.contains(platform) {
+            continue;
+        }
+        for input in inputs {
+            if !input.provided_by.contains(&StackInputProvider::Developer) {
+                continue;
+            }
+            if input
+                .platforms
+                .as_ref()
+                .is_some_and(|input_platforms| !input_platforms.contains(platform))
+            {
+                continue;
+            }
+            inputs_by_id
+                .entry(input.id.clone())
+                .or_insert(input.clone());
+        }
+    }
     let mut inputs = inputs_by_id.into_values().collect::<Vec<_>>();
     inputs.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
-    Ok(inputs)
+    inputs
 }
 
 #[cfg(feature = "platform")]
@@ -337,6 +505,7 @@ fn collect_stack_input_values(
     inputs: &[StackInputDefinition],
     input_values: &[String],
     secret_input_values: &[String],
+    selected_platforms: &[Platform],
     json: bool,
 ) -> Result<alien_platform_api::types::StackInputValuesRequest> {
     use alien_platform_api::types;
@@ -366,14 +535,15 @@ fn collect_stack_input_values(
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "input".to_string(),
                     message: format!(
-                        "Missing developer input: {}. Pass {} {}=...",
+                        "Missing developer input: {}. Pass {} {}=...{}",
                         input.label,
                         if matches!(input.kind, StackInputKind::Secret) {
                             "--secret-input"
                         } else {
                             "--input"
                         },
-                        input.id
+                        input.id,
+                        narrowing_hint(input, selected_platforms)
                     ),
                 }));
             }
@@ -391,6 +561,26 @@ fn collect_stack_input_values(
     }
 
     Ok(types::StackInputValuesRequest(values))
+}
+
+#[cfg(feature = "platform")]
+fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform]) -> String {
+    let Some(input_platforms) = &input.platforms else {
+        return ".".to_string();
+    };
+    let alternatives = selected_platforms
+        .iter()
+        .filter(|platform| !input_platforms.contains(platform))
+        .map(|platform| platform.as_str())
+        .collect::<Vec<_>>();
+    if alternatives.is_empty() {
+        ".".to_string()
+    } else {
+        format!(
+            ", or narrow the link with --platforms {}.",
+            alternatives.join(",")
+        )
+    }
 }
 
 #[cfg(feature = "platform")]
@@ -710,9 +900,20 @@ mod tests {
             placeholder: None,
             default: None,
             platforms: None,
-            setup_methods: None,
             validation: None,
             env: vec![],
+        }
+    }
+
+    fn platform_input(
+        id: &str,
+        kind: StackInputKind,
+        required: bool,
+        platforms: Vec<Platform>,
+    ) -> StackInputDefinition {
+        StackInputDefinition {
+            platforms: Some(platforms),
+            ..input(id, kind, required)
         }
     }
 
@@ -736,6 +937,7 @@ mod tests {
             &[input("controlPlaneApiKey", StackInputKind::Secret, true)],
             &[],
             &[],
+            &[Platform::Aws],
             true,
         )
         .expect_err("missing required input should fail");
@@ -760,10 +962,33 @@ mod tests {
                 "enabled=true".to_string(),
             ],
             &[],
+            &[Platform::Aws],
             true,
         )
         .expect("typed values should parse");
 
         assert_eq!(values.len(), 3);
+    }
+
+    #[test]
+    fn missing_platform_scoped_input_suggests_narrowing() {
+        let err = collect_stack_input_values(
+            &[platform_input(
+                "tailscaleAuthKey",
+                StackInputKind::Secret,
+                true,
+                vec![Platform::Local],
+            )],
+            &[],
+            &[],
+            &[Platform::Aws, Platform::Local],
+            true,
+        )
+        .expect_err("missing required local input should fail");
+
+        assert!(err
+            .to_string()
+            .contains("--secret-input tailscaleAuthKey=..."));
+        assert!(err.to_string().contains("--platforms aws"));
     }
 }

@@ -9,11 +9,15 @@ import { Resource } from "./resource.js"
 export type {
   ComputeCluster as ComputeClusterConfig,
   CapacityGroup,
+  CapacityGroupScalePolicy,
+  ComputeChoiceRange as GeneratedComputeChoiceRange,
   MachineProfile,
 } from "./generated/index.js"
 export {
   ComputeClusterSchema as ComputeClusterConfigSchema,
   CapacityGroupSchema,
+  CapacityGroupScalePolicySchema,
+  ComputeChoiceRangeSchema,
   MachineProfileSchema,
 } from "./generated/index.js"
 
@@ -91,6 +95,7 @@ export class ComputeCluster {
       profile: machineProfileFromRequirements(config.requirements),
       minSize,
       maxSize,
+      scalePolicy: scalePolicyFromInput(config.scale),
       nestedVirtualization: config.requirements.nestedVirtualization,
     })
     return this
@@ -130,6 +135,28 @@ function selectedScaleBounds(scale: ComputePoolScale): { minSize: number; maxSiz
   }
 }
 
+function scalePolicyFromInput(scale: ComputePoolScale): ComputeClusterConfig["capacityGroups"][number]["scalePolicy"] {
+  if (scale.type === "fixed") {
+    return {
+      type: "fixed",
+      machines: choiceRange(scale.machines),
+    }
+  }
+
+  return {
+    type: "autoscale",
+    min: choiceRange(scale.min),
+    max: choiceRange(scale.max),
+  }
+}
+
+function choiceRange(choice: ComputeChoiceRange): { min: number; max: number; default: number } {
+  if (typeof choice === "number") {
+    return { min: choice, max: choice, default: choice }
+  }
+  return choice
+}
+
 function defaultChoice(choice: ComputeChoiceRange): number {
   if (typeof choice === "number") {
     return choice
@@ -143,6 +170,7 @@ function machineProfileFromRequirements(requirements: ComputePoolRequirements): 
     cpu: typeof requirements.cpu === "number" ? `${requirements.cpu}` : requirements.cpu,
     memoryBytes: parseQuantityBytes(requirements.memory),
     ephemeralStorageBytes: parseQuantityBytes(requirements.ephemeralStorage ?? "20Gi"),
+    architecture: requirements.architecture,
     gpu: requirements.accelerators?.[0]
       ? {
           type: requirements.accelerators[0].type,

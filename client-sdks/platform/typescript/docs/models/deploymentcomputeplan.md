@@ -18,14 +18,28 @@ let value: DeploymentComputePlan = {
         memoryBytes: 523395,
         ephemeralStorageBytes: 206903,
       },
+      scale: {
+        type: "autoscale",
+        min: {
+          min: 243735,
+          max: 780745,
+          default: 799327,
+        },
+        max: {
+          min: 504244,
+          max: 889408,
+          default: 145999,
+        },
+      },
       selected: {
         mode: "autoscale",
-        min: 591224,
-        max: 509604,
+        min: 509604,
+        max: 214763,
       },
       recommended: {
-        mode: "fixed",
-        machines: 736018,
+        mode: "autoscale",
+        min: 526675,
+        max: 32921,
       },
       machines: [
         {

@@ -93,11 +93,11 @@ impl Cli {
             Some(Commands::Onboard(args)) => args.json,
             Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
-            Some(Commands::Debug(args)) => args.json,
+            Some(Commands::Debug(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
-                Some(DevSubcommand::Debug(args)) => args.json,
+                Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
                 _ => false,
             },
             #[cfg(feature = "platform")]

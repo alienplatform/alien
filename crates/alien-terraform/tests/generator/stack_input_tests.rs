@@ -1,7 +1,7 @@
 use super::helpers::{assert_terraform_valid, render};
 use alien_core::{
     ResourceLifecycle, Stack, StackInputDefinition, StackInputEnvironmentMapping, StackInputKind,
-    StackInputProvider, StackInputSetupMethod, StackInputValidation, StackSettings, Storage,
+    StackInputProvider, StackInputValidation, StackSettings, Storage,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -17,7 +17,6 @@ fn plain_input_stack() -> Stack {
             placeholder: None,
             default: None,
             platforms: None,
-            setup_methods: Some(vec![StackInputSetupMethod::Terraform]),
             validation: Some(StackInputValidation {
                 min_length: Some(8),
                 max_length: Some(200),
@@ -74,7 +73,6 @@ fn terraform_rejects_deployer_secret_inputs_until_provider_state_safety_exists()
             placeholder: None,
             default: None,
             platforms: None,
-            setup_methods: Some(vec![StackInputSetupMethod::Terraform]),
             validation: None,
             env: vec![],
         }])

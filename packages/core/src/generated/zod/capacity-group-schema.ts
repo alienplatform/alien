@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { CapacityGroupScalePolicySchema } from "./capacity-group-scale-policy-schema.js";
 import { MachineProfileSchema } from "./machine-profile-schema.js";
 
 /**
@@ -17,6 +18,9 @@ export const CapacityGroupSchema = z.object({
 "nestedVirtualization": z.boolean().describe("Require instance types that expose nested virtualization (VT-x/EPT)\nto guest VMs. This is needed by workloads that boot nested VMs inside\ncontainers.\nWhen true, the controller's instance-type selector is constrained\nto a vetted nested-virt-capable allowlist.").nullish(),
 get "profile"(){
                 return z.union([MachineProfileSchema, z.null()]).optional()
+              },
+get "scalePolicy"(){
+                return z.union([CapacityGroupScalePolicySchema, z.null()]).optional()
               }
     }).describe("Capacity group definition.\n\nA capacity group represents machines with identical hardware profiles.\nEach group becomes a separate Auto Scaling Group (AWS), Managed Instance Group (GCP),\nor VM Scale Set (Azure).")
 

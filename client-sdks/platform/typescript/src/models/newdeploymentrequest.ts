@@ -1263,10 +1263,7 @@ export type NewDeploymentRequest = {
    * Required for workspace/project tokens. Deployment group tokens use their own group automatically.
    */
   deploymentGroupId?: string | undefined;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId?: string | undefined;
   /**
    * ID of the pinned release
    */
@@ -3790,7 +3787,7 @@ export type NewDeploymentRequest$Outbound = {
   name: string;
   platform: string;
   deploymentGroupId?: string | undefined;
-  managerId?: string | null | undefined;
+  managerId?: string | undefined;
   pinnedReleaseId?: string | null | undefined;
   environmentVariables?:
     | Array<EnvironmentVariableConfig$Outbound>
@@ -3821,7 +3818,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   name: z.string(),
   platform: NewDeploymentRequestPlatform$outboundSchema,
   deploymentGroupId: z.string().optional(),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string().optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   environmentVariables: z.nullable(
     z.array(EnvironmentVariableConfig$outboundSchema),

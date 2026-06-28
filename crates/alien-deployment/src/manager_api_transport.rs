@@ -182,6 +182,32 @@ pub async fn acquire_deployment_with_payload(
     acquire_deployment_with_statuses(client, deployment_id, session, None, None, None).await
 }
 
+/// Acquire a deployment lock for CLI-owned setup.
+///
+/// Runtime managers intentionally skip these setup-owned states; the customer
+/// CLI must drive them with the customer's local cloud credentials until the
+/// deployment reaches the provisioning handoff.
+pub async fn acquire_setup_run_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<serde_json::Value, AlienError> {
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        Some("setup-run".to_string()),
+        Some("cli".to_string()),
+        Some(vec![
+            "pending".to_string(),
+            "preflights-failed".to_string(),
+            "initial-setup".to_string(),
+            "initial-setup-failed".to_string(),
+        ]),
+    )
+    .await
+}
+
 /// Acquire a deployment lock for a caller that owns setup-time teardown.
 ///
 /// Unlike the normal manager acquire path, this can acquire `teardown-required`

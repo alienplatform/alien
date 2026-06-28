@@ -26,12 +26,8 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
         "Capacity groups must have instance_type and profile for cloud platforms"
     }
 
-    fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-            && stack
-                .resources
-                .values()
-                .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
+    fn should_run(&self, _stack: &Stack, _platform: Platform) -> bool {
+        false
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
@@ -96,7 +92,13 @@ impl DeploymentPrerequisiteCheck for CapacityGroupProfileCheck {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        <Self as CompileTimeCheck>::should_run(self, stack, stack_state.platform)
+        matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) && stack
+            .resources
+            .values()
+            .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
     }
 
     async fn check(
@@ -113,7 +115,8 @@ impl DeploymentPrerequisiteCheck for CapacityGroupProfileCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        CapacityGroup, ComputeCluster, MachineProfile, Resource, ResourceEntry, ResourceLifecycle,
+        CapacityGroup, ComputeCluster, EnvironmentVariablesSnapshot, ExternalBindings,
+        MachineProfile, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -135,6 +138,19 @@ mod tests {
             supported_platforms: None,
             inputs: vec![],
         }
+    }
+
+    fn deployment_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: "empty".to_string(),
+                created_at: "2026-05-13T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
     }
 
     #[tokio::test]
@@ -254,15 +270,24 @@ mod tests {
 
         let stack = make_stack(cluster);
         let check = CapacityGroupProfileCheck;
-        assert!(!CompileTimeCheck::should_run(
+        assert!(!CompileTimeCheck::should_run(&check, &stack, Platform::Aws));
+        assert!(DeploymentPrerequisiteCheck::should_run(
             &check,
             &stack,
-            Platform::Local
+            &StackState::new(Platform::Aws),
+            &deployment_config()
         ));
-        assert!(!CompileTimeCheck::should_run(
+        assert!(!DeploymentPrerequisiteCheck::should_run(
             &check,
             &stack,
-            Platform::Kubernetes
+            &StackState::new(Platform::Local),
+            &deployment_config()
+        ));
+        assert!(!DeploymentPrerequisiteCheck::should_run(
+            &check,
+            &stack,
+            &StackState::new(Platform::Kubernetes),
+            &deployment_config()
         ));
     }
 }

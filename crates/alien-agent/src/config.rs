@@ -83,6 +83,13 @@ pub struct AgentConfig {
 
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,
+
+    /// Allow Local runtime debug commands and shells.
+    #[builder(default = false)]
+    pub local_debug_enabled: bool,
+
+    /// Optional shell command override for Local runtime debug shells.
+    pub local_debug_shell_command: Option<String>,
 }
 
 impl AgentConfig {

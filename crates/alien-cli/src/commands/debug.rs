@@ -16,12 +16,20 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::Parser;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use clap::{Args, Parser, Subcommand};
+use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tempfile::TempDir;
+use tokio::sync::mpsc;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, Message},
+};
 
 const DEBUG_SESSIONS_PATH: &str = "/v1/debug/sessions";
 
@@ -32,21 +40,31 @@ const DEBUG_SESSIONS_PATH: &str = "/v1/debug/sessions";
     long_about = "Request a debug session from the manager for a deployment, then run a \
 local command (or an interactive shell) with the env the manager returns.
 
-DEPLOYMENT can be a deployment ID (`dep_...`), a deployment name, or `<group>/<name>`.
-
-EXAMPLES:
+DEPLOYMENT can be a deployment ID (`dep_...`), a deployment name, or `<group>/<name>`.",
+    after_help = "EXAMPLES:
     alien debug dep_abc123 -- aws sts get-caller-identity
     alien debug acme/prod -- gcloud projects list
     alien debug acme/prod -- kubectl get pods
 
-    # No `--` arg drops you into an interactive shell with the env set:
+    # No `--` arg drops you into a local interactive shell with the env set:
     alien debug acme/prod
+
+    # Open an interactive shell in a Local deployment runtime:
+    alien debug shell acme/prod
+
+    # Run a non-interactive command in a Local deployment runtime:
+    alien debug exec acme/prod -- uname -a
+    alien debug exec acme/prod -- powershell.exe -NoLogo -Command Get-Process
 
 See also: https://alien.dev/docs/debug"
 )]
 pub struct DebugArgs {
+    /// Runtime debug subcommand. Omit for context debug.
+    #[command(subcommand)]
+    pub command: Option<DebugSubcommand>,
+
     /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
-    pub deployment: String,
+    pub deployment: Option<String>,
 
     /// Command and arguments to execute. Everything after `--` is forwarded verbatim.
     /// If omitted, an interactive shell ($SHELL, or /bin/sh) is spawned instead.
@@ -59,21 +77,80 @@ pub struct DebugArgs {
     pub json: bool,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum DebugSubcommand {
+    /// Open an interactive shell in the deployment runtime
+    #[command(after_help = "EXAMPLES:
+    alien debug shell acme/prod")]
+    Shell(DebugShellArgs),
+    /// Run a non-interactive command in the deployment runtime
+    #[command(after_help = "EXAMPLES:
+    alien debug exec acme/prod -- uname -a
+    alien debug exec acme/prod -- powershell.exe -NoLogo -Command Get-Process")]
+    Exec(DebugExecArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DebugShellArgs {
+    /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
+    pub deployment: String,
+
+    /// Emit errors as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DebugExecArgs {
+    /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
+    pub deployment: String,
+
+    /// Timeout in seconds for the remote command.
+    #[arg(long, default_value_t = 120)]
+    pub timeout_seconds: u64,
+
+    /// Emit structured JSON with captured output.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Command and arguments to execute remotely.
+    #[arg(last = true, required = true)]
+    pub cmd: Vec<String>,
+}
+
 /// Wire request body for `POST /v1/debug/sessions`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateDebugSessionRequest {
     /// The resolved deployment ID (always `dep_...`).
     deployment_id: String,
+    /// Requested session kind.
+    kind: DebugSessionKind,
 }
 
 // Wire types live in `alien-debug-session` so the manager (push mode) and
 // the agent (pull mode) can produce identical payloads. The CLI only
 // consumes — no provider-specific knowledge needed here.
-use alien_core::debug_session::{DebugCredFile, DebugSessionResponse};
+use alien_core::debug_session::{
+    DebugCredFile, DebugSessionKind, DebugSessionResponse, RuntimeAgentFrame, RuntimeClientFrame,
+    RuntimeTunnelDebugSession,
+};
 
 /// Top-level entry for `alien debug`.
 pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
+    match args.command.clone() {
+        Some(DebugSubcommand::Shell(shell)) => return runtime_shell_task(shell, ctx).await,
+        Some(DebugSubcommand::Exec(exec)) => return runtime_exec_task(exec, ctx).await,
+        None => {}
+    }
+
+    let deployment = args.deployment.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "deployment".to_string(),
+            message: "Deployment is required. Use `alien debug <deployment>` or `alien debug shell <deployment>`.".to_string(),
+        })
+    })?;
+
     let (_, project_link) = ctx.resolve_project(None, true).await?;
     // `debug` never pushes images, so skip the artifact-registry repo
     // provisioning step — saves ~10s per invocation against cloud managers.
@@ -82,14 +159,397 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
         .await?;
 
     let is_dev = ctx.is_dev();
-    let deployment_id = resolve_deployment_id(&manager, &args.deployment, is_dev).await?;
+    let deployment_id = resolve_deployment_id(&manager, deployment, is_dev).await?;
 
     // No CLI-side caching: every invocation asks the manager to create-or-
     // reuse a session. The manager controls session lifetime, token rotation,
     // and registry eviction.
-    let session = request_debug_session(&manager, &deployment_id).await?;
+    let session =
+        request_debug_session(&manager, &deployment_id, DebugSessionKind::Context).await?;
     let session = resolve_pending_session(&manager, session).await?;
-    exec_with_session(&args.deployment, session, &args.cmd).await
+    exec_with_session(deployment, session, &args.cmd).await
+}
+
+impl DebugArgs {
+    pub fn wants_json_output(&self) -> bool {
+        match &self.command {
+            Some(DebugSubcommand::Shell(args)) => args.json,
+            Some(DebugSubcommand::Exec(args)) => args.json,
+            None => self.json,
+        }
+    }
+}
+
+async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "terminal".to_string(),
+            message: "`alien debug shell` requires an interactive terminal. Use `alien debug exec <deployment> -- <cmd>` for non-interactive agents or CI.".to_string(),
+        }));
+    }
+
+    let (_, project_link) = ctx.resolve_project(None, true).await?;
+    let manager = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
+    let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
+    let session =
+        request_debug_session(&manager, &deployment_id, DebugSessionKind::RuntimeShell).await?;
+    let session = resolve_pending_session(&manager, session).await?;
+    let DebugSessionResponse::RuntimeTunnel(tunnel) = session else {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: "Manager returned a non-runtime debug session for `alien debug shell`"
+                .to_string(),
+            url: None,
+        }));
+    };
+
+    run_runtime_shell(tunnel, &args.deployment).await
+}
+
+async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()> {
+    let (_, project_link) = ctx.resolve_project(None, true).await?;
+    let manager = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
+    let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
+    let session =
+        request_debug_session(&manager, &deployment_id, DebugSessionKind::RuntimeExec).await?;
+    let session = resolve_pending_session(&manager, session).await?;
+    let DebugSessionResponse::RuntimeTunnel(tunnel) = session else {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: "Manager returned a non-runtime debug session for `alien debug exec`"
+                .to_string(),
+            url: None,
+        }));
+    };
+
+    run_runtime_exec(tunnel, args.cmd, args.timeout_seconds, args.json).await
+}
+
+async fn run_runtime_shell(
+    tunnel: RuntimeTunnelDebugSession,
+    deployment_label: &str,
+) -> Result<()> {
+    let ws_url = runtime_ws_url(&tunnel)?;
+    let request = ws_url
+        .as_str()
+        .into_client_request()
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Invalid runtime debug tunnel URL".to_string(),
+            url: Some(tunnel.tunnel_url.clone()),
+        })?;
+    let (ws_stream, _) =
+        connect_async(request)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to dial runtime debug tunnel".to_string(),
+                url: Some(tunnel.tunnel_url.clone()),
+            })?;
+    let (mut sink, mut stream) = ws_stream.split();
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((120, 40));
+    send_runtime_client_frame(&mut sink, &RuntimeClientFrame::StartShell { cols, rows }).await?;
+
+    eprintln!(
+        "Alien runtime shell\n  deployment: {}\n  platform: {}\n  session: {}\n",
+        deployment_label, tunnel.platform, tunnel.session_id
+    );
+
+    crossterm::terminal::enable_raw_mode()
+        .into_alien_error()
+        .context(ErrorData::CliInteractionFailed {
+            message: "Failed to enable terminal raw mode".to_string(),
+        })?;
+    let _raw_guard = RawModeGuard;
+
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(32);
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buf = [0u8; 8192];
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => {
+                    let _ = stdin_tx.blocking_send(Vec::new());
+                    break;
+                }
+                Ok(n) => {
+                    if stdin_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let writer = tokio::spawn(async move {
+        while let Some(chunk) = stdin_rx.recv().await {
+            let frame = if chunk.is_empty() {
+                RuntimeClientFrame::CloseStdin
+            } else {
+                RuntimeClientFrame::Stdin {
+                    data_b64: BASE64.encode(chunk),
+                }
+            };
+            let payload = match serde_json::to_string(&frame) {
+                Ok(payload) => payload,
+                Err(_) => break,
+            };
+            if sink.send(Message::Text(payload.into())).await.is_err() {
+                break;
+            }
+        }
+        let _ = sink.close().await;
+    });
+
+    let mut exit_code = 0;
+    while let Some(msg) = stream.next().await {
+        let msg = msg
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Runtime debug tunnel read failed".to_string(),
+                url: Some(tunnel.tunnel_url.clone()),
+            })?;
+        let Some(frame) = decode_runtime_agent_frame(msg)? else {
+            continue;
+        };
+        match frame {
+            RuntimeAgentFrame::Started { .. } => {}
+            RuntimeAgentFrame::Stdout { data_b64 } | RuntimeAgentFrame::Stderr { data_b64 } => {
+                let bytes = BASE64.decode(data_b64).into_alien_error().context(
+                    ErrorData::ApiRequestFailed {
+                        message: "Runtime debug tunnel returned invalid base64".to_string(),
+                        url: Some(tunnel.tunnel_url.clone()),
+                    },
+                )?;
+                std::io::stdout()
+                    .write_all(&bytes)
+                    .into_alien_error()
+                    .context(ErrorData::CliInteractionFailed {
+                        message: "Failed to write runtime shell output".to_string(),
+                    })?;
+                std::io::stdout().flush().into_alien_error().context(
+                    ErrorData::CliInteractionFailed {
+                        message: "Failed to flush runtime shell output".to_string(),
+                    },
+                )?;
+            }
+            RuntimeAgentFrame::Exit { code, .. } => {
+                exit_code = code.unwrap_or(1);
+                break;
+            }
+            RuntimeAgentFrame::Error { message } => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message,
+                    url: Some(tunnel.tunnel_url.clone()),
+                }));
+            }
+        }
+    }
+    writer.abort();
+    if exit_code != 0 {
+        std::process::exit(exit_code as i32);
+    }
+    Ok(())
+}
+
+async fn run_runtime_exec(
+    tunnel: RuntimeTunnelDebugSession,
+    cmd: Vec<String>,
+    timeout_seconds: u64,
+    json: bool,
+) -> Result<()> {
+    let ws_url = runtime_ws_url(&tunnel)?;
+    let request = ws_url
+        .as_str()
+        .into_client_request()
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Invalid runtime debug tunnel URL".to_string(),
+            url: Some(tunnel.tunnel_url.clone()),
+        })?;
+    let (mut ws_stream, _) =
+        connect_async(request)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to dial runtime debug tunnel".to_string(),
+                url: Some(tunnel.tunnel_url.clone()),
+            })?;
+
+    send_runtime_client_frame(
+        &mut ws_stream,
+        &RuntimeClientFrame::StartExec {
+            command: cmd,
+            timeout_ms: Some(timeout_seconds.saturating_mul(1000)),
+        },
+    )
+    .await?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    let mut timed_out = false;
+    let mut output_truncated = false;
+
+    while let Some(msg) = ws_stream.next().await {
+        let msg = msg
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Runtime debug tunnel read failed".to_string(),
+                url: Some(tunnel.tunnel_url.clone()),
+            })?;
+        let Some(frame) = decode_runtime_agent_frame(msg)? else {
+            continue;
+        };
+        match frame {
+            RuntimeAgentFrame::Started { .. } => {}
+            RuntimeAgentFrame::Stdout { data_b64 } => {
+                let bytes = BASE64.decode(data_b64).into_alien_error().context(
+                    ErrorData::ApiRequestFailed {
+                        message: "Runtime debug tunnel returned invalid stdout base64".to_string(),
+                        url: Some(tunnel.tunnel_url.clone()),
+                    },
+                )?;
+                if json {
+                    stdout.extend_from_slice(&bytes);
+                } else {
+                    std::io::stdout()
+                        .write_all(&bytes)
+                        .into_alien_error()
+                        .context(ErrorData::CliInteractionFailed {
+                            message: "Failed to write runtime exec stdout".to_string(),
+                        })?;
+                }
+            }
+            RuntimeAgentFrame::Stderr { data_b64 } => {
+                let bytes = BASE64.decode(data_b64).into_alien_error().context(
+                    ErrorData::ApiRequestFailed {
+                        message: "Runtime debug tunnel returned invalid stderr base64".to_string(),
+                        url: Some(tunnel.tunnel_url.clone()),
+                    },
+                )?;
+                if json {
+                    stderr.extend_from_slice(&bytes);
+                } else {
+                    std::io::stderr()
+                        .write_all(&bytes)
+                        .into_alien_error()
+                        .context(ErrorData::CliInteractionFailed {
+                            message: "Failed to write runtime exec stderr".to_string(),
+                        })?;
+                }
+            }
+            RuntimeAgentFrame::Exit {
+                code,
+                timed_out: t,
+                output_truncated: truncated,
+            } => {
+                exit_code = code;
+                timed_out = t;
+                output_truncated = truncated;
+                break;
+            }
+            RuntimeAgentFrame::Error { message } => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message,
+                    url: Some(tunnel.tunnel_url.clone()),
+                }));
+            }
+        }
+    }
+
+    let code = exit_code.unwrap_or(1);
+    if json {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RuntimeExecJson {
+            session_id: String,
+            exit_code: i32,
+            stdout_b64: String,
+            stderr_b64: String,
+            timed_out: bool,
+            output_truncated: bool,
+        }
+        crate::output::print_json(&RuntimeExecJson {
+            session_id: tunnel.session_id,
+            exit_code: code,
+            stdout_b64: BASE64.encode(stdout),
+            stderr_b64: BASE64.encode(stderr),
+            timed_out,
+            output_truncated,
+        })?;
+    }
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+async fn send_runtime_client_frame<S>(sink: &mut S, frame: &RuntimeClientFrame) -> Result<()>
+where
+    S: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let payload =
+        serde_json::to_string(frame)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to serialize runtime debug frame".to_string(),
+                url: None,
+            })?;
+    sink.send(Message::Text(payload.into()))
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to send runtime debug frame".to_string(),
+            url: None,
+        })
+}
+
+fn decode_runtime_agent_frame(msg: Message) -> Result<Option<RuntimeAgentFrame>> {
+    let text = match msg {
+        Message::Text(t) => t.to_string(),
+        Message::Binary(b) => String::from_utf8(b.to_vec()).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Runtime debug tunnel returned non-UTF8 binary frame".to_string(),
+                url: None,
+            },
+        )?,
+        Message::Close(_) => return Ok(None),
+        _ => return Ok(None),
+    };
+    serde_json::from_str::<RuntimeAgentFrame>(&text)
+        .map(Some)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Runtime debug tunnel returned malformed frame".to_string(),
+            url: None,
+        })
+}
+
+fn runtime_ws_url(tunnel: &RuntimeTunnelDebugSession) -> Result<String> {
+    let ws_base = if let Some(rest) = tunnel.tunnel_url.strip_prefix("https://") {
+        format!("wss://{}", rest)
+    } else if let Some(rest) = tunnel.tunnel_url.strip_prefix("http://") {
+        format!("ws://{}", rest)
+    } else {
+        tunnel.tunnel_url.clone()
+    };
+    Ok(format!(
+        "{}?token={}",
+        ws_base,
+        urlencoding::encode(&tunnel.client_token)
+    ))
+}
+
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
 }
 
 /// If the manager returned a `Pending` session (pull-mode kubernetes async
@@ -202,6 +662,7 @@ async fn resolve_deployment_id(
 async fn request_debug_session(
     manager: &ManagerContext,
     deployment_id: &str,
+    kind: DebugSessionKind,
 ) -> Result<DebugSessionResponse> {
     let url = format!(
         "{}{}",
@@ -211,6 +672,7 @@ async fn request_debug_session(
 
     let request_body = CreateDebugSessionRequest {
         deployment_id: deployment_id.to_string(),
+        kind,
     };
 
     let response = manager
@@ -379,6 +841,14 @@ async fn exec_with_session(
                 env.append(&mut isolation);
             }
             (env, None, Some(guard))
+        }
+        DebugSessionResponse::RuntimeTunnel(_) => {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message:
+                    "Runtime debug sessions must be used through `alien debug shell` or `alien debug exec`."
+                        .to_string(),
+                url: None,
+            }));
         }
     };
 

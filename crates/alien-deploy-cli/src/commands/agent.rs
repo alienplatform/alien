@@ -70,6 +70,14 @@ pub struct InstallArgs {
     /// Generic public endpoint URLs for exposed resources.
     #[arg(skip)]
     pub public_endpoints: Option<alien_core::PublicEndpointUrls>,
+
+    /// Enable Local runtime debug commands and shells.
+    #[arg(long)]
+    pub enable_local_debug: bool,
+
+    /// Override the shell command used by Local runtime debug shells.
+    #[arg(long)]
+    pub local_debug_shell_command: Option<String>,
 }
 
 pub async fn agent_command(args: AgentArgs) -> Result<()> {
@@ -198,6 +206,13 @@ fn install(args: InstallArgs) -> Result<()> {
     if args.public_endpoints.is_some() {
         service_args.push(OsString::from("--public-endpoints-file"));
         service_args.push(OsString::from(&public_endpoints_path));
+    }
+    if args.enable_local_debug {
+        service_args.push(OsString::from("--enable-local-debug"));
+    }
+    if let Some(shell_command) = &args.local_debug_shell_command {
+        service_args.push(OsString::from("--local-debug-shell-command"));
+        service_args.push(OsString::from(shell_command));
     }
     let service_args = if let Some(deployment_id) = &args.deployment_id {
         let mut service_args = service_args;

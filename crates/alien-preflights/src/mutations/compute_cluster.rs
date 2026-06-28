@@ -8,9 +8,11 @@
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
+    compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, ComputeCluster, Container, Daemon, DeploymentConfig, MachineProfile, Network,
-    Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, Container, Daemon, DeploymentConfig,
+    MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
+    StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -480,6 +482,30 @@ fn materialize_group(
             resource_id: None,
         })
     })?;
+    let scale = group.scale_policy.clone().unwrap_or_else(|| {
+        CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
+    });
+    let requirements = capacity_group_requirements(group);
+    let errors = validate_compute_pool_selection(
+        platform,
+        &group.group_id,
+        selection,
+        &requirements,
+        &scale,
+    );
+    if !errors.is_empty() {
+        return Err(AlienError::new(
+            crate::error::ErrorData::StackMutationFailed {
+                mutation_name: "ComputeClusterMutation".to_string(),
+                message: format!(
+                    "Invalid compute selection for '{}': {}",
+                    group.group_id,
+                    errors.join("; ")
+                ),
+                resource_id: None,
+            },
+        ));
+    }
     let machine = selection.machine().ok_or_else(|| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
@@ -500,19 +526,6 @@ fn materialize_group(
             resource_id: None,
         })
     })?;
-    if group.nested_virtualization == Some(true) && !spec.is_nested_virt_capable() {
-        return Err(AlienError::new(
-            crate::error::ErrorData::StackMutationFailed {
-                mutation_name: "ComputeClusterMutation".to_string(),
-                message: format!(
-                "{} machine '{}' does not support nested virtualization for capacity group '{}'",
-                platform, machine, group.group_id
-            ),
-                resource_id: None,
-            },
-        ));
-    }
-
     group.instance_type = Some(machine.to_string());
     group.profile = Some(spec.to_machine_profile());
     group.min_size = selection.min_size();
@@ -594,10 +607,12 @@ fn build_categorized_capacity_groups(
                 cpu: "4.0".to_string(),
                 memory_bytes: 8 * 1024 * 1024 * 1024,
                 ephemeral_storage_bytes: 50 * 1024 * 1024 * 1024,
+                architecture: None,
                 gpu: None,
             }),
             min_size: 1,
             max_size: 1,
+            scale_policy: None,
             nested_virtualization: None,
         }]),
         Platform::Kubernetes | Platform::Test => Ok(vec![CapacityGroup {
@@ -607,10 +622,12 @@ fn build_categorized_capacity_groups(
                 cpu: "4.0".to_string(),
                 memory_bytes: 8 * 1024 * 1024 * 1024,
                 ephemeral_storage_bytes: 50 * 1024 * 1024 * 1024,
+                architecture: None,
                 gpu: None,
             }),
             min_size: 0,
             max_size: 0,
+            scale_policy: None,
             nested_virtualization: None,
         }]),
     }
@@ -634,6 +651,7 @@ fn build_capacity_group_for_id(
             max_memory_per_container: 2 * 1024 * 1024 * 1024,
             max_ephemeral_storage_bytes: 0,
             gpu: None,
+            architecture: None,
             nested_virt: false,
         }
     } else {
@@ -657,6 +675,7 @@ fn build_capacity_group_for_id(
         profile: None,
         min_size: default_min_machines(&effective),
         max_size: default_max_machines(&effective),
+        scale_policy: None,
         nested_virtualization: None,
     };
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
@@ -673,6 +692,7 @@ fn build_capacity_group_for_id(
             ephemeral_storage_bytes: effective
                 .max_ephemeral_storage_bytes
                 .max(20 * 1024 * 1024 * 1024),
+            architecture: effective.architecture,
             gpu: effective.gpu,
         });
     }
@@ -777,6 +797,7 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
         max_memory_per_container,
         max_ephemeral_storage_bytes: max_ephemeral,
         gpu: gpu_requirement,
+        architecture: None,
         nested_virt: false,
     })
 }
@@ -785,7 +806,7 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 mod tests {
     use super::*;
     use alien_core::{
-        ComputePoolSelection, ComputeSettings, ContainerAutoscaling, ContainerCode,
+        ComputePoolSelection, ComputeSettings, ContainerAutoscaling, ContainerCode, DaemonCode,
         EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, ResourceSpec,
         StackSettings,
     };
@@ -1881,5 +1902,86 @@ mod tests {
             Some("m8i.xlarge"),
             "customer-declared instance_type must not be overwritten"
         );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_explicit_cluster_materializes_deployment_compute_selection() {
+        let daemon = Daemon::new("loader".to_string())
+            .code(DaemonCode::Image {
+                image: "loader:latest".to_string(),
+            })
+            .cluster("custom-runtime".to_string())
+            .permissions("loader".to_string())
+            .build();
+
+        let cluster = ComputeCluster::new("custom-runtime".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: 0,
+                max_size: 0,
+                nested_virtualization: None,
+            })
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "loader".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "custom-runtime".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let mutation = ComputeClusterMutation;
+        let config = deployment_config_with_compute_pool("m8i.xlarge", 2, 2);
+
+        assert!(
+            mutation.should_run(&stack, &stack_state, &config),
+            "explicit daemon clusters must run when provider compute settings need materialization"
+        );
+
+        let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = result
+            .resources
+            .get("custom-runtime")
+            .unwrap()
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        let group = cluster
+            .capacity_groups
+            .iter()
+            .find(|g| g.group_id == "general")
+            .expect("general capacity group must survive");
+
+        assert_eq!(group.instance_type.as_deref(), Some("m8i.xlarge"));
+        assert!(group.profile.is_some());
+        assert_eq!(group.min_size, 2);
+        assert_eq!(group.max_size, 2);
     }
 }

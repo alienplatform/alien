@@ -77,6 +77,12 @@ pub struct Args {
     #[arg(long, env = "STACK_SETTINGS_FILE")]
     pub stack_settings_file: Option<PathBuf>,
 
+    #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
+    pub enable_local_debug: bool,
+
+    #[arg(long, env = "ALIEN_LOCAL_DEBUG_SHELL_COMMAND")]
+    pub local_debug_shell_command: Option<String>,
+
     #[arg(long, env = "SYNC_INTERVAL", default_value = "30")]
     pub sync_interval: u64,
 
@@ -324,6 +330,8 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         .maybe_namespace(args.namespace)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
+        .local_debug_enabled(args.enable_local_debug)
+        .maybe_local_debug_shell_command(args.local_debug_shell_command)
         .build();
 
     let cancel = CancellationToken::new();

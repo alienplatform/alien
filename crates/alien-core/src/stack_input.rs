@@ -34,23 +34,6 @@ pub enum StackInputKind {
     StringList,
 }
 
-/// Setup methods that can collect deployer-provided input values.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum StackInputSetupMethod {
-    /// Deployment portal generated CLI setup.
-    Cli,
-    /// Terraform setup package.
-    Terraform,
-    /// CloudFormation setup package.
-    CloudFormation,
-    /// Helm setup package.
-    Helm,
-    /// Google OAuth setup flow.
-    GoogleOauth,
-}
-
 /// How a resolved stack input is injected into runtime environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -152,9 +135,6 @@ pub struct StackInputDefinition {
     /// Platforms where this input applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<Platform>>,
-    /// Setup methods where this input applies.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub setup_methods: Option<Vec<StackInputSetupMethod>>,
     /// Portable validation constraints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation: Option<StackInputValidation>,

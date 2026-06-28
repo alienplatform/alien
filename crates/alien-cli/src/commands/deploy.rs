@@ -19,7 +19,8 @@ use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
-    acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+    acquire_deployment, acquire_setup_run_deployment, final_reconcile, release_deployment,
+    ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -526,13 +527,29 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         message: "Failed to construct deployment config".to_string(),
     })?;
 
+    let setup_owned_status = matches!(
+        current.status,
+        DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+    );
+
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
-    acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire deployment lock".to_string(),
-        })?;
+    if setup_owned_status {
+        acquire_setup_run_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to acquire setup deployment lock".to_string(),
+            })?;
+    } else {
+        acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to acquire deployment lock".to_string(),
+            })?;
+    }
 
     // Re-fetch under lock (manager may have advanced the state)
     let deployment = manager_client
@@ -571,7 +588,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     let transport = ManagerApiTransport::new(manager_client.clone(), session.clone());
     let policy = RunnerPolicy {
         max_steps: 400,
-        operation: LoopOperation::Deploy,
+        operation: if setup_owned_status {
+            LoopOperation::InitialSetup
+        } else {
+            LoopOperation::Deploy
+        },
         delay_threshold: None,
     };
 

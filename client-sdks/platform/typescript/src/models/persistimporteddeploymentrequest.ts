@@ -1438,23 +1438,6 @@ export type PersistImportedDeploymentRequestProvidedBy = ClosedEnum<
 >;
 
 /**
- * Setup methods that can collect deployer-provided input values.
- */
-export const PersistImportedDeploymentRequestSetupMethod = {
-  Cli: "cli",
-  Terraform: "terraform",
-  CloudFormation: "cloud-formation",
-  Helm: "helm",
-  GoogleOauth: "google-oauth",
-} as const;
-/**
- * Setup methods that can collect deployer-provided input values.
- */
-export type PersistImportedDeploymentRequestSetupMethod = ClosedEnum<
-  typeof PersistImportedDeploymentRequestSetupMethod
->;
-
-/**
  * Portable stack input validation constraints.
  */
 export type PersistImportedDeploymentRequestValidation = {
@@ -1551,13 +1534,6 @@ export type PersistImportedDeploymentRequestInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  /**
-   * Setup methods where this input applies.
-   */
-  setupMethods?:
-    | Array<PersistImportedDeploymentRequestSetupMethod>
-    | null
-    | undefined;
   validation?:
     | PersistImportedDeploymentRequestValidation
     | any
@@ -6077,12 +6053,6 @@ export const PersistImportedDeploymentRequestProvidedBy$outboundSchema:
   );
 
 /** @internal */
-export const PersistImportedDeploymentRequestSetupMethod$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestSetupMethod> = z.enum(
-    PersistImportedDeploymentRequestSetupMethod,
-  );
-
-/** @internal */
 export type PersistImportedDeploymentRequestValidation$Outbound = {
   format?: string | null | undefined;
   max?: string | null | undefined;
@@ -6168,7 +6138,6 @@ export type PersistImportedDeploymentRequestInput$Outbound = {
   platforms?: Array<string> | null | undefined;
   providedBy: Array<string>;
   required: boolean;
-  setupMethods?: Array<string> | null | undefined;
   validation?:
     | PersistImportedDeploymentRequestValidation$Outbound
     | any
@@ -6214,9 +6183,6 @@ export const PersistImportedDeploymentRequestInput$outboundSchema: z.ZodType<
     PersistImportedDeploymentRequestProvidedBy$outboundSchema,
   ),
   required: z.boolean(),
-  setupMethods: z.nullable(
-    z.array(PersistImportedDeploymentRequestSetupMethod$outboundSchema),
-  ).optional(),
   validation: z.nullable(
     z.union([
       z.lazy(() => PersistImportedDeploymentRequestValidation$outboundSchema),
