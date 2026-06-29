@@ -986,10 +986,12 @@ mod tests {
                     cpu: "2.0".to_string(),
                     memory_bytes: 8 * 1024 * 1024 * 1024,
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
                     gpu: None,
                 }),
                 min_size: 1,
                 max_size: 10,
+                scale_policy: None,
                 nested_virtualization: None,
             })
             .build();
@@ -1532,10 +1534,12 @@ mod tests {
                     cpu: "2.0".to_string(),
                     memory_bytes: 8 * 1024 * 1024 * 1024,
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
                     gpu: None,
                 }),
                 min_size: 1,
                 max_size: 10,
+                scale_policy: None,
                 nested_virtualization: None,
             })
             .build();
@@ -1835,10 +1839,12 @@ mod tests {
                     cpu: "4.0".to_string(),
                     memory_bytes: 16 * 1024 * 1024 * 1024,
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
                     gpu: None,
                 }),
                 min_size: 1,
                 max_size: 1,
+                scale_policy: None,
                 nested_virtualization: Some(true),
             })
             .build();
@@ -1921,6 +1927,7 @@ mod tests {
                 profile: None,
                 min_size: 0,
                 max_size: 0,
+                scale_policy: None,
                 nested_virtualization: None,
             })
             .build();

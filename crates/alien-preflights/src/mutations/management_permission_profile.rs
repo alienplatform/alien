@@ -1059,6 +1059,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 3,
+                scale_policy: None,
                 nested_virtualization: None,
             })
             .build();
