@@ -1285,7 +1285,7 @@ fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Re
         })
 }
 
-fn read_token_file(path: &Path) -> Result<String> {
+pub(crate) fn read_token_file(path: &Path) -> Result<String> {
     let token = std::fs::read_to_string(path).into_alien_error().context(
         ErrorData::ConfigurationError {
             message: format!("Failed to read token file {}", path.display()),
