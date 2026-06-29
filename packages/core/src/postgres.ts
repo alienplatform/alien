@@ -49,8 +49,9 @@ export class Postgres {
   }
 
   /**
-   * Requests vCPUs (e.g. "0.5", "2"). The controller picks the cheapest tier that
-   * satisfies both cpu and memory.
+   * Requests vCPUs (e.g. "0.5", "2"). On GCP and Azure, `cpu` and `memory` together pick the
+   * smallest tier that satisfies both. On AWS (Aurora Serverless v2) sizing comes from `memory`, so
+   * `cpu` is ignored.
    * @param value The requested vCPUs.
    * @returns The Postgres builder instance.
    */
@@ -60,7 +61,8 @@ export class Postgres {
   }
 
   /**
-   * Requests memory (e.g. "1Gi", "8Gi").
+   * Requests memory (e.g. "1Gi", "8Gi"). Drives the size on AWS (the ACU ceiling) and, together
+   * with `cpu`, the tier on GCP and Azure.
    * @param value The requested memory.
    * @returns The Postgres builder instance.
    */
