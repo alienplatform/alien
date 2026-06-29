@@ -248,6 +248,7 @@ fn aws_s3_import_request(
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
+        setup_metadata: None,
         release_id: None,
         platform: Platform::Aws,
         base_platform: None,
@@ -259,6 +260,7 @@ fn aws_s3_import_request(
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
@@ -315,6 +317,7 @@ fn aws_remote_management_import_request(
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
+        setup_metadata: None,
         release_id: None,
         platform: Platform::Aws,
         base_platform: None,
@@ -326,6 +329,7 @@ fn aws_remote_management_import_request(
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -346,6 +350,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
+        setup_metadata: None,
         release_id: None,
         platform: Platform::Kubernetes,
         base_platform: Some(Platform::Aws),
@@ -357,6 +362,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
         management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: "kubernetes".to_string(),
             resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
@@ -387,6 +393,7 @@ fn gcp_remote_management_import_request(
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
+        setup_metadata: None,
         release_id: None,
         platform: Platform::Gcp,
         base_platform: None,
@@ -398,6 +405,7 @@ fn gcp_remote_management_import_request(
         management_config: Some(ManagementConfig::Gcp(GcpManagementConfig {
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -428,6 +436,7 @@ fn azure_remote_management_import_request(
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
+        setup_metadata: None,
         release_id: None,
         platform: Platform::Azure,
         base_platform: None,
@@ -441,6 +450,7 @@ fn azure_remote_management_import_request(
             oidc_issuer: "https://issuer.example".to_string(),
             oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         })),
+        input_values: Default::default(),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -522,9 +532,8 @@ async fn happy_path_creates_imported_deployment() {
         "storage imports are already at their controller terminal state"
     );
 
-    // Persistence-side check: the SQLite store has the row with
-    // status=provisioning, the caller-supplied name, and stack_state
-    // populated.
+    // Persistence-side check: the SQLite store has the row with the
+    // setup-handoff status, the caller-supplied name, and stack_state populated.
     let persisted = fixture
         .deployment_store
         .get_deployment(
@@ -534,7 +543,7 @@ async fn happy_path_creates_imported_deployment() {
         .await
         .unwrap()
         .expect("deployment must persist");
-    assert_eq!(persisted.status, "provisioning");
+    assert_eq!(persisted.status, "initial-setup");
     assert_eq!(
         persisted.import_source,
         Some(ImportSourceKind::CloudFormation)
@@ -562,8 +571,8 @@ async fn happy_path_creates_imported_deployment() {
     );
     assert_eq!(persisted.deployment_group_id, fixture.deployment_group_id);
     assert!(
-        persisted.current_release_id.is_some(),
-        "imported deployment must pin the release that produced it"
+        persisted.desired_release_id.is_some(),
+        "imported deployment must target the release that produced it"
     );
     let deployment_token = persisted
         .deployment_token
@@ -631,7 +640,7 @@ async fn aws_import_persists_target_environment_info() {
     let body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
-        "remote-stack-management",
+        "management",
         "210987654321",
     );
 
@@ -664,7 +673,7 @@ async fn aws_cloudformation_import_accepts_stringified_booleans() {
     let mut body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
-        "remote-stack-management",
+        "management",
         "210987654321",
     );
     body.resources[0].import_data["managementPermissionsApplied"] =
@@ -682,7 +691,7 @@ async fn gcp_import_persists_target_environment_info() {
     let body = gcp_remote_management_import_request(
         "acme-prod",
         "us-central1",
-        "remote-stack-management",
+        "management",
         "customer-project",
         Some("123456789012"),
     );
@@ -721,7 +730,7 @@ async fn azure_import_persists_target_environment_info() {
     let body = azure_remote_management_import_request(
         "acme-prod",
         "eastus",
-        "remote-stack-management",
+        "management",
         "00000000-0000-0000-0000-000000000123",
         "00000000-0000-0000-0000-000000000456",
     );
@@ -812,7 +821,7 @@ async fn explicit_release_id_is_persisted() {
         .await
         .unwrap()
         .expect("deployment must persist");
-    assert_eq!(persisted.current_release_id, Some(release_id));
+    assert_eq!(persisted.desired_release_id, Some(release_id));
 }
 
 #[tokio::test]
@@ -831,6 +840,7 @@ async fn native_deployment_blocks_imported_name() {
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                input_values: Default::default(),
                 deployment_token: None,
             },
         )

@@ -173,8 +173,15 @@ resource "azurerm_resource_group" "default_resource_group" {
 === secrets.tf ===
 data "azurerm_client_config" "secrets_current" {}
 
+resource "random_id" "secrets_name_suffix" {
+  byte_length = 3
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_key_vault" "secrets" {
-  name                          = substr(lower("${local.resource_prefix}-secrets"), 0, 24)
+  name                          = format("%s-%s", trim(substr(lower(replace("${local.resource_prefix}-secrets", "_", "-")), 0, 17), "-"), random_id.secrets_name_suffix.hex)
   resource_group_name           = var.azure_resource_group_name
   location                      = var.azure_location
   tenant_id                     = data.azurerm_client_config.secrets_current.tenant_id
@@ -209,9 +216,11 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
+    random_id.secrets_name_suffix,
     azurerm_key_vault.secrets
   ]
 }

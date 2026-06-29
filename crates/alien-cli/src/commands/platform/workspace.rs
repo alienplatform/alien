@@ -2,7 +2,7 @@ use crate::auth::{load_workspace, save_workspace};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::InteractionMode;
-use crate::output::{can_prompt, print_json, prompt_select};
+use crate::output::{print_json, prompt_select};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 use alien_error::{AlienError, Context};
 use alien_platform_api::SdkResultExt;
@@ -124,7 +124,7 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
 pub async fn list_workspace_names(http: &crate::auth::AuthHttp) -> Result<Vec<String>> {
     let client = http.sdk_client();
     let response = client
-        .list_workspaces()
+        .list_memberships()
         .send()
         .await
         .into_sdk_error()
@@ -137,7 +137,7 @@ pub async fn list_workspace_names(http: &crate::auth::AuthHttp) -> Result<Vec<St
         .into_inner()
         .items
         .into_iter()
-        .map(|workspace| (*workspace.name).clone())
+        .map(|membership| (*membership.name).clone())
         .collect())
 }
 
@@ -167,9 +167,11 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
         return Ok(workspaces[0].clone());
     }
 
-    InteractionMode::new(json_mode, can_prompt()).require_prompt(
-        "Workspace selection requires a real terminal. Pass `--workspace <name>` or run `alien workspaces set <name>` first.",
-    )?;
+    if InteractionMode::current(json_mode).is_machine() {
+        return Err(AlienError::new(ErrorData::WorkspaceSelectionRequired {
+            workspaces,
+        }));
+    }
 
     prompt_select("Select a workspace:", &workspaces)
 }

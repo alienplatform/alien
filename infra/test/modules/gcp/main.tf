@@ -161,6 +161,7 @@ locals {
     "roles/pubsub.admin",                    # Pub/Sub topics & subscriptions
     "roles/storage.admin",                   # GCS buckets
     "roles/iam.serviceAccountAdmin",         # Service accounts (create/delete)
+    "roles/iam.serviceAccountKeyAdmin",      # Recreate Terraform-managed target SA keys
     "roles/iam.serviceAccountUser",          # Bind SAs to resources (actAs)
     "roles/iam.roleAdmin",                   # Custom IAM roles
     "roles/resourcemanager.projectIamAdmin", # Project-level IAM bindings

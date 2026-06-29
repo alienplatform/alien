@@ -53,6 +53,7 @@ base64 = { workspace = true }
 # Crypto
 sha2 = { workspace = true }
 hex = { workspace = true }
+hmac = { workspace = true }
 
 # Time
 chrono = { workspace = true, features = ["serde"] }

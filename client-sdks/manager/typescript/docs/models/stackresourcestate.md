@@ -30,7 +30,7 @@ let value: StackResourceState = {
     id: "<id>",
     type: "worker",
   },
-  status: "updating",
+  status: "update-failed",
   type: "<value>",
 };
 ```

@@ -134,11 +134,13 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
                 current_release_id: None,
                 desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_metadata: None,
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await
@@ -188,11 +190,13 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
                 current_release_id: None,
                 desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_metadata: None,
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await
@@ -248,11 +252,13 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 current_release_id: None,
                 desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_metadata: None,
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await

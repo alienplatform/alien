@@ -9,11 +9,14 @@ let value: CreateDeploymentResponse = {
   deployment: {
     createdAt: "1717217133195",
     deploymentGroupId: "<id>",
+    deploymentProtocolVersion: 555963,
     id: "<id>",
     name: "<value>",
-    platform: "kubernetes",
-    retryRequested: false,
+    platform: "test",
+    projectId: "<id>",
+    retryRequested: true,
     status: "<value>",
+    workspaceId: "<id>",
   },
 };
 ```

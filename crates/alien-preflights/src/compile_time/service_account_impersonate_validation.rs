@@ -160,6 +160,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -184,6 +185,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -217,6 +219,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -253,6 +256,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = ServiceAccountImpersonateValidationCheck;

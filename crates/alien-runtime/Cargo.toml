@@ -65,6 +65,7 @@ pin-project-lite = { workspace = true, optional = true }
 http-body = { workspace = true, optional = true }
 cloudevents-sdk = { workspace = true, features = ["reqwest"], optional = true }
 port_check = { workspace = true }
+strip-ansi-escapes = { workspace = true }
 
 [dev-dependencies]
 port_check = { workspace = true }

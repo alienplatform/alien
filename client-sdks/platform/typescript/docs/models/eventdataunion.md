@@ -337,7 +337,7 @@ const value: models.DataDeploymentFailed = {
     internal: true,
     message: "<value>",
   },
-  phase: "provisioning",
+  phase: "preflights",
   type: "DeploymentFailed",
 };
 ```

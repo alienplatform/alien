@@ -1,0 +1,15 @@
+# OpenAPI specs generated from Rust schema exporters.
+crates/alien-manager/openapi.json linguist-generated=true
+client-sdks/**/openapi*.json linguist-generated=true
+packages/core/openapi.json linguist-generated=true
+
+# Azure OpenAPI fragments and the generated include module.
+crates/alien-azure-clients/openapi/** linguist-generated=true
+crates/alien-azure-clients/src/azure/models/mod.rs linguist-generated=true
+
+# Kubb schema output.
+packages/core/src/generated/** linguist-generated=true
+
+# Protobuf TypeScript output.
+packages/sdk/src/generated/** linguist-generated=true
+packages/sdk/dist/generated/** linguist-generated=true

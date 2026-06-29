@@ -8,6 +8,7 @@
 //! - Launch templates/instance configurations
 
 use crate::error::{ErrorData, Result};
+use crate::instance_catalog::Architecture;
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
 use crate::ResourceType;
 use alien_error::AlienError;
@@ -44,9 +45,95 @@ pub struct MachineProfile {
     pub memory_bytes: u64,
     /// Ephemeral storage in bytes (hardware total)
     pub ephemeral_storage_bytes: u64,
+    /// CPU architecture required or provided by this machine profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<Architecture>,
     /// GPU specification (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<GpuSpec>,
+}
+
+/// Allowed range and default for a count selected by the installer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeChoiceRange {
+    /// Lowest allowed value.
+    pub min: u32,
+    /// Highest allowed value.
+    pub max: u32,
+    /// Default value recommended when no installer override is supplied.
+    pub default: u32,
+}
+
+impl ComputeChoiceRange {
+    /// Returns whether a selected value is inside the allowed range.
+    pub fn contains(&self, value: u32) -> bool {
+        self.min <= value && value <= self.max
+    }
+}
+
+/// Source-declared scale policy for a capacity group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum CapacityGroupScalePolicy {
+    /// A fixed-size pool where the installer can choose the fixed machine count.
+    Fixed {
+        /// Allowed fixed machine count range.
+        machines: ComputeChoiceRange,
+    },
+    /// An autoscaling pool with separately bounded min and max counts.
+    Autoscale {
+        /// Allowed minimum machine count range.
+        min: ComputeChoiceRange,
+        /// Allowed maximum machine count range.
+        max: ComputeChoiceRange,
+    },
+}
+
+impl CapacityGroupScalePolicy {
+    /// Derive the legacy policy represented by selected min/max values.
+    pub fn from_selected_bounds(min_size: u32, max_size: u32) -> Self {
+        if min_size == max_size {
+            Self::Fixed {
+                machines: ComputeChoiceRange {
+                    min: min_size,
+                    max: max_size,
+                    default: min_size,
+                },
+            }
+        } else {
+            Self::Autoscale {
+                min: ComputeChoiceRange {
+                    min: min_size,
+                    max: min_size,
+                    default: min_size,
+                },
+                max: ComputeChoiceRange {
+                    min: max_size,
+                    max: max_size,
+                    default: max_size,
+                },
+            }
+        }
+    }
+
+    /// Default selected min bound.
+    pub fn default_min_size(&self) -> u32 {
+        match self {
+            Self::Fixed { machines } => machines.default,
+            Self::Autoscale { min, .. } => min.default,
+        }
+    }
+
+    /// Default selected max bound.
+    pub fn default_max_size(&self) -> u32 {
+        match self {
+            Self::Fixed { machines } => machines.default,
+            Self::Autoscale { max, .. } => max.default,
+        }
+    }
 }
 
 /// Capacity group definition.
@@ -60,8 +147,9 @@ pub struct MachineProfile {
 pub struct CapacityGroup {
     /// Unique identifier for this capacity group (must be lowercase alphanumeric with hyphens)
     pub group_id: String,
-    /// Instance type for machines in this group (e.g., "m7g.xlarge", "n2-standard-8")
-    /// Auto-selected if not specified, based on profile requirements.
+    /// Provider machine selected at deployment time.
+    /// `alien.ts` should declare portable requirements; preflight materialization
+    /// fills this field from `StackSettings.compute`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_type: Option<String>,
     /// Machine resource profile (auto-derived from instance_type if not specified)
@@ -71,6 +159,19 @@ pub struct CapacityGroup {
     pub min_size: u32,
     /// Maximum number of machines (must be ≤ 10)
     pub max_size: u32,
+    /// Source-declared scale policy and installer-editable bounds.
+    ///
+    /// Older stacks only have `minSize` and `maxSize`; planners derive an exact
+    /// fixed/autoscale policy from those selected bounds when this field is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_policy: Option<CapacityGroupScalePolicy>,
+    /// Require instance types that expose nested virtualization (VT-x/EPT)
+    /// to guest VMs. This is needed by workloads that boot nested VMs inside
+    /// containers.
+    /// When true, the controller's instance-type selector is constrained
+    /// to a vetted nested-virt-capable allowlist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_virtualization: Option<bool>,
 }
 
 /// ComputeCluster resource for running long-running container workloads.
@@ -82,21 +183,30 @@ pub struct CapacityGroup {
 /// ## Architecture
 ///
 /// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
-/// - **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout
-/// - **horizond** runs on each machine from the selected Horizon machine image channel
+/// - **Alien** manages allowed fleet operations: machine count and runtime
+///   machine image rollout
+/// - A node agent runs on each machine from the selected runtime image channel
 ///
 /// ## Example
 ///
 /// ```rust
-/// use alien_core::{ComputeCluster, CapacityGroup};
+/// use alien_core::{CapacityGroup, ComputeCluster, MachineProfile};
 ///
 /// let cluster = ComputeCluster::new("compute".to_string())
 ///     .capacity_group(CapacityGroup {
 ///         group_id: "general".to_string(),
-///         instance_type: Some("m7g.xlarge".to_string()),
-///         profile: None,
+///         instance_type: None,
+///         profile: Some(MachineProfile {
+///             cpu: "4.0".to_string(),
+///             memory_bytes: 16 * 1024 * 1024 * 1024,
+///             ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+///             architecture: None,
+///             gpu: None,
+///         }),
 ///         min_size: 1,
 ///         max_size: 5,
+///         scale_policy: None,
+///         nested_virtualization: None,
 ///     })
 ///     .build();
 /// ```
@@ -305,6 +415,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -323,6 +435,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 3,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .capacity_group(CapacityGroup {
                 group_id: "gpu".to_string(),
@@ -331,6 +445,7 @@ mod tests {
                     cpu: "4.0".to_string(),
                     memory_bytes: 17179869184,             // 16 GiB
                     ephemeral_storage_bytes: 214748364800, // 200 GiB
+                    architecture: None,
                     gpu: Some(GpuSpec {
                         gpu_type: "nvidia-a10g".to_string(),
                         count: 1,
@@ -338,6 +453,8 @@ mod tests {
                 }),
                 min_size: 0,
                 max_size: 2,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -362,6 +479,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -377,6 +496,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -387,6 +508,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -403,6 +526,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -413,6 +538,8 @@ mod tests {
                 profile: None,
                 min_size: 2,
                 max_size: 10,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 
@@ -430,6 +557,8 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 5,
+                scale_policy: None,
+                nested_virtualization: None,
             })
             .build();
 

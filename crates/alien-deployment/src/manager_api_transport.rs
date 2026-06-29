@@ -12,6 +12,7 @@ use alien_core::{DeploymentState, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
+use serde::Serialize;
 use tracing::{error, info};
 
 use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
@@ -42,7 +43,6 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         deployment_id: &str,
         state: &DeploymentState,
         config: &alien_core::DeploymentConfig,
-        step_error: Option<&AlienError>,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
@@ -54,10 +54,6 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                     message: "Failed to serialize state for reconcile".to_string(),
                 })?;
 
-        let error_json = step_error.map(|e| {
-            serde_json::to_value(e)
-                .unwrap_or_else(|_| serde_json::json!({ "message": e.to_string() }))
-        });
         let suggested_delay_ms = suggested_delay_ms
             .map(i64::try_from)
             .transpose()
@@ -76,7 +72,6 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                 session: self.session.clone(),
                 state: state_json,
                 update_heartbeat: Some(update_heartbeat),
-                error: error_json,
                 suggested_delay_ms,
                 heartbeats,
             })
@@ -106,13 +101,30 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         // the server's updates on subsequent reconcile calls.
         let state_update = serde_json::from_value::<DeploymentState>(resp.current)
             .ok()
-            .filter(|updated| updated.runtime_metadata != state.runtime_metadata);
+            .filter(|updated| deployment_state_changed(updated, state));
 
         Ok(StepReconcileResult {
             state: state_update,
             config: config_update,
         })
     }
+}
+
+fn deployment_state_changed(updated: &DeploymentState, current: &DeploymentState) -> bool {
+    updated.status != current.status
+        || updated.platform != current.platform
+        || updated.current_release != current.current_release
+        || updated.target_release != current.target_release
+        || serialized_values_differ(&updated.stack_state, &current.stack_state)
+        || updated.error != current.error
+        || updated.environment_info != current.environment_info
+        || updated.runtime_metadata != current.runtime_metadata
+        || updated.retry_requested != current.retry_requested
+        || updated.protocol_version != current.protocol_version
+}
+
+fn serialized_values_differ<T: Serialize>(updated: &T, current: &T) -> bool {
+    serde_json::to_value(updated).ok() != serde_json::to_value(current).ok()
 }
 
 fn to_manager_api_heartbeats(
@@ -154,13 +166,91 @@ pub async fn acquire_deployment(
     deployment_id: &str,
     session: &str,
 ) -> Result<(), AlienError> {
+    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None)
+        .await
+        .map(|_| ())
+}
+
+/// Acquire a deployment lock and return the manager's acquired deployment
+/// payload. Callers that need deployment-config fields that are intentionally
+/// redacted from `GET /v1/deployments` should use this helper.
+pub async fn acquire_deployment_with_payload(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<serde_json::Value, AlienError> {
+    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None).await
+}
+
+/// Acquire a deployment lock for CLI-owned setup.
+///
+/// Runtime managers intentionally skip these setup-owned states; the customer
+/// CLI must drive them with the customer's local cloud credentials until the
+/// deployment reaches the provisioning handoff.
+pub async fn acquire_setup_run_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<serde_json::Value, AlienError> {
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        Some("setup-run".to_string()),
+        Some("cli".to_string()),
+        Some(vec![
+            "pending".to_string(),
+            "preflights-failed".to_string(),
+            "initial-setup".to_string(),
+            "initial-setup-failed".to_string(),
+        ]),
+    )
+    .await
+}
+
+/// Acquire a deployment lock for a caller that owns setup-time teardown.
+///
+/// Unlike the normal manager acquire path, this can acquire `teardown-required`
+/// so setup-authority callers can resume frozen-resource teardown.
+pub async fn acquire_setup_delete_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<(), AlienError> {
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        Some("setup-teardown".to_string()),
+        Some("cli".to_string()),
+        Some(vec![
+            "delete-pending".to_string(),
+            "deleting".to_string(),
+            "teardown-required".to_string(),
+            "teardown-failed".to_string(),
+        ]),
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn acquire_deployment_with_statuses(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    acquire_mode: Option<String>,
+    setup_method: Option<String>,
+    statuses: Option<Vec<String>>,
+) -> Result<serde_json::Value, AlienError> {
     for attempt in 1..=MAX_ACQUIRE_ATTEMPTS {
         let resp = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
+                acquire_mode: acquire_mode.clone(),
                 session: session.to_string(),
                 deployment_ids: Some(vec![deployment_id.to_string()]),
-                statuses: None,
+                setup_method: setup_method.clone(),
+                statuses: statuses.clone(),
                 platforms: None,
                 limit: None,
             })
@@ -171,8 +261,8 @@ pub async fn acquire_deployment(
                 message: "Failed to acquire sync lock".to_string(),
             })?;
 
-        if !resp.into_inner().deployments.is_empty() {
-            return Ok(());
+        if let Some(deployment) = resp.into_inner().deployments.into_iter().next() {
+            return Ok(deployment.deployment);
         }
 
         if attempt == MAX_ACQUIRE_ATTEMPTS {
@@ -210,7 +300,6 @@ pub async fn final_reconcile(
             session: session.to_string(),
             state: state_json,
             update_heartbeat: Some(false),
-            error: None,
             suggested_delay_ms: None,
             heartbeats: vec![],
         })

@@ -11,7 +11,7 @@ let value: SyncAcquireResponseDeployment = {
   current: {
     platform: "aws",
     protocolVersion: 626709,
-    status: "initial-setup-failed",
+    status: "initial-setup",
   },
   config: {
     environmentVariables: {
@@ -29,5 +29,6 @@ let value: SyncAcquireResponseDeployment = {
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `deploymentId`                                                               | *string*                                                                     | :heavy_check_mark:                                                           | ID of the acquired deployment                                                | dep_0c29fq4a2yjb7kx3smwdgxlc                                                 |
 | `projectId`                                                                  | *string*                                                                     | :heavy_check_mark:                                                           | Project ID the deployment belongs to                                         |                                                                              |
+| `setupMethod`                                                                | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)           | :heavy_minus_sign:                                                           | N/A                                                                          |                                                                              |
 | `current`                                                                    | [models.SyncAcquireResponseCurrent](../models/syncacquireresponsecurrent.md) | :heavy_check_mark:                                                           | Current deployment state (includes releases)                                 |                                                                              |
 | `config`                                                                     | [models.SyncAcquireResponseConfig](../models/syncacquireresponseconfig.md)   | :heavy_check_mark:                                                           | Deployment configuration                                                     |                                                                              |

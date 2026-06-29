@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     error::{ErrorData, Result},
     generators::labels::{entry_pascal_label, has_explicit_label},
@@ -33,6 +35,38 @@ pub struct AwsIamPolicy {
     pub version: String,
     /// List of policy statements
     pub statement: Vec<AwsIamStatement>,
+}
+
+/// Ensures every statement in a single AWS IAM policy document has a unique
+/// Sid. Permission sets may intentionally split the same logical permission
+/// across several IAM statements when AWS requires different resource or
+/// condition blocks.
+pub fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+    let mut used = HashSet::new();
+
+    for statement in statements {
+        if used.insert(statement.sid.clone()) {
+            continue;
+        }
+
+        let base = statement.sid.clone();
+        let mut suffix = 2usize;
+        loop {
+            let candidate = suffixed_statement_sid(&base, suffix);
+            if used.insert(candidate.clone()) {
+                statement.sid = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
+fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
+    let suffix = suffix.to_string();
+    let max_base_len = 128usize.saturating_sub(suffix.len());
+    let trimmed = base.chars().take(max_base_len).collect::<String>();
+    format!("{trimmed}{suffix}")
 }
 
 /// AWS runtime permissions generator for IAM policy documents
@@ -203,5 +237,63 @@ impl AwsRuntimePermissionsGenerator {
 impl Default for AwsRuntimePermissionsGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::get_permission_set;
+
+    fn statement(sid: &str) -> AwsIamStatement {
+        AwsIamStatement {
+            sid: sid.to_string(),
+            effect: "Allow".to_string(),
+            action: vec!["ec2:DescribeInstances".to_string()],
+            resource: vec!["*".to_string()],
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_statement_sids_are_suffixed() {
+        let mut statements = vec![
+            statement("DuplicateSid"),
+            statement("DuplicateSid"),
+            statement("DuplicateSid"),
+        ];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        let sids = statements
+            .iter()
+            .map(|statement| statement.sid.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(sids, vec!["DuplicateSid", "DuplicateSid2", "DuplicateSid3"]);
+    }
+
+    #[test]
+    fn compute_cluster_management_policy_can_be_normalized_to_unique_sids() {
+        let permission_set = get_permission_set("compute-cluster/management")
+            .expect("compute-cluster management permission set should exist");
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack");
+
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let mut policy = generator
+            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .expect("AWS policy should generate");
+        ensure_unique_statement_sids(&mut policy.statement);
+
+        let mut seen = HashSet::new();
+        for statement in policy.statement {
+            assert!(
+                seen.insert(statement.sid.clone()),
+                "duplicate AWS IAM statement Sid: {}",
+                statement.sid
+            );
+        }
     }
 }

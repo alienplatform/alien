@@ -11,14 +11,14 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
-    ErrorData, ExposeProtocol, Ingress, KubernetesCluster, KubernetesClusterOutputs,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
-    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
-    WorkerCode,
+    ErrorData, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
+    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
-use std::collections::BTreeSet;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Generated Helm chart files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,16 +58,14 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
 
-    let stack_json = serde_json::to_string_pretty(stack)
-        .into_alien_error()
-        .context(ErrorData::JsonSerializationFailed {
-            reason: "failed to serialize stack into chart metadata".to_string(),
-        })?;
-    let stack_settings_json = serde_json::to_string_pretty(&options.stack_settings)
-        .into_alien_error()
-        .context(ErrorData::JsonSerializationFailed {
+    let stack_json = to_stable_pretty_json(stack).context(ErrorData::JsonSerializationFailed {
+        reason: "failed to serialize stack into chart metadata".to_string(),
+    })?;
+    let stack_settings_json = to_stable_pretty_json(&options.stack_settings).context(
+        ErrorData::JsonSerializationFailed {
             reason: "failed to serialize stack settings into chart metadata".to_string(),
-        })?;
+        },
+    )?;
 
     let mut files = IndexMap::new();
     files.insert("Chart.yaml".to_string(), chart_yaml(&chart_name, stack));
@@ -93,6 +91,7 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
@@ -248,7 +247,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         options.base_platform,
     );
     append_services(&mut yaml, &analysis);
-    yaml.push_str("\npublicUrls: {}\n");
+    yaml.push_str("\npublicEndpoints: {}\n");
 
     Ok(yaml)
 }
@@ -269,9 +268,17 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
 #[derive(Debug, Default)]
 struct ChartAnalysis {
     service_accounts: BTreeSet<String>,
+    service_account_rbac: BTreeMap<String, Vec<KubernetesRoleRule>>,
     infrastructure: Vec<InfrastructureValue>,
     services: Vec<ServiceValue>,
     extra_templates: IndexMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KubernetesRoleRule {
+    api_groups: Vec<&'static str>,
+    resources: Vec<&'static str>,
+    verbs: Vec<&'static str>,
 }
 
 impl ChartAnalysis {
@@ -283,6 +290,14 @@ impl ChartAnalysis {
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let service_account_rbac = stack
+            .permission_profiles()
+            .iter()
+            .filter_map(|(name, profile)| {
+                let rules = kubernetes_rbac_rules_for_permission_profile(profile);
+                (!rules.is_empty()).then(|| (name.clone(), rules))
+            })
+            .collect::<BTreeMap<_, _>>();
 
         let names = IndexMap::new();
         let stack_settings = StackSettings::default();
@@ -291,7 +306,7 @@ impl ChartAnalysis {
             if let Some(function) = entry.config.downcast_ref::<Worker>() {
                 fail_if_worker_source_remains(resource_id, function)?;
                 service_accounts.insert(function.permissions.clone());
-                if function.ingress == Ingress::Public {
+                if !function.public_endpoints.is_empty() {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
                         component: "worker".to_string(),
@@ -301,15 +316,11 @@ impl ChartAnalysis {
             }
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 fail_if_container_source_remains(resource_id, container)?;
-                if let Some(port) = container
-                    .ports
-                    .iter()
-                    .find(|port| port.expose == Some(ExposeProtocol::Http))
-                {
+                if let Some(endpoint) = container.public_endpoints.first() {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
                         component: "container".to_string(),
-                        target_port: port.port,
+                        target_port: endpoint.port,
                     });
                 }
             }
@@ -352,8 +363,51 @@ impl ChartAnalysis {
         }
 
         analysis.service_accounts = service_accounts;
+        analysis.service_account_rbac = service_account_rbac;
         Ok(analysis)
     }
+}
+
+fn kubernetes_rbac_rules_for_permission_profile(
+    profile: &alien_core::PermissionProfile,
+) -> Vec<KubernetesRoleRule> {
+    let mut secret_verbs = BTreeSet::new();
+    let mut needs_jobs = false;
+
+    for permission in profile.0.values().flatten() {
+        match permission.id() {
+            "vault/data-read" => {
+                secret_verbs.extend(["get", "list", "watch"]);
+            }
+            "vault/data-write" => {
+                secret_verbs.extend([
+                    "get", "list", "watch", "create", "update", "patch", "delete",
+                ]);
+            }
+            "build/execute" => {
+                needs_jobs = true;
+            }
+            _ => {}
+        }
+    }
+
+    let mut rules = Vec::new();
+    if !secret_verbs.is_empty() {
+        rules.push(KubernetesRoleRule {
+            api_groups: vec![""],
+            resources: vec!["secrets"],
+            verbs: secret_verbs.into_iter().collect(),
+        });
+    }
+    if needs_jobs {
+        rules.push(KubernetesRoleRule {
+            api_groups: vec!["batch"],
+            resources: vec!["jobs"],
+            verbs: vec!["get", "list", "watch", "create", "delete"],
+        });
+    }
+
+    rules
 }
 
 fn fail_if_worker_source_remains(resource_id: &str, worker: &Worker) -> Result<()> {
@@ -394,6 +448,33 @@ struct ServiceValue {
     id: String,
     component: String,
     target_port: u16,
+}
+
+fn to_stable_pretty_json<T: Serialize>(value: &T) -> alien_error::Result<String> {
+    let value = serde_json::to_value(value).into_alien_error()?;
+    serde_json::to_string_pretty(&sort_json_object_keys(value)).into_alien_error()
+}
+
+fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sort_json_object_keys)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, sort_json_object_keys(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
 }
 
 fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
@@ -535,6 +616,14 @@ runtime:
       enabled: true
     egress:
       enabled: true
+  cleanup:
+    onUninstall:
+      enabled: true
+      deletePersistentVolumeClaims: false
+      image:
+        repository: alpine/k8s
+        tag: "1.32.0"
+        pullPolicy: IfNotPresent
 
 heartbeat:
   collection:
@@ -587,7 +676,7 @@ clusterBootstrap:
     append_stack_settings(&mut yaml, stack_settings)?;
     yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
-    yaml.push_str("\npublicUrls: {}\n");
+    yaml.push_str("\npublicEndpoints: {}\n");
 
     yaml.push_str(
         r#"
@@ -642,6 +731,7 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
                 "  {}:\n    annotations: {{}}\n    labels: {{}}\n",
                 yaml_key(name)
             ));
+            append_service_account_rbac(yaml, analysis.service_account_rbac.get(name));
         }
     }
 }
@@ -672,7 +762,39 @@ fn append_registered_service_accounts(
             None => yaml.push_str("    annotations: {}\n"),
         }
         yaml.push_str("    labels: {}\n");
+        append_service_account_rbac(yaml, analysis.service_account_rbac.get(name));
     }
+}
+
+fn append_service_account_rbac(yaml: &mut String, rules: Option<&Vec<KubernetesRoleRule>>) {
+    let Some(rules) = rules.filter(|rules| !rules.is_empty()) else {
+        return;
+    };
+
+    yaml.push_str("    rbac:\n");
+    yaml.push_str("      rules:\n");
+    for rule in rules {
+        yaml.push_str("        - apiGroups: ");
+        append_yaml_inline_string_list(yaml, &rule.api_groups);
+        yaml.push('\n');
+        yaml.push_str("          resources: ");
+        append_yaml_inline_string_list(yaml, &rule.resources);
+        yaml.push('\n');
+        yaml.push_str("          verbs: ");
+        append_yaml_inline_string_list(yaml, &rule.verbs);
+        yaml.push('\n');
+    }
+}
+
+fn append_yaml_inline_string_list(yaml: &mut String, values: &[&str]) {
+    yaml.push('[');
+    for (idx, value) in values.iter().enumerate() {
+        if idx > 0 {
+            yaml.push_str(", ");
+        }
+        yaml.push_str(&yaml_string(value));
+    }
+    yaml.push(']');
 }
 
 fn append_manager_service_account(
@@ -787,7 +909,7 @@ fn append_cluster_bootstrap(
     yaml.push_str("    default:\n");
     yaml.push_str(&format!("      enabled: {}\n", eks_managed));
     yaml.push_str("      name: \"gp3\"\n");
-    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.eks.amazonaws.com\"\n");
     yaml.push_str("      parameters:\n");
     yaml.push_str("        type: \"gp3\"\n");
     yaml.push_str("        fsType: \"ext4\"\n");
@@ -1209,6 +1331,29 @@ fn values_schema_json() -> String {
               "properties": { "enabled": { "type": "boolean" } }
             }
           }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "onUninstall": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "deletePersistentVolumeClaims": { "type": "boolean" },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository": { "type": "string", "minLength": 1 },
+                    "tag": { "type": "string", "minLength": 1 },
+                    "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1225,7 +1370,35 @@ fn values_schema_json() -> String {
         "type": "object",
         "properties": {
           "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
-          "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+          "rbac": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "apiGroups": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "resources": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    },
+                    "verbs": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "required": ["apiGroups", "resources", "verbs"]
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1412,7 +1585,13 @@ fn values_schema_json() -> String {
         }
       }
     },
-    "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
+    "publicEndpoints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
     "persistentStorage": { "type": "object" },
     "ephemeralStorage": { "type": "object" }
   },
@@ -1598,8 +1777,6 @@ fn role_tpl() -> String {
     r#"{{- $stackSettings := default dict .Values.stackSettings -}}
 {{- $exposure := dig "kubernetes" "exposure" dict $stackSettings -}}
 {{- $exposureMode := dig "mode" "" $exposure -}}
-{{- $route := dig "route" dict $exposure -}}
-{{- $routeApi := dig "routeApi" "" $route -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -1636,15 +1813,15 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- if and (ne $exposureMode "disabled") (eq $routeApi "ingress") }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- end }}
-  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- $route := dig "route" dict $exposure -}}
+  {{- $routeApi := dig "routeApi" "" $route -}}
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
   - apiGroups: ["networking.gke.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -1682,6 +1859,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "deployment.fullname" . }}
+---
+{{- range $name, $account := .Values.serviceAccounts }}
+{{- $rbac := default dict $account.rbac }}
+{{- $rules := default list $rbac.rules }}
+{{- if $rules }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+rules:
+{{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+---
+{{- end }}
+{{- end }}
 "#
     .to_string()
 }
@@ -1851,7 +2058,55 @@ data:
 {{ .Files.Get "files/stack.json" | indent 4 }}
   stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
   services.json: {{ toJson .Values.services | quote }}
-  public-urls.json: {{ toJson (default dict .Values.publicUrls) | quote }}
+  public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
+"#
+    .to_string()
+}
+
+fn cleanup_job_tpl() -> String {
+    r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+{{- if dig "enabled" true $cleanup }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              selector='managed-by=runtime'
+              kubectl -n {{ .Release.Namespace | quote }} delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
+              if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'httproutes'; then
+                kubectl -n {{ .Release.Namespace | quote }} delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+              fi
+              if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'gateways'; then
+                kubectl -n {{ .Release.Namespace | quote }} delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+              fi
+              {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
+              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
+              {{- else }}
+              echo "Preserving runtime PersistentVolumeClaims. Set runtime.cleanup.onUninstall.deletePersistentVolumeClaims=true to delete them."
+              {{- end }}
+{{- end }}
 "#
     .to_string()
 }
@@ -1926,8 +2181,12 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: BASE_PLATFORM
+            - name: ALIEN_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
+            - name: AWS_REGION
+              value: {{ .Values.basePlatformConfig.aws.region | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
             - name: GCP_PROJECT_ID
@@ -2015,8 +2274,8 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            - name: PUBLIC_URLS_FILE
-              value: /etc/deployment/config/public-urls.json
+            - name: PUBLIC_ENDPOINTS_FILE
+              value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
@@ -2265,6 +2524,13 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+{{- if eq $provisioner "ebs.csi.eks.amazonaws.com" }}
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: eks.amazonaws.com/compute-type
+        values:
+          - auto
+{{ end }}
 {{ end }}
 {{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
 {{- if dig "enabled" false $eksAlb }}
@@ -2714,7 +2980,8 @@ mod tests {
         import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
         KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
         PermissionProfile, Queue, RemoteStackManagement, Resource, ResourceLifecycle,
-        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode, WorkerTrigger,
+        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode,
+        WorkerPublicEndpoint, WorkerTrigger,
     };
 
     const TEST_RUNTIME_ENCRYPTION_KEY: &str =
@@ -2728,7 +2995,11 @@ mod tests {
                 image: "example.com/api:1".to_string(),
             })
             .permissions("runtime".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .link(&storage)
             .trigger(WorkerTrigger::queue(&queue))
             .build();

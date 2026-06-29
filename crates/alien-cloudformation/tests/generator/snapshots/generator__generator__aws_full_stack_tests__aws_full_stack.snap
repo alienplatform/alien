@@ -34,7 +34,6 @@ Metadata:
     - Label:
         default: Operations
       Parameters:
-      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
@@ -43,8 +42,6 @@ Metadata:
         default: Availability zones
       CertificateArn:
         default: Certificate ARN
-      DeploymentModel:
-        default: Deployment model
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -135,13 +132,6 @@ Parameters:
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
     AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
-  DeploymentModel:
-    Type: String
-    Description: How runtime updates are delivered after setup.
-    Default: push
-    AllowedValues:
-    - push
-    - pull
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -154,9 +144,7 @@ Parameters:
     Description: Telemetry collection behavior.
     Default: auto
     AllowedValues:
-    - "off"
     - auto
-    - approval-required
   HeartbeatsMode:
     Type: String
     Description: Heartbeat health-check behavior.
@@ -165,10 +153,6 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  DeploymentModelPush:
-    Fn::Equals:
-    - Ref: DeploymentModel
-    - push
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -1317,15 +1301,11 @@ Resources:
       SetupFingerprint: test
       SetupFingerprintVersion: 1
       ManagementConfig:
-        Fn::If:
-        - DeploymentModelPush
-        - platform: aws
-          managingRoleArn:
-            Ref: ManagingRoleArn
-        - Ref: AWS::NoValue
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
       StackSettings:
-        deploymentModel:
-          Ref: DeploymentModel
+        deploymentModel: push
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -1597,18 +1577,14 @@ Outputs:
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        Fn::If:
-        - DeploymentModelPush
-        - platform: aws
-          managingRoleArn:
-            Ref: ManagingRoleArn
-        - Ref: AWS::NoValue
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel:
-          Ref: DeploymentModel
+        deploymentModel: push
         updates:
           Ref: UpdatesMode
         telemetry:

@@ -21,6 +21,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export const DeploymentStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -33,6 +34,8 @@ export const DeploymentStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -56,6 +59,19 @@ export const DeploymentPlatform = {
  * Target platform for the deployment
  */
 export type DeploymentPlatform = ClosedEnum<typeof DeploymentPlatform>;
+
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export const DeploymentBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export type DeploymentBasePlatform = ClosedEnum<typeof DeploymentBasePlatform>;
 
 export const DeploymentPlatformTest = {
   Test: "test",
@@ -179,6 +195,61 @@ export type DeploymentEnvironmentInfoUnion =
   | DeploymentEnvironmentInfoAws
   | DeploymentEnvironmentInfoTest
   | any;
+
+export type DeploymentPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentPoolsUnion =
+  | DeploymentPoolsFixed
+  | DeploymentPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?:
+    | { [k: string]: DeploymentPoolsFixed | DeploymentPoolsAutoscale }
+    | undefined;
+};
+
+export type DeploymentComputeUnion = DeploymentCompute | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1123,6 +1194,7 @@ export type DeploymentUpdates = ClosedEnum<typeof DeploymentUpdates>;
  * User-provided configuration (network, deployment model, approvals)
  */
 export type DeploymentStackSettings = {
+  compute?: DeploymentCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1376,6 +1448,7 @@ export const DeploymentStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -1467,67 +1540,237 @@ export type DeploymentStackState = {
   resources: { [k: string]: DeploymentStackStateResources };
 };
 
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const DeploymentDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const DeploymentTypeStringList = {
+  StringList: "stringList",
 } as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type DeploymentDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentDeleteScopeEnum
+export type DeploymentTypeStringList = ClosedEnum<
+  typeof DeploymentTypeStringList
 >;
 
-export type DeploymentDeleteScopeUnion = DeploymentDeleteScopeEnum | any;
+export type DeploymentDefaultStringList = {
+  type: DeploymentTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
 
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const DeploymentPendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const DeploymentTypeBoolean = {
+  Boolean: "boolean",
 } as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type DeploymentPendingDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentPendingDeleteScopeEnum
->;
+export type DeploymentTypeBoolean = ClosedEnum<typeof DeploymentTypeBoolean>;
 
-export type DeploymentPendingDeleteScopeUnion =
-  | DeploymentPendingDeleteScopeEnum
+export type DeploymentDefaultBoolean = {
+  type: DeploymentTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const DeploymentTypeNumber = {
+  Number: "number",
+} as const;
+export type DeploymentTypeNumber = ClosedEnum<typeof DeploymentTypeNumber>;
+
+export type DeploymentDefaultNumber = {
+  type: DeploymentTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const DeploymentTypeString = {
+  String: "string",
+} as const;
+export type DeploymentTypeString = ClosedEnum<typeof DeploymentTypeString>;
+
+export type DeploymentDefaultString = {
+  type: DeploymentTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type DeploymentDefaultUnion =
+  | DeploymentDefaultString
+  | DeploymentDefaultNumber
+  | DeploymentDefaultBoolean
+  | DeploymentDefaultStringList
   | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const DeploymentTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type DeploymentTypeEnvEnum = ClosedEnum<typeof DeploymentTypeEnvEnum>;
+
+export type DeploymentTypeUnion = DeploymentTypeEnvEnum | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type DeploymentEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: DeploymentTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const DeploymentKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type DeploymentKind = ClosedEnum<typeof DeploymentKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentPreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentPreparedStackPlatform = ClosedEnum<
+  typeof DeploymentPreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const DeploymentProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type DeploymentProvidedBy = ClosedEnum<typeof DeploymentProvidedBy>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type DeploymentValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type DeploymentValidationUnion = DeploymentValidation | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type DeploymentInput = {
+  default?:
+    | DeploymentDefaultString
+    | DeploymentDefaultNumber
+    | DeploymentDefaultBoolean
+    | DeploymentDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<DeploymentEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: DeploymentKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<DeploymentPreparedStackPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<DeploymentProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: DeploymentValidation | any | null | undefined;
+};
 
 export const DeploymentManagementEnum = {
   Auto: "auto",
@@ -2696,6 +2939,10 @@ export type DeploymentPreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<DeploymentInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: DeploymentPermissions | undefined;
@@ -2715,7 +2962,6 @@ export type DeploymentPreparedStackUnion = DeploymentPreparedStack | any;
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentRuntimeMetadata = {
-  deleteScope?: DeploymentDeleteScopeEnum | any | null | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2723,11 +2969,6 @@ export type DeploymentRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | DeploymentPendingDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: DeploymentPreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2752,6 +2993,22 @@ export const DeploymentImportSource = {
  * Setup source that imported this deployment
  */
 export type DeploymentImportSource = ClosedEnum<typeof DeploymentImportSource>;
+
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export const DeploymentSetupMethod1 = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export type DeploymentSetupMethod1 = ClosedEnum<typeof DeploymentSetupMethod1>;
 
 /**
  * Latest error information if the deployment is in a failed state
@@ -2893,6 +3150,14 @@ export type Deployment = {
    */
   platform: DeploymentPlatform;
   /**
+   * Underlying cloud platform for Kubernetes deployments.
+   */
+  basePlatform?: DeploymentBasePlatform | null | undefined;
+  /**
+   * Cloud region or location for the deployment.
+   */
+  region?: string | null | undefined;
+  /**
    * DeploymentState protocol version owned by the runtime/manager
    */
   deploymentProtocolVersion: number;
@@ -2941,6 +3206,14 @@ export type Deployment = {
    */
   importSource?: DeploymentImportSource | null | undefined;
   /**
+   * Setup method that created the deployment record and owns setup-time resources.
+   */
+  setupMethod?: DeploymentSetupMethod1 | null | undefined;
+  /**
+   * Setup method metadata needed to guide privileged teardown.
+   */
+  setupMetadata?: { [k: string]: any | null } | null | undefined;
+  /**
    * Imported setup target for compatibility checks
    */
   setupTarget?: string | null | undefined;
@@ -2984,10 +3257,7 @@ export type Deployment = {
     | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -3003,6 +3273,11 @@ export const DeploymentStatus$inboundSchema: z.ZodEnum<
 export const DeploymentPlatform$inboundSchema: z.ZodEnum<
   typeof DeploymentPlatform
 > = z.enum(DeploymentPlatform);
+
+/** @internal */
+export const DeploymentBasePlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentBasePlatform
+> = z.enum(DeploymentBasePlatform);
 
 /** @internal */
 export const DeploymentPlatformTest$inboundSchema: z.ZodEnum<
@@ -3151,6 +3426,106 @@ export function deploymentEnvironmentInfoUnionFromJSON(
     jsonString,
     (x) => DeploymentEnvironmentInfoUnion$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentEnvironmentInfoUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsAutoscale$inboundSchema: z.ZodType<
+  DeploymentPoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function deploymentPoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsFixed$inboundSchema: z.ZodType<
+  DeploymentPoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function deploymentPoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsUnion$inboundSchema: z.ZodType<
+  DeploymentPoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+  z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+]);
+
+export function deploymentPoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCompute$inboundSchema: z.ZodType<
+  DeploymentCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+      z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function deploymentComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputeUnion$inboundSchema: z.ZodType<
+  DeploymentComputeUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]);
+
+export function deploymentComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputeUnion' from JSON`,
   );
 }
 
@@ -4686,6 +5061,9 @@ export const DeploymentStackSettings$inboundSchema: z.ZodType<
   DeploymentStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: DeploymentDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => DeploymentDomains$inboundSchema), z.any()]),
@@ -5003,44 +5381,255 @@ export function deploymentStackStateFromJSON(
 }
 
 /** @internal */
-export const DeploymentDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentDeleteScopeEnum
-> = z.enum(DeploymentDeleteScopeEnum);
+export const DeploymentTypeStringList$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeStringList
+> = z.enum(DeploymentTypeStringList);
 
 /** @internal */
-export const DeploymentDeleteScopeUnion$inboundSchema: z.ZodType<
-  DeploymentDeleteScopeUnion,
+export const DeploymentDefaultStringList$inboundSchema: z.ZodType<
+  DeploymentDefaultStringList,
   unknown
-> = z.union([DeploymentDeleteScopeEnum$inboundSchema, z.any()]);
+> = z.object({
+  type: DeploymentTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
 
-export function deploymentDeleteScopeUnionFromJSON(
+export function deploymentDefaultStringListFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDeleteScopeUnion, SDKValidationError> {
+): SafeParseResult<DeploymentDefaultStringList, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DeploymentDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDeleteScopeUnion' from JSON`,
+    (x) => DeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultStringList' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentPendingDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentPendingDeleteScopeEnum
-> = z.enum(DeploymentPendingDeleteScopeEnum);
+export const DeploymentTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeBoolean
+> = z.enum(DeploymentTypeBoolean);
 
 /** @internal */
-export const DeploymentPendingDeleteScopeUnion$inboundSchema: z.ZodType<
-  DeploymentPendingDeleteScopeUnion,
+export const DeploymentDefaultBoolean$inboundSchema: z.ZodType<
+  DeploymentDefaultBoolean,
   unknown
-> = z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]);
+> = z.object({
+  type: DeploymentTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
 
-export function deploymentPendingDeleteScopeUnionFromJSON(
+export function deploymentDefaultBooleanFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentPendingDeleteScopeUnion, SDKValidationError> {
+): SafeParseResult<DeploymentDefaultBoolean, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DeploymentPendingDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentPendingDeleteScopeUnion' from JSON`,
+    (x) => DeploymentDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeNumber$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeNumber
+> = z.enum(DeploymentTypeNumber);
+
+/** @internal */
+export const DeploymentDefaultNumber$inboundSchema: z.ZodType<
+  DeploymentDefaultNumber,
+  unknown
+> = z.object({
+  type: DeploymentTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeString$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeString
+> = z.enum(DeploymentTypeString);
+
+/** @internal */
+export const DeploymentDefaultString$inboundSchema: z.ZodType<
+  DeploymentDefaultString,
+  unknown
+> = z.object({
+  type: DeploymentTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDefaultUnion$inboundSchema: z.ZodType<
+  DeploymentDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDefaultString$inboundSchema),
+  z.lazy(() => DeploymentDefaultNumber$inboundSchema),
+  z.lazy(() => DeploymentDefaultBoolean$inboundSchema),
+  z.lazy(() => DeploymentDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeEnvEnum
+> = z.enum(DeploymentTypeEnvEnum);
+
+/** @internal */
+export const DeploymentTypeUnion$inboundSchema: z.ZodType<
+  DeploymentTypeUnion,
+  unknown
+> = z.union([DeploymentTypeEnvEnum$inboundSchema, z.any()]);
+
+export function deploymentTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentEnv$inboundSchema: z.ZodType<DeploymentEnv, unknown> = z
+  .object({
+    name: z.string(),
+    targetResources: z.nullable(z.array(z.string())).optional(),
+    type: z.nullable(z.union([DeploymentTypeEnvEnum$inboundSchema, z.any()]))
+      .optional(),
+  });
+
+export function deploymentEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentKind$inboundSchema: z.ZodEnum<typeof DeploymentKind> = z
+  .enum(DeploymentKind);
+
+/** @internal */
+export const DeploymentPreparedStackPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentPreparedStackPlatform
+> = z.enum(DeploymentPreparedStackPlatform);
+
+/** @internal */
+export const DeploymentProvidedBy$inboundSchema: z.ZodEnum<
+  typeof DeploymentProvidedBy
+> = z.enum(DeploymentProvidedBy);
+
+/** @internal */
+export const DeploymentValidation$inboundSchema: z.ZodType<
+  DeploymentValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentValidationUnion$inboundSchema: z.ZodType<
+  DeploymentValidationUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentValidation$inboundSchema), z.any()]);
+
+export function deploymentValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInput$inboundSchema: z.ZodType<
+  DeploymentInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDefaultString$inboundSchema),
+      z.lazy(() => DeploymentDefaultNumber$inboundSchema),
+      z.lazy(() => DeploymentDefaultBoolean$inboundSchema),
+      z.lazy(() => DeploymentDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => DeploymentEnv$inboundSchema)).optional(),
+  id: z.string(),
+  kind: DeploymentKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(z.array(DeploymentPreparedStackPlatform$inboundSchema))
+    .optional(),
+  providedBy: z.array(DeploymentProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([z.lazy(() => DeploymentValidation$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function deploymentInputFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInput' from JSON`,
   );
 }
 
@@ -6603,6 +7192,7 @@ export const DeploymentPreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => DeploymentInput$inboundSchema)).optional(),
   permissions: z.lazy(() => DeploymentPermissions$inboundSchema).optional(),
   resources: z.record(
     z.string(),
@@ -6644,13 +7234,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([DeploymentDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
-    z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([z.lazy(() => DeploymentPreparedStack$inboundSchema), z.any()]),
   ).optional(),
@@ -6671,6 +7255,11 @@ export function deploymentRuntimeMetadataFromJSON(
 export const DeploymentImportSource$inboundSchema: z.ZodEnum<
   typeof DeploymentImportSource
 > = z.enum(DeploymentImportSource);
+
+/** @internal */
+export const DeploymentSetupMethod1$inboundSchema: z.ZodEnum<
+  typeof DeploymentSetupMethod1
+> = z.enum(DeploymentSetupMethod1);
 
 /** @internal */
 export const DeploymentError$inboundSchema: z.ZodType<
@@ -6748,6 +7337,8 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     status: DeploymentStatus$inboundSchema,
     projectId: z.string(),
     platform: DeploymentPlatform$inboundSchema,
+    basePlatform: z.nullable(DeploymentBasePlatform$inboundSchema).optional(),
+    region: z.nullable(z.string()).optional(),
     deploymentProtocolVersion: z.int(),
     deploymentGroupId: z.string(),
     environmentInfo: z.nullable(
@@ -6770,6 +7361,9 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     desiredReleaseId: z.nullable(z.string()).optional(),
     pinnedReleaseId: z.nullable(z.string()).optional(),
     importSource: z.nullable(DeploymentImportSource$inboundSchema).optional(),
+    setupMethod: z.nullable(DeploymentSetupMethod1$inboundSchema).optional(),
+    setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
+      .optional(),
     setupTarget: z.nullable(z.string()).optional(),
     setupFingerprint: z.nullable(z.string()).optional(),
     setupFingerprintVersion: z.nullable(z.int()).optional(),
@@ -6789,7 +7383,7 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     ).optional(),
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    managerId: z.nullable(z.string()).optional(),
+    managerId: z.string(),
     workspaceId: z.string(),
   });
 

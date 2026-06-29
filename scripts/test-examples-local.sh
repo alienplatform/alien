@@ -5,6 +5,9 @@ set -euo pipefail
 # part of the root workspace and without relying on relative package paths in
 # committed example manifests.
 #
+# Usage:
+#   pnpm test:examples
+#
 # Strategy:
 # 1. Build local CLI + local TS packages that examples consume.
 # 2. Temporarily inject `pnpm.overrides` into examples/package.json pointing to
@@ -36,12 +39,43 @@ else
   cargo build -p alien-cli --bin alien
 fi
 
-pnpm -r \
-  --filter @alienplatform/platform-api \
-  --filter @alienplatform/core \
-  --filter @alienplatform/sdk \
-  --filter @alienplatform/testing \
-  run build
+build_filters=()
+if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then
+  build_filters+=(--filter @alienplatform/platform-api)
+  build_filters+=(--filter @alienplatform/core)
+  build_filters+=(--filter @alienplatform/sdk)
+  build_filters+=(--filter @alienplatform/testing)
+else
+  package_needs_build() {
+    local package_dir="$1"
+    shift
+
+    for output in "$@"; do
+      if [[ ! -e "$ROOT_DIR/$package_dir/$output" ]]; then
+        return 0
+      fi
+    done
+
+    return 1
+  }
+
+  if package_needs_build "client-sdks/platform/typescript" "esm/index.js" "esm/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/platform-api)
+  fi
+  if package_needs_build "packages/core" "dist/index.js" "dist/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/core)
+  fi
+  if package_needs_build "packages/sdk" "dist/index.js" "dist/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/sdk)
+  fi
+  if package_needs_build "packages/testing" "dist/index.js" "dist/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/testing)
+  fi
+fi
+
+if (( ${#build_filters[@]} > 0 )); then
+  pnpm -r "${build_filters[@]}" run build
+fi
 
 node - "$EXAMPLES_PACKAGE_JSON" "$ROOT_DIR" <<'NODE'
 const fs = require("fs");

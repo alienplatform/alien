@@ -8,9 +8,12 @@ pub const ENV_ALIEN_BASE_PLATFORM: &str = "ALIEN_BASE_PLATFORM";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+pub const ENV_ALIEN_RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
 pub const ENV_ALIEN_SECRETS: &str = "ALIEN_SECRETS";
 pub const ENV_ALIEN_TRANSPORT: &str = "ALIEN_TRANSPORT";
 pub const ENV_ALIEN_DEPLOYMENT_ID: &str = "ALIEN_DEPLOYMENT_ID";
+pub const ENV_ALIEN_DEPLOYMENT_NAME: &str = "ALIEN_DEPLOYMENT_NAME";
+pub const ENV_ALIEN_PUBLIC_ENDPOINTS_JSON: &str = "ALIEN_PUBLIC_ENDPOINTS_JSON";
 pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENABLED";
 pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
 pub const ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS: &str = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS";
@@ -408,6 +411,9 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_POLLING_URL
                 | ENV_ALIEN_COMMANDS_TOKEN
                 | ENV_ALIEN_DEPLOYMENT_ID
+                | ENV_ALIEN_DEPLOYMENT_NAME
+                | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
+                | ENV_ALIEN_RUNTIME_SECRETS
                 | ENV_ALIEN_SECRETS
         )
         || name.starts_with("ALIEN_BINDING_")
@@ -494,8 +500,13 @@ mod tests {
 
     #[test]
     fn prepared_environment_allows_deployment_managed_names() {
-        validate_prepared_runtime_environment_vars([ENV_ALIEN_SECRETS, ENV_ALIEN_DEPLOYMENT_ID])
-            .unwrap();
+        validate_prepared_runtime_environment_vars([
+            ENV_ALIEN_SECRETS,
+            ENV_ALIEN_DEPLOYMENT_ID,
+            ENV_ALIEN_DEPLOYMENT_NAME,
+            ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
+        ])
+        .unwrap();
 
         let error =
             validate_prepared_runtime_environment_vars([ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT])

@@ -9,6 +9,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type AzureCustomCertificateConfig = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -17,10 +18,12 @@ export const AzureCustomCertificateConfig$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 /** @internal */
 export type AzureCustomCertificateConfig$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -29,6 +32,7 @@ export const AzureCustomCertificateConfig$outboundSchema: z.ZodType<
   AzureCustomCertificateConfig
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function azureCustomCertificateConfigToJSON(

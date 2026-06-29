@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Protocol for exposed ports.
+ * @description Protocol for public workload endpoints.
  */
-export const ExposeProtocolSchema = z.enum(["http", "tcp"]).describe("Protocol for exposed ports.")
+export const ExposeProtocolSchema = z.enum(["http", "tcp"]).describe("Protocol for public workload endpoints.")
 
 export type ExposeProtocol = z.infer<typeof ExposeProtocolSchema>

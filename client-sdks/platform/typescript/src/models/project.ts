@@ -92,7 +92,7 @@ export type ProjectCli = {
    */
   displayName: string;
   /**
-   * Binary name displayed in help and usage (e.g., "acme-deploy")
+   * Binary name displayed in help and usage (e.g., "acmectl")
    */
   name: string;
   /**

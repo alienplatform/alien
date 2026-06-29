@@ -1,23 +1,12 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::LoadBalancerEndpoint;
+use crate::{PublicEndpointOutput, WorkerPublicEndpoint};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
-
-/// Controls network accessibility of the worker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub enum Ingress {
-    /// Worker accessible from the internet with an HTTPS URL
-    Public,
-    /// Worker accessible only from within the customer's cloud via triggers, other workers, etc. No external HTTP URL is created.
-    Private,
-}
 
 /// Specifies the source of the worker's executable code.
 /// This can be a pre-built container image or source code that the system will build.
@@ -154,6 +143,11 @@ pub struct Worker {
     #[builder(field)]
     pub triggers: Vec<WorkerTrigger>,
 
+    /// Public endpoints exposed by this worker.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_endpoints: Vec<WorkerPublicEndpoint>,
+
     /// Permission profile name that defines the permissions granted to this worker.
     /// This references a profile defined in the stack's permission definitions.
     pub permissions: String,
@@ -187,12 +181,6 @@ pub struct Worker {
     #[serde(default)]
     pub environment: HashMap<String, String>,
 
-    /// Controls network accessibility of the worker.
-    #[builder(default = default_ingress())]
-    #[serde(default = "default_ingress")]
-    #[cfg_attr(feature = "openapi", schema(default = default_ingress))]
-    pub ingress: Ingress,
-
     /// Whether the worker can receive remote commands via the Commands protocol.
     /// When enabled, the runtime polls the manager for pending commands and executes registered handlers.
     #[builder(default = default_commands_enabled())]
@@ -218,6 +206,21 @@ impl Worker {
     pub fn get_permissions(&self) -> &str {
         &self.permissions
     }
+
+    fn validate_public_endpoints(&self) -> Result<()> {
+        let mut endpoint_names = std::collections::HashSet::new();
+        for endpoint in &self.public_endpoints {
+            endpoint.validate_for_resource(&self.id)?;
+            if !endpoint_names.insert(endpoint.name.as_str()) {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!("duplicate public endpoint name '{}'", endpoint.name),
+                }));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn default_memory_mb() -> u32 {
@@ -226,10 +229,6 @@ fn default_memory_mb() -> u32 {
 
 fn default_timeout_seconds() -> u32 {
     180
-}
-
-fn default_ingress() -> Ingress {
-    Ingress::Private
 }
 
 fn default_commands_enabled() -> bool {
@@ -317,6 +316,12 @@ impl<S: State> WorkerBuilder<S> {
         self.triggers.push(trigger);
         self
     }
+
+    /// Exposes a named public endpoint for the worker.
+    pub fn public_endpoint(mut self, endpoint: WorkerPublicEndpoint) -> Self {
+        self.public_endpoints.push(endpoint);
+        self
+    }
 }
 
 // Implementation of ResourceDefinition trait for Worker
@@ -373,6 +378,14 @@ impl ResourceDefinition for Worker {
                 reason: "the 'id' field is immutable".to_string(),
             }));
         }
+        self.validate_public_endpoints()?;
+        new_worker.validate_public_endpoints()?;
+        if self.public_endpoints != new_worker.public_endpoints {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'publicEndpoints' field is immutable".to_string(),
+            }));
+        }
         Ok(())
     }
 
@@ -404,16 +417,12 @@ impl ResourceDefinition for Worker {
 pub struct WorkerOutputs {
     /// The platform-specific worker name.
     pub worker_name: String,
-    /// The invocation URL (if applicable, e.g., for public ingress or specific platforms).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    /// Public endpoints resolved for this worker.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub public_endpoints: HashMap<String, PublicEndpointOutput>,
     /// The ARN or platform-specific identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
-    /// Load balancer endpoint information for DNS management (optional).
-    /// Used by the DNS controller to create custom domain mappings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load_balancer_endpoint: Option<LoadBalancerEndpoint>,
     /// Push target for commands delivery. Platform-specific:
     /// - AWS: Lambda function name or ARN
     /// - GCP: Full Pub/Sub topic path (projects/{project}/topics/{topic})
@@ -496,12 +505,16 @@ mod tests {
                 image: "test-image".to_string(),
             })
             .permissions("execution".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .readiness_probe(probe.clone())
             .build();
 
         assert_eq!(worker.id, "my-worker");
-        assert_eq!(worker.ingress, Ingress::Public);
+        assert_eq!(worker.public_endpoints[0].name, "api");
         assert_eq!(worker.readiness_probe, Some(probe));
     }
 
@@ -686,12 +699,11 @@ mod tests {
                 image: "test-image".to_string(),
             })
             .permissions("execution".to_string())
-            .ingress(Ingress::Private)
             .commands_enabled(true)
             .build();
 
         assert_eq!(worker.id, "cmd-worker");
-        assert_eq!(worker.ingress, Ingress::Private);
+        assert!(worker.public_endpoints.is_empty());
         assert_eq!(worker.commands_enabled, true);
     }
 
@@ -705,7 +717,7 @@ mod tests {
             .build();
 
         // Test that defaults are applied correctly
-        assert_eq!(worker.ingress, Ingress::Private);
+        assert!(worker.public_endpoints.is_empty());
         assert_eq!(worker.commands_enabled, false);
         assert_eq!(worker.memory_mb, 256);
         assert_eq!(worker.timeout_seconds, 180);
@@ -718,11 +730,15 @@ mod tests {
                 image: "test-image".to_string(),
             })
             .permissions("execution".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .commands_enabled(true)
             .build();
 
-        assert_eq!(worker.ingress, Ingress::Public);
+        assert_eq!(worker.public_endpoints[0].name, "api");
         assert_eq!(worker.commands_enabled, true);
     }
 }

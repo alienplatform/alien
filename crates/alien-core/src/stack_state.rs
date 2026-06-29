@@ -160,6 +160,7 @@ impl StackState {
                     | ResourceStatus::Provisioning
                     | ResourceStatus::Updating
                     | ResourceStatus::Deleting
+                    | ResourceStatus::TeardownRequired
             )
         }) {
             return Ok(StackStatus::InProgress);
@@ -381,7 +382,10 @@ fn is_zero(num: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResourceType, Storage, StorageOutputs, Worker, WorkerCode, WorkerOutputs};
+    use crate::{
+        PublicEndpointOutput, ResourceType, Storage, StorageOutputs, Worker, WorkerCode,
+        WorkerOutputs,
+    };
 
     #[test]
     fn resource_prefix_validation_accepts_canonical_prefixes() {
@@ -414,11 +418,18 @@ mod tests {
         // Create a worker with outputs
         let worker_outputs = WorkerOutputs {
             worker_name: "test-worker".to_string(),
-            url: Some("https://example.lambda-url.us-east-1.on.aws/".to_string()),
+            public_endpoints: HashMap::from([(
+                "api".to_string(),
+                PublicEndpointOutput {
+                    url: "https://example.lambda-url.us-east-1.on.aws/".to_string(),
+                    host: "example.lambda-url.us-east-1.on.aws".to_string(),
+                    wildcard_host: None,
+                    load_balancer_endpoint: None,
+                },
+            )]),
             identifier: Some(
                 "arn:aws:lambda:us-east-1:123456789012:function:test-worker".to_string(),
             ),
-            load_balancer_endpoint: None,
             commands_push_target: None,
         };
 
@@ -450,8 +461,8 @@ mod tests {
             .unwrap();
         assert_eq!(retrieved_outputs.worker_name, "test-worker");
         assert_eq!(
-            retrieved_outputs.url,
-            Some("https://example.lambda-url.us-east-1.on.aws/".to_string())
+            retrieved_outputs.public_endpoints["api"].url,
+            "https://example.lambda-url.us-east-1.on.aws/"
         );
         assert_eq!(
             retrieved_outputs.identifier,
@@ -592,11 +603,18 @@ mod tests {
         // Create a worker with outputs (similar to your original sketch)
         let worker_outputs = WorkerOutputs {
             worker_name: "test-alien-worker".to_string(),
-            url: Some("https://test.lambda-url.us-east-1.on.aws/".to_string()),
+            public_endpoints: HashMap::from([(
+                "api".to_string(),
+                PublicEndpointOutput {
+                    url: "https://test.lambda-url.us-east-1.on.aws/".to_string(),
+                    host: "test.lambda-url.us-east-1.on.aws".to_string(),
+                    wildcard_host: None,
+                    load_balancer_endpoint: None,
+                },
+            )]),
             identifier: Some(
                 "arn:aws:lambda:us-east-1:123456789012:function:test-alien-worker".to_string(),
             ),
-            load_balancer_endpoint: None,
             commands_push_target: None,
         };
 
@@ -632,11 +650,12 @@ mod tests {
             .get_resource_outputs::<WorkerOutputs>("test-alien-worker")
             .unwrap();
 
-        let worker_url = worker_outputs
-            .url
-            .as_ref()
-            .ok_or_else(|| "Worker URL not found in stack state")
-            .unwrap();
+        let worker_url = &worker_outputs
+            .public_endpoints
+            .get("api")
+            .ok_or_else(|| "Worker API endpoint not found in stack state")
+            .unwrap()
+            .url;
 
         assert_eq!(worker_url, "https://test.lambda-url.us-east-1.on.aws/");
     }
@@ -1134,6 +1153,7 @@ mod tests {
                 current_release: None,
                 target_release: None,
                 stack_state: Some(stack_state),
+                error: None,
                 environment_info: None,
                 runtime_metadata: None,
                 retry_requested: false,

@@ -15,7 +15,7 @@
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::permissions::{PermissionProfile, PermissionsConfig};
 use alien_core::BinaryTarget;
-use alien_core::{Ingress, ResourceLifecycle, ToolchainConfig, Worker, WorkerCode};
+use alien_core::{ResourceLifecycle, ToolchainConfig, Worker, WorkerCode};
 use alien_local::LocalBindingsProvider;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,8 +36,6 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
     let workspace_root = workspace_root::get_workspace_root();
     let test_app_src = workspace_root.join(TEST_APP_PATH);
 
-    ensure_test_app_deps(&workspace_root, &test_app_src);
-
     // Create a worker with the test-app source
     let func = Worker::new("test-func".to_string())
         .code(WorkerCode::Source {
@@ -49,7 +47,6 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
         .memory_mb(512)
         .timeout_seconds(60)
         .environment(HashMap::new())
-        .ingress(Ingress::Private)
         .permissions("execution".to_string())
         .build();
 
@@ -64,7 +61,7 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
 
     // Create a stack with just this worker
     let stack = alien_core::Stack::new("test-stack".to_string())
-        .add(func, ResourceLifecycle::Frozen)
+        .add(func, ResourceLifecycle::Live)
         .permissions(permissions)
         .build();
 
@@ -106,30 +103,6 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
     }
 
     panic!("Built worker not found in stack");
-}
-
-fn ensure_test_app_deps(workspace_root: &std::path::Path, test_app_src: &std::path::Path) {
-    let app_sdk = test_app_src
-        .join("node_modules")
-        .join("@alienplatform")
-        .join("sdk");
-
-    if app_sdk.exists() {
-        return;
-    }
-
-    // examples/ is a separate pnpm workspace — install from there.
-    let examples_dir = workspace_root.join("examples");
-    let status = std::process::Command::new("pnpm")
-        .arg("install")
-        .current_dir(&examples_dir)
-        .status()
-        .expect("Failed to run pnpm install for test app dependencies");
-
-    assert!(
-        status.success(),
-        "pnpm install failed for test app dependencies"
-    );
 }
 
 /// Helper to create worker manager for tests using LocalBindingsProvider

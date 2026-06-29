@@ -28,7 +28,10 @@ jobs:
       - name: Compute next version
         id: bump
         run: |
-          LATEST_TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "v0.0.0")
+          LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
           CURRENT_VERSION=${LATEST_TAG#v}
           echo "Latest tag: $LATEST_TAG"
 
@@ -211,7 +214,7 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Publish npm packages
         env:
@@ -245,6 +248,7 @@ jobs:
         working-directory: client-sdks/platform/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           npm install
           npm run build

@@ -418,6 +418,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
         let stack_state = StackState::new(Platform::Azure);
         let config = DeploymentConfig::builder()

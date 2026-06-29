@@ -168,6 +168,18 @@ impl BinaryTarget {
         }
     }
 
+    /// Inverse of [`runtime_platform_id`] — the `.oci.tar` filename spelling
+    /// (`linux-aarch64`/`darwin-aarch64`), not the `linux-arm64`/`darwin-arm64` CLI names.
+    pub fn from_runtime_platform_id(id: &str) -> Option<Self> {
+        match id {
+            "windows-x64" => Some(Self::WindowsX64),
+            "linux-x64" => Some(Self::LinuxX64),
+            "linux-aarch64" => Some(Self::LinuxArm64),
+            "darwin-aarch64" => Some(Self::DarwinArm64),
+            _ => None,
+        }
+    }
+
     /// Get the OCI os string for this target
     pub fn oci_os(&self) -> &'static str {
         match self {
@@ -321,6 +333,24 @@ mod tests {
             BinaryTarget::defaults_for_platform(Platform::Local),
             vec![BinaryTarget::current_os()]
         );
+    }
+
+    #[test]
+    fn runtime_platform_id_round_trips() {
+        for target in BinaryTarget::ALL {
+            assert_eq!(
+                BinaryTarget::from_runtime_platform_id(target.runtime_platform_id()),
+                Some(*target),
+                "round-trip failed for {target}"
+            );
+        }
+        // The tarball spelling differs from the CLI/FromStr spelling.
+        assert_eq!(
+            BinaryTarget::from_runtime_platform_id("linux-aarch64"),
+            Some(BinaryTarget::LinuxArm64)
+        );
+        assert_eq!(BinaryTarget::from_runtime_platform_id("linux-arm64"), None);
+        assert_eq!(BinaryTarget::from_runtime_platform_id("nonsense"), None);
     }
 
     #[test]

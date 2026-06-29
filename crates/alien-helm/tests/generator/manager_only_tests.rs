@@ -10,10 +10,10 @@ use super::{
     test_utils::{self, LinterStatus},
 };
 use alien_core::{
-    Container, ContainerCode, Daemon, DaemonCode, Ingress, KubernetesCertificateMode,
+    Container, ContainerCode, Daemon, DaemonCode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
-    Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
+    Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde_json::{json, Value};
@@ -25,7 +25,11 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
             image: "registry.example.com/api:1".to_string(),
         })
         .permissions("runtime".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .build();
     let stack = Stack::new("pure-fn".to_string())
         .permission(
@@ -93,7 +97,11 @@ fn chart_removes_manual_public_ingress_values_and_template() {
             image: "registry.example.com/api:1".to_string(),
         })
         .permissions("runtime".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .build();
     let stack = Stack::new("no-manual-ingress".to_string())
         .permission(
@@ -125,7 +133,7 @@ fn chart_removes_manual_public_ingress_values_and_template() {
 }
 
 #[test]
-fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
+fn chart_role_rbac_allows_every_cleanup_route_resource() {
     let stack = Stack::new("route-rbac".to_string()).build();
     let settings = StackSettings {
         kubernetes: Some(KubernetesSettings {
@@ -159,7 +167,6 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
     assert!(role.contains("alb.networking.azure.io"));
     assert!(role.contains("resources: [\"healthcheckpolicy\"]"));
-    assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
     let rendered = test_utils::helm_template(&chart.files, Some(MANAGER_FETCH_VALUES));
@@ -186,10 +193,65 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
             assert!(rendered
                 .stdout
                 .contains(r#"resources: ["healthcheckpolicy"]"#));
-            assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered route RBAC")
+        }
+    }
+}
+
+#[test]
+fn workload_vault_permissions_render_runtime_secret_rbac() {
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "registry.example.com/api:1".to_string(),
+        })
+        .permissions("runtime".to_string())
+        .build();
+    let stack = Stack::new("vault-rbac".to_string())
+        .permission(
+            "runtime",
+            PermissionProfile::new()
+                .resource("alien-vault", ["vault/data-read", "vault/data-write"]),
+        )
+        .add(
+            Vault::new("alien-vault".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(worker, ResourceLifecycle::Live)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let values_yaml = chart.files.get("values.yaml").expect("values.yaml");
+    let values: Value = serde_yaml::from_str(values_yaml).expect("values.yaml should parse");
+    let rule = values
+        .pointer("/serviceAccounts/runtime/rbac/rules/0")
+        .expect("runtime service account should get a secret RBAC rule");
+
+    assert_eq!(rule.pointer("/apiGroups/0"), Some(&json!("")));
+    assert_eq!(rule.pointer("/resources/0"), Some(&json!("secrets")));
+    for verb in [
+        "get", "list", "watch", "create", "update", "patch", "delete",
+    ] {
+        assert!(
+            rule.get("verbs")
+                .and_then(Value::as_array)
+                .expect("verbs should be an array")
+                .iter()
+                .any(|value| value == &json!(verb)),
+            "expected generated RBAC verbs to include {verb}"
+        );
+    }
+
+    let rendered = test_utils::helm_template(&chart.files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("kind: RoleBinding"));
+            assert!(rendered.stdout.contains("runtime-sa"));
+            assert!(rendered.stdout.contains("- secrets"));
+            assert!(rendered.stdout.contains("- delete"));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("rendered workload vault RBAC")
         }
     }
 }
@@ -240,7 +302,7 @@ fn gcp_base_platform_config_renders_operator_environment() {
     let rendered = test_utils::helm_template(&files, Some(&gcp_values));
     match &rendered.status {
         LinterStatus::Passed => {
-            assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
             assert!(rendered.stdout.contains("value: \"gcp\""));
             assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
             assert!(rendered.stdout.contains("value: \"alien-test-target\""));
@@ -250,6 +312,30 @@ fn gcp_base_platform_config_renders_operator_environment() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("GCP runtime config render")
+        }
+    }
+}
+
+#[test]
+fn aws_base_platform_config_renders_operator_environment() {
+    let stack = Stack::new("aws-runtime-config".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+    let values = files.get("values.yaml").expect("values.yaml");
+    let aws_values = values
+        .replace("basePlatform: null", "basePlatform: aws")
+        .replace("region: \"\"", "region: us-east-1");
+
+    let rendered = test_utils::helm_template(&files, Some(&aws_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("value: \"aws\""));
+            assert!(rendered.stdout.contains("name: AWS_REGION"));
+            assert!(rendered.stdout.contains("value: \"us-east-1\""));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("AWS runtime config render")
         }
     }
 }
@@ -319,6 +405,33 @@ fn cluster_bootstrap_renders_only_when_enabled() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             enabled_rendered.assert_ok("enabled cluster bootstrap render")
+        }
+    }
+}
+
+#[test]
+fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
+    let stack = Stack::new("cleanup-hook".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+
+    let rendered = test_utils::helm_template(&files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("kind: Job"));
+            assert!(rendered.stdout.contains("helm.sh/hook"));
+            assert!(rendered.stdout.contains("pre-delete"));
+            assert!(rendered.stdout.contains("selector='managed-by=runtime'"));
+            assert!(rendered
+                .stdout
+                .contains("delete deployments.apps,statefulsets.apps"));
+            assert!(rendered
+                .stdout
+                .contains("Preserving runtime PersistentVolumeClaims"));
+            assert!(!rendered.stdout.contains("delete persistentvolumeclaims -l"));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("uninstall cleanup hook render")
         }
     }
 }

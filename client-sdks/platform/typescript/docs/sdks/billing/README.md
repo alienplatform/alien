@@ -5,7 +5,7 @@
 ### Available Operations
 
 * [listAuditLog](#listauditlog) - List billing activity entries for the current workspace.
-* [getPlan](#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
+* [getEntitlements](#getentitlements) - Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
 
 ## listAuditLog
 
@@ -80,13 +80,13 @@ run();
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## getPlan
+## getEntitlements
 
-Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
+Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="getWorkspacePlan" method="get" path="/v1/billing/plan" -->
+<!-- UsageSnippet language="typescript" operationID="getWorkspaceBillingEntitlements" method="get" path="/v1/billing/entitlements" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -95,7 +95,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.billing.getPlan({
+  const result = await alien.billing.getEntitlements({
     workspace: "my-workspace",
   });
 
@@ -111,7 +111,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { billingGetPlan } from "@alienplatform/platform-api/funcs/billingGetPlan.js";
+import { billingGetEntitlements } from "@alienplatform/platform-api/funcs/billingGetEntitlements.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -120,14 +120,14 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await billingGetPlan(alien, {
+  const res = await billingGetEntitlements(alien, {
     workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("billingGetPlan failed:", res.error);
+    console.log("billingGetEntitlements failed:", res.error);
   }
 }
 
@@ -138,17 +138,18 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GetWorkspacePlanRequest](../../models/operations/getworkspaceplanrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.GetWorkspaceBillingEntitlementsRequest](../../models/operations/getworkspacebillingentitlementsrequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[operations.GetWorkspacePlanResponse](../../models/operations/getworkspaceplanresponse.md)\>**
+**Promise\<[models.WorkspaceBillingEntitlements](../../models/workspacebillingentitlements.md)\>**
 
 ### Errors
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

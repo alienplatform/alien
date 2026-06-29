@@ -74,7 +74,10 @@ const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
-const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+// The absolute wait deadline controls Azure RBAC propagation. Terraform-imported
+// setup can drive this state quickly, so keep the Stay guard comfortably above
+// the number of reconciles that can happen inside the deadline.
+const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
 
 fn current_unix_timestamp_secs() -> u64 {
     SystemTime::now()

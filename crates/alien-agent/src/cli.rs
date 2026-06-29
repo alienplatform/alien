@@ -4,12 +4,12 @@
 //! parsing, signal handling, panic hooks, or the Windows service shim.
 
 use crate::error::{ErrorData, Result};
-use crate::{run_agent_with_cancel, AgentConfig, InstanceLock};
+use crate::loops::debug_session::DebugSessionLoop;
+use crate::{run_agent_with_cancel_and_debug_loop, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
-use alien_core::Platform;
+use alien_core::{validate_public_endpoint_urls, Platform, PublicEndpointUrls};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::Parser;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +35,7 @@ pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
 
-    #[arg(long, env = "BASE_PLATFORM", value_parser = parse_platform)]
+    #[arg(long, env = "ALIEN_BASE_PLATFORM", value_parser = parse_platform)]
     pub base_platform: Option<Platform>,
 
     #[arg(long, env = "SYNC_URL")]
@@ -65,17 +65,23 @@ pub struct Args {
     #[arg(long, env = "EXTERNAL_BINDINGS_FILE")]
     pub external_bindings_file: Option<PathBuf>,
 
-    #[arg(long, env = "PUBLIC_URLS")]
-    pub public_urls: Option<String>,
+    #[arg(long, env = "PUBLIC_ENDPOINTS")]
+    pub public_endpoints: Option<String>,
 
-    #[arg(long, env = "PUBLIC_URLS_FILE")]
-    pub public_urls_file: Option<PathBuf>,
+    #[arg(long, env = "PUBLIC_ENDPOINTS_FILE")]
+    pub public_endpoints_file: Option<PathBuf>,
 
     #[arg(long, env = "STACK_SETTINGS")]
     pub stack_settings: Option<String>,
 
     #[arg(long, env = "STACK_SETTINGS_FILE")]
     pub stack_settings_file: Option<PathBuf>,
+
+    #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
+    pub enable_local_debug: bool,
+
+    #[arg(long, env = "ALIEN_LOCAL_DEBUG_SHELL_COMMAND")]
+    pub local_debug_shell_command: Option<String>,
 
     #[arg(long, env = "SYNC_INTERVAL", default_value = "30")]
     pub sync_interval: u64,
@@ -97,7 +103,20 @@ pub struct Args {
 /// Downstream distributions register additional controller factories here.
 pub type InitHook = fn();
 
+/// Optional second hook that lets downstream binaries inject a real
+/// [`DebugSessionLoop`] implementation. Defaults to `None`, which leaves
+/// the OSS no-op stub in place.
+pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
+
 const NOOP_INIT: InitHook = || {};
+const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
+
+#[derive(Debug, PartialEq, Eq)]
+enum StartupDeploymentId {
+    Stored(String),
+    Configured(String),
+    Initialize,
+}
 
 /// CLI entry point. Parses args, sets up tracing/panic hooks, runs the
 /// agent until SIGTERM/SIGINT/Ctrl-C. Calls `init_hook` once before the
@@ -105,6 +124,21 @@ const NOOP_INIT: InitHook = || {};
 /// hook; downstream binaries that wrap this entry point pass a hook that
 /// registers their additional controllers.
 pub fn cli_main_with_hook(init_hook: InitHook) {
+    cli_main_with_hooks(init_hook, NOOP_DEBUG_LOOP_HOOK);
+}
+
+/// Like [`cli_main_with_hook`] but also accepts a [`DebugLoopHook`] so
+/// downstream binaries can inject a real [`DebugSessionLoop`] before the
+/// agent starts.
+pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) {
+    // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
+    // (pulled by other deps) present in the tree can't auto-pick a provider
+    // and panics on first TLS use ("Could not automatically determine the
+    // process-level CryptoProvider"). Install one explicitly before any
+    // rustls-backed client (reqwest, tokio-tungstenite, aws-sdk) is touched.
+    // Ignoring `Err` makes this idempotent across re-invocations in tests.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = Args::parse();
 
     #[cfg(windows)]
@@ -117,7 +151,7 @@ pub fn cli_main_with_hook(init_hook: InitHook) {
         .build()
         .expect("failed to build tokio runtime");
 
-    if let Err(e) = rt.block_on(run(args, init_hook)) {
+    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook)) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -128,7 +162,7 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
+async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook) -> Result<()> {
     let embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
 
     args.agent_name = args.agent_name.or_else(|| env_string("OPERATOR_NAME"));
@@ -200,80 +234,88 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
 
             info!("   Sync URL: {}", sync_url);
 
-            if let Some(stored_deployment_id) = db.get_deployment_id().await? {
-                info!("   Using stored deployment ID: {}", stored_deployment_id);
-                // Prefer the deployment-scoped token previously returned by
-                // `/v1/initialize` over the chart-mounted deployment-group
-                // token. The platform API rejects `/v1/sync/acquire` calls
-                // made with a deployment-group token (403 Forbidden), so
-                // without this restoration step pod restarts silently lose
-                // sync until the agent re-initializes.
-                if let Some(stored_token) = db.get_sync_token().await? {
-                    info!("   Using stored deployment-scoped sync token");
-                    sync_token = stored_token;
-                }
-            } else if let Some(deployment_id) = configured_deployment_id {
-                info!("   Using configured deployment ID: {}", deployment_id);
-                db.set_deployment_id(&deployment_id).await?;
-            } else {
-                info!("   First startup, initializing with manager...");
-
-                let init_result = initialize_with_manager(
-                    &sync_url,
-                    &sync_token,
-                    args.platform,
-                    args.agent_name.as_deref(),
-                    initial_stack_settings.as_ref(),
-                )
-                .await;
-
-                let (initialized_deployment_id, deployment_token) = match init_result {
-                    Ok(v) => v,
-                    // 409 from initialize means a deployment with our name
-                    // already exists in this dg — the canonical cause is
-                    // that we *had* state (deployment_id + dep-scoped token)
-                    // in `data_dir` but it was wiped (emptyDir on chart
-                    // default, manual reset, etc.). Re-acquiring a fresh
-                    // deployment-scoped token over the existing row is
-                    // exactly what `/v1/rejoin` exists for; fall through to
-                    // it instead of crashing the agent.
-                    Err(e) if e.http_status_code == Some(409) => {
-                        info!(
-                            "   Name already exists — assuming local state was wiped, rejoining…"
-                        );
-                        let agent_name = args.agent_name.clone().or_else(|| {
-                            std::env::var("HOSTNAME")
-                                .ok()
-                                .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
-                        });
-                        let name = agent_name.ok_or_else(|| {
-                            AlienError::new(ErrorData::ConfigurationError {
-                                message: "Cannot rejoin without a deployment name — pass --agent-name or set AGENT_NAME / HOSTNAME"
-                                    .to_string(),
-                            })
-                        })?;
-                        let (dep_id, dep_token) =
-                            rejoin_with_manager(&sync_url, &sync_token, &name).await?;
-                        info!(deployment_id = %dep_id, "   Rejoined existing deployment");
-                        (dep_id, Some(dep_token))
+            match select_startup_deployment_id(
+                db.get_deployment_id().await?,
+                configured_deployment_id,
+                &data_dir,
+            )? {
+                StartupDeploymentId::Stored(stored_deployment_id) => {
+                    info!("   Using stored deployment ID: {}", stored_deployment_id);
+                    // Prefer the deployment-scoped token previously returned by
+                    // `/v1/initialize` over the chart-mounted deployment-group
+                    // token. The platform API rejects `/v1/sync/acquire` calls
+                    // made with a deployment-group token (403 Forbidden), so
+                    // without this restoration step pod restarts silently lose
+                    // sync until the agent re-initializes.
+                    if let Some(stored_token) = db.get_sync_token().await? {
+                        info!("   Using stored deployment-scoped sync token");
+                        sync_token = stored_token;
                     }
-                    Err(e) => return Err(e),
-                };
-
-                db.set_deployment_id(&initialized_deployment_id).await?;
-
-                if let Some(ref dt) = deployment_token {
-                    info!("   Received deployment-scoped token from manager");
-                    sync_token = dt.clone();
-                    // Persist so pod restarts don't fall back to the
-                    // chart-mounted deployment-group token.
-                    db.set_sync_token(&sync_token).await?;
                 }
+                StartupDeploymentId::Configured(deployment_id) => {
+                    info!("   Using configured deployment ID: {}", deployment_id);
+                    db.set_deployment_id(&deployment_id).await?;
+                }
+                StartupDeploymentId::Initialize => {
+                    info!("   First startup, initializing with manager...");
 
-                info!(
-                    "   Initialized successfully, deployment ID: {}",
-                    initialized_deployment_id
-                );
+                    let init_result = initialize_with_manager(
+                        &sync_url,
+                        &sync_token,
+                        args.platform,
+                        args.agent_name.as_deref(),
+                        initial_stack_settings.as_ref(),
+                    )
+                    .await;
+
+                    let (initialized_deployment_id, deployment_token) = match init_result {
+                        Ok(v) => v,
+                        // 409 from initialize means a deployment with our name
+                        // already exists in this dg — the canonical cause is
+                        // that we *had* state (deployment_id + dep-scoped token)
+                        // in `data_dir` but it was wiped (emptyDir on chart
+                        // default, manual reset, etc.). Re-acquiring a fresh
+                        // deployment-scoped token over the existing row is
+                        // exactly what `/v1/rejoin` exists for; fall through to
+                        // it instead of crashing the agent.
+                        Err(e) if e.http_status_code == Some(409) => {
+                            info!(
+                                "   Name already exists — assuming local state was wiped, rejoining…"
+                            );
+                            let agent_name = args.agent_name.clone().or_else(|| {
+                                std::env::var("HOSTNAME").ok().or_else(|| {
+                                    hostname::get().ok().and_then(|h| h.into_string().ok())
+                                })
+                            });
+                            let name = agent_name.ok_or_else(|| {
+                                AlienError::new(ErrorData::ConfigurationError {
+                                    message: "Cannot rejoin without a deployment name — pass --agent-name or set AGENT_NAME / HOSTNAME"
+                                        .to_string(),
+                                })
+                            })?;
+                            let (dep_id, dep_token) =
+                                rejoin_with_manager(&sync_url, &sync_token, &name).await?;
+                            info!(deployment_id = %dep_id, "   Rejoined existing deployment");
+                            (dep_id, Some(dep_token))
+                        }
+                        Err(e) => return Err(e),
+                    };
+
+                    db.set_deployment_id(&initialized_deployment_id).await?;
+
+                    if let Some(ref dt) = deployment_token {
+                        info!("   Received deployment-scoped token from manager");
+                        sync_token = dt.clone();
+                        // Persist so pod restarts don't fall back to the
+                        // chart-mounted deployment-group token.
+                        db.set_sync_token(&sync_token).await?;
+                    }
+
+                    info!(
+                        "   Initialized successfully, deployment ID: {}",
+                        initialized_deployment_id
+                    );
+                }
             }
 
             Some(crate::SyncConfig {
@@ -308,16 +350,23 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
         external_bindings_json,
         "external bindings",
     )?;
-    let public_urls_json = load_config_value(
-        args.public_urls,
-        args.public_urls_file.as_deref(),
-        "public URLs",
+    let public_endpoints_json = load_config_value(
+        args.public_endpoints,
+        args.public_endpoints_file.as_deref(),
+        "public endpoints",
         false,
     )
     .await?;
-    let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
-    // Re-parse from the JSON we loaded up front so the downstream code path
-    // sees the same `StackSettings` that was forwarded to `initialize`.
+    let public_endpoints =
+        parse_json_opt::<PublicEndpointUrls>(public_endpoints_json, "public endpoints")?;
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
+        validate_public_endpoint_urls(public_endpoints).context(ErrorData::ConfigurationError {
+            message: "Invalid public endpoints configuration".to_string(),
+        })?;
+    }
+    // `stack_settings_json` was loaded up front so it could be forwarded to
+    // `initialize`; reuse that same value here so the downstream config sees
+    // the settings that were sent to the manager.
     let mut stack_settings =
         parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
@@ -329,6 +378,7 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
     let agent_config = AgentConfig::builder()
         .platform(args.platform)
         .maybe_base_platform(args.base_platform)
+        .maybe_agent_name(args.agent_name)
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)
@@ -336,8 +386,10 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
-        .maybe_public_urls(public_urls)
+        .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
+        .local_debug_enabled(args.enable_local_debug)
+        .maybe_local_debug_shell_command(args.local_debug_shell_command)
         .build();
 
     let cancel = CancellationToken::new();
@@ -364,9 +416,30 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
             None
         };
 
-    run_agent_with_cancel(agent_config, service_provider, cancel).await?;
+    run_agent_with_cancel_and_debug_loop(agent_config, service_provider, debug_loop_hook(), cancel)
+        .await?;
 
     Ok(())
+}
+
+fn select_startup_deployment_id(
+    stored_deployment_id: Option<String>,
+    configured_deployment_id: Option<String>,
+    data_dir: &str,
+) -> Result<StartupDeploymentId> {
+    match (stored_deployment_id, configured_deployment_id) {
+        (Some(stored), Some(configured)) if stored != configured => {
+            Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Agent data directory '{}' is already initialized for deployment '{}', but this service was configured for deployment '{}'. Use the original deployment name/token for this host, or stop the service and clear the data directory before assigning this host to a different deployment.",
+                    data_dir, stored, configured
+                ),
+            }))
+        }
+        (Some(stored), _) => Ok(StartupDeploymentId::Stored(stored)),
+        (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
+        (None, None) => Ok(StartupDeploymentId::Initialize),
+    }
 }
 
 #[cfg(unix)]
@@ -497,7 +570,8 @@ mod windows_entry {
             .build()
             .expect("failed to build tokio runtime");
 
-        let exit_code = match rt.block_on(super::run(args, init_hook)) {
+        let exit_code = match rt.block_on(super::run(args, init_hook, super::NOOP_DEBUG_LOOP_HOOK))
+        {
             Ok(()) => 0,
             Err(e) => {
                 error!(error = %e, "Agent exited with error");
@@ -823,7 +897,7 @@ async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::is_secret_file_mode_allowed;
+    use super::{is_secret_file_mode_allowed, select_startup_deployment_id, StartupDeploymentId};
 
     #[test]
     fn secret_file_mode_allows_kubernetes_fs_group_read() {
@@ -839,5 +913,49 @@ mod tests {
         assert!(!is_secret_file_mode_allowed(0o644));
         assert!(!is_secret_file_mode_allowed(0o700));
         assert!(!is_secret_file_mode_allowed(0o040));
+    }
+
+    #[test]
+    fn startup_deployment_id_uses_matching_stored_id() {
+        let selected = select_startup_deployment_id(
+            Some("dep_existing".to_string()),
+            Some("dep_existing".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect("matching configured deployment should be accepted");
+
+        assert_eq!(
+            selected,
+            StartupDeploymentId::Stored("dep_existing".to_string())
+        );
+    }
+
+    #[test]
+    fn startup_deployment_id_rejects_mismatched_configured_id() {
+        let err = select_startup_deployment_id(
+            Some("dep_existing".to_string()),
+            Some("dep_other".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect_err("mismatched configured deployment should fail");
+
+        assert_eq!(err.code, "CONFIGURATION_ERROR");
+        assert!(err.message.contains("dep_existing"));
+        assert!(err.message.contains("dep_other"));
+    }
+
+    #[test]
+    fn startup_deployment_id_uses_configured_id_without_stored_state() {
+        let selected = select_startup_deployment_id(
+            None,
+            Some("dep_configured".to_string()),
+            "/var/lib/alien-agent",
+        )
+        .expect("configured deployment should be used for empty state");
+
+        assert_eq!(
+            selected,
+            StartupDeploymentId::Configured("dep_configured".to_string())
+        );
     }
 }

@@ -41,6 +41,12 @@ pub struct DeploymentGroupResponse {
     pub max_deployments: i64,
     pub deployment_count: i64,
     pub created_at: String,
+    /// Required by the platform-SDK DeploymentGroup schema. Standalone
+    /// OSS mode is single-tenant, so we synthesize a project id
+    /// matching the workspace id.
+    pub project_id: String,
+    /// Required by the platform-SDK DeploymentGroup schema.
+    pub workspace_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +89,12 @@ fn record_to_response(dg: &DeploymentGroupRecord) -> DeploymentGroupResponse {
         max_deployments: dg.max_deployments,
         deployment_count: dg.deployment_count,
         created_at: dg.created_at.to_rfc3339(),
+        // Standalone is single-tenant. Synthesize IDs that match the
+        // platform-SDK regex patterns (`prj_[0-9a-z]{28}`, `ws_[0-9a-zA-Z]{24}`)
+        // so the CLI's `DeploymentGroup` parser accepts the response.
+        // prj_ + 28 lowercase alphanumerics; ws_ + 24 alphanumerics.
+        project_id: "prj_standalone000000000000000000".to_string(),
+        workspace_id: "ws_standalone00000000000000".to_string(),
     }
 }
 

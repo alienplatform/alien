@@ -1,14 +1,19 @@
 use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::aws::helpers::{
+        aws_terraform_permission_context, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize,
+    },
     expr,
 };
 use alien_core::{
-    import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Network, ResourceLifecycle, Result,
-    Stack, Worker,
+    import::EmitContext, Container, ErrorData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Network, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, ResourceLifecycle, Result, Stack, Worker,
 };
 use alien_error::AlienError;
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -108,6 +113,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ),
             )
             )
+            // `create-new` picks AZs by name from this data source for the
+            // newly-created subnets. Apply the same EKS-disallowed AZ-ID
+            // exclusion here so a brand-new VPC also can't land its subnets
+            // in (e.g.) `use1-az3` and then fail at cluster creation.
             .with_data(data_block(
                 "aws_availability_zones",
                 &format!("{label}_available"),
@@ -117,6 +126,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("state", Expression::String("available".to_string())),
+                    attr(
+                        "exclude_zone_ids",
+                        expr::raw("var.unsupported_availability_zone_ids"),
+                    ),
                 ],
             ))
             .with_data(data_block(
@@ -128,6 +141,89 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
                     ),
                     attr("name", expr::raw("var.eks_cluster_name")),
+                ],
+            ))
+            // `network_mode == "use-default"` reuses the AWS account's default
+            // VPC + its existing subnets. Without these data sources the EKS
+            // cluster's `subnet_ids` would resolve to `[]` and the provider
+            // rejects the apply ("Attribute vpc_config.0.subnet_ids requires
+            // 1 item minimum"). The data blocks are gated by `count` so
+            // create-new / use-existing modes pay no API cost.
+            .with_data(data_block(
+                "aws_vpc",
+                &format!("{label}_default"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    attr("default", Expression::Bool(true)),
+                ],
+            ))
+            // EKS control plane subnets must live in AZs the service supports.
+            // AWS publishes the disallowed list by **Availability Zone ID**
+            // (e.g. `use1-az3`), not by name (`us-east-1e`), because AZ
+            // names are account-local — the same physical zone can map to a
+            // different name in different accounts. The exclusion list is a
+            // module variable so callers in other regions / hit by future
+            // deprecations can override. `exclude_zone_ids` is a no-op for
+            // AZ IDs that don't exist in the current region.
+            .with_data(data_block(
+                "aws_availability_zones",
+                &format!("{label}_eks_supported"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    attr("state", Expression::String("available".to_string())),
+                    attr(
+                        "exclude_zone_ids",
+                        expr::raw("var.unsupported_availability_zone_ids"),
+                    ),
+                ],
+            ))
+            .with_data(data_block(
+                "aws_subnets",
+                &format!("{label}_default"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
+                        ),
+                    ),
+                    nested(block(
+                        "filter",
+                        [
+                            attr("name", Expression::String("vpc-id".to_string())),
+                            attr(
+                                "values",
+                                expr::raw(format!(
+                                    "[data.aws_vpc.{label}_default[0].id]"
+                                )),
+                            ),
+                        ],
+                    )),
+                    nested(block(
+                        "filter",
+                        [
+                            attr(
+                                "name",
+                                Expression::String("availability-zone-id".to_string()),
+                            ),
+                            attr(
+                                "values",
+                                expr::raw(format!(
+                                    "data.aws_availability_zones.{label}_eks_supported[0].zone_ids"
+                                )),
+                            ),
+                        ],
+                    )),
                 ],
             ));
 
@@ -419,57 +515,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
             resource_block(
-                "aws_iam_role",
-                &format!("{label}_managed_node"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr(
-                        "name",
-                        expr::template(format!("${{local.resource_prefix}}-{label}-mng-node")),
-                    ),
-                    attr(
-                        "assume_role_policy",
-                        expr::jsonencode(expr::object([
-                            ("Version", Expression::String("2012-10-17".to_string())),
-                            (
-                                "Statement",
-                                Expression::Array(vec![expr::object([
-                                    ("Effect", Expression::String("Allow".to_string())),
-                                    (
-                                        "Principal",
-                                        expr::object([(
-                                            "Service",
-                                            Expression::String("ec2.amazonaws.com".to_string()),
-                                        )]),
-                                    ),
-                                    ("Action", Expression::String("sts:AssumeRole".to_string())),
-                                ])]),
-                            ),
-                        ])),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role_policy_attachment",
-                &format!("{label}_managed_node"),
-                [
-                    attr(
-                        "for_each",
-                        expr::raw(
-                            "var.kubernetes_cluster_mode == \"create\" ? toset([\"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy\", \"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly\", \"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy\"]) : toset([])",
-                        ),
-                    ),
-                    attr(
-                        "role",
-                        expr::raw(format!("aws_iam_role.{label}_managed_node[0].name")),
-                    ),
-                    attr("policy_arn", expr::raw("each.value")),
-                ],
-            ),
-            resource_block(
                 "aws_eks_cluster",
                 label,
                 [
@@ -504,9 +549,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             attr("enabled", Expression::Bool(true)),
                             attr(
                                 "node_pools",
-                                Expression::Array(vec![Expression::String(
-                                    "system".to_string(),
-                                )]),
+                                Expression::Array(vec![
+                                    Expression::String("system".to_string()),
+                                    Expression::String("general-purpose".to_string()),
+                                ]),
                             ),
                             attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_node[0].arn"))),
                         ],
@@ -543,115 +589,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
             resource_block(
-                "aws_eks_node_group",
-                label,
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
-                    attr("node_group_name", expr::template(format!("${{local.resource_prefix}}-{label}"))),
-                    attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_managed_node[0].arn"))),
-                    attr("subnet_ids", expr::raw(private_subnet_ids_expr(label))),
-                    attr("ami_type", Expression::String("AL2023_ARM_64_STANDARD".to_string())),
-                    attr("capacity_type", Expression::String("ON_DEMAND".to_string())),
-                    attr("disk_size", Expression::Number(hcl::Number::from(20))),
-                    attr(
-                        "instance_types",
-                        Expression::Array(vec![Expression::String("t4g.medium".to_string())]),
-                    ),
-                    nested(block(
-                        "scaling_config",
-                        [
-                            attr("desired_size", Expression::Number(hcl::Number::from(2))),
-                            attr("max_size", Expression::Number(hcl::Number::from(3))),
-                            attr("min_size", Expression::Number(hcl::Number::from(2))),
-                        ],
-                    )),
-                    nested(block(
-                        "update_config",
-                        [attr("max_unavailable", Expression::Number(hcl::Number::from(1)))],
-                    )),
-                    attr(
-                        "depends_on",
-                        expr::raw(format!(
-                            "[aws_eks_addon.{label}_vpc_cni, aws_iam_role_policy_attachment.{label}_managed_node]"
-                        )),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("name", expr::template(format!("${{local.resource_prefix}}-{label}-ebs-csi"))),
-                    attr(
-                        "assume_role_policy",
-                        expr::raw(r#"jsonencode({
-  Version = "2012-10-17"
-  Statement = [{
-    Effect = "Allow"
-    Principal = {
-      Federated = local.eks_oidc_provider_arn
-    }
-    Action = "sts:AssumeRoleWithWebIdentity"
-    Condition = {
-      StringEquals = {
-        "${local.eks_oidc_issuer_host_path}:aud" = "sts.amazonaws.com"
-        "${local.eks_oidc_issuer_host_path}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
-      }
-    }
-  }]
-})"#),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_iam_role_policy_attachment",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("role", expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].name"))),
-                    attr(
-                        "policy_arn",
-                        Expression::String(
-                            "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-                                .to_string(),
-                        ),
-                    ),
-                ],
-            ),
-            resource_block(
-                "aws_eks_addon",
-                &format!("{label}_ebs_csi"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
-                    attr("addon_name", Expression::String("aws-ebs-csi-driver".to_string())),
-                    attr(
-                        "service_account_role_arn",
-                        expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].arn")),
-                    ),
-                    attr(
-                        "depends_on",
-                        expr::raw(format!(
-                            "[aws_eks_node_group.{label}, aws_iam_role_policy_attachment.{label}_ebs_csi]"
-                        )),
-                    ),
-                ],
-            ),
-            resource_block(
                 "aws_eks_addon",
                 &format!("{label}_kube_proxy"),
                 [
@@ -663,7 +600,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     attr("addon_name", Expression::String("kube-proxy".to_string())),
                     attr(
                         "depends_on",
-                        expr::raw(format!("[aws_eks_node_group.{label}]")),
+                        expr::raw(format!("[aws_eks_cluster.{label}]")),
                     ),
                 ],
             ),
@@ -679,11 +616,12 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     attr("addon_name", Expression::String("coredns".to_string())),
                     attr(
                         "depends_on",
-                        expr::raw(format!("[aws_eks_node_group.{label}]")),
+                        expr::raw(format!("[aws_eks_cluster.{label}]")),
                     ),
                 ],
             ),
         ]);
+        emit_eks_cluster_management_iam(ctx, &mut fragment, label)?;
         Ok(fragment)
     }
 
@@ -695,6 +633,77 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             "cluster_name",
         )
     }
+}
+
+fn emit_eks_cluster_management_iam(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+) -> Result<()> {
+    let Some(management_label) = remote_stack_management_label(ctx) else {
+        return Ok(());
+    };
+    let Some(profile) = ctx.stack.management().profile() else {
+        return Ok(());
+    };
+
+    let context = aws_terraform_permission_context()
+        .with_resource_id(ctx.resource_id.to_string())
+        .with_resource_name(format!("${{local.{label}_cluster_name}}"));
+
+    for (idx, permission_set_ref) in
+        kubernetes_cluster_management_permission_refs(profile, ctx.resource_id)
+            .into_iter()
+            .enumerate()
+    {
+        let Some(permission_set) =
+            permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        else {
+            continue;
+        };
+        if permission_set.id.ends_with("/provision")
+            || !permission_set.id.starts_with("kubernetes-cluster/")
+            || permission_set.platforms.aws.is_none()
+        {
+            continue;
+        }
+
+        emit_iam_role_policy_for_target_with_label(
+            fragment,
+            management_label,
+            &permission_set,
+            &format!(
+                "{management_label}_{label}_{}_{idx}",
+                iam_policy_name_sanitize(&permission_set.id)
+            ),
+            &iam_policy_name_sanitize(&format!("{}-{}-{idx}", ctx.resource_id, permission_set.id)),
+            &context,
+            BindingTarget::Resource,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn kubernetes_cluster_management_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    profile
+        .0
+        .get(resource_id)
+        .map(|refs| refs.iter().collect())
+        .unwrap_or_default()
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
 }
 
 fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
@@ -798,17 +807,12 @@ fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
         entry
             .config
             .downcast_ref::<Worker>()
-            .map(|worker| worker.ingress == Ingress::Public)
+            .map(|worker| !worker.public_endpoints.is_empty())
             .unwrap_or(false)
             || entry
                 .config
                 .downcast_ref::<Container>()
-                .map(|container| {
-                    container
-                        .ports
-                        .iter()
-                        .any(|port| matches!(port.expose, Some(ExposeProtocol::Http)))
-                })
+                .map(|container| !container.public_endpoints.is_empty())
                 .unwrap_or(false)
     })
 }
@@ -1477,13 +1481,19 @@ fn eks_subnet_tags(label: &str, kind: &str, role: &str) -> Expression {
 
 fn public_subnet_ids_expr(label: &str) -> String {
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 
 fn private_subnet_ids_expr(label: &str) -> String {
+    // For `use-default`, the AWS account's default VPC has only public subnets
+    // — there is no private/public distinction. Returning the same default
+    // subnet set here is the right behavior: EKS works on either, and ALB
+    // configurations downstream will use the same list. If a customer needs a
+    // proper private/public split they should switch to `create-new` or
+    // `use-existing`.
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 

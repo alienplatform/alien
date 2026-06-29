@@ -10,8 +10,9 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{generate_cloudformation_template, CfRegistry, RegistrationMode};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Network,
-    NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, ManagementPermissions,
+    Network, NetworkSettings, PermissionProfile, Platform, RemoteStackManagement,
+    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]
@@ -76,6 +77,39 @@ fn aws_function_basic_lambda() {
 }
 
 #[test]
+fn aws_remote_stack_management_skips_live_provision_sets() {
+    let stack = Stack::new("acme-mgmt".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new()
+                .resource("job", ["worker/provision", "worker/dispatch-command"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Worker::new("job".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/job:1.2.3".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws_remote_stack_management_skips_live_provision_sets",
+    );
+
+    assert!(yaml.contains("lambda:InvokeFunction"));
+    assert!(!yaml.contains("lambda:CreateFunction"));
+}
+
+#[test]
 fn aws_function_public_ingress_emits_apigw_v2() {
     let stack = Stack::new("acme-public".to_string())
         .add(
@@ -84,7 +118,11 @@ fn aws_function_public_ingress_emits_apigw_v2() {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
-                .ingress(Ingress::Public)
+                .public_endpoint(alien_core::WorkerPublicEndpoint {
+                    name: "api".to_string(),
+                    host_label: None,
+                    wildcard_subdomains: false,
+                })
                 .timeout_seconds(60)
                 .memory_mb(512)
                 .build(),
@@ -130,6 +168,8 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
                     profile: None,
                     min_size: 1,
                     max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

@@ -2,7 +2,7 @@
 
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
-[![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
+[![Slack](https://img.shields.io/badge/Slack-Join-4A154B?logo=slack&logoColor=white)](https://alien.dev/slack)
 
 Alien provides infrastructure to deploy and operate software inside your users' environments, while retaining centralized control over updates, monitoring, and lifecycle management.
 
@@ -126,7 +126,7 @@ const api = new alien.Worker("api")
   .code({ type: "source", src: "./api", toolchain: { type: "typescript" } })
   .link(data)
   .link(secrets)
-  .ingress("public")
+  .publicEndpoint("api")
   .build()
 
 export default new alien.Stack("my-app")
@@ -296,6 +296,6 @@ See the [Self-Hosting Guide](https://alien.dev/docs/self-hosting) for the full c
 
 ## Community
 
-- [Discord](https://alien.dev/discord) — get help and share feedback
+- [Slack](https://alien.dev/slack) — get help and share feedback
 - [GitHub Issues](https://github.com/alienplatform/alien/issues) — bug reports and feature requests
 - [X](https://x.com/alien) — updates and announcements

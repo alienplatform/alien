@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{DeleteScope, DeploymentState, DeploymentStatus, Platform, StackSettings};
+use alien_core::{DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -74,6 +74,7 @@ async fn create_test_deployment(
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                input_values: Default::default(),
                 deployment_token: None,
             },
         )
@@ -132,7 +133,7 @@ async fn list_by_status() {
     // Instead, use set_redeploy which sets "update-pending"
     store.set_redeploy(&test_subject(), &dep1.id).await.unwrap();
     store
-        .set_delete_pending(&test_subject(), &dep2.id, DeleteScope::Full)
+        .set_delete_pending(&test_subject(), &dep2.id)
         .await
         .unwrap();
 
@@ -225,6 +226,54 @@ async fn list_by_deployment_group() {
 }
 
 #[tokio::test]
+async fn list_by_deployment_group_and_name() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+
+    let group_a = store
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "group-a".to_string(),
+                max_deployments: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    let group_b = store
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "group-b".to_string(),
+                max_deployments: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    create_test_deployment(&store, &group_a.id, "api", Platform::Aws).await;
+    create_test_deployment(&store, &group_a.id, "worker", Platform::Aws).await;
+    create_test_deployment(&store, &group_b.id, "api", Platform::Gcp).await;
+
+    let matches = store
+        .list_deployments(
+            &test_subject(),
+            &DeploymentFilter {
+                deployment_group_id: Some(group_a.id.clone()),
+                name: Some("api".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].deployment_group_id, group_a.id);
+    assert_eq!(matches[0].name, "api");
+}
+
+#[tokio::test]
 async fn update_status() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);
@@ -234,7 +283,7 @@ async fn update_status() {
 
     // set_delete_pending
     store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::LiveOnly)
+        .set_delete_pending(&test_subject(), &dep.id)
         .await
         .unwrap();
     let fetched = store
@@ -243,15 +292,9 @@ async fn update_status() {
         .unwrap()
         .unwrap();
     assert_eq!(fetched.status, "delete-pending");
-    assert_eq!(
-        fetched.runtime_metadata.unwrap_or_default().delete_scope,
-        Some(DeleteScope::LiveOnly)
-    );
 
     // set_delete_pending again should fail (already delete-pending)
-    let result = store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::Full)
-        .await;
+    let result = store.set_delete_pending(&test_subject(), &dep.id).await;
     assert!(result.is_err());
 
     // Create another deployment for retry and redeploy
@@ -410,6 +453,58 @@ async fn acquire_does_not_pick_failed_status_without_retry_request() {
     assert!(
         acquired.is_empty(),
         "failed deployments without retry_requested must not be acquired"
+    );
+}
+
+#[tokio::test]
+async fn acquire_only_picks_running_when_explicitly_requested() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'running' WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let default_acquired = store
+        .acquire(
+            &test_subject(),
+            "default-session",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert!(
+        default_acquired.is_empty(),
+        "normal deployment loop acquire must not pick stable running deployments"
+    );
+
+    let heartbeat_acquired = store
+        .acquire(
+            &test_subject(),
+            "heartbeat-session",
+            &DeploymentFilter {
+                statuses: Some(vec!["running".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(heartbeat_acquired.len(), 1);
+    assert_eq!(heartbeat_acquired[0].deployment.id, dep.id);
+    assert_eq!(
+        heartbeat_acquired[0].deployment.locked_by.as_deref(),
+        Some("heartbeat-session")
     );
 }
 
@@ -582,6 +677,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
         current_release: None,
         target_release: None,
         stack_state: None,
+        error: None,
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
@@ -596,7 +692,6 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
-                error: None,
                 suggested_delay_ms: None,
                 agent_version: None,
                 agent_os: None,
@@ -651,6 +746,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
         current_release: None,
         target_release: None,
         stack_state: None,
+        error: None,
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
@@ -665,7 +761,6 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
-                error: None,
                 suggested_delay_ms: None,
                 agent_version: None,
                 agent_os: None,

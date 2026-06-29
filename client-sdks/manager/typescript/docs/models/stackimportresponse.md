@@ -37,7 +37,7 @@ let value: StackImportResponse = {
           id: "<id>",
           type: "worker",
         },
-        status: "provision-failed",
+        status: "running",
         type: "<value>",
       },
     },

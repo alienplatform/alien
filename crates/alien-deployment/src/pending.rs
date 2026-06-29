@@ -87,6 +87,7 @@ pub async fn handle_pending(
         crate::helpers::inject_monitoring_environment_variables(
             &mut mutated_stack_with_env,
             monitoring,
+            current.platform,
         )?;
     }
 
@@ -97,13 +98,13 @@ pub async fn handle_pending(
     let mut next = current.clone();
     next.status = DeploymentStatus::InitialSetup;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.environment_info = Some(environment_info);
     next.runtime_metadata = Some(runtime_metadata);
     // Error handled in DeploymentStepResult
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],

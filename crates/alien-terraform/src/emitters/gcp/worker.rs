@@ -10,8 +10,8 @@
 //! * `Storage` → `google_eventarc_trigger` for storage events
 //!   (`google.cloud.storage.object.v1.<event>`).
 //!
-//! Public ingress maps to `INGRESS_TRAFFIC_ALL`; private maps to
-//! `INGRESS_TRAFFIC_INTERNAL_ONLY`.
+//! Public endpoints map to `INGRESS_TRAFFIC_ALL`; workers without public
+//! endpoints use `INGRESS_TRAFFIC_INTERNAL_ONLY`.
 
 use crate::{
     block::{attr, block, nested, resource_block},
@@ -26,7 +26,7 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData,
     RemoteStackManagement, Result, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
@@ -65,9 +65,11 @@ impl TfEmitter for GcpWorkerEmitter {
 
         let service_account = service_account_email(ctx, &function.permissions);
 
-        let ingress = match function.ingress {
-            Ingress::Public => "INGRESS_TRAFFIC_ALL",
-            Ingress::Private => "INGRESS_TRAFFIC_INTERNAL_ONLY",
+        let public = !function.public_endpoints.is_empty();
+        let ingress = if public {
+            "INGRESS_TRAFFIC_ALL"
+        } else {
+            "INGRESS_TRAFFIC_INTERNAL_ONLY"
         };
 
         let container_attrs: Vec<hcl::structure::Structure> = vec![
@@ -129,7 +131,7 @@ impl TfEmitter for GcpWorkerEmitter {
             attr("deletion_protection", Expression::Bool(false)),
             nested(block("template", template_body)),
         ];
-        if matches!(function.ingress, Ingress::Public) {
+        if public {
             service_body.push(attr("invoker_iam_disabled", Expression::Bool(true)));
         }
 
@@ -317,7 +319,7 @@ impl TfEmitter for GcpWorkerEmitter {
                 "push_endpoint",
                 expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
             )];
-            if !matches!(function.ingress, Ingress::Public) {
+            if !public {
                 if let Some(sa) = &service_account {
                     push_body.push(nested(block(
                         "oidc_token",
@@ -391,10 +393,26 @@ impl TfEmitter for GcpWorkerEmitter {
             }
         }
 
-        let url_field = if matches!(function.ingress, Ingress::Public) {
-            expr::traversal(["google_cloud_run_v2_service", label, "uri"])
+        let public_endpoints = if !function.public_endpoints.is_empty() {
+            expr::object(function.public_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    expr::object([
+                        (
+                            "url",
+                            expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
+                        ),
+                        (
+                            "host",
+                            expr::raw(format!(
+                                "trimprefix(google_cloud_run_v2_service.{label}.uri, \"https://\")"
+                            )),
+                        ),
+                    ]),
+                )
+            }))
         } else {
-            Expression::Null
+            expr::object(std::iter::empty::<(&str, Expression)>())
         };
 
         Ok(expr::object([
@@ -404,7 +422,7 @@ impl TfEmitter for GcpWorkerEmitter {
                 "serviceName",
                 expr::traversal(["google_cloud_run_v2_service", label, "name"]),
             ),
-            ("url", url_field),
+            ("publicEndpoints", public_endpoints),
             (
                 "pubsubSubscriptionNames",
                 Expression::Array(subscription_names),
@@ -451,8 +469,24 @@ impl TfEmitter for GcpWorkerEmitter {
             ("location".to_string(), expr::raw("var.gcp_region")),
             ("privateUrl".to_string(), service_url.clone()),
         ];
-        if matches!(function.ingress, Ingress::Public) {
-            fields.push(("publicUrl".to_string(), service_url));
+        if !function.public_endpoints.is_empty() {
+            fields.push((
+                "publicEndpoints".to_string(),
+                expr::object(function.public_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.name.as_str(),
+                        expr::object([
+                            ("url", service_url.clone()),
+                            (
+                                "host",
+                                expr::raw(format!(
+                                    "trimprefix(google_cloud_run_v2_service.{label}.uri, \"https://\")"
+                                )),
+                            ),
+                        ]),
+                    )
+                })),
+            ));
         }
         Ok(Some(expr::object(
             fields

@@ -1,0 +1,1 @@
+{"type":"string","description":"Primitive stack input kind.","enum":["string","secret","number","integer","boolean","enum","stringList"],"x-readme-ref-name":"StackInputKind"}

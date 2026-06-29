@@ -111,7 +111,7 @@ export type ConfigCli = {
    */
   displayName: string;
   /**
-   * Binary name displayed in help and usage (e.g., "acme-deploy")
+   * Binary name displayed in help and usage (e.g., "acmectl")
    */
   name: string;
   type: "cli";
@@ -155,6 +155,10 @@ export type PackageModules = {
    * Terraform module target (aws, gcp, azure, eks, gke, aks)
    */
   target: string;
+  /**
+   * Terraform input variables exposed by this module.
+   */
+  variables?: Array<string> | undefined;
 };
 
 /**
@@ -580,6 +584,7 @@ export const PackageModules$inboundSchema: z.ZodType<PackageModules, unknown> =
     size: z.int(),
     source: z.string(),
     target: z.string(),
+    variables: z.array(z.string()).optional(),
   });
 
 export function packageModulesFromJSON(

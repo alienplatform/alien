@@ -40,6 +40,7 @@ pub struct PermissionContext {
     pub stack_prefix: Option<String>,
     pub stack_name: Option<String>,
     pub deployment_name: Option<String>,
+    pub resource_id: Option<String>,
     pub resource_name: Option<String>,
     pub service_account_name: Option<String>,
     pub principal_id: Option<String>,
@@ -66,6 +67,7 @@ impl PermissionContext {
             stack_prefix: None,
             stack_name: None,
             deployment_name: None,
+            resource_id: None,
             resource_name: None,
             service_account_name: None,
             principal_id: None,
@@ -159,6 +161,12 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for the Alien logical resource ID.
+    pub fn with_resource_id(mut self, resource_id: impl Into<String>) -> Self {
+        self.resource_id = Some(resource_id.into());
+        self
+    }
+
     /// Builder pattern for resource name
     pub fn with_resource_name(mut self, resource_name: impl Into<String>) -> Self {
         self.resource_name = Some(resource_name.into());
@@ -220,6 +228,7 @@ impl PermissionContext {
             "stackPrefix" => self.stack_prefix.as_deref(),
             "stackName" => self.stack_name.as_deref(),
             "deploymentName" => self.deployment_name.as_deref(),
+            "resourceId" => self.resource_id.as_deref(),
             "resourceName" => self.resource_name.as_deref(),
             "serviceAccountName" => self.service_account_name.as_deref(),
             "principalId" => self.principal_id.as_deref(),

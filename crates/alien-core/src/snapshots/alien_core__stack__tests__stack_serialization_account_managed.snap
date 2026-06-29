@@ -27,7 +27,6 @@ expression: stack
         "concurrencyLimit": null,
         "environment": {},
         "id": "my-worker",
-        "ingress": "private",
         "links": [
           {
             "id": "my-bucket",

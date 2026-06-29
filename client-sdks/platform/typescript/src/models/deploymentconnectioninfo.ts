@@ -19,15 +19,21 @@ export type Arc = {
   deploymentId: string;
 };
 
+export type PublicEndpoints = {
+  url: string;
+  host?: string | undefined;
+  wildcardHost?: string | undefined;
+};
+
 export type DeploymentConnectionInfoResources = {
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
    */
   type: string;
   /**
-   * Public URL if resource has public ingress
+   * Public endpoints keyed by endpoint name.
    */
-  publicUrl?: string | undefined;
+  publicEndpoints?: { [k: string]: PublicEndpoints } | undefined;
 };
 
 /**
@@ -35,6 +41,7 @@ export type DeploymentConnectionInfoResources = {
  */
 export const DeploymentConnectionInfoStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -47,6 +54,8 @@ export const DeploymentConnectionInfoStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -60,7 +69,7 @@ export type DeploymentConnectionInfoStatus = ClosedEnum<
 export type DeploymentConnectionInfo = {
   arc: Arc;
   /**
-   * Deployed resources and their URLs
+   * Deployed resources and their public endpoints
    */
   resources: { [k: string]: DeploymentConnectionInfoResources };
   /**
@@ -87,12 +96,35 @@ export function arcFromJSON(
 }
 
 /** @internal */
+export const PublicEndpoints$inboundSchema: z.ZodType<
+  PublicEndpoints,
+  unknown
+> = z.object({
+  url: z.string(),
+  host: z.string().optional(),
+  wildcardHost: z.string().optional(),
+});
+
+export function publicEndpointsFromJSON(
+  jsonString: string,
+): SafeParseResult<PublicEndpoints, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PublicEndpoints$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PublicEndpoints' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConnectionInfoResources$inboundSchema: z.ZodType<
   DeploymentConnectionInfoResources,
   unknown
 > = z.object({
   type: z.string(),
-  publicUrl: z.string().optional(),
+  publicEndpoints: z.record(
+    z.string(),
+    z.lazy(() => PublicEndpoints$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentConnectionInfoResourcesFromJSON(

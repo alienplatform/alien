@@ -4,12 +4,18 @@
 
 import * as z from "zod/v4";
 import {
+  ComputeCapacityBlocker,
+  ComputeCapacityBlocker$Outbound,
+  ComputeCapacityBlocker$outboundSchema,
+} from "./computecapacityblocker.js";
+import {
   ComputeCapacityRecommendation,
   ComputeCapacityRecommendation$Outbound,
   ComputeCapacityRecommendation$outboundSchema,
 } from "./computecapacityrecommendation.js";
 
 export type ComputeCapacityGroupStatus = {
+  capacityBlocker?: ComputeCapacityBlocker | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -21,6 +27,7 @@ export type ComputeCapacityGroupStatus = {
 
 /** @internal */
 export type ComputeCapacityGroupStatus$Outbound = {
+  capacityBlocker?: ComputeCapacityBlocker$Outbound | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -35,6 +42,7 @@ export const ComputeCapacityGroupStatus$outboundSchema: z.ZodType<
   ComputeCapacityGroupStatus$Outbound,
   ComputeCapacityGroupStatus
 > = z.object({
+  capacityBlocker: z.nullable(ComputeCapacityBlocker$outboundSchema).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   groupId: z.string(),

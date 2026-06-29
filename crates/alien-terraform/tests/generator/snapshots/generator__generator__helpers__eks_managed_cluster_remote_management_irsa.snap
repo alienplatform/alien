@@ -162,6 +162,16 @@ variable "security_group_ids" {
   default     = []
 }
 
+variable "unsupported_availability_zone_ids" {
+  type        = list(string)
+  description = "Availability Zone IDs to exclude when selecting EKS control-plane subnets. AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are account-local — the same physical zone can be `us-east-1e` in one account and `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting EKS control plane today (see https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per region when AWS deprecates more."
+  default = [
+    "use1-az3",
+    "usw1-az2",
+    "cac1-az3"
+  ]
+}
+
 variable "kubernetes_cluster_mode" {
   type        = string
   description = "Kubernetes cluster mode. Values: create or existing."
@@ -232,7 +242,7 @@ locals {
         provider   = "awsAlb"
         scheme     = "internet-facing"
         targetType = "ip"
-        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []) : []
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
       }
     }
     certificate = {
@@ -281,13 +291,41 @@ locals {
 
 === kubernetes.tf ===
 data "aws_availability_zones" "kubernetes_available" {
-  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  state = "available"
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
 }
 
 data "aws_eks_cluster" "kubernetes_existing" {
   count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
   name  = var.eks_cluster_name
+}
+
+data "aws_vpc" "kubernetes_default" {
+  count   = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  default = true
+}
+
+data "aws_availability_zones" "kubernetes_eks_supported" {
+  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
+}
+
+data "aws_subnets" "kubernetes_default" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+
+  filter {
+    name = "vpc-id"
+    values = [
+      data.aws_vpc.kubernetes_default[0].id
+    ]
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
 }
 
 data "aws_eks_cluster" "target" {
@@ -449,18 +487,6 @@ resource "aws_iam_role_policy_attachment" "kubernetes_node" {
   policy_arn = each.value
 }
 
-resource "aws_iam_role" "kubernetes_managed_node" {
-  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  name               = "${local.resource_prefix}-kubernetes-mng-node"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }] })
-}
-
-resource "aws_iam_role_policy_attachment" "kubernetes_managed_node" {
-  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly", "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"]) : toset([])
-  role       = aws_iam_role.kubernetes_managed_node[0].name
-  policy_arn = each.value
-}
-
 resource "aws_eks_cluster" "kubernetes" {
   count                         = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name                          = "${local.resource_prefix}-k8s"
@@ -468,7 +494,7 @@ resource "aws_eks_cluster" "kubernetes" {
   bootstrap_self_managed_addons = false
 
   vpc_config {
-    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
     endpoint_public_access  = true
     endpoint_private_access = true
   }
@@ -481,7 +507,8 @@ resource "aws_eks_cluster" "kubernetes" {
   compute_config {
     enabled = true
     node_pools = [
-      "system"
+      "system",
+      "general-purpose"
     ]
     node_role_arn = aws_iam_role.kubernetes_node[0].arn
   }
@@ -510,64 +537,12 @@ resource "aws_eks_addon" "kubernetes_vpc_cni" {
   addon_name   = "vpc-cni"
 }
 
-resource "aws_eks_node_group" "kubernetes" {
-  count           = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  cluster_name    = aws_eks_cluster.kubernetes[0].name
-  node_group_name = "${local.resource_prefix}-kubernetes"
-  node_role_arn   = aws_iam_role.kubernetes_managed_node[0].arn
-  subnet_ids      = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
-  ami_type        = "AL2023_ARM_64_STANDARD"
-  capacity_type   = "ON_DEMAND"
-  disk_size       = 20
-  instance_types = [
-    "t4g.medium"
-  ]
-
-  scaling_config {
-    desired_size = 2
-    max_size     = 3
-    min_size     = 2
-  }
-
-  update_config {
-    max_unavailable = 1
-  }
-
-  depends_on = [
-    aws_eks_addon.kubernetes_vpc_cni,
-    aws_iam_role_policy_attachment.kubernetes_managed_node
-  ]
-}
-
-resource "aws_iam_role" "kubernetes_ebs_csi" {
-  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  name               = "${local.resource_prefix}-kubernetes-ebs-csi"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Federated = local.eks_oidc_provider_arn }, Action = "sts:AssumeRoleWithWebIdentity", Condition = { StringEquals = { "${local.eks_oidc_issuer_host_path}:aud" = "sts.amazonaws.com", "${local.eks_oidc_issuer_host_path}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa" } } }] })
-}
-
-resource "aws_iam_role_policy_attachment" "kubernetes_ebs_csi" {
-  count      = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  role       = aws_iam_role.kubernetes_ebs_csi[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-}
-
-resource "aws_eks_addon" "kubernetes_ebs_csi" {
-  count                    = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  cluster_name             = aws_eks_cluster.kubernetes[0].name
-  addon_name               = "aws-ebs-csi-driver"
-  service_account_role_arn = aws_iam_role.kubernetes_ebs_csi[0].arn
-  depends_on = [
-    aws_eks_node_group.kubernetes,
-    aws_iam_role_policy_attachment.kubernetes_ebs_csi
-  ]
-}
-
 resource "aws_eks_addon" "kubernetes_kube_proxy" {
   count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
   cluster_name = aws_eks_cluster.kubernetes[0].name
   addon_name   = "kube-proxy"
   depends_on = [
-    aws_eks_node_group.kubernetes
+    aws_eks_cluster.kubernetes
   ]
 }
 
@@ -576,8 +551,14 @@ resource "aws_eks_addon" "kubernetes_coredns" {
   cluster_name = aws_eks_cluster.kubernetes[0].name
   addon_name   = "coredns"
   depends_on = [
-    aws_eks_node_group.kubernetes
+    aws_eks_cluster.kubernetes
   ]
+}
+
+resource "aws_iam_role_policy" "management_kubernetes_kubernetes-cluster-heartbeat_0" {
+  name   = "kubernetes-kubernetes-cluster-heartbeat-0"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "KubernetesClusterHeartbeat", Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.kubernetes_cluster_name}"] }] })
 }
 
 === management.tf ===
@@ -624,16 +605,6 @@ resource "aws_iam_role" "management" {
   }
 }
 
-resource "aws_iam_policy" "management_managed_policy_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "deployment-management-0")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-0")), 0, 8))
-  policy = jsonencode({ Statement = [{ Action = ["eks:DescribeCluster"], Effect = "Allow", Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.kubernetes_cluster_mode == "create" ? format("%s-k8s", local.resource_prefix) : var.eks_cluster_name}"], Sid = "KubernetesClusterHeartbeat" }], Version = "2012-10-17" })
-}
-
-resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
-  role       = aws_iam_role.management.name
-  policy_arn = aws_iam_policy.management_managed_policy_0.arn
-}
-
 resource "aws_iam_role_policy" "management_self_read" {
   name   = "deployment-management-self-read"
   role   = aws_iam_role.management.id
@@ -655,6 +626,7 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
     basePlatform                = local.deployment_base_platform
   }
   depends_on = [
@@ -673,19 +645,12 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy_attachment.kubernetes_cluster,
     aws_iam_role.kubernetes_node,
     aws_iam_role_policy_attachment.kubernetes_node,
-    aws_iam_role.kubernetes_managed_node,
-    aws_iam_role_policy_attachment.kubernetes_managed_node,
     aws_eks_cluster.kubernetes,
     aws_eks_addon.kubernetes_vpc_cni,
-    aws_eks_node_group.kubernetes,
-    aws_iam_role.kubernetes_ebs_csi,
-    aws_iam_role_policy_attachment.kubernetes_ebs_csi,
-    aws_eks_addon.kubernetes_ebs_csi,
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
+    aws_iam_role_policy.management_kubernetes_kubernetes-cluster-heartbeat_0,
     aws_iam_role.management,
-    aws_iam_policy.management_managed_policy_0,
-    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
     aws_iam_role_policy.management_self_read
   ]
 }
@@ -752,6 +717,11 @@ output "deployment_base_platform" {
   description = "Base cloud platform for Kubernetes targets."
 }
 
+output "kubernetes_namespace" {
+  value       = var.kubernetes_namespace
+  description = "Kubernetes namespace for runtime resources."
+}
+
 output "kubernetes_kubeconfig" {
   value       = local.kubernetes_kubeconfig
   description = "Kubeconfig for managed Kubernetes clusters created by this module."
@@ -761,6 +731,11 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "kubernetes_update_kubeconfig_command" {
+  value       = "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+  description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
 }
 
 === README.md ===
@@ -829,3 +804,22 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+
+## Kubernetes Operations
+
+Before inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:
+
+```bash
+AWS_PROFILE=<target-profile> aws sts get-caller-identity
+terraform output kubernetes_update_kubeconfig_command
+AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)
+kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events
+```
+
+Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.
+
+## Destroy Order
+
+If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+
+If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.

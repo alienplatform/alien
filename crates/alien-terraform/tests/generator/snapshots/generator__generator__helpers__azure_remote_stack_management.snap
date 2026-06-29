@@ -231,6 +231,9 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.App/containerApps/sourceControls/read",
       "Microsoft.App/containerApps/sourceControls/write",
       "Microsoft.App/containerApps/write",
+      "Microsoft.App/managedEnvironments/certificates/delete",
+      "Microsoft.App/managedEnvironments/certificates/read",
+      "Microsoft.App/managedEnvironments/certificates/write",
       "Microsoft.App/managedEnvironments/daprComponents/delete",
       "Microsoft.App/managedEnvironments/daprComponents/read",
       "Microsoft.App/managedEnvironments/daprComponents/write",
@@ -338,6 +341,7 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,

@@ -180,6 +180,11 @@ impl LocalBindingsProvider {
 
     /// Triggers graceful shutdown and waits for all background tasks to complete.
     pub async fn shutdown(self: Arc<Self>) {
+        let worker_manager = { self.worker_manager.read().unwrap().clone() };
+        if let Some(worker_manager) = worker_manager {
+            worker_manager.shutdown_all().await;
+        }
+
         // Trigger shutdown for all background tasks
         let _ = self.shutdown_tx.send(());
 

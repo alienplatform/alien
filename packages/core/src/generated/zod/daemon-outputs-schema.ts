@@ -4,9 +4,13 @@
 */
 
 import * as z from "zod";
+import { PublicEndpointOutputSchema } from "./public-endpoint-output-schema.js";
 
 export const DaemonOutputsSchema = z.object({
     "daemonName": z.string(),
+"publicEndpoints": z.optional(z.object({
+    
+    }).catchall(z.lazy(() => PublicEndpointOutputSchema).describe("Runtime-resolved public endpoint metadata."))),
 "running": z.boolean()
     })
 

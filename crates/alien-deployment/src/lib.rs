@@ -14,6 +14,7 @@ mod pending;
 mod provisioning;
 pub mod runner;
 mod running;
+pub mod setup_teardown;
 pub mod transport;
 mod updating;
 
@@ -27,6 +28,7 @@ pub use alien_core::{
 // Re-export helper functions
 pub use helpers::collect_environment_info;
 pub use helpers::create_aggregated_error_from_stack_state;
+pub use helpers::deployment_headline_error_from_state;
 
 use tracing::{debug, info, warn};
 
@@ -158,6 +160,30 @@ pub async fn step(
             )
             .await?
         }
+        DeploymentStatus::PreflightsFailed => {
+            if !current.retry_requested {
+                debug!("Deployment preflights failed and no retry is requested, no action");
+                DeploymentStepResult {
+                    state: current,
+                    suggested_delay_ms: None,
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                }
+            } else {
+                let mut retry_state = current;
+                retry_state.status = DeploymentStatus::Pending;
+                retry_state.error = None;
+                retry_state.retry_requested = false;
+                pending::handle_pending(
+                    retry_state,
+                    require_target_stack()?,
+                    config,
+                    client_config,
+                    service_provider,
+                )
+                .await?
+            }
+        }
         DeploymentStatus::InitialSetup => {
             initial_setup::handle_initial_setup(current, config, client_config, service_provider)
                 .await?
@@ -189,6 +215,7 @@ pub async fn step(
         DeploymentStatus::Deleting => {
             deleting::handle_deleting(current, config, client_config, service_provider).await?
         }
+        DeploymentStatus::TeardownRequired => deleting::handle_teardown_required(current).await?,
         // Failed states - retry failed resources and transition back to active status
         DeploymentStatus::InitialSetupFailed => {
             initial_setup::handle_initial_setup_failed(
@@ -223,6 +250,15 @@ pub async fn step(
         DeploymentStatus::DeleteFailed => {
             deleting::handle_delete_failed(current, config, client_config, service_provider).await?
         }
+        DeploymentStatus::TeardownFailed => {
+            debug!("Deployment setup teardown failed, no normal deployment action");
+            DeploymentStepResult {
+                state: current,
+                suggested_delay_ms: None,
+                update_heartbeat: false,
+                heartbeats: vec![],
+            }
+        }
         DeploymentStatus::RefreshFailed => {
             running::handle_refresh_failed(
                 current,
@@ -237,7 +273,6 @@ pub async fn step(
             debug!("Deployment is deleted, no action");
             DeploymentStepResult {
                 state: current,
-                error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
@@ -247,7 +282,6 @@ pub async fn step(
             debug!("Deployment is in error state, no action");
             DeploymentStepResult {
                 state: current,
-                error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],

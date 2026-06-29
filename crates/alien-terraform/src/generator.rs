@@ -26,8 +26,9 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteStackManagement, Result, Stack, StackSettings, TelemetryMode,
-    UpdatesMode,
+    NetworkSettings, RemoteStackManagement, Result, Stack, StackInputDefaultValue,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
+    TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -189,6 +190,8 @@ pub fn generate_terraform_module(
             availability_zones: 2,
         });
     }
+    let stack_inputs = stack_inputs_for_terraform(stack, target);
+    validate_stack_inputs_for_terraform(&stack_inputs)?;
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
     let mut registration_resources: Vec<Expression> = Vec::new();
@@ -303,6 +306,7 @@ pub fn generate_terraform_module(
             &deployment_name_default,
             needs_azure_management_inputs,
             &options.supported_aws_regions,
+            &stack_inputs,
         )?)?,
     );
     files.insert(
@@ -348,6 +352,7 @@ pub fn generate_terraform_module(
             target,
             options.registration.as_ref(),
             &import_depends_on,
+            terraform_input_values_expression(&stack_inputs),
         ))?,
     );
     if let Some(helm_install) = options
@@ -376,6 +381,7 @@ pub fn generate_terraform_module(
             options.display_name.as_deref(),
             &stack_settings,
             options.helm_install.as_ref(),
+            &stack_inputs,
         ),
     );
 
@@ -801,6 +807,74 @@ fn provider_decl_attr(source: &str, version: &str) -> Expression {
     ])
 }
 
+fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<StackInputDefinition> {
+    let platform = target.deployment_platform();
+    stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input.provided_by.contains(&StackInputProvider::Deployer)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .cloned()
+        .collect()
+}
+
+fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
+    let secret_inputs: Vec<&str> = inputs
+        .iter()
+        .filter(|input| input.kind == StackInputKind::Secret)
+        .map(|input| input.id.as_str())
+        .collect();
+    if secret_inputs.is_empty() {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::OperationNotSupported {
+        operation: "generate_terraform_module".to_string(),
+        reason: format!(
+            "Terraform deployer-provided secret stack inputs are not enabled because this provider cannot prove values stay out of Terraform state yet. Use the deployment portal, CloudFormation, or deploy CLI for secret inputs, or move these inputs out of the Terraform setup path: {}",
+            secret_inputs.join(", ")
+        ),
+    }))
+}
+
+fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
+    format!("input_{}", snake_case_identifier(&input.id))
+}
+
+fn snake_case_identifier(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_separator = true;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && !previous_was_separator && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !output.ends_with('_') {
+            output.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let output = output.trim_matches('_').to_string();
+    if output.is_empty() {
+        "value".to_string()
+    } else if output
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_digit())
+    {
+        format!("value_{output}")
+    } else {
+        output
+    }
+}
+
 fn variables_body(
     target: TerraformTarget,
     network_vars: &NetworkVariables,
@@ -810,6 +884,7 @@ fn variables_body(
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
     supported_aws_regions: &[String],
+    stack_inputs: &[StackInputDefinition],
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
@@ -922,6 +997,24 @@ fn variables_body(
             "security_group_ids",
             "Existing security group IDs. Required when network is use-existing.",
             Some(vec![]),
+        )));
+        blocks.push(nested(list_variable_block(
+            "unsupported_availability_zone_ids",
+            "Availability Zone IDs to exclude when selecting EKS control-plane subnets. \
+             AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are \
+             account-local — the same physical zone can be `us-east-1e` in one account and \
+             `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting \
+             EKS control plane today (see \
+             https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per \
+             region when AWS deprecates more.",
+            Some(vec![
+                // us-east-1e
+                "use1-az3".to_string(),
+                // us-west-1b
+                "usw1-az2".to_string(),
+                // ca-central-1d
+                "cac1-az3".to_string(),
+            ]),
         )));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
@@ -1144,6 +1237,9 @@ fn variables_body(
             default.clone(),
         )));
     }
+    for input in stack_inputs {
+        blocks.push(nested(stack_input_variable_block(input)));
+    }
 
     Ok(Body::from(blocks))
 }
@@ -1214,13 +1310,35 @@ fn advanced_settings_default_json(
         }
     }
 
-    serde_json::to_string(&value)
+    serde_json::to_string(&sort_json_object_keys(value))
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
                 reason: format!("failed to serialize advanced settings default: {err}"),
             })
         })
+}
+
+fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sort_json_object_keys)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, sort_json_object_keys(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
 }
 
 fn remove_kubernetes_exposure_default(object: &mut serde_json::Map<String, serde_json::Value>) {
@@ -1434,6 +1552,158 @@ fn variable_block(
     }
 }
 
+fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
+    let variable_name = terraform_stack_input_variable_name(input);
+    let mut body: Vec<Structure> = vec![
+        attr("type", stack_input_terraform_type(input)),
+        attr(
+            "description",
+            Expression::String(format!("{} {}", input.label, input.description)),
+        ),
+    ];
+    if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {
+        body.push(attr("default", default));
+    } else if !input.required {
+        body.push(attr("default", expr::raw("null")));
+        body.push(attr("nullable", Expression::Bool(true)));
+    }
+    if input.kind == StackInputKind::Secret {
+        body.push(attr("sensitive", Expression::Bool(true)));
+    }
+    for condition in stack_input_validation_conditions(input, &variable_name) {
+        body.push(nested(block(
+            "validation",
+            [
+                attr("condition", expr::raw(condition)),
+                attr(
+                    "error_message",
+                    Expression::String(stack_input_validation_message(input)),
+                ),
+            ],
+        )));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(variable_name)],
+        body: Body::from(body),
+    }
+}
+
+fn stack_input_terraform_type(input: &StackInputDefinition) -> Expression {
+    match input.kind {
+        StackInputKind::Number | StackInputKind::Integer => expr::raw("number"),
+        StackInputKind::Boolean => expr::raw("bool"),
+        StackInputKind::StringList => expr::raw("list(string)"),
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+            expr::raw("string")
+        }
+    }
+}
+
+fn stack_input_default_expression(default: &StackInputDefaultValue) -> Expression {
+    match default {
+        StackInputDefaultValue::String(value) => Expression::String(value.clone()),
+        StackInputDefaultValue::Number(value) => expr::raw(value),
+        StackInputDefaultValue::Boolean(value) => Expression::Bool(*value),
+        StackInputDefaultValue::StringList(values) => {
+            Expression::Array(values.iter().cloned().map(Expression::String).collect())
+        }
+    }
+}
+
+fn stack_input_validation_conditions(
+    input: &StackInputDefinition,
+    variable_name: &str,
+) -> Vec<String> {
+    let mut conditions = Vec::new();
+    let variable = format!("var.{variable_name}");
+    let optional_prefix = (!input.required && input.default.is_none())
+        .then(|| format!("{variable} == null || "))
+        .unwrap_or_default();
+
+    if input.kind == StackInputKind::Integer {
+        conditions.push(format!("{optional_prefix}floor({variable}) == {variable}"));
+    }
+
+    if let Some(validation) = &input.validation {
+        add_stack_input_validation_conditions(
+            validation,
+            input,
+            &variable,
+            &optional_prefix,
+            &mut conditions,
+        );
+    }
+
+    conditions
+}
+
+fn add_stack_input_validation_conditions(
+    validation: &StackInputValidation,
+    input: &StackInputDefinition,
+    variable: &str,
+    optional_prefix: &str,
+    conditions: &mut Vec<String>,
+) {
+    if let Some(values) = &validation.values {
+        let allowed = hcl_string_array(values);
+        conditions.push(format!("{optional_prefix}contains({allowed}, {variable})"));
+    }
+    if let Some(pattern) = &validation.pattern {
+        let whole_pattern = format!("^(?:{pattern})$");
+        conditions.push(format!(
+            "{optional_prefix}can(regex({}, {variable}))",
+            hcl_string(&whole_pattern)
+        ));
+    }
+    if matches!(
+        input.kind,
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum
+    ) {
+        if let Some(min) = validation.min_length {
+            conditions.push(format!("{optional_prefix}length({variable}) >= {min}"));
+        }
+        if let Some(max) = validation.max_length {
+            conditions.push(format!("{optional_prefix}length({variable}) <= {max}"));
+        }
+    }
+    if matches!(input.kind, StackInputKind::Number | StackInputKind::Integer) {
+        if let Some(min) = &validation.min {
+            conditions.push(format!("{optional_prefix}{variable} >= {min}"));
+        }
+        if let Some(max) = &validation.max {
+            conditions.push(format!("{optional_prefix}{variable} <= {max}"));
+        }
+    }
+    if input.kind == StackInputKind::StringList {
+        if let Some(min) = validation.min_items {
+            conditions.push(format!("{optional_prefix}length({variable}) >= {min}"));
+        }
+        if let Some(max) = validation.max_items {
+            conditions.push(format!("{optional_prefix}length({variable}) <= {max}"));
+        }
+    }
+}
+
+fn stack_input_validation_message(input: &StackInputDefinition) -> String {
+    format!("{} is invalid. {}", input.label, input.description)
+}
+
+fn hcl_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing string literal should not fail")
+}
+
+fn hcl_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| hcl_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn custom_domain_certificate_arn_variable_block(default: String) -> Block {
     Block {
         identifier: Identifier::sanitized("variable"),
@@ -1566,13 +1836,47 @@ fn provider_config_object(items: Vec<Structure>) -> Expression {
 
 fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
     match target {
+        // EKS: use the `exec` auth plugin instead of
+        // `data.aws_eks_cluster_auth.target.token` because that data source
+        // resolves the token at *plan* time. The token's lifetime is ~15
+        // minutes; a multi-step apply (cluster creation, IAM provisioning,
+        // then Helm install) routinely exceeds that and surfaces as "the
+        // server has asked for the client to provide credentials" mid-apply.
+        // `exec` regenerates the token per Kubernetes API call. The
+        // generated `kubernetes_kubeconfig` local already uses this pattern
+        // for the `kubectl` CLI output; mirroring it here keeps both paths
+        // honoring the same auth flow.
         TerraformTarget::Eks => vec![
             attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
             attr(
                 "cluster_ca_certificate",
                 expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
             ),
-            attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
+            // `exec` is expressed as an *attribute* (object literal), not a
+            // nested HCL block, because this same body is reused inside the
+            // `helm` provider as `kubernetes = { … }` (object form, which
+            // only takes attributes — `provider_config_object` drops
+            // anything that isn't an Attribute). The kubernetes provider
+            // accepts both block and attribute forms, so attribute form
+            // works in both places.
+            attr(
+                "exec",
+                expr::object([
+                    (
+                        "api_version",
+                        Expression::String(
+                            "client.authentication.k8s.io/v1beta1".to_string(),
+                        ),
+                    ),
+                    ("command", Expression::String("aws".to_string())),
+                    (
+                        "args",
+                        expr::raw(
+                            "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
+                        ),
+                    ),
+                ]),
+            ),
         ],
         TerraformTarget::Gke => vec![
             attr(
@@ -1919,6 +2223,7 @@ fn registration_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
+    input_values: Expression,
 ) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -1956,11 +2261,17 @@ fn registration_body(
             attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
-                expr::raw("local.deployment_management_config"),
+                expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
             ),
-            attr("stack_settings", expr::raw("local.deployment_settings")),
+            attr(
+                "stack_settings",
+                expr::raw("jsondecode(jsonencode(local.deployment_settings))"),
+            ),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
+        if !expression_is_empty_object(&input_values) {
+            body.push(attr("input_values", input_values));
+        }
         if let Some(release_id) = &registration.release_id {
             body.push(attr("release_id", Expression::String(release_id.clone())));
         }
@@ -2025,6 +2336,7 @@ fn registration_body(
                 ),
                 ("stack_settings", expr::raw("local.deployment_settings")),
                 ("resources", expr::raw("local.deployment_resources")),
+                ("inputValues", input_values),
             ]
             .into_iter()
             .chain(
@@ -2043,6 +2355,37 @@ fn registration_body(
         "deployment_registration",
         body,
     ))])
+}
+
+fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Expression {
+    if inputs.is_empty() {
+        return expr::raw("{}");
+    }
+
+    let mut required_entries = Vec::new();
+    let mut optional_maps = Vec::new();
+    for input in inputs {
+        let variable = format!("var.{}", terraform_stack_input_variable_name(input));
+        let entry = format!("{} = {variable}", input.id);
+        if input.required || input.default.is_some() {
+            required_entries.push(entry);
+        } else {
+            optional_maps.push(format!("{variable} == null ? {{}} : {{ {entry} }}"));
+        }
+    }
+
+    let required_map = format!("{{ {} }}", required_entries.join(", "));
+    if optional_maps.is_empty() {
+        expr::raw(required_map)
+    } else {
+        let mut maps = vec![required_map];
+        maps.extend(optional_maps);
+        expr::raw(format!("merge({})", maps.join(", ")))
+    }
+}
+
+fn expression_is_empty_object(expression: &Expression) -> bool {
+    matches!(expression, Expression::Object(object) if object.is_empty())
 }
 
 fn helm_install_body(
@@ -2173,6 +2516,11 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Base cloud platform for Kubernetes targets.",
         ));
         outputs.push((
+            "kubernetes_namespace",
+            expr::raw("var.kubernetes_namespace"),
+            "Kubernetes namespace for runtime resources.",
+        ));
+        outputs.push((
             "kubernetes_kubeconfig",
             expr::raw("local.kubernetes_kubeconfig"),
             "Kubeconfig for managed Kubernetes clusters created by this module.",
@@ -2182,6 +2530,16 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             expr::raw("local.kubernetes_kube_context"),
             "Kube context for managed Kubernetes clusters created by this module.",
         ));
+        if target == TerraformTarget::Eks {
+            outputs.push((
+                "kubernetes_update_kubeconfig_command",
+                expr::template(
+                    "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+                        .to_string(),
+                ),
+                "AWS CLI command template for configuring kubectl access to the target EKS cluster.",
+            ));
+        }
     }
 
     let blocks: Vec<Structure> = outputs
@@ -2216,6 +2574,7 @@ fn readme_md(
     display_name: Option<&str>,
     stack_settings: &StackSettings,
     helm_install: Option<&TerraformHelmInstall>,
+    stack_inputs: &[StackInputDefinition],
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -2257,6 +2616,13 @@ fn readme_md(
             helm_install,
         ));
     }
+    if !stack_inputs.is_empty() {
+        input_sections.push(readme_stack_inputs(stack_inputs));
+    }
+    let kubernetes_operations = target
+        .is_kubernetes()
+        .then(|| readme_kubernetes_operations(target))
+        .unwrap_or_default();
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -2273,12 +2639,14 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
-- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.",
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
+{kubernetes_operations}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,
         required_env = required_env,
-        registration_note = registration_note
+        registration_note = registration_note,
+        kubernetes_operations = kubernetes_operations
     )
 }
 
@@ -2293,6 +2661,24 @@ fn readme_required_inputs(has_registration: bool) -> String {
 
 fn readme_common_inputs() -> String {
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.".to_string()
+}
+
+fn readme_stack_inputs(inputs: &[StackInputDefinition]) -> String {
+    let mut lines = vec!["Application inputs:".to_string()];
+    for input in inputs {
+        let required = if input.required {
+            "required"
+        } else {
+            "optional"
+        };
+        lines.push(format!(
+            "- `{}`: {} ({required}). {}",
+            terraform_stack_input_variable_name(input),
+            input.label,
+            input.description
+        ));
+    }
+    lines.join("\n")
 }
 
 fn readme_aws_inputs() -> String {
@@ -2334,7 +2720,7 @@ fn readme_kubernetes_inputs(
         _ => "",
     };
     let helm = if has_registration && helm_install.is_some() {
-        "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart."
+        "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration."
     } else {
         ""
     };
@@ -2346,6 +2732,22 @@ fn readme_kubernetes_inputs(
     format!(
         "Kubernetes settings:\n\n- `kubernetes_cluster_mode`: `create` or `existing`.\n- `kubernetes_namespace`: namespace for runtime resources.{cluster_name}{exposure}{helm}"
     )
+}
+
+fn readme_kubernetes_operations(target: TerraformTarget) -> String {
+    match target {
+        TerraformTarget::Eks => format!(
+            "{}{}",
+            "\n\n## Kubernetes Operations\n\nBefore inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:\n\n```bash\nAWS_PROFILE=<target-profile> aws sts get-caller-identity\nterraform output kubernetes_update_kubeconfig_command\nAWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)\nkubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events\n```\n\nTreat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.",
+            readme_kubernetes_destroy_order(),
+        ),
+        TerraformTarget::Gke | TerraformTarget::Aks => readme_kubernetes_destroy_order().to_string(),
+        _ => String::new(),
+    }
+}
+
+fn readme_kubernetes_destroy_order() -> &'static str {
+    "\n\n## Destroy Order\n\nIf `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.\n\nIf `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install."
 }
 
 #[cfg(test)]
@@ -2391,9 +2793,15 @@ mod tests {
             TerraformTarget::Aws,
             Some(&registration),
             &[],
+            Expression::Object(Default::default()),
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
+        assert!(registration_body.contains(
+            "management_config = jsondecode(jsonencode(local.deployment_management_config))"
+        ));
+        assert!(registration_body
+            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");

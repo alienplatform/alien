@@ -16,11 +16,13 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, DeploymentModel, ErrorData, KubernetesCluster, PermissionProfile,
-    PermissionSetReference, RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsRemoteStackManagementEmitter;
@@ -36,23 +38,10 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             "RoleName".to_string(),
             CfExpression::sub("${AWS::StackName}-management"),
         );
-        if let Some(irsa) = eks_pull_irsa_context(ctx) {
-            role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                irsa_trust_policy(
-                    &irsa.oidc_provider_id,
-                    &irsa.cluster_id,
-                    &irsa.namespace,
-                    &irsa.service_account_name,
-                ),
-            );
-            role.depends_on.push(irsa.oidc_provider_id);
-        } else {
-            role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                remote_management_trust_policy(),
-            );
-        }
+        role.properties.insert(
+            "AssumeRolePolicyDocument".to_string(),
+            remote_management_trust_policy(),
+        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         let policy_documents = remote_management_policy_documents(ctx)?;
@@ -110,79 +99,6 @@ fn remote_management_trust_policy() -> CfExpression {
     ])
 }
 
-struct EksPullIrsaContext {
-    oidc_provider_id: String,
-    cluster_id: String,
-    namespace: String,
-    service_account_name: String,
-}
-
-fn eks_pull_irsa_context(ctx: &EmitContext<'_>) -> Option<EksPullIrsaContext> {
-    if ctx.stack_settings.deployment_model != DeploymentModel::Pull {
-        return None;
-    }
-
-    ctx.stack.resources().find_map(|(resource_id, entry)| {
-        let cluster = entry.config.downcast_ref::<KubernetesCluster>()?;
-        let prefix = ctx.name_for(resource_id)?;
-        Some(EksPullIrsaContext {
-            oidc_provider_id: format!("{prefix}OidcProvider"),
-            cluster_id: format!("{prefix}Cluster"),
-            namespace: cluster.namespace.clone(),
-            service_account_name: "${AWS::StackName}-manager-sa".to_string(),
-        })
-    })
-}
-
-fn irsa_trust_policy(
-    oidc_provider_id: &str,
-    cluster_id: &str,
-    namespace: &str,
-    service_account_name: &str,
-) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Sub",
-        CfExpression::list([
-            CfExpression::from(format!(
-                r#"{{
-  "Version": "2012-10-17",
-  "Statement": [{{
-    "Effect": "Allow",
-    "Principal": {{"Federated": "${{OidcProviderArn}}"}},
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {{
-      "StringEquals": {{
-        "${{OidcIssuerHostPath}}:aud": "sts.amazonaws.com",
-        "${{OidcIssuerHostPath}}:sub": "system:serviceaccount:{namespace}:{service_account_name}"
-      }}
-    }}
-  }}]
-}}"#
-            )),
-            CfExpression::object([
-                ("OidcProviderArn", CfExpression::ref_(oidc_provider_id)),
-                ("OidcIssuerHostPath", oidc_issuer_host_path(cluster_id)),
-            ]),
-        ]),
-    )])
-}
-
-fn oidc_issuer_host_path(cluster_id: &str) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Select",
-        CfExpression::list([
-            CfExpression::from(1u8),
-            CfExpression::object([(
-                "Fn::Split",
-                CfExpression::list([
-                    CfExpression::from("https://"),
-                    CfExpression::get_att(cluster_id, "OpenIdConnectIssuerUrl"),
-                ]),
-            )]),
-        ]),
-    )])
-}
-
 fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
@@ -222,21 +138,25 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         }
 
         for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+            if permission_set_ref.id().ends_with("/provision") {
+                continue;
+            }
             let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                 continue;
             };
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
             let Some(permission_set) = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
-            if permission_set.platforms.aws.is_none()
-                || !resource_scoped_aws_permission_applies(&permission_set.id, resource_entry)
-            {
+            if permission_set.platforms.aws.is_none() {
                 continue;
             }
-
-            let resource_context = context.clone().with_resource_name(resource_id.to_string());
+            let resource_context =
+                resource_scoped_aws_permission_context(resource_id, resource_entry, &context);
             let policy = generator
                 .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
                 .context(ErrorData::GenericError {
@@ -378,9 +298,72 @@ fn resource_scoped_permission_refs(
         .collect()
 }
 
-fn resource_scoped_aws_permission_applies(
-    permission_set_id: &str,
-    _resource_entry: &alien_core::ResourceEntry,
-) -> bool {
-    permission_set_id == "kubernetes-public-endpoint/management"
+fn resource_scoped_aws_permission_context(
+    resource_id: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    base_context: &PermissionContext,
+) -> PermissionContext {
+    let mut context = base_context
+        .clone()
+        .with_resource_id(resource_id.to_string());
+    context.resource_name = None;
+
+    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+        return context.with_resource_name(format!("${{AWS::StackName}}-{resource_id}"));
+    }
+
+    if resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .is_some()
+    {
+        return context.with_resource_name(resource_id.to_string());
+    }
+
+    context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode};
+
+    fn live_worker_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_names_future_worker_lambda() {
+        let entry = live_worker_entry("jobs");
+        let context = resource_scoped_aws_permission_context("jobs", &entry, &permission_context());
+
+        assert_eq!(context.resource_id.as_deref(), Some("jobs"));
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${AWS::StackName}-jobs")
+        );
+    }
+
+    #[test]
+    fn aws_remote_management_resource_scope_does_not_filter_by_permission_id() {
+        let entry = live_worker_entry("jobs");
+        let context = resource_scoped_aws_permission_context("jobs", &entry, &permission_context());
+
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${AWS::StackName}-jobs")
+        );
+    }
 }

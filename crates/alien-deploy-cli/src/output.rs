@@ -351,6 +351,7 @@ fn extract_resources(stack_state: &StackState) -> BTreeMap<String, (String, Reso
 fn format_deployment_status(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights failed",
         DeploymentStatus::InitialSetup => "initializing",
         DeploymentStatus::InitialSetupFailed => "setup failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -363,6 +364,8 @@ fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete failed",
+        DeploymentStatus::TeardownRequired => "teardown required",
+        DeploymentStatus::TeardownFailed => "teardown failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }
@@ -378,6 +381,7 @@ fn format_resource_status(status: ResourceStatus) -> &'static str {
         ResourceStatus::UpdateFailed => "update failed",
         ResourceStatus::Deleting => "deleting",
         ResourceStatus::DeleteFailed => "delete failed",
+        ResourceStatus::TeardownRequired => "teardown required",
         ResourceStatus::Deleted => "deleted",
         ResourceStatus::RefreshFailed => "refresh failed",
     }

@@ -4,12 +4,17 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  DeploymentSetupMethod,
+  DeploymentSetupMethod$outboundSchema,
+} from "./deploymentsetupmethod.js";
 
 /**
  * Deployment status in the deployment lifecycle
  */
 export const SyncAcquireRequestStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -22,6 +27,8 @@ export const SyncAcquireRequestStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -49,6 +56,19 @@ export const SyncAcquireRequestPlatform = {
 export type SyncAcquireRequestPlatform = ClosedEnum<
   typeof SyncAcquireRequestPlatform
 >;
+
+/**
+ * Phase ownership mode for deployment acquisition
+ */
+export const AcquireMode = {
+  Runtime: "runtime",
+  SetupRun: "setup-run",
+  SetupTeardown: "setup-teardown",
+} as const;
+/**
+ * Phase ownership mode for deployment acquisition
+ */
+export type AcquireMode = ClosedEnum<typeof AcquireMode>;
 
 /**
  * Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
@@ -85,6 +105,11 @@ export type SyncAcquireRequest = {
    * Filter by platforms (default: all platforms the Manager supports)
    */
   platforms?: Array<SyncAcquireRequestPlatform> | undefined;
+  setupMethod?: DeploymentSetupMethod | undefined;
+  /**
+   * Phase ownership mode for deployment acquisition
+   */
+  acquireMode?: AcquireMode | undefined;
   /**
    * Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
    */
@@ -106,6 +131,11 @@ export const SyncAcquireRequestPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(SyncAcquireRequestPlatform);
 
 /** @internal */
+export const AcquireMode$outboundSchema: z.ZodEnum<typeof AcquireMode> = z.enum(
+  AcquireMode,
+);
+
+/** @internal */
 export const SyncAcquireRequestDeploymentModel$outboundSchema: z.ZodEnum<
   typeof SyncAcquireRequestDeploymentModel
 > = z.enum(SyncAcquireRequestDeploymentModel);
@@ -117,6 +147,8 @@ export type SyncAcquireRequest$Outbound = {
   deploymentIds?: Array<string> | undefined;
   statuses?: Array<string> | undefined;
   platforms?: Array<string> | undefined;
+  setupMethod?: string | undefined;
+  acquireMode?: string | undefined;
   deploymentModel?: string | undefined;
   limit?: number | undefined;
 };
@@ -131,6 +163,8 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
   deploymentIds: z.array(z.string()).optional(),
   statuses: z.array(SyncAcquireRequestStatus$outboundSchema).optional(),
   platforms: z.array(SyncAcquireRequestPlatform$outboundSchema).optional(),
+  setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
+  acquireMode: AcquireMode$outboundSchema.optional(),
   deploymentModel: SyncAcquireRequestDeploymentModel$outboundSchema.optional(),
   limit: z.int().optional(),
 });

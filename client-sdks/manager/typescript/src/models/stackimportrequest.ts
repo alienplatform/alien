@@ -44,6 +44,15 @@ export type StackImportRequest = {
    * `name` attribute on the `alien_deployment` resource.
    */
   deploymentName: string;
+  /**
+   * Deployer-provided stack input values collected by generated setup
+   *
+   * @remarks
+   * surfaces. Platform-backed managers resolve these into runtime
+   * environment variables before deployment creation; standalone managers
+   * accept the field for setup package compatibility.
+   */
+  inputValues?: { [k: string]: any } | undefined;
   managementConfig?: ManagementConfig | null | undefined;
   /**
    * Represents the target cloud platform.
@@ -85,6 +94,13 @@ export type StackImportRequest = {
    */
   setupImportFormatVersion: number;
   /**
+   * Setup source metadata needed by the control plane to guide privileged
+   *
+   * @remarks
+   * teardown. The manager treats this as opaque JSON.
+   */
+  setupMetadata?: any | undefined;
+  /**
    * Setup target this package was generated for.
    */
   setupTarget: string;
@@ -109,6 +125,7 @@ export type StackImportRequest$Outbound = {
   basePlatform?: string | null | undefined;
   deploymentGroupToken: string;
   deploymentName: string;
+  inputValues?: { [k: string]: any } | undefined;
   managementConfig?: ManagementConfig$Outbound | null | undefined;
   platform: string;
   region: string;
@@ -118,6 +135,7 @@ export type StackImportRequest$Outbound = {
   setupFingerprint: string;
   setupFingerprintVersion: number;
   setupImportFormatVersion: number;
+  setupMetadata?: any | undefined;
   setupTarget: string;
   sourceKind?: string | null | undefined;
   stackSettings: StackSettings$Outbound;
@@ -131,6 +149,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupToken: z.string(),
   deploymentName: z.string(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   managementConfig: z.nullable(ManagementConfig$outboundSchema).optional(),
   platform: PlatformEnum$outboundSchema,
   region: z.string(),
@@ -140,6 +159,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
   setupImportFormatVersion: z.int(),
+  setupMetadata: z.any().optional(),
   setupTarget: z.string(),
   sourceKind: z.nullable(ImportSourceKind$outboundSchema).optional(),
   stackSettings: StackSettings$outboundSchema,

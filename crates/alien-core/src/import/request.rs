@@ -1,5 +1,6 @@
 use crate::{ManagementConfig, Platform, ResourceType, StackSettings, StackState};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Oldest setup import payload format this binary can read.
 pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
@@ -47,6 +48,10 @@ pub struct StackImportRequest {
     /// regardless of which setup package emitted the payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<ImportSourceKind>,
+    /// Setup source metadata needed by the control plane to guide privileged
+    /// teardown. The manager treats this as opaque JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_metadata: Option<serde_json::Value>,
     /// Optional release id that produced the setup package. When
     /// omitted, the manager imports against the latest release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +76,12 @@ pub struct StackImportRequest {
     /// cross-account/cross-tenant management identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
+    /// Deployer-provided stack input values collected by generated setup
+    /// surfaces. Platform-backed managers resolve these into runtime
+    /// environment variables before deployment creation; standalone managers
+    /// accept the field for setup package compatibility.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub input_values: HashMap<String, serde_json::Value>,
     /// Imported resources with typed per-resource payloads.
     pub resources: Vec<ImportedResource>,
 }

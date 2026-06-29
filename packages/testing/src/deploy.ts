@@ -115,6 +115,7 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
   const proc = spawn(cliPath, args, {
     cwd: options.app,
     env: childEnv,
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   })
 
@@ -157,19 +158,12 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
 
     const agent = findPrimaryAgent(status)
 
+    // A stack with no URL-exposing resource (e.g. daemon-only) has no public URL;
+    // commands are still reachable through commandsUrl.
     const publicUrl = findPublicUrl(agent.resources)
-    if (!publicUrl) {
-      throw new AlienError(
-        TestingOperationFailedError.create({
-          operation: "resolve-public-url",
-          message: "No public URL found in deployment resources",
-          details: { resources: agent.resources },
-        }),
-      )
-    }
 
     if (verbose) {
-      console.log(`[testing] Public URL: ${publicUrl}`)
+      console.log(`[testing] Public URL: ${publicUrl ?? "(none)"}`)
       if (agent.commandsUrl) {
         console.log(`[testing] Commands URL: ${agent.commandsUrl}`)
       }
@@ -195,7 +189,7 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
       appPath: options.app,
     })
   } catch (error) {
-    proc.kill("SIGTERM")
+    signalProcessTree(proc, "SIGTERM")
     throw await withTestingContext(
       error,
       "deploy",
@@ -203,6 +197,22 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
       { statusFile, appPath: options.app, platform: options.platform ?? "local" },
     )
   }
+}
+
+function signalProcessTree(
+  proc: import("node:child_process").ChildProcess,
+  signal: NodeJS.Signals,
+): void {
+  if (proc.pid && process.platform !== "win32") {
+    try {
+      process.kill(-proc.pid, signal)
+      return
+    } catch {
+      // Fall back to signaling only the direct child.
+    }
+  }
+
+  proc.kill(signal)
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +315,7 @@ async function deployViaApi(options: DeployOptions): Promise<Deployment> {
   return new Deployment({
     id: running.id,
     name: running.name,
-    url: running.url!,
+    url: running.url,
     platform,
     commandsUrl: running.commandsUrl!,
     appPath: options.app,
@@ -426,10 +436,8 @@ async function waitForPlatformDeploymentRunning(
           console.log(`[testing] Deployment ${deploymentId} status: ${data.status}`)
         }
 
+        // A running deployment may have no URL (e.g. daemon-only stacks) — url stays optional.
         if (data.status === "running") {
-          if (!data.url) {
-            throw new Error(`Deployment is running but has no URL: ${JSON.stringify(data)}`)
-          }
           return data
         }
 

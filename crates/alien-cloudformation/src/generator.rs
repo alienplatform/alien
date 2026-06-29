@@ -7,9 +7,11 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    Ingress, KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result,
-    Stack, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -32,7 +34,6 @@ const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 const PARAM_DOMAIN_NAME: &str = "DomainName";
 const PARAM_HOSTED_ZONE_ID: &str = "HostedZoneId";
 const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
-const PARAM_DEPLOYMENT_MODEL: &str = "DeploymentModel";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
 const PARAM_TELEMETRY_MODE: &str = "TelemetryMode";
 const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
@@ -45,7 +46,6 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
-const CONDITION_DEPLOYMENT_MODEL_PUSH: &str = "DeploymentModelPush";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
@@ -216,6 +216,8 @@ pub fn generate_cloudformation_template(
     validate_stack_settings(&options.stack_settings)?;
 
     let mut stack_settings = options.stack_settings.clone();
+    // CloudFormation packages always register push deployments.
+    stack_settings.deployment_model = DeploymentModel::Push;
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
         stack_settings.network = Some(NetworkSettings::Create {
             cidr: None,
@@ -243,8 +245,15 @@ pub fn generate_cloudformation_template(
     };
 
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
+    let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
-    add_standard_parameters(&mut template, &stack_settings, supports_custom_domain);
+    add_standard_parameters(
+        &mut template,
+        stack,
+        &stack_settings,
+        supports_custom_domain,
+    );
+    add_stack_input_parameters(&mut template, &stack_inputs);
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
@@ -253,10 +262,15 @@ pub fn generate_cloudformation_template(
         &mut template,
         stack,
         &stack_settings,
-        options.target,
         supports_custom_domain,
     );
-    add_console_interface_metadata(&mut template, &stack_settings, supports_custom_domain);
+    add_console_interface_metadata(
+        &mut template,
+        stack,
+        &stack_settings,
+        supports_custom_domain,
+        &stack_inputs,
+    );
 
     let mut registration_resources = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -310,6 +324,7 @@ pub fn generate_cloudformation_template(
     let management_config = management_config_expression(options.target);
     let stack_settings = stack_settings_expression(
         options.target,
+        stack,
         &stack_settings,
         kubernetes_namespace.clone(),
         supports_custom_domain,
@@ -326,6 +341,7 @@ pub fn generate_cloudformation_template(
             stack_settings.clone(),
             &options,
             resources.clone(),
+            stack_input_values_expression(&stack_inputs),
             options.registration.callback_url(),
         );
     }
@@ -349,8 +365,110 @@ fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> 
             resource
                 .config
                 .downcast_ref::<Worker>()
-                .is_some_and(|worker| worker.ingress == Ingress::Public)
+                .is_some_and(|worker| !worker.public_endpoints.is_empty())
         })
+}
+
+fn stack_inputs_for_cloudformation(
+    stack: &Stack,
+    target: CloudFormationTarget,
+) -> Vec<StackInputDefinition> {
+    let platform = target.deployment_platform();
+    stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input.provided_by.contains(&StackInputProvider::Deployer)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .cloned()
+        .collect()
+}
+
+fn stack_input_parameter_name(input: &StackInputDefinition) -> String {
+    format!("Input{}", sanitize_logical_id(&input.id))
+}
+
+fn add_stack_input_parameters(template: &mut CfTemplate, inputs: &[StackInputDefinition]) {
+    for input in inputs {
+        template.parameters.insert(
+            stack_input_parameter_name(input),
+            stack_input_parameter(input),
+        );
+    }
+}
+
+fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
+    let validation = input.validation.as_ref();
+    let mut parameter = CfParameter {
+        parameter_type: match input.kind {
+            StackInputKind::Number => "Number".to_string(),
+            StackInputKind::StringList => "CommaDelimitedList".to_string(),
+            StackInputKind::String
+            | StackInputKind::Secret
+            | StackInputKind::Integer
+            | StackInputKind::Boolean
+            | StackInputKind::Enum => "String".to_string(),
+        },
+        description: Some(input.description.clone()),
+        default: input.default.as_ref().map(stack_input_default_expression),
+        allowed_values: validation
+            .and_then(|validation| validation.values.as_ref())
+            .map(|values| values.iter().cloned().map(CfExpression::from).collect()),
+        allowed_pattern: validation
+            .and_then(|validation| validation.pattern.clone())
+            .or_else(|| {
+                matches!(input.kind, StackInputKind::Integer).then(|| "^-?[0-9]+$".to_string())
+            }),
+        min_length: validation.and_then(|validation| validation.min_length),
+        max_length: validation.and_then(|validation| validation.max_length),
+        min_value: validation
+            .and_then(|validation| validation.min.as_deref())
+            .map(number_constraint_expression),
+        max_value: validation
+            .and_then(|validation| validation.max.as_deref())
+            .map(number_constraint_expression),
+        no_echo: matches!(input.kind, StackInputKind::Secret).then_some(true),
+    };
+
+    if matches!(input.kind, StackInputKind::Boolean) {
+        parameter.allowed_values = Some(vec![
+            CfExpression::from("true"),
+            CfExpression::from("false"),
+        ]);
+    }
+
+    parameter
+}
+
+fn number_constraint_expression(value: &str) -> CfExpression {
+    value
+        .parse::<i64>()
+        .map(CfExpression::Integer)
+        .or_else(|_| value.parse::<f64>().map(CfExpression::Number))
+        .unwrap_or_else(|_| CfExpression::from(value))
+}
+
+fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpression {
+    match default {
+        StackInputDefaultValue::String(value) | StackInputDefaultValue::Number(value) => {
+            CfExpression::from(value.clone())
+        }
+        StackInputDefaultValue::Boolean(value) => CfExpression::from(value.to_string()),
+        StackInputDefaultValue::StringList(values) => CfExpression::from(values.join(",")),
+    }
+}
+
+fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
+    CfExpression::object(inputs.iter().map(|input| {
+        (
+            input.id.clone(),
+            CfExpression::ref_(stack_input_parameter_name(input)),
+        )
+    }))
 }
 
 fn regional_service_token(
@@ -634,6 +752,7 @@ fn apply_resource_dependencies(
 
 fn add_standard_parameters(
     template: &mut CfTemplate,
+    stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
 ) {
@@ -666,6 +785,7 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, settings.network.as_ref());
+    add_compute_parameters(template, stack, settings.compute.as_ref());
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
@@ -700,16 +820,6 @@ fn add_standard_parameters(
     }
 
     template.parameters.insert(
-        PARAM_DEPLOYMENT_MODEL.to_string(),
-        string_parameter(
-            "How runtime updates are delivered after setup.",
-            Some(deployment_model(settings.deployment_model).to_string()),
-            Some(vec![CfExpression::from("push"), CfExpression::from("pull")]),
-            false,
-        ),
-    );
-
-    template.parameters.insert(
         PARAM_UPDATES_MODE.to_string(),
         string_parameter(
             "How updates are applied after setup registration.",
@@ -726,11 +836,7 @@ fn add_standard_parameters(
         string_parameter(
             "Telemetry collection behavior.",
             Some(telemetry_mode(settings.telemetry).to_string()),
-            Some(vec![
-                CfExpression::from("off"),
-                CfExpression::from("auto"),
-                CfExpression::from("approval-required"),
-            ]),
+            Some(vec![CfExpression::from(telemetry_mode(settings.telemetry))]),
             false,
         ),
     );
@@ -779,7 +885,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
                 PARAM_AVAILABILITY_ZONES.to_string(),
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
-                    defaults.availability_zones,
+                    u32::from(defaults.availability_zones),
                     Some(vec![
                         CfExpression::from(1u8),
                         CfExpression::from(2u8),
@@ -819,6 +925,95 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             );
         }
         None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
+    }
+}
+
+fn add_compute_parameters(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) {
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let machine_parameter = compute_machine_parameter_name(&group.group_id);
+        template.parameters.insert(
+            machine_parameter,
+            string_parameter(
+                &format!(
+                    "Provider machine type for runtime compute pool '{}'.",
+                    group.group_id
+                ),
+                selection.machine().map(ToString::to_string),
+                None,
+                false,
+            ),
+        );
+
+        let scale = group.scale_policy.as_ref().cloned().unwrap_or_else(|| {
+            CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
+        });
+        match (selection, scale) {
+            (
+                ComputePoolSelection::Fixed { machines, .. },
+                CapacityGroupScalePolicy::Fixed { machines: range },
+            ) => {
+                let mut parameter = number_parameter(
+                    &format!(
+                        "Fixed machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *machines,
+                    None,
+                );
+                parameter.min_value = Some(CfExpression::from(range.min));
+                parameter.max_value = Some(CfExpression::from(range.max));
+                template.parameters.insert(
+                    compute_fixed_machines_parameter_name(&group.group_id),
+                    parameter,
+                );
+            }
+            (
+                ComputePoolSelection::Autoscale { min, max, .. },
+                CapacityGroupScalePolicy::Autoscale {
+                    min: min_range,
+                    max: max_range,
+                },
+            ) => {
+                let mut min_parameter = number_parameter(
+                    &format!(
+                        "Minimum machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *min,
+                    None,
+                );
+                min_parameter.min_value = Some(CfExpression::from(min_range.min));
+                min_parameter.max_value = Some(CfExpression::from(min_range.max));
+                template.parameters.insert(
+                    compute_autoscale_min_parameter_name(&group.group_id),
+                    min_parameter,
+                );
+
+                let mut max_parameter = number_parameter(
+                    &format!(
+                        "Maximum machine count for runtime compute pool '{}'.",
+                        group.group_id
+                    ),
+                    *max,
+                    None,
+                );
+                max_parameter.min_value = Some(CfExpression::from(max_range.min));
+                max_parameter.max_value = Some(CfExpression::from(max_range.max));
+                template.parameters.insert(
+                    compute_autoscale_max_parameter_name(&group.group_id),
+                    max_parameter,
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -864,16 +1059,8 @@ fn add_standard_conditions(
     template: &mut CfTemplate,
     stack: &Stack,
     settings: &StackSettings,
-    target: CloudFormationTarget,
     supports_custom_domain: bool,
 ) {
-    if !target.is_kubernetes() {
-        template.conditions.insert(
-            CONDITION_DEPLOYMENT_MODEL_PUSH.to_string(),
-            equals_ref(PARAM_DEPLOYMENT_MODEL, "push"),
-        );
-    }
-
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -951,10 +1138,13 @@ fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
 
 fn add_console_interface_metadata(
     template: &mut CfTemplate,
+    stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
+    stack_inputs: &[StackInputDefinition],
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
+    let compute_parameters = compute_parameter_names(stack, settings.compute.as_ref());
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
         "Parameters": [
@@ -975,10 +1165,24 @@ fn add_console_interface_metadata(
             "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
         }));
     }
+    if !stack_inputs.is_empty() {
+        parameter_groups.push(json!({
+            "Label": { "default": "Application inputs" },
+            "Parameters": stack_inputs
+                .iter()
+                .map(stack_input_parameter_name)
+                .collect::<Vec<_>>()
+        }));
+    }
+    if !compute_parameters.is_empty() {
+        parameter_groups.push(json!({
+            "Label": { "default": "Runtime compute" },
+            "Parameters": compute_parameters
+        }));
+    }
     parameter_groups.push(json!({
         "Label": { "default": "Operations" },
         "Parameters": [
-            PARAM_DEPLOYMENT_MODEL,
             PARAM_UPDATES_MODE,
             PARAM_TELEMETRY_MODE,
             PARAM_HEARTBEATS_MODE
@@ -1023,11 +1227,16 @@ fn add_console_interface_metadata(
             "Certificate ARN",
         );
     }
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_DEPLOYMENT_MODEL,
-        "Deployment model",
-    );
+    for input in stack_inputs {
+        insert_parameter_label(
+            &mut parameter_labels,
+            &stack_input_parameter_name(input),
+            &input.label,
+        );
+    }
+    for (parameter, label) in compute_parameter_labels(stack, settings.compute.as_ref()) {
+        insert_parameter_label(&mut parameter_labels, &parameter, &label);
+    }
     insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
     insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
     insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
@@ -1062,6 +1271,177 @@ fn network_parameter_names(network: Option<&NetworkSettings>) -> Vec<&'static st
     }
 }
 
+fn compute_capacity_groups(stack: &Stack) -> Vec<&CapacityGroup> {
+    let mut groups: Vec<&CapacityGroup> = stack
+        .resources()
+        .filter_map(|(_resource_id, resource)| resource.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| cluster.capacity_groups.iter())
+        .collect();
+    groups.sort_by(|left, right| left.group_id.cmp(&right.group_id));
+    groups
+}
+
+fn compute_parameter_names(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Vec<String> {
+    let mut parameters = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        parameters.push(compute_machine_parameter_name(&group.group_id));
+        match selection {
+            ComputePoolSelection::Fixed { .. } => {
+                parameters.push(compute_fixed_machines_parameter_name(&group.group_id));
+            }
+            ComputePoolSelection::Autoscale { .. } => {
+                parameters.push(compute_autoscale_min_parameter_name(&group.group_id));
+                parameters.push(compute_autoscale_max_parameter_name(&group.group_id));
+            }
+        }
+    }
+    parameters
+}
+
+fn compute_parameter_labels(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Vec<(String, String)> {
+    let mut labels = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let label_prefix = compute_pool_label(&group.group_id);
+        labels.push((
+            compute_machine_parameter_name(&group.group_id),
+            format!("{label_prefix} machine"),
+        ));
+        match selection {
+            ComputePoolSelection::Fixed { .. } => labels.push((
+                compute_fixed_machines_parameter_name(&group.group_id),
+                format!("{label_prefix} machines"),
+            )),
+            ComputePoolSelection::Autoscale { .. } => {
+                labels.push((
+                    compute_autoscale_min_parameter_name(&group.group_id),
+                    format!("{label_prefix} minimum machines"),
+                ));
+                labels.push((
+                    compute_autoscale_max_parameter_name(&group.group_id),
+                    format!("{label_prefix} maximum machines"),
+                ));
+            }
+        }
+    }
+    labels
+}
+
+fn compute_settings_expression(
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Option<CfExpression> {
+    let mut pools = Vec::new();
+    for group in compute_capacity_groups(stack) {
+        let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
+        else {
+            continue;
+        };
+        let machine = (
+            "machine",
+            CfExpression::ref_(compute_machine_parameter_name(&group.group_id)),
+        );
+        let expression = match selection {
+            ComputePoolSelection::Fixed { .. } => CfExpression::object([
+                ("mode", CfExpression::from("fixed")),
+                (
+                    "machines",
+                    CfExpression::ref_(compute_fixed_machines_parameter_name(&group.group_id)),
+                ),
+                machine,
+            ]),
+            ComputePoolSelection::Autoscale { .. } => CfExpression::object([
+                ("mode", CfExpression::from("autoscale")),
+                (
+                    "min",
+                    CfExpression::ref_(compute_autoscale_min_parameter_name(&group.group_id)),
+                ),
+                (
+                    "max",
+                    CfExpression::ref_(compute_autoscale_max_parameter_name(&group.group_id)),
+                ),
+                machine,
+            ]),
+        };
+        pools.push((group.group_id.as_str(), expression));
+    }
+    if pools.is_empty() {
+        return None;
+    }
+    Some(CfExpression::object([(
+        "pools",
+        CfExpression::object(pools),
+    )]))
+}
+
+fn compute_machine_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Machine", pascal_identifier(pool_id))
+}
+
+fn compute_fixed_machines_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Machines", pascal_identifier(pool_id))
+}
+
+fn compute_autoscale_min_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Min", pascal_identifier(pool_id))
+}
+
+fn compute_autoscale_max_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}Max", pascal_identifier(pool_id))
+}
+
+fn compute_pool_label(pool_id: &str) -> String {
+    pool_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn pascal_identifier(value: &str) -> String {
+    let mut output = String::new();
+    let mut uppercase_next = true;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if uppercase_next {
+                output.push(character.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                output.push(character);
+            }
+        } else {
+            uppercase_next = true;
+        }
+    }
+    if output.is_empty() {
+        "Pool".to_string()
+    } else if matches!(output.chars().next(), Some(character) if character.is_ascii_digit()) {
+        format!("Pool{output}")
+    } else {
+        output
+    }
+}
+
 fn insert_parameter_label(
     labels: &mut serde_json::Map<String, serde_json::Value>,
     parameter: &str,
@@ -1077,6 +1457,7 @@ fn add_custom_resource(
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: CfExpression,
+    input_values: CfExpression,
     callback_url: Option<&str>,
 ) {
     let depends_on = template
@@ -1110,6 +1491,11 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if !matches!(&input_values, CfExpression::Object(values) if values.is_empty()) {
+        resource
+            .properties
+            .insert("InputValues".to_string(), input_values);
+    }
     if let Some(base_platform) = options.target.base_platform() {
         resource.properties.insert(
             "BasePlatform".to_string(),
@@ -1323,15 +1709,13 @@ fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression
 
 fn stack_settings_expression(
     target: CloudFormationTarget,
+    stack: &Stack,
     settings: &StackSettings,
     kubernetes_namespace: Option<CfExpression>,
     supports_custom_domain: bool,
 ) -> CfExpression {
     let mut values = vec![
-        (
-            "deploymentModel",
-            CfExpression::ref_(PARAM_DEPLOYMENT_MODEL),
-        ),
+        ("deploymentModel", CfExpression::from("push")),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
@@ -1345,6 +1729,9 @@ fn stack_settings_expression(
             "kubernetes",
             kubernetes_settings_expression(settings.kubernetes.as_ref(), kubernetes_namespace),
         ));
+    }
+    if let Some(compute) = compute_settings_expression(stack, settings.compute.as_ref()) {
+        values.push(("compute", compute));
     }
     CfExpression::object(values)
 }
@@ -1590,17 +1977,13 @@ fn management_config_expression(target: CloudFormationTarget) -> CfExpression {
         return CfExpression::Null;
     }
 
-    CfExpression::if_(
-        CONDITION_DEPLOYMENT_MODEL_PUSH,
-        CfExpression::object([
-            ("platform", CfExpression::from("aws")),
-            (
-                "managingRoleArn",
-                CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-            ),
-        ]),
-        CfExpression::no_value(),
-    )
+    CfExpression::object([
+        ("platform", CfExpression::from("aws")),
+        (
+            "managingRoleArn",
+            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+        ),
+    ])
 }
 
 fn string_parameter(
@@ -1625,13 +2008,17 @@ fn string_parameter_with_allowed_pattern(
         default: default.map(CfExpression::from),
         allowed_values,
         allowed_pattern,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: no_echo.then_some(true),
     }
 }
 
 fn number_parameter(
     description: &str,
-    default: u8,
+    default: u32,
     allowed_values: Option<Vec<CfExpression>>,
 ) -> CfParameter {
     CfParameter {
@@ -1640,6 +2027,10 @@ fn number_parameter(
         default: Some(CfExpression::from(default)),
         allowed_values,
         allowed_pattern: None,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: None,
     }
 }
@@ -1651,6 +2042,10 @@ fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter 
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
         allowed_pattern: None,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
         no_echo: None,
     }
 }
@@ -1668,13 +2063,6 @@ fn output(description: &str, value: CfExpression) -> CfOutput {
         description: Some(description.to_string()),
         value,
         export: None,
-    }
-}
-
-fn deployment_model(model: DeploymentModel) -> &'static str {
-    match model {
-        DeploymentModel::Push => "push",
-        DeploymentModel::Pull => "pull",
     }
 }
 

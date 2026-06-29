@@ -355,7 +355,6 @@ async function run() {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
       defaultManagers: null,
-      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
 
@@ -387,7 +386,6 @@ async function run() {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
       defaultManagers: null,
-      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
   if (res.ok) {

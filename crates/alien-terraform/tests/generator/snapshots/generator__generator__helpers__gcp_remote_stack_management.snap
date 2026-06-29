@@ -262,6 +262,7 @@ resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_https_endpo
     "compute.targetHttpsProxies.create",
     "compute.targetHttpsProxies.delete",
     "compute.targetHttpsProxies.get",
+    "compute.targetHttpsProxies.setSslCertificates",
     "compute.targetHttpsProxies.use",
     "compute.urlMaps.create",
     "compute.urlMaps.delete",
@@ -349,6 +350,7 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
   }
   depends_on = [
     google_service_account.management,

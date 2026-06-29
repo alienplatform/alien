@@ -9,6 +9,15 @@ import {
   ImportSourceKind,
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
+import {
+  KubernetesBasePlatform,
+  KubernetesBasePlatform$outboundSchema,
+} from "./kubernetesbaseplatform.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 export const ModePersist = {
   Persist: "persist",
@@ -33,23 +42,64 @@ export type PersistImportedDeploymentRequestPlatformEnum = ClosedEnum<
   typeof PersistImportedDeploymentRequestPlatformEnum
 >;
 
+export type PersistImportedDeploymentRequestPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type PersistImportedDeploymentRequestPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
 /**
- * Base cloud platform for cloud-backed Kubernetes imports.
+ * User-selected deployment settings for one compute pool.
  */
-export const PersistImportedDeploymentRequestBasePlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
+export type PersistImportedDeploymentRequestPoolsUnion =
+  | PersistImportedDeploymentRequestPoolsFixed
+  | PersistImportedDeploymentRequestPoolsAutoscale;
+
 /**
- * Base cloud platform for cloud-backed Kubernetes imports.
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
  */
-export type PersistImportedDeploymentRequestBasePlatform = ClosedEnum<
-  typeof PersistImportedDeploymentRequestBasePlatform
->;
+export type PersistImportedDeploymentRequestCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | PersistImportedDeploymentRequestPoolsFixed
+      | PersistImportedDeploymentRequestPoolsAutoscale;
+  } | undefined;
+};
+
+export type PersistImportedDeploymentRequestComputeUnion =
+  | PersistImportedDeploymentRequestCompute
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1062,6 +1112,7 @@ export type PersistImportedDeploymentRequestUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type PersistImportedDeploymentRequestStackSettings = {
+  compute?: PersistImportedDeploymentRequestCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1235,69 +1286,260 @@ export type PersistImportedDeploymentRequestEnvironmentInfoUnion =
   | PersistImportedDeploymentRequestEnvironmentInfoTest
   | any;
 
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export const PersistImportedDeploymentRequestDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const PersistImportedDeploymentRequestTypeStringList = {
+  StringList: "stringList",
 } as const;
-/**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
- */
-export type PersistImportedDeploymentRequestDeleteScopeEnum = ClosedEnum<
-  typeof PersistImportedDeploymentRequestDeleteScopeEnum
+export type PersistImportedDeploymentRequestTypeStringList = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeStringList
 >;
 
-export type PersistImportedDeploymentRequestDeleteScopeUnion =
-  | PersistImportedDeploymentRequestDeleteScopeEnum
+export type PersistImportedDeploymentRequestDefaultStringList = {
+  type: PersistImportedDeploymentRequestTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const PersistImportedDeploymentRequestTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type PersistImportedDeploymentRequestTypeBoolean = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeBoolean
+>;
+
+export type PersistImportedDeploymentRequestDefaultBoolean = {
+  type: PersistImportedDeploymentRequestTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const PersistImportedDeploymentRequestTypeNumber = {
+  Number: "number",
+} as const;
+export type PersistImportedDeploymentRequestTypeNumber = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeNumber
+>;
+
+export type PersistImportedDeploymentRequestDefaultNumber = {
+  type: PersistImportedDeploymentRequestTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const PersistImportedDeploymentRequestTypeString = {
+  String: "string",
+} as const;
+export type PersistImportedDeploymentRequestTypeString = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeString
+>;
+
+export type PersistImportedDeploymentRequestDefaultString = {
+  type: PersistImportedDeploymentRequestTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type PersistImportedDeploymentRequestDefaultUnion =
+  | PersistImportedDeploymentRequestDefaultString
+  | PersistImportedDeploymentRequestDefaultNumber
+  | PersistImportedDeploymentRequestDefaultBoolean
+  | PersistImportedDeploymentRequestDefaultStringList
   | any;
 
 /**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * Environment variable handling for a stack input mapping.
  */
-export const PersistImportedDeploymentRequestPendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const PersistImportedDeploymentRequestTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
 } as const;
 /**
- * Scope for a delete operation.
- *
- * @remarks
- *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * Environment variable handling for a stack input mapping.
  */
-export type PersistImportedDeploymentRequestPendingDeleteScopeEnum = ClosedEnum<
-  typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum
+export type PersistImportedDeploymentRequestTypeEnvEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeEnvEnum
 >;
 
-export type PersistImportedDeploymentRequestPendingDeleteScopeUnion =
-  | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+export type PersistImportedDeploymentRequestTypeUnion =
+  | PersistImportedDeploymentRequestTypeEnvEnum
   | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type PersistImportedDeploymentRequestEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: PersistImportedDeploymentRequestTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const PersistImportedDeploymentRequestKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type PersistImportedDeploymentRequestKind = ClosedEnum<
+  typeof PersistImportedDeploymentRequestKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const PersistImportedDeploymentRequestPreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type PersistImportedDeploymentRequestPreparedStackPlatform = ClosedEnum<
+  typeof PersistImportedDeploymentRequestPreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const PersistImportedDeploymentRequestProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type PersistImportedDeploymentRequestProvidedBy = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type PersistImportedDeploymentRequestValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type PersistImportedDeploymentRequestValidationUnion =
+  | PersistImportedDeploymentRequestValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type PersistImportedDeploymentRequestInput = {
+  default?:
+    | PersistImportedDeploymentRequestDefaultString
+    | PersistImportedDeploymentRequestDefaultNumber
+    | PersistImportedDeploymentRequestDefaultBoolean
+    | PersistImportedDeploymentRequestDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<PersistImportedDeploymentRequestEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: PersistImportedDeploymentRequestKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<PersistImportedDeploymentRequestPreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<PersistImportedDeploymentRequestProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | PersistImportedDeploymentRequestValidation
+    | any
+    | null
+    | undefined;
+};
 
 export const PersistImportedDeploymentRequestManagementEnum = {
   Auto: "auto",
@@ -2512,6 +2754,10 @@ export type PersistImportedDeploymentRequestPreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<PersistImportedDeploymentRequestInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: PersistImportedDeploymentRequestPermissions | undefined;
@@ -2540,11 +2786,6 @@ export type PersistImportedDeploymentRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type PersistImportedDeploymentRequestRuntimeMetadata = {
-  deleteScope?:
-    | PersistImportedDeploymentRequestDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2552,11 +2793,6 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | PersistImportedDeploymentRequestPendingDeleteScopeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
     | any
@@ -2578,6 +2814,7 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
  */
 export const PersistImportedDeploymentRequestStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -2590,6 +2827,8 @@ export const PersistImportedDeploymentRequestStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -2677,7 +2916,7 @@ export type PersistImportedDeploymentRequest = {
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
-  basePlatform?: PersistImportedDeploymentRequestBasePlatform | undefined;
+  basePlatform?: KubernetesBasePlatform | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -2729,6 +2968,7 @@ export type PersistImportedDeploymentRequest = {
    */
   desiredReleaseId?: string | undefined;
   importSource?: ImportSourceKind | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   /**
    * Stable target key for the setup contract, e.g. aws/us-east-1
    */
@@ -2756,6 +2996,7 @@ export type PersistImportedDeploymentRequest = {
     | PersistImportedDeploymentRequestManagementConfigAzure
     | PersistImportedDeploymentRequestManagementConfigKubernetes
     | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
 /** @internal */
@@ -2770,10 +3011,152 @@ export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
   );
 
 /** @internal */
-export const PersistImportedDeploymentRequestBasePlatform$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestBasePlatform> = z.enum(
-    PersistImportedDeploymentRequestBasePlatform,
+export type PersistImportedDeploymentRequestPoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsAutoscale$Outbound,
+    PersistImportedDeploymentRequestPoolsAutoscale
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    max: z.int(),
+    min: z.int(),
+    mode: z.literal("autoscale"),
+  });
+
+export function persistImportedDeploymentRequestPoolsAutoscaleToJSON(
+  persistImportedDeploymentRequestPoolsAutoscale:
+    PersistImportedDeploymentRequestPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsAutoscale,
+    ),
   );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsFixed$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsFixed$Outbound,
+    PersistImportedDeploymentRequestPoolsFixed
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    machines: z.int(),
+    mode: z.literal("fixed"),
+  });
+
+export function persistImportedDeploymentRequestPoolsFixedToJSON(
+  persistImportedDeploymentRequestPoolsFixed:
+    PersistImportedDeploymentRequestPoolsFixed,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsFixed$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsFixed,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPoolsUnion$Outbound =
+  | PersistImportedDeploymentRequestPoolsFixed$Outbound
+  | PersistImportedDeploymentRequestPoolsAutoscale$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPoolsUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPoolsUnion$Outbound,
+    PersistImportedDeploymentRequestPoolsUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestPoolsFixed$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema),
+  ]);
+
+export function persistImportedDeploymentRequestPoolsUnionToJSON(
+  persistImportedDeploymentRequestPoolsUnion:
+    PersistImportedDeploymentRequestPoolsUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPoolsUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestPoolsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | PersistImportedDeploymentRequestPoolsFixed$Outbound
+      | PersistImportedDeploymentRequestPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCompute$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestCompute$Outbound,
+  PersistImportedDeploymentRequestCompute
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PersistImportedDeploymentRequestPoolsFixed$outboundSchema),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema
+      ),
+    ]),
+  ).optional(),
+});
+
+export function persistImportedDeploymentRequestComputeToJSON(
+  persistImportedDeploymentRequestCompute:
+    PersistImportedDeploymentRequestCompute,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCompute$outboundSchema.parse(
+      persistImportedDeploymentRequestCompute,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestComputeUnion$Outbound =
+  | PersistImportedDeploymentRequestCompute$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestComputeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestComputeUnion$Outbound,
+    PersistImportedDeploymentRequestComputeUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestCompute$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestComputeUnionToJSON(
+  persistImportedDeploymentRequestComputeUnion:
+    PersistImportedDeploymentRequestComputeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestComputeUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestComputeUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const PersistImportedDeploymentRequestDeploymentModel$outboundSchema:
@@ -5098,6 +5481,11 @@ export const PersistImportedDeploymentRequestUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PersistImportedDeploymentRequestStackSettings$Outbound = {
+  compute?:
+    | PersistImportedDeploymentRequestCompute$Outbound
+    | any
+    | null
+    | undefined;
   deploymentModel?: string | undefined;
   domains?:
     | PersistImportedDeploymentRequestDomains$Outbound
@@ -5133,6 +5521,12 @@ export const PersistImportedDeploymentRequestStackSettings$outboundSchema:
     PersistImportedDeploymentRequestStackSettings$Outbound,
     PersistImportedDeploymentRequestStackSettings
   > = z.object({
+    compute: z.nullable(
+      z.union([
+        z.lazy(() => PersistImportedDeploymentRequestCompute$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     deploymentModel:
       PersistImportedDeploymentRequestDeploymentModel$outboundSchema.optional(),
     domains: z.nullable(
@@ -5415,64 +5809,395 @@ export function persistImportedDeploymentRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestDeleteScopeEnum> = z.enum(
-    PersistImportedDeploymentRequestDeleteScopeEnum,
+export const PersistImportedDeploymentRequestTypeStringList$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeStringList> = z.enum(
+    PersistImportedDeploymentRequestTypeStringList,
   );
 
 /** @internal */
-export type PersistImportedDeploymentRequestDeleteScopeUnion$Outbound =
-  | string
-  | any;
+export type PersistImportedDeploymentRequestDefaultStringList$Outbound = {
+  type: string;
+  value: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultStringList$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestDeleteScopeUnion$Outbound,
-    PersistImportedDeploymentRequestDeleteScopeUnion
-  > = z.union([
-    PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
-    z.any(),
-  ]);
+    PersistImportedDeploymentRequestDefaultStringList$Outbound,
+    PersistImportedDeploymentRequestDefaultStringList
+  > = z.object({
+    type: PersistImportedDeploymentRequestTypeStringList$outboundSchema,
+    value: z.array(z.string()),
+  });
 
-export function persistImportedDeploymentRequestDeleteScopeUnionToJSON(
-  persistImportedDeploymentRequestDeleteScopeUnion:
-    PersistImportedDeploymentRequestDeleteScopeUnion,
+export function persistImportedDeploymentRequestDefaultStringListToJSON(
+  persistImportedDeploymentRequestDefaultStringList:
+    PersistImportedDeploymentRequestDefaultStringList,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema.parse(
-      persistImportedDeploymentRequestDeleteScopeUnion,
+    PersistImportedDeploymentRequestDefaultStringList$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultStringList,
     ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum> = z
-    .enum(PersistImportedDeploymentRequestPendingDeleteScopeEnum);
+export const PersistImportedDeploymentRequestTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeBoolean> = z.enum(
+    PersistImportedDeploymentRequestTypeBoolean,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound =
-  | string
+export type PersistImportedDeploymentRequestDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestDefaultBoolean$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDefaultBoolean$Outbound,
+    PersistImportedDeploymentRequestDefaultBoolean
+  > = z.object({
+    type: PersistImportedDeploymentRequestTypeBoolean$outboundSchema,
+    value: z.boolean(),
+  });
+
+export function persistImportedDeploymentRequestDefaultBooleanToJSON(
+  persistImportedDeploymentRequestDefaultBoolean:
+    PersistImportedDeploymentRequestDefaultBoolean,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDefaultBoolean$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultBoolean,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestTypeNumber$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeNumber> = z.enum(
+    PersistImportedDeploymentRequestTypeNumber,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestDefaultNumber$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDefaultNumber$Outbound,
+    PersistImportedDeploymentRequestDefaultNumber
+  > = z.object({
+    type: PersistImportedDeploymentRequestTypeNumber$outboundSchema,
+    value: z.string(),
+  });
+
+export function persistImportedDeploymentRequestDefaultNumberToJSON(
+  persistImportedDeploymentRequestDefaultNumber:
+    PersistImportedDeploymentRequestDefaultNumber,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDefaultNumber$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultNumber,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestTypeString$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeString> = z.enum(
+    PersistImportedDeploymentRequestTypeString,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestDefaultString$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDefaultString$Outbound,
+    PersistImportedDeploymentRequestDefaultString
+  > = z.object({
+    type: PersistImportedDeploymentRequestTypeString$outboundSchema,
+    value: z.string(),
+  });
+
+export function persistImportedDeploymentRequestDefaultStringToJSON(
+  persistImportedDeploymentRequestDefaultString:
+    PersistImportedDeploymentRequestDefaultString,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDefaultString$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultString,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestDefaultUnion$Outbound =
+  | PersistImportedDeploymentRequestDefaultString$Outbound
+  | PersistImportedDeploymentRequestDefaultNumber$Outbound
+  | PersistImportedDeploymentRequestDefaultBoolean$Outbound
+  | PersistImportedDeploymentRequestDefaultStringList$Outbound
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound,
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion
+    PersistImportedDeploymentRequestDefaultUnion$Outbound,
+    PersistImportedDeploymentRequestDefaultUnion
   > = z.union([
-    PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+    z.lazy(() => PersistImportedDeploymentRequestDefaultString$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestDefaultNumber$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestDefaultBoolean$outboundSchema),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestDefaultStringList$outboundSchema
+    ),
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPendingDeleteScopeUnionToJSON(
-  persistImportedDeploymentRequestPendingDeleteScopeUnion:
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion,
+export function persistImportedDeploymentRequestDefaultUnionToJSON(
+  persistImportedDeploymentRequestDefaultUnion:
+    PersistImportedDeploymentRequestDefaultUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingDeleteScopeUnion),
+    PersistImportedDeploymentRequestDefaultUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeEnvEnum> = z.enum(
+    PersistImportedDeploymentRequestTypeEnvEnum,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestTypeUnion$Outbound = string | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestTypeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestTypeUnion$Outbound,
+    PersistImportedDeploymentRequestTypeUnion
+  > = z.union([
+    PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestTypeUnionToJSON(
+  persistImportedDeploymentRequestTypeUnion:
+    PersistImportedDeploymentRequestTypeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestTypeUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestTypeUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnv$Outbound = {
+  name: string;
+  targetResources?: Array<string> | null | undefined;
+  type?: string | any | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnv$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestEnv$Outbound,
+  PersistImportedDeploymentRequestEnv
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function persistImportedDeploymentRequestEnvToJSON(
+  persistImportedDeploymentRequestEnv: PersistImportedDeploymentRequestEnv,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnv$outboundSchema.parse(
+      persistImportedDeploymentRequestEnv,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestKind$outboundSchema: z.ZodEnum<
+  typeof PersistImportedDeploymentRequestKind
+> = z.enum(PersistImportedDeploymentRequestKind);
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackPlatform> = z
+    .enum(PersistImportedDeploymentRequestPreparedStackPlatform);
+
+/** @internal */
+export const PersistImportedDeploymentRequestProvidedBy$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProvidedBy> = z.enum(
+    PersistImportedDeploymentRequestProvidedBy,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestValidation$Outbound = {
+  format?: string | null | undefined;
+  max?: string | null | undefined;
+  maxItems?: number | null | undefined;
+  maxLength?: number | null | undefined;
+  min?: string | null | undefined;
+  minItems?: number | null | undefined;
+  minLength?: number | null | undefined;
+  pattern?: string | null | undefined;
+  values?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestValidation$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestValidation$Outbound,
+    PersistImportedDeploymentRequestValidation
+  > = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function persistImportedDeploymentRequestValidationToJSON(
+  persistImportedDeploymentRequestValidation:
+    PersistImportedDeploymentRequestValidation,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestValidation$outboundSchema.parse(
+      persistImportedDeploymentRequestValidation,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestValidationUnion$Outbound =
+  | PersistImportedDeploymentRequestValidation$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestValidationUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestValidationUnion$Outbound,
+    PersistImportedDeploymentRequestValidationUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestValidation$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestValidationUnionToJSON(
+  persistImportedDeploymentRequestValidationUnion:
+    PersistImportedDeploymentRequestValidationUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestValidationUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestValidationUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestInput$Outbound = {
+  default?:
+    | PersistImportedDeploymentRequestDefaultString$Outbound
+    | PersistImportedDeploymentRequestDefaultNumber$Outbound
+    | PersistImportedDeploymentRequestDefaultBoolean$Outbound
+    | PersistImportedDeploymentRequestDefaultStringList$Outbound
+    | any
+    | null
+    | undefined;
+  description: string;
+  env?: Array<PersistImportedDeploymentRequestEnv$Outbound> | undefined;
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string | null | undefined;
+  platforms?: Array<string> | null | undefined;
+  providedBy: Array<string>;
+  required: boolean;
+  validation?:
+    | PersistImportedDeploymentRequestValidation$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestInput$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestInput$Outbound,
+  PersistImportedDeploymentRequestInput
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultString$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultNumber$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultBoolean$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultStringList$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => PersistImportedDeploymentRequestEnv$outboundSchema))
+    .optional(),
+  id: z.string(),
+  kind: PersistImportedDeploymentRequestKind$outboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(
+      PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchema,
+    ),
+  ).optional(),
+  providedBy: z.array(
+    PersistImportedDeploymentRequestProvidedBy$outboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => PersistImportedDeploymentRequestValidation$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function persistImportedDeploymentRequestInputToJSON(
+  persistImportedDeploymentRequestInput: PersistImportedDeploymentRequestInput,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestInput$outboundSchema.parse(
+      persistImportedDeploymentRequestInput,
+    ),
   );
 }
 
@@ -7876,6 +8601,7 @@ export const PersistImportedDeploymentRequestSupportedPlatform$outboundSchema:
 /** @internal */
 export type PersistImportedDeploymentRequestPreparedStack$Outbound = {
   id: string;
+  inputs?: Array<PersistImportedDeploymentRequestInput$Outbound> | undefined;
   permissions?:
     | PersistImportedDeploymentRequestPermissions$Outbound
     | undefined;
@@ -7892,6 +8618,9 @@ export const PersistImportedDeploymentRequestPreparedStack$outboundSchema:
     PersistImportedDeploymentRequestPreparedStack
   > = z.object({
     id: z.string(),
+    inputs: z.array(
+      z.lazy(() => PersistImportedDeploymentRequestInput$outboundSchema),
+    ).optional(),
     permissions: z.lazy(() =>
       PersistImportedDeploymentRequestPermissions$outboundSchema
     ).optional(),
@@ -7943,9 +8672,7 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 
 /** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
-  deleteScope?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?: string | any | null | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
     | any
@@ -7960,19 +8687,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     PersistImportedDeploymentRequestRuntimeMetadata$Outbound,
     PersistImportedDeploymentRequestRuntimeMetadata
   > = z.object({
-    deleteScope: z.nullable(
-      z.union([
-        PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
-        z.any(),
-      ]),
-    ).optional(),
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-    pendingDeleteScope: z.nullable(
-      z.union([
-        PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
-        z.any(),
-      ]),
-    ).optional(),
     preparedStack: z.nullable(
       z.union([
         z.lazy(() =>
@@ -8173,6 +8888,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
   currentReleaseId?: string | undefined;
   desiredReleaseId?: string | undefined;
   importSource?: string | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   setupTarget: string;
   setupFingerprint: string;
   setupFingerprintVersion: number;
@@ -8183,6 +8899,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
     | PersistImportedDeploymentRequestManagementConfigAzure$Outbound
     | PersistImportedDeploymentRequestManagementConfigKubernetes$Outbound
     | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
 /** @internal */
@@ -8195,8 +8912,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.string(),
   managerId: z.string(),
   platform: PersistImportedDeploymentRequestPlatformEnum$outboundSchema,
-  basePlatform: PersistImportedDeploymentRequestBasePlatform$outboundSchema
-    .optional(),
+  basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   stackSettings: z.lazy(() =>
     PersistImportedDeploymentRequestStackSettings$outboundSchema
   ),
@@ -8231,6 +8947,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   currentReleaseId: z.string().optional(),
   desiredReleaseId: z.string().optional(),
   importSource: ImportSourceKind$outboundSchema.optional(),
+  setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   setupTarget: z.string(),
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
@@ -8249,6 +8966,8 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
       PersistImportedDeploymentRequestManagementConfigKubernetes$outboundSchema
     ),
   ]).optional(),
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
 });
 
 export function persistImportedDeploymentRequestToJSON(

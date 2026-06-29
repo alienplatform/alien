@@ -52,21 +52,21 @@ pub struct DeploymentConfig {
     /// runtime deployment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<crate::Platform>,
-    /// Public URLs for exposed resources (optional override).
+    /// Public endpoint URLs for exposed resources (optional override).
     ///
     /// Use this only when a caller already knows the public URL. Managed public
     /// endpoint flows should prefer `domain_metadata` plus controller-reported
     /// load balancer outputs so DNS, certificate renewal, and route readiness
     /// stay tied to the resource state.
     ///
-    /// If not set, platforms determine public URLs from other sources:
+    /// If not set, platforms determine public endpoint URLs from other sources:
     /// - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
     /// - Local: `http://localhost:{allocated_port}`
-    /// - Custom or disabled exposure: no public URL unless a controller reports one
+    /// - Custom or disabled exposure: no public endpoint URL unless a controller reports one
     ///
-    /// Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
+    /// Outer key: resource ID. Inner key: endpoint name. Value: public URL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_urls: Option<HashMap<String, String>>,
+    pub public_endpoints: Option<HashMap<String, HashMap<String, String>>>,
     /// Domain metadata for auto-managed public resources.
     ///
     /// Contains generated hostnames, DNS record state, certificate material,
@@ -77,9 +77,9 @@ pub struct DeploymentConfig {
     pub domain_metadata: Option<DomainMetadata>,
     /// OTLP observability configuration for log export (optional).
     ///
-    /// When set, alien-deployment injects OTEL_EXPORTER_OTLP_* env vars into
-    /// container/function configs, and worker-template stamping passes the
-    /// monitoring endpoints to worker images.
+    /// When set, worker runtimes export captured application logs through this
+    /// endpoint. Container orchestrators may use it for their node-level log
+    /// collectors, but app container configs must not receive the auth header.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring: Option<OtlpConfig>,
     /// Manager base URL (e.g., "https://manager.alien.dev").
@@ -110,16 +110,24 @@ pub struct DeploymentConfig {
     pub native_image_host: Option<String>,
 }
 
+/// Resource-attribute key marking OTLP telemetry as Alien system-component
+/// output (infrastructure daemons and internal runtimes) rather than user
+/// workload. Log consumers — the CLI log viewer and the dashboard — hide
+/// telemetry carrying this attribute by default. The value is the string
+/// `"true"`.
+///
+/// System components set this on their own telemetry's resource attributes so
+/// consumers can filter generically, without enumerating component names.
+pub const ALIEN_SYSTEM_RESOURCE_ATTRIBUTE: &str = "alien.system";
+
 /// OTLP log export configuration for a deployment.
 ///
-/// When set, all compute workloads (containers and worker VMs) export
-/// their logs to the given endpoint via OTLP/HTTP.
-///
-/// The `logs_auth_header` is stored as plain text in DeploymentConfig because
-/// alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
-/// before vault secrets load. For worker VMs, worker-template stamping passes
-/// the monitoring configuration to the provider controller, which stores the
-/// sensitive header in the cloud vault used by the worker image.
+/// When set, injected compute runtimes export captured application logs
+/// through the given endpoint via OTLP/HTTP; which resources are injected
+/// is platform-dependent. Workers and daemons read auth headers from a
+/// runtime-only secret — never from application environment variables.
+/// Containers have no runtime wrapper, so they get the endpoint and auth
+/// header as plain OTEL env vars for the application's own exporter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -127,16 +135,7 @@ pub struct OtlpConfig {
     /// Full OTLP logs endpoint URL.
     /// Example: "https://<manager-host>/v1/logs"
     pub logs_endpoint: String,
-    /// Auth header value in "key=value,..." format used for container OTLP env var injection.
-    ///
-    /// `alien-deployment` injects this as the `OTEL_EXPORTER_OTLP_HEADERS` plain env var
-    /// into all containers. It must be plain (not a vault secret) because alien-runtime
-    /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
-    ///
-    /// Worker VMs do NOT use this field directly. The ComputeCluster infra
-    /// controller writes the same value to the cloud vault used by the worker
-    /// image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
-    ///
+    /// Auth header value in "key=value,..." format.
     /// Example: "authorization=Bearer <write-token>"
     pub logs_auth_header: String,
     /// Full OTLP metrics endpoint URL (optional).

@@ -12,7 +12,7 @@ let value: ListDeploymentsResponse = {
     {
       id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       name: "<value>",
-      status: "running",
+      status: "refresh-failed",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       platform: "test",
       deploymentProtocolVersion: 120212,
@@ -40,7 +40,7 @@ let value: ListDeploymentsResponse = {
           commitAuthorLogin: "johndoe",
           commitAuthorAvatarUrl: "https://github.com/johndoe.png",
         },
-        createdAt: new Date("2024-04-17T05:47:54.417Z"),
+        createdAt: new Date("2024-06-27T06:57:01.451Z"),
       },
       deploymentGroup: {
         id: "dg_r27ict8c7vcgsumpj90ackf7b",

@@ -54,7 +54,11 @@ pub async fn handle_running(
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
-        crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
+        crate::helpers::inject_monitoring_environment_variables(
+            &mut target_stack,
+            monitoring,
+            current.platform,
+        )?;
     }
 
     // TODO: Add mechanism to limit executor to only perform read-only health checks
@@ -101,16 +105,12 @@ pub async fn handle_running(
     if has_failed {
         info!("Health check failed for one or more resources");
 
-        // Create aggregated error from failed resources
-        let error =
-            crate::helpers::create_aggregated_error_from_stack_state(&step_result.next_state);
-
         next.status = DeploymentStatus::RefreshFailed;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
 
         Ok(DeploymentStepResult {
             state: next,
-            error,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: heartbeats.clone(),
@@ -122,8 +122,7 @@ pub async fn handle_running(
 
         Ok(DeploymentStepResult {
             state: next,
-            error: None,
-            suggested_delay_ms: None,
+            suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: true, // Update heartbeat timestamp for Running status
             heartbeats,
         })
@@ -154,7 +153,6 @@ pub async fn handle_refresh_failed(
         info!("No retry requested, staying in RefreshFailed status");
         return Ok(DeploymentStepResult {
             state: current,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -182,11 +180,11 @@ pub async fn handle_refresh_failed(
     // Transition back to Running
     next.status = DeploymentStatus::Running;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.retry_requested = false; // Clear retry flag directly
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],

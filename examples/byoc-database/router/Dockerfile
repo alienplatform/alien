@@ -1,12 +1,11 @@
 FROM nginx:alpine
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker-entrypoint.d/10-nginx-resolver.envsh /docker-entrypoint.d/10-nginx-resolver.envsh
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
 # Expose port
 EXPOSE 8080
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]
-
 

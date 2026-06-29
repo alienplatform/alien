@@ -1,6 +1,9 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ComputeCluster, ResourceSpec, ToolchainConfig};
+use crate::resources::{
+    ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, PublicEndpointOutput,
+    ResourceSpec, ToolchainConfig,
+};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -21,6 +24,40 @@ pub enum DaemonCode {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRuntimeMount {
+    /// Absolute host path to mount into the daemon container.
+    pub source: String,
+    /// Absolute container path where the source is mounted.
+    pub target: String,
+    /// Optional mount options understood by the backend runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRuntime {
+    /// Run the daemon container with elevated host capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privileged: Option<bool>,
+    /// Process namespace mode. Supported values are `host` and `private`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid_namespace: Option<String>,
+    /// Network mode. Supported values are `host` and `appnet`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_mode: Option<String>,
+    /// Host mounts exposed to the daemon container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<DaemonRuntimeMount>,
+    /// Runtime user, as a numeric uid or uid:gid string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -30,8 +67,15 @@ pub struct Daemon {
     pub id: String,
     #[builder(field)]
     pub links: Vec<ResourceRef>,
-    /// ComputeCluster resource ID that this daemon runs on for Horizon-backed
-    /// cloud platforms. Kubernetes and Local runtimes ignore this field.
+    /// Public endpoints exposed by the daemon.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_endpoints: Vec<PublicEndpoint>,
+    /// HTTP health check for public daemon endpoint load balancers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<HealthCheck>,
+    /// ComputeCluster resource ID that this daemon runs on for managed cloud
+    /// compute backends. Kubernetes and Local runtimes ignore this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
     pub permissions: String,
@@ -50,6 +94,13 @@ pub struct Daemon {
     /// Command to override the image default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+    /// Optional backend runtime settings for trusted daemons.
+    ///
+    /// These settings are intended for daemon-style infrastructure that must
+    /// operate on the host. Backends that do not support a setting may reject
+    /// it during provisioning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<DaemonRuntime>,
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
@@ -64,6 +115,98 @@ impl Daemon {
 
     pub fn get_permissions(&self) -> &str {
         &self.permissions
+    }
+
+    fn validate_public_endpoints(&self) -> Result<()> {
+        let mut endpoint_names = std::collections::HashSet::new();
+        let mut backend_ports = std::collections::HashSet::new();
+
+        for endpoint in &self.public_endpoints {
+            endpoint.validate_for_resource(&self.id)?;
+            if !endpoint_names.insert(endpoint.name.as_str()) {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!("duplicate public endpoint name '{}'", endpoint.name),
+                }));
+            }
+            backend_ports.insert(endpoint.port);
+            if endpoint.protocol != ExposeProtocol::Http {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "daemon public endpoints currently support only HTTP".to_string(),
+                }));
+            }
+        }
+
+        if backend_ports.len() > 1 {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason:
+                    "public endpoints on one daemon must currently route to the same backend port"
+                        .to_string(),
+            }));
+        }
+
+        Ok(())
+    }
+
+    fn validate_runtime(&self) -> Result<()> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(());
+        };
+
+        if let Some(pid_namespace) = &runtime.pid_namespace {
+            if pid_namespace != "host" && pid_namespace != "private" {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.pidNamespace must be 'host' or 'private'".to_string(),
+                }));
+            }
+        }
+
+        if let Some(network_mode) = &runtime.network_mode {
+            if network_mode != "host" && network_mode != "appnet" {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.networkMode must be 'host' or 'appnet'".to_string(),
+                }));
+            }
+        }
+
+        if let Some(user) = &runtime.user {
+            let valid = match user.split_once(':') {
+                Some((uid, gid)) => {
+                    !uid.is_empty()
+                        && !gid.is_empty()
+                        && uid.chars().all(|c| c.is_ascii_digit())
+                        && gid.chars().all(|c| c.is_ascii_digit())
+                }
+                None => !user.is_empty() && user.chars().all(|c| c.is_ascii_digit()),
+            };
+            if !valid {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.user must be a numeric uid or uid:gid".to_string(),
+                }));
+            }
+        }
+
+        for mount in &runtime.mounts {
+            if mount.source.is_empty() || mount.target.is_empty() {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.mounts source and target must be non-empty".to_string(),
+                }));
+            }
+            if !mount.source.starts_with('/') || !mount.target.starts_with('/') {
+                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: "runtime.mounts source and target must be absolute paths".to_string(),
+                }));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -92,6 +235,11 @@ impl<S: daemon_builder::State> DaemonBuilder<S> {
     {
         let resource_ref: ResourceRef = resource.into();
         self.links.push(resource_ref);
+        self
+    }
+
+    pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
+        self.public_endpoints.push(endpoint);
         self
     }
 }
@@ -139,6 +287,18 @@ impl ResourceDefinition for Daemon {
             }));
         }
 
+        self.validate_public_endpoints()?;
+        new_daemon.validate_public_endpoints()?;
+        self.validate_runtime()?;
+        new_daemon.validate_runtime()?;
+
+        if self.public_endpoints != new_daemon.public_endpoints {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'publicEndpoints' field is immutable".to_string(),
+            }));
+        }
+
         Ok(())
     }
 
@@ -169,6 +329,8 @@ impl ResourceDefinition for Daemon {
 pub struct DaemonOutputs {
     pub daemon_name: String,
     pub running: bool,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub public_endpoints: HashMap<String, PublicEndpointOutput>,
 }
 
 impl ResourceOutputsDefinition for DaemonOutputs {
@@ -217,5 +379,70 @@ mod tests {
         let roundtrip: crate::Resource =
             serde_json::from_value(json).expect("daemon should deserialize");
         assert_eq!(roundtrip.resource_type().as_ref(), "daemon");
+    }
+
+    #[test]
+    fn daemon_accepts_one_public_http_endpoint() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "public".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("public".to_string()),
+                wildcard_subdomains: true,
+            })
+            .permissions("gateway".to_string())
+            .build();
+
+        assert!(daemon.validate_public_endpoints().is_ok());
+        assert_eq!(daemon.public_endpoints.len(), 1);
+        assert_eq!(
+            daemon.public_endpoints[0].host_label.as_deref(),
+            Some("public")
+        );
+        assert!(daemon.public_endpoints[0].wildcard_subdomains);
+    }
+
+    #[test]
+    fn daemon_rejects_multiple_backend_ports_or_non_http_public_endpoints() {
+        let multiple = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 9090,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .permissions("gateway".to_string())
+            .build();
+        assert!(multiple.validate_public_endpoints().is_err());
+
+        let tcp = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Tcp,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .permissions("gateway".to_string())
+            .build();
+        assert!(tcp.validate_public_endpoints().is_err());
     }
 }

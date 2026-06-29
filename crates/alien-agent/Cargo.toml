@@ -56,6 +56,24 @@ url = { workspace = true }
 hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 
+# Debug-session tunnel (kubectl forwarding for pull-mode K8s `alien debug`)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures = { workspace = true }
+base64 = { workspace = true }
+
+# AWS IRSA-driven re-signing for the pull-mode debug tunnel cloud-proxy path
+# (lets `alien debug <pull-k8s-dep> -- aws ...` work via the operator's pod
+# IRSA identity).
+aws-config = "1.5"
+aws-credential-types = { workspace = true }
+aws-sigv4 = { workspace = true }
+
+# rustls 0.23 requires a CryptoProvider to be selected when multiple providers
+# (aws-lc-rs and ring) are pulled in transitively. Install one at startup so
+# any rustls-backed client (reqwest, tokio-tungstenite, aws-sdk hyper) works
+# without panicking.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

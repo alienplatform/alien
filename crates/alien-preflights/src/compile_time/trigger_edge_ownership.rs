@@ -1,12 +1,15 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, ResourceLifecycle, Stack, Storage, Worker, WorkerTrigger};
+use alien_core::{
+    ManagementPermissions, PermissionProfile, Platform, ResourceLifecycle, Stack, Storage, Worker,
+    WorkerTrigger,
+};
 
 /// Validates trigger edges whose source resource is setup-owned.
 ///
-/// A storage trigger mutates the source storage resource on several providers. When that storage
-/// resource is Frozen, setup owns the notification wiring by default, so normal deployment must
-/// fail before the worker controller attempts cloud mutations.
+/// A storage trigger can mutate the source storage resource on several providers. When the storage
+/// resource is Frozen, Alien may attach trigger wiring only through an explicit management grant on
+/// that source resource. Auto/Extend management can derive that grant; Override must author it.
 pub struct TriggerEdgeOwnershipCheck;
 
 #[async_trait::async_trait]
@@ -24,13 +27,25 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
         })
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
+        if !storage_trigger_source_requires_management(platform) {
+            return Ok(CheckResult::success());
+        }
+
         let mut errors = Vec::new();
+
+        let ManagementPermissions::Override(management_profile) = stack.management() else {
+            return Ok(CheckResult::success());
+        };
 
         for (function_id, entry) in stack.resources() {
             let Some(worker) = entry.config.downcast_ref::<Worker>() else {
                 continue;
             };
+
+            if entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
 
             for trigger in &worker.triggers {
                 if let WorkerTrigger::Storage { storage, .. } = trigger {
@@ -43,13 +58,20 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
                     };
 
                     if source_entry.lifecycle == ResourceLifecycle::Frozen {
-                        errors.push(format!(
-                            "Setup required: worker '{}' has a storage trigger from Frozen storage '{}'. \
-                             Storage notification wiring is setup-owned by default because it mutates the storage resource. \
-                             Rerun setup with the updated stack, or make the storage resource Live and grant storage/provision.",
-                            function_id,
-                            storage.id()
-                        ));
+                        let source_id = storage.id();
+                        if !profile_contains_permission(
+                            management_profile,
+                            source_id,
+                            "storage/trigger-management",
+                        ) {
+                            errors.push(format!(
+                                "Setup required: worker '{}' has a storage trigger from Frozen storage '{}'. \
+                                 Storage trigger wiring mutates the source storage resource on this platform. \
+                                 The stack overrides management permissions, so Alien cannot derive this automatically. \
+                                 Add 'storage/trigger-management' to the management override for '{}' or '*' and rerun setup.",
+                                function_id, source_id, source_id
+                            ));
+                        }
                     }
                 }
             }
@@ -63,6 +85,31 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
     }
 }
 
+fn storage_trigger_source_requires_management(platform: Platform) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp)
+}
+
+fn profile_contains_permission(
+    profile: &PermissionProfile,
+    resource_id: &str,
+    permission_id: &str,
+) -> bool {
+    profile_scope_contains_permission(profile, "*", permission_id)
+        || profile_scope_contains_permission(profile, resource_id, permission_id)
+}
+
+fn profile_scope_contains_permission(
+    profile: &PermissionProfile,
+    scope: &str,
+    permission_id: &str,
+) -> bool {
+    profile.0.get(scope).is_some_and(|permissions| {
+        permissions
+            .iter()
+            .any(|permission| permission.id() == permission_id)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,7 +118,10 @@ mod tests {
     };
     use indexmap::IndexMap;
 
-    fn stack_with_storage_lifecycle(storage_lifecycle: ResourceLifecycle) -> Stack {
+    fn stack_with_storage_lifecycle(
+        storage_lifecycle: ResourceLifecycle,
+        management: ManagementPermissions,
+    ) -> Stack {
         let storage = Storage::new("uploads".to_string()).build();
         let worker = Worker::new("processor".to_string())
             .code(WorkerCode::Image {
@@ -112,15 +162,32 @@ mod tests {
                     "execution".to_string(),
                     PermissionProfile::new().global(Vec::<&str>::new()),
                 )]),
-                management: Default::default(),
+                management,
             },
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 
     #[tokio::test]
-    async fn frozen_storage_trigger_fails_with_setup_required() {
-        let stack = stack_with_storage_lifecycle(ResourceLifecycle::Frozen);
+    async fn frozen_storage_trigger_with_auto_management_succeeds() {
+        let stack =
+            stack_with_storage_lifecycle(ResourceLifecycle::Frozen, ManagementPermissions::Auto);
+
+        let result = TriggerEdgeOwnershipCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn frozen_storage_trigger_with_override_without_trigger_management_fails() {
+        let stack = stack_with_storage_lifecycle(
+            ResourceLifecycle::Frozen,
+            ManagementPermissions::override_(PermissionProfile::new().global(["worker/provision"])),
+        );
 
         let result = TriggerEdgeOwnershipCheck
             .check(&stack, Platform::Aws)
@@ -130,12 +197,47 @@ mod tests {
         assert!(!result.success);
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].contains("Frozen storage 'uploads'"));
-        assert!(result.errors[0].contains("Rerun setup"));
+        assert!(result.errors[0].contains("storage/trigger-management"));
+    }
+
+    #[tokio::test]
+    async fn frozen_storage_trigger_with_override_trigger_management_succeeds() {
+        let stack = stack_with_storage_lifecycle(
+            ResourceLifecycle::Frozen,
+            ManagementPermissions::override_(
+                PermissionProfile::new().resource("uploads", ["storage/trigger-management"]),
+            ),
+        );
+
+        let result = TriggerEdgeOwnershipCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn azure_storage_trigger_does_not_require_source_storage_management() {
+        let stack = stack_with_storage_lifecycle(
+            ResourceLifecycle::Frozen,
+            ManagementPermissions::override_(PermissionProfile::new().global(["worker/provision"])),
+        );
+
+        let result = TriggerEdgeOwnershipCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .unwrap();
+
+        assert!(result.success);
     }
 
     #[tokio::test]
     async fn live_storage_trigger_succeeds() {
-        let stack = stack_with_storage_lifecycle(ResourceLifecycle::Live);
+        let stack = stack_with_storage_lifecycle(
+            ResourceLifecycle::Live,
+            ManagementPermissions::override_(PermissionProfile::new().global(["worker/provision"])),
+        );
 
         let result = TriggerEdgeOwnershipCheck
             .check(&stack, Platform::Aws)

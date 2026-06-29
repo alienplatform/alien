@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
-use crate::output::prompt_confirm;
+use crate::output::{print_json, prompt_confirm};
 use crate::ui::{
     command, contextual_heading, deployment_resource_detail, dim_label, format_resource_status,
     heading, make_table, print_table, render_human_error, status_cell, success_line,
@@ -108,11 +108,19 @@ pub enum DeploymentsCmd {
         /// Project to list deployments for (optional, uses linked project by default)
         #[arg(long)]
         project: Option<String>,
+
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Get deployment details
     Get {
         /// Deployment name or ID
         id: String,
+
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Delete a deployment
     Delete {
@@ -164,24 +172,24 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
 
     match args.cmd {
         // --- Manager API operations (all modes: dev, standalone, platform) ---
-        DeploymentsCmd::Ls { project } => {
-            let manager = resolve_manager_client(&ctx, project.as_deref()).await?;
-            list_deployments_task(&manager).await
+        DeploymentsCmd::Ls { project, json } => {
+            let manager = resolve_manager_client(&ctx, project.as_deref(), !json).await?;
+            list_deployments_task(&manager, json).await
         }
-        DeploymentsCmd::Get { id } => {
-            let manager = resolve_manager_client(&ctx, None).await?;
-            get_deployment_task(&manager, &id).await
+        DeploymentsCmd::Get { id, json } => {
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            get_deployment_task(&manager, &id, json).await
         }
         DeploymentsCmd::Delete { id, yes } => {
-            let manager = resolve_manager_client(&ctx, None).await?;
+            let manager = resolve_manager_client(&ctx, None, true).await?;
             delete_deployment_task(&manager, &id, yes).await
         }
         DeploymentsCmd::Retry { id } => {
-            let manager = resolve_manager_client(&ctx, None).await?;
+            let manager = resolve_manager_client(&ctx, None, true).await?;
             retry_deployment_task(&manager, &id).await
         }
         DeploymentsCmd::Redeploy { id } => {
-            let manager = resolve_manager_client(&ctx, None).await?;
+            let manager = resolve_manager_client(&ctx, None, true).await?;
             redeploy_deployment_task(&manager, &id).await
         }
 
@@ -273,47 +281,34 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
 pub(crate) async fn resolve_manager_client(
     ctx: &ExecutionMode,
     project_override: Option<&str>,
+    allow_bootstrap: bool,
 ) -> Result<alien_manager_api::Client> {
-    let (_, project_link) = ctx.resolve_project(project_override, true).await?;
+    let (_, project_link) = ctx
+        .resolve_project(project_override, allow_bootstrap)
+        .await?;
     // The platform parameter is only used in platform mode for build-config
     // discovery; the manager URL is the same regardless of platform.
     let manager_ctx = ctx.resolve_manager(&project_link.project_id, "aws").await?;
     Ok(manager_ctx.client)
 }
 
-/// Resolve a deployment by name or ID.
+/// Resolve a deployment by name or ID via the shared resolver. The `is_dev`
+/// argument only affects the "not found" hint surfaced to the user; the
+/// `deployments` subcommand doesn't carry a dev/platform flag at this layer
+/// so we conservatively assume non-dev (callers in dev mode go through
+/// `dev_helpers`).
 async fn resolve_deployment_reference(
     client: &alien_manager_api::Client,
     reference: &str,
 ) -> Result<DeploymentResponse> {
-    let response = client
-        .list_deployments()
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "listing deployments for resolution".to_string(),
-            url: None,
-        })?
-        .into_inner();
-
-    response
-        .items
-        .into_iter()
-        .find(|d| d.id == reference || d.name == reference)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "deployment".to_string(),
-                message: format!("Deployment '{}' was not found.", reference),
-            })
-        })
+    crate::deployment_resolver::resolve(client, reference, false).await
 }
 
 // ---------------------------------------------------------------------------
 // Manager API operations (unified for all modes)
 // ---------------------------------------------------------------------------
 
-async fn list_deployments_task(client: &alien_manager_api::Client) -> Result<()> {
+async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -> Result<()> {
     let response = client
         .list_deployments()
         .send()
@@ -324,6 +319,10 @@ async fn list_deployments_task(client: &alien_manager_api::Client) -> Result<()>
             url: None,
         })?
         .into_inner();
+
+    if json {
+        return print_json(&response.items);
+    }
 
     if response.items.is_empty() {
         println!("(no deployments)");
@@ -354,8 +353,16 @@ async fn list_deployments_task(client: &alien_manager_api::Client) -> Result<()>
     Ok(())
 }
 
-async fn get_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
+async fn get_deployment_task(
+    client: &alien_manager_api::Client,
+    reference: &str,
+    json: bool,
+) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
+
+    if json {
+        return print_json(&deployment);
+    }
 
     println!(
         "{}",
@@ -437,7 +444,9 @@ async fn delete_deployment_task(
     client
         .delete_deployment()
         .id(&deployment.id)
-        .delete_scope(alien_manager_api::types::DeleteScope::Full)
+        .body(alien_manager_api::types::DeleteDeploymentRequest {
+            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+        })
         .send()
         .await
         .into_sdk_error()
@@ -585,7 +594,8 @@ async fn create_deployment_task(
         )
     } else {
         let http = ctx.auth_http().await?;
-        crate::project_link::get_project_by_name(&http, workspace, project_name).await?
+        crate::project_link::get_project_by_name(&http, workspace, Some(workspace), project_name)
+            .await?
     };
 
     let platform = match platform_str {
@@ -791,6 +801,7 @@ async fn create_deployment_task(
         .transpose()?;
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+        compute: None,
         deployment_model: Some(if no_push {
             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
         } else {
@@ -850,6 +861,9 @@ async fn create_deployment_task(
         manager_id: None,
         pinned_release_id: None,
         environment_info: None,
+        input_values: std::collections::HashMap::new(),
+        setup_method: None,
+        setup_metadata: None,
     };
 
     let workspace_param = CreateDeploymentWorkspace::try_from(workspace)

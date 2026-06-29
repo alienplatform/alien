@@ -405,15 +405,8 @@ impl TestContext {
         }
 
         // 2. Mark the deployment as delete-pending via the manager API.
-        // Distribution flows import setup-owned resources from TF/CF/Helm. In
-        // those flows Alien should delete only Live resources; the setup tool
-        // cleanup below owns Frozen resources.
-        let delete_scope = if self.distribution_cleanups.is_empty() {
-            alien_manager_api::types::DeleteScope::Full
-        } else {
-            alien_manager_api::types::DeleteScope::LiveOnly
-        };
-        let destroy_enqueued = match self.deployment.destroy_with_scope(delete_scope).await {
+        // The manager chooses the resource cleanup set from deployment ownership.
+        let destroy_enqueued = match self.deployment.destroy().await {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(
@@ -1153,8 +1146,7 @@ pub async fn run_alien_deploy_up(
         .arg(&manager.url)
         .arg("--platform")
         .arg(platform.as_str())
-        .arg("-y")
-        .arg("--experimental");
+        .arg("-y");
 
     if foreground {
         // In foreground mode the process runs indefinitely. Inherit stdio

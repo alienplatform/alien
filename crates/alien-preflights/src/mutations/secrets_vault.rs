@@ -338,6 +338,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -415,6 +416,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -470,6 +472,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -549,6 +552,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -626,6 +630,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -694,6 +699,7 @@ mod tests {
                 ),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -782,6 +788,7 @@ mod tests {
                 management: ManagementPermissions::Override(override_profile.clone()),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -847,6 +854,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Local);

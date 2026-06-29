@@ -51,16 +51,26 @@ impl AlienManager {
     /// This method spawns the deployment loop and heartbeat loop as background
     /// tasks, then runs the axum HTTP server. It blocks until the server shuts down.
     pub async fn start(self, addr: SocketAddr) -> crate::error::Result<()> {
+        let deployment_loop =
+            if !self.config.disable_deployment_loop || !self.config.disable_heartbeat_loop {
+                Some(Arc::new(DeploymentLoop::new(
+                    self.config.clone(),
+                    self.deployment_store.clone(),
+                    self.release_store.clone(),
+                    self.credential_resolver.clone(),
+                    self.server_bindings.clone(),
+                    self.dev_status_tx,
+                )))
+            } else {
+                None
+            };
+
         // Spawn the deployment loop
         if !self.config.disable_deployment_loop {
-            let deployment_loop = DeploymentLoop::new(
-                self.config.clone(),
-                self.deployment_store.clone(),
-                self.release_store.clone(),
-                self.credential_resolver.clone(),
-                self.server_bindings.clone(),
-                self.dev_status_tx,
-            );
+            let deployment_loop = deployment_loop
+                .as_ref()
+                .expect("deployment loop is constructed when enabled")
+                .clone();
             tokio::spawn(async move {
                 deployment_loop.run().await;
             });
@@ -70,8 +80,12 @@ impl AlienManager {
 
         // Spawn the heartbeat loop
         if !self.config.disable_heartbeat_loop {
-            let heartbeat_loop =
-                HeartbeatLoop::new(self.config.clone(), self.deployment_store.clone());
+            let heartbeat_loop = HeartbeatLoop::new(
+                self.config.clone(),
+                self.deployment_store.clone(),
+                deployment_loop
+                    .expect("deployment loop processor is constructed when heartbeat is enabled"),
+            );
             tokio::spawn(async move {
                 heartbeat_loop.run().await;
             });

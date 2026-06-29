@@ -16,10 +16,24 @@ import type { DeploymentInit, Platform, UpgradeOptions } from "./types.js"
 
 const execFileAsync = promisify(execFile)
 
+function signalProcessTree(proc: ChildProcess, signal: NodeJS.Signals): void {
+  if (proc.pid && process.platform !== "win32") {
+    try {
+      process.kill(-proc.pid, signal)
+      return
+    } catch {
+      // Fall back to signaling only the direct child.
+    }
+  }
+
+  proc.kill(signal)
+}
+
 export class Deployment {
   readonly id: string
   readonly name: string
-  readonly url: string
+  /** Public URL of the app. Undefined for stacks with no URL-exposing resource (e.g. daemon-only). */
+  readonly url: string | undefined
   readonly platform: Platform
 
   /** Whether the deployment has been destroyed */
@@ -170,12 +184,12 @@ export class Deployment {
     // Dev mode — kill the process
     if (this.process) {
       if (!this.process.killed) {
-        this.process.kill("SIGTERM")
+        signalProcessTree(this.process, "SIGTERM")
 
         await new Promise<void>(resolve => {
           const timeout = setTimeout(() => {
             if (!this.process!.killed) {
-              this.process!.kill("SIGKILL")
+              signalProcessTree(this.process!, "SIGKILL")
             }
             resolve()
           }, 5000)

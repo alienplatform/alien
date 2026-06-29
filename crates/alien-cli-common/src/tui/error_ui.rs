@@ -110,8 +110,8 @@ impl ErrorPrinter {
                 Self::print_multiple_builds_details(stderr, error)?;
             }
             #[cfg(feature = "deployment")]
-            "AGENT_DEPLOYMENT_FAILED" => {
-                Self::print_agent_deployment_failed_details(stderr, error)?;
+            "DEPLOYMENT_FAILED" => {
+                Self::print_deployment_failed_details(stderr, error)?;
             }
             _ => {
                 // Fallback to generic context printing
@@ -262,9 +262,9 @@ impl ErrorPrinter {
         Ok(())
     }
 
-    /// Print agent deployment failure details with resource-level errors
+    /// Print deployment failure details with resource-level errors
     #[cfg(feature = "deployment")]
-    fn print_agent_deployment_failed_details<T>(
+    fn print_deployment_failed_details<T>(
         stderr: &mut StandardStream,
         error: &AlienError<T>,
     ) -> io::Result<()>

@@ -351,6 +351,9 @@ resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
       "Microsoft.App/containerApps/revisions/restart/action",
       "Microsoft.App/containerApps/sourceControls/read",
       "Microsoft.App/containerApps/write",
+      "Microsoft.App/managedEnvironments/certificates/delete",
+      "Microsoft.App/managedEnvironments/certificates/read",
+      "Microsoft.App/managedEnvironments/certificates/write",
       "Microsoft.App/managedEnvironments/daprComponents/delete",
       "Microsoft.App/managedEnvironments/daprComponents/read",
       "Microsoft.App/managedEnvironments/daprComponents/write",
@@ -697,6 +700,9 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.App/containerApps/revisions/restart/action",
       "Microsoft.App/containerApps/sourceControls/read",
       "Microsoft.App/containerApps/write",
+      "Microsoft.App/managedEnvironments/certificates/delete",
+      "Microsoft.App/managedEnvironments/certificates/read",
+      "Microsoft.App/managedEnvironments/certificates/write",
       "Microsoft.App/managedEnvironments/daprComponents/delete",
       "Microsoft.App/managedEnvironments/daprComponents/read",
       "Microsoft.App/managedEnvironments/daprComponents/write",
@@ -821,8 +827,15 @@ resource "azurerm_storage_table" "metadata" {
 === secrets.tf ===
 data "azurerm_client_config" "secrets_current" {}
 
+resource "random_id" "secrets_name_suffix" {
+  byte_length = 3
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_key_vault" "secrets" {
-  name                          = substr(lower("${local.resource_prefix}-secrets"), 0, 24)
+  name                          = format("%s-%s", trim(substr(lower(replace("${local.resource_prefix}-secrets", "_", "-")), 0, 17), "-"), random_id.secrets_name_suffix.hex)
   resource_group_name           = var.azure_resource_group_name
   location                      = var.azure_location
   tenant_id                     = data.azurerm_client_config.secrets_current.tenant_id
@@ -843,7 +856,7 @@ resource "azurerm_key_vault" "secrets" {
 }
 
 resource "azurerm_role_assignment" "secrets_write_key_vault_secrets_management_assignment_0" {
-  name               = uuidv5("oid", "deployment:azure:vault-role-assign:${local.resource_prefix}:secrets:write_key_vault_secrets:management:0")
+  name               = uuidv5("oid", "deployment:azure:vault-role-assign:${azurerm_key_vault.secrets.id}:write_key_vault_secrets:management:0")
   scope              = azurerm_key_vault.secrets.id
   role_definition_id = azurerm_role_definition.setup_management_write_key_vault_secrets_0.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -935,6 +948,7 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
@@ -968,6 +982,7 @@ resource "terraform_data" "deployment_registration" {
     azurerm_role_assignment.assets_reader_management_assignment_0,
     azurerm_servicebus_queue.jobs,
     azurerm_storage_table.metadata,
+    random_id.secrets_name_suffix,
     azurerm_key_vault.secrets,
     azurerm_role_assignment.secrets_write_key_vault_secrets_management_assignment_0,
     azurerm_container_registry.registry,

@@ -19,6 +19,9 @@ export const StackImportRequestSchema = z.object({
               },
 "deploymentGroupToken": z.string().describe("Deployment-group token authorizing the import."),
 "deploymentName": z.string().describe("User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."),
+"inputValues": z.optional(z.object({
+    
+    }).catchall(z.any()).describe("Deployer-provided stack input values collected by generated setup\nsurfaces. Platform-backed managers resolve these into runtime\nenvironment variables before deployment creation; standalone managers\naccept the field for setup package compatibility.")),
 get "managementConfig"(){
                 return z.union([ManagementConfigSchema, z.null()]).optional()
               },
@@ -34,6 +37,7 @@ get "resources"(){
 "setupFingerprint": z.string().describe("Setup compatibility fingerprint embedded in the package."),
 "setupFingerprintVersion": z.int().min(0).describe("Setup fingerprint algorithm version embedded in the package."),
 "setupImportFormatVersion": z.int().min(0).describe("Wire-format version for the setup import payload."),
+"setupMetadata": z.optional(z.any().describe("Setup source metadata needed by the control plane to guide privileged\nteardown. The manager treats this as opaque JSON.")),
 "setupTarget": z.string().describe("Setup target this package was generated for."),
 get "sourceKind"(){
                 return z.union([ImportSourceKindSchema, z.null()]).optional()

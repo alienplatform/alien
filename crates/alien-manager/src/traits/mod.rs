@@ -18,8 +18,8 @@ pub use auth_validator::{AuthValidator, TokenType};
 pub use credential_resolver::{CredentialResolver, ResolvedCredentials};
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
-    CreateImportedDeploymentParams, DeploymentFilter, DeploymentGroupRecord, DeploymentRecord,
-    DeploymentStore, ReconcileData,
+    CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,
+    DeploymentRecord, DeploymentStore, ReconcileData,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

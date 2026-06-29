@@ -11,6 +11,10 @@ import {
   DeploymentSetupPolicy,
   DeploymentSetupPolicy$inboundSchema,
 } from "./deploymentsetuppolicy.js";
+import {
+  EncryptedStackInputValue,
+  EncryptedStackInputValue$inboundSchema,
+} from "./encryptedstackinputvalue.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const CreateManagerResponseSetupStatus = {
@@ -37,8 +41,68 @@ export type CreateManagerResponseEnvironmentVariable = {
 export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
+  inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
   environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
 };
+
+export type CreateManagerResponsePoolsAutoscale3 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type CreateManagerResponsePoolsFixed3 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateManagerResponsePoolsUnion3 =
+  | CreateManagerResponsePoolsFixed3
+  | CreateManagerResponsePoolsAutoscale3;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute3 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed3
+      | CreateManagerResponsePoolsAutoscale3;
+  } | undefined;
+};
+
+export type CreateManagerResponseComputeUnion3 =
+  | CreateManagerResponseCompute3
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1039,6 +1103,7 @@ export type CreateManagerResponseUpdates3 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateManagerResponseStackSettings3 = {
+  compute?: CreateManagerResponseCompute3 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1102,6 +1167,65 @@ export type CreateManagerResponseSetupTerraform = {
    */
   stackSettings: CreateManagerResponseStackSettings3;
 };
+
+export type CreateManagerResponsePoolsAutoscale2 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type CreateManagerResponsePoolsFixed2 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateManagerResponsePoolsUnion2 =
+  | CreateManagerResponsePoolsFixed2
+  | CreateManagerResponsePoolsAutoscale2;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute2 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed2
+      | CreateManagerResponsePoolsAutoscale2;
+  } | undefined;
+};
+
+export type CreateManagerResponseComputeUnion2 =
+  | CreateManagerResponseCompute2
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -2102,6 +2226,7 @@ export type CreateManagerResponseUpdates2 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateManagerResponseStackSettings2 = {
+  compute?: CreateManagerResponseCompute2 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -2160,6 +2285,65 @@ export type CreateManagerResponseSetupGoogleOauth = {
    */
   stackSettings: CreateManagerResponseStackSettings2;
 };
+
+export type CreateManagerResponsePoolsAutoscale1 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type CreateManagerResponsePoolsFixed1 = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateManagerResponsePoolsUnion1 =
+  | CreateManagerResponsePoolsFixed1
+  | CreateManagerResponsePoolsAutoscale1;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute1 = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed1
+      | CreateManagerResponsePoolsAutoscale1;
+  } | undefined;
+};
+
+export type CreateManagerResponseComputeUnion1 =
+  | CreateManagerResponseCompute1
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -3160,6 +3344,7 @@ export type CreateManagerResponseUpdates1 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateManagerResponseStackSettings1 = {
+  compute?: CreateManagerResponseCompute1 | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -3282,6 +3467,8 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
 > = z.object({
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
+  inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
   environmentVariables: z.array(
     z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
   ),
@@ -3294,6 +3481,111 @@ export function createManagerResponseSetupConfigFromJSON(
     jsonString,
     (x) => CreateManagerResponseSetupConfig$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'CreateManagerResponseSetupConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale3,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function createManagerResponsePoolsAutoscale3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed3,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function createManagerResponsePoolsFixed3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed3$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale3$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute3$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute3,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed3$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale3$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseComputeUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion3' from JSON`,
   );
 }
 
@@ -4994,6 +5286,12 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
   CreateManagerResponseStackSettings3,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: CreateManagerResponseDeploymentModel3$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -5065,6 +5363,111 @@ export function createManagerResponseSetupTerraformFromJSON(
     (x) =>
       CreateManagerResponseSetupTerraform$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'CreateManagerResponseSetupTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale2,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function createManagerResponsePoolsAutoscale2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed2,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function createManagerResponsePoolsFixed2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed2$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale2$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute2$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute2,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed2$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale2$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute2$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseComputeUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion2' from JSON`,
   );
 }
 
@@ -6765,6 +7168,12 @@ export const CreateManagerResponseStackSettings2$inboundSchema: z.ZodType<
   CreateManagerResponseStackSettings2,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: CreateManagerResponseDeploymentModel2$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -6831,6 +7240,111 @@ export function createManagerResponseSetupGoogleOauthFromJSON(
     (x) =>
       CreateManagerResponseSetupGoogleOauth$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'CreateManagerResponseSetupGoogleOauth' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale1,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function createManagerResponsePoolsAutoscale1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed1,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function createManagerResponsePoolsFixed1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed1$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale1$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute1$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute1,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed1$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale1$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute1$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseComputeUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion1' from JSON`,
   );
 }
 
@@ -8531,6 +9045,12 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
   CreateManagerResponseStackSettings1,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: CreateManagerResponseDeploymentModel1$inboundSchema
     .optional(),
   domains: z.nullable(

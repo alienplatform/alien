@@ -216,6 +216,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut default_state = None;
     let mut all_states = Vec::new();
     let mut get_binding_params_method = None;
+    let mut needs_update_method = None;
 
     for item in &item_impl.items {
         match item {
@@ -223,6 +224,12 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
                 // Check for get_binding_params method
                 if method.sig.ident == "get_binding_params" {
                     get_binding_params_method = Some(method.clone());
+                    continue;
+                }
+
+                // Check for needs_update method
+                if method.sig.ident == "needs_update" {
+                    needs_update_method = Some(method.clone());
                     continue;
                 }
 
@@ -299,6 +306,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         &terminal_states,
         &flow_entries,
         get_binding_params_method.as_ref(),
+        needs_update_method.as_ref(),
     );
 
     // Generate handler methods
@@ -463,12 +471,15 @@ fn generate_controller_impl(
     terminal_states: &[(Ident, ExprPath)],
     flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
     get_binding_params_method: Option<&ImplItemFn>,
+    needs_update_method: Option<&ImplItemFn>,
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
         generate_get_status_match_arms(state_enum_name, handlers, terminal_states);
     let transition_to_failure_body = generate_transition_to_failure(state_enum_name, handlers);
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
+    let transition_to_teardown_body =
+        generate_transition_to_teardown(state_enum_name, flow_entries);
     let transition_to_update_body = generate_transition_to_update(state_enum_name, flow_entries);
 
     let get_binding_params_impl = if let Some(method) = get_binding_params_method {
@@ -476,6 +487,21 @@ fn generate_controller_impl(
         let method_block = &method.block;
         quote! {
             fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+                #method_block
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let needs_update_impl = if let Some(method) = needs_update_method {
+        // Include the user's implementation directly in the trait
+        let method_block = &method.block;
+        quote! {
+            fn needs_update(
+                &self,
+                ctx: &crate::core::ResourceControllerContext<'_>,
+            ) -> crate::Result<bool> {
                 #method_block
             }
         }
@@ -525,6 +551,11 @@ fn generate_controller_impl(
                 #transition_to_delete_body
             }
 
+            fn transition_to_teardown_start(&mut self) -> crate::Result<()> {
+                use #state_enum_name::*;
+                #transition_to_teardown_body
+            }
+
             fn transition_to_update(&mut self) -> crate::Result<()> {
                 use #state_enum_name::*;
                 #transition_to_update_body
@@ -547,6 +578,8 @@ fn generate_controller_impl(
             }
 
             #get_binding_params_impl
+
+            #needs_update_impl
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;
@@ -699,6 +732,34 @@ fn generate_transition_to_update(
                 resource_id: None, // Not available in macro-generated transition methods
             }))
         }
+    }
+}
+
+fn generate_transition_to_teardown(
+    state_enum_name: &Ident,
+    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+) -> TokenStream2 {
+    if let Some((teardown_start_state, teardown_flow)) = flow_entries.get("Teardown") {
+        let allowed_states = &teardown_flow.from_states;
+        let allowed_states_str = allowed_states
+            .iter()
+            .map(|s| quote!(#s).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        quote! {
+            match &self.state {
+                #(#allowed_states)|* => {
+                    self.state = #state_enum_name::#teardown_start_state;
+                    Ok(())
+                }
+                _ => Err(alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                    message: format!("Cannot transition to teardown from state: {:?}. Allowed states: {}", self.state, #allowed_states_str),
+                    resource_id: None,
+                }))
+            }
+        }
+    } else {
+        generate_transition_to_delete(state_enum_name, flow_entries)
     }
 }
 

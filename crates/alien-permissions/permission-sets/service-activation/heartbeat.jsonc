@@ -16,6 +16,21 @@
           }
         }
       }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "predefinedRoles": ["Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      }
     ]
   }
 }

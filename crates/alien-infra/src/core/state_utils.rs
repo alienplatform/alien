@@ -1,4 +1,7 @@
-use alien_core::{ResourceLifecycle, ResourceStatus, StackResourceState, StackState};
+use alien_core::{
+    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackResourceState,
+    StackState,
+};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -230,7 +233,7 @@ pub trait StackStateExt {
     fn retry_failed(&mut self) -> Result<Vec<String>>;
 
     /// Prepares the stack for destroy operations by handling failed resources appropriately.
-    /// - For ProvisionFailed/UpdateFailed resources: transitions them to delete start
+    /// - For ProvisionFailed/UpdateFailed/RefreshFailed resources: transitions them to delete start
     /// - For DeleteFailed resources: retries the delete operation
     /// Returns the IDs of resources that were successfully prepared.
     fn prepare_for_destroy(&mut self) -> Result<Vec<String>>;
@@ -241,6 +244,19 @@ pub trait StackStateExt {
         &mut self,
         lifecycle_filter: &[ResourceLifecycle],
     ) -> Result<Vec<String>>;
+
+    /// Same as [`StackStateExt::prepare_for_destroy`], limited to resources
+    /// whose lifecycle matches the provided filter, and using setup teardown
+    /// transitions instead of runtime delete transitions.
+    fn prepare_for_teardown_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>>;
+
+    /// Same as [`StackStateExt::prepare_for_destroy`], limited to resources
+    /// owned by runtime cleanup: Live resources and Frozen resources with
+    /// explicit runtime cleanup before teardown.
+    fn prepare_for_runtime_cleanup_destroy(&mut self) -> Result<Vec<String>>;
 }
 
 impl StackStateExt for StackState {
@@ -272,35 +288,101 @@ impl StackStateExt for StackState {
     }
 
     fn prepare_for_destroy(&mut self) -> Result<Vec<String>> {
-        prepare_for_destroy_matching(self, |_| true)
+        prepare_for_destroy_matching(self, |_| Ok(true), DestroyPreparationMode::Teardown)
     }
 
     fn prepare_for_destroy_with_lifecycle_filter(
         &mut self,
         lifecycle_filter: &[ResourceLifecycle],
     ) -> Result<Vec<String>> {
-        prepare_for_destroy_matching(self, |resource_state| {
-            resource_state
-                .lifecycle
-                .is_some_and(|lifecycle| lifecycle_filter.contains(&lifecycle))
-        })
+        prepare_for_destroy_matching(
+            self,
+            |resource_state| {
+                Ok(lifecycle_filter.contains(&resource_lifecycle(
+                    resource_id_from_state(resource_state),
+                    resource_state,
+                )?))
+            },
+            DestroyPreparationMode::Delete,
+        )
     }
+
+    fn prepare_for_teardown_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>> {
+        prepare_for_destroy_matching(
+            self,
+            |resource_state| {
+                Ok(lifecycle_filter.contains(&resource_lifecycle(
+                    resource_id_from_state(resource_state),
+                    resource_state,
+                )?))
+            },
+            DestroyPreparationMode::Teardown,
+        )
+    }
+
+    fn prepare_for_runtime_cleanup_destroy(&mut self) -> Result<Vec<String>> {
+        prepare_for_destroy_matching(
+            self,
+            is_runtime_cleanup_resource,
+            DestroyPreparationMode::Delete,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestroyPreparationMode {
+    Delete,
+    Teardown,
+}
+
+fn resource_id_from_state(resource_state: &StackResourceState) -> &str {
+    resource_state.config.id()
+}
+
+fn resource_lifecycle(
+    resource_id: &str,
+    resource_state: &StackResourceState,
+) -> Result<ResourceLifecycle> {
+    resource_state.lifecycle.ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceLifecycleMissing {
+            resource_id: resource_id.to_string(),
+        })
+    })
+}
+
+fn is_runtime_cleanup_resource(resource_state: &StackResourceState) -> Result<bool> {
+    if resource_lifecycle(resource_id_from_state(resource_state), resource_state)?
+        == ResourceLifecycle::Live
+    {
+        return Ok(true);
+    }
+
+    Ok(
+        ownership_policy_for_resource_type(resource_state.config.resource_type().as_ref())
+            .has_runtime_cleanup_before_teardown(),
+    )
 }
 
 fn prepare_for_destroy_matching(
     stack_state: &mut StackState,
-    should_prepare: impl Fn(&StackResourceState) -> bool,
+    should_prepare: impl Fn(&StackResourceState) -> Result<bool>,
+    mode: DestroyPreparationMode,
 ) -> Result<Vec<String>> {
     let mut prepared_resource_ids = Vec::new();
 
     for (resource_id, resource_state) in &mut stack_state.resources {
-        if !should_prepare(resource_state) {
+        if !should_prepare(resource_state)? {
             continue;
         }
 
         match resource_state.status {
-            ResourceStatus::ProvisionFailed | ResourceStatus::UpdateFailed => {
-                // For provision/update failures during destroy, transition to delete start
+            ResourceStatus::ProvisionFailed
+            | ResourceStatus::UpdateFailed
+            | ResourceStatus::RefreshFailed => {
+                // For non-delete failures during destroy, transition to delete start.
                 match resource_state.get_internal_controller() {
                     Ok(Some(mut controller)) => {
                         tracing::info!(
@@ -329,16 +411,30 @@ fn prepare_for_destroy_matching(
                                 );
                             }
                             Err(e) => {
+                                if mode == DestroyPreparationMode::Teardown {
+                                    return Err(e);
+                                }
+
                                 tracing::warn!(
                                     resource_id = %resource_id,
                                     error = %e,
                                     "Cannot transition resource to delete start - this may indicate the resource doesn't support deletion from this state"
                                 );
-                                // Continue with other resources instead of failing the entire operation
                             }
                         }
                     }
                     Ok(None) => {
+                        if mode == DestroyPreparationMode::Teardown {
+                            return Err(AlienError::new(
+                                ErrorData::ResourceStateSerializationFailed {
+                                    resource_id: resource_id.clone(),
+                                    message:
+                                        "Missing controller state for setup-owned resource teardown"
+                                            .to_string(),
+                                },
+                            ));
+                        }
+
                         tracing::warn!(
                             resource_id = %resource_id,
                             "No internal controller state for failed resource - cannot transition to delete"
@@ -369,6 +465,46 @@ fn prepare_for_destroy_matching(
                             resource_id = %resource_id,
                             error = %e,
                             "Failed to retry delete operation for resource"
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            ResourceStatus::TeardownRequired if mode == DestroyPreparationMode::Teardown => {
+                match resource_state.get_internal_controller() {
+                    Ok(Some(mut controller)) => {
+                        tracing::info!(
+                            resource_id = %resource_id,
+                            "Transitioning resource to teardown start"
+                        );
+
+                        controller.transition_to_teardown_start()?;
+                        let next_status = controller.get_status();
+                        let next_outputs = controller.get_outputs();
+
+                        resource_state.set_internal_controller(Some(controller))?;
+                        resource_state.retry_attempt = 0;
+                        resource_state.error = None;
+                        resource_state.status = next_status;
+                        resource_state.outputs = next_outputs;
+                        resource_state.last_failed_state = None;
+
+                        prepared_resource_ids.push(resource_id.clone());
+                    }
+                    Ok(None) => {
+                        return Err(AlienError::new(
+                            ErrorData::ResourceStateSerializationFailed {
+                                resource_id: resource_id.clone(),
+                                message: "Missing controller state for teardown-required resource"
+                                    .to_string(),
+                            },
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            resource_id = %resource_id,
+                            error = %e,
+                            "Failed to deserialize controller state for teardown-required resource"
                         );
                         return Err(e);
                     }
@@ -484,6 +620,55 @@ mod tests {
         // Resource should now be in DeleteStart state
         let updated_resource = stack_state.resources.get("test-function").unwrap();
         assert_eq!(updated_resource.status, ResourceStatus::Deleting);
+
+        let controller = updated_resource
+            .get_internal_controller_typed::<TestWorkerController>()
+            .unwrap();
+        assert_eq!(controller.state, TestWorkerState::DeleteStart);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_for_destroy_refresh_failed() {
+        let mut stack_state = StackState::new(Platform::Test);
+
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        let mut failed_controller = TestWorkerController::default();
+        failed_controller.state = TestWorkerState::Ready;
+
+        let mut resource_state = StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(function_config),
+            None,
+            Vec::new(),
+        );
+        resource_state.status = ResourceStatus::RefreshFailed;
+        resource_state.error = Some(AlienError::new(GenericError {
+            message: "heartbeat failed".to_string(),
+        }));
+        resource_state.retry_attempt = 10;
+        resource_state
+            .set_internal_controller(Some(Box::new(failed_controller)))
+            .unwrap();
+
+        stack_state
+            .resources
+            .insert("test-function".to_string(), resource_state);
+
+        let prepared = stack_state.prepare_for_destroy().unwrap();
+
+        assert_eq!(prepared, vec!["test-function"]);
+
+        let updated_resource = stack_state.resources.get("test-function").unwrap();
+        assert_eq!(updated_resource.status, ResourceStatus::Deleting);
+        assert_eq!(updated_resource.retry_attempt, 0);
+        assert!(updated_resource.error.is_none());
+        assert!(updated_resource.last_failed_state.is_none());
 
         let controller = updated_resource
             .get_internal_controller_typed::<TestWorkerController>()

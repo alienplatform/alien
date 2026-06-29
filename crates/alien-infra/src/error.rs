@@ -104,6 +104,18 @@ pub enum ErrorData {
         dependency_id: String,
     },
 
+    /// Persisted resource state is missing lifecycle ownership metadata.
+    #[error(
+        code = "RESOURCE_LIFECYCLE_MISSING",
+        message = "Resource '{resource_id}' is missing lifecycle metadata required for scoped deletion",
+        retryable = "false",
+        internal = "false"
+    )]
+    ResourceLifecycleMissing {
+        /// ID of the resource missing lifecycle metadata
+        resource_id: String,
+    },
+
     /// Duplicate resource ID detected in stack configuration.
     #[error(
         code = "DUPLICATE_RESOURCE_ID",
@@ -409,6 +421,20 @@ pub enum ErrorData {
     )]
     HorizonApiError {
         /// Human-readable description of the error
+        message: String,
+        /// The cluster ID involved, if applicable
+        cluster_id: Option<String>,
+    },
+
+    /// Managed container API rejected a request that retrying will not fix.
+    #[error(
+        code = "HORIZON_API_REQUEST_REJECTED",
+        message = "Managed container API rejected the request: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    HorizonApiRequestRejected {
+        /// Human-readable description of the rejection
         message: String,
         /// The cluster ID involved, if applicable
         cluster_id: Option<String>,

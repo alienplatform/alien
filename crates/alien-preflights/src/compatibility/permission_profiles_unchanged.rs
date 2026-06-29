@@ -97,6 +97,7 @@ mod tests {
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -104,6 +105,7 @@ mod tests {
             resources: IndexMap::new(),
             permissions: permissions_config,
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesUnchangedCheck;
@@ -140,6 +142,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -150,6 +153,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesUnchangedCheck;
@@ -179,6 +183,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let new_stack = Stack {
@@ -189,6 +194,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesUnchangedCheck;

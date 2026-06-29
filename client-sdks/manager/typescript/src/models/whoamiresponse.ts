@@ -14,6 +14,13 @@ export type WhoamiResponse = {
   role: string;
   scope: ScopeInfo;
   workspaceId: string;
+  /**
+   * Required by the platform-SDK `ServiceAccountSubject` parser when
+   *
+   * @remarks
+   * the CLI looks up a deployment-group token by workspace name.
+   */
+  workspaceName: string;
 };
 
 /** @internal */
@@ -24,6 +31,7 @@ export const WhoamiResponse$inboundSchema: z.ZodType<WhoamiResponse, unknown> =
     role: z.string(),
     scope: ScopeInfo$inboundSchema,
     workspaceId: z.string(),
+    workspaceName: z.string(),
   });
 
 export function whoamiResponseFromJSON(

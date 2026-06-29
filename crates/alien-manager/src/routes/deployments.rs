@@ -1,7 +1,7 @@
 //! Deployment REST API endpoints.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -10,8 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DeleteScope,
-    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
+    EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings, StackState, WorkerOutputs,
     RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
@@ -58,6 +58,16 @@ pub struct DeploymentResponse {
     pub platform: Platform,
     pub status: String,
     pub deployment_group_id: String,
+    /// Required by the platform-SDK Deployment schema. Hard-coded to
+    /// alien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI
+    /// accepts the response.
+    pub deployment_protocol_version: u32,
+    /// Required by the platform-SDK Deployment schema. Standalone is
+    /// single-tenant; reuse the same synthetic project id used in the
+    /// deployment-groups route.
+    pub project_id: String,
+    /// Required by the platform-SDK Deployment schema.
+    pub workspace_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_settings: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,6 +127,7 @@ pub struct ListDeploymentsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ListDeploymentsQuery {
     pub deployment_group_id: Option<String>,
+    pub name: Option<String>,
     #[serde(default)]
     pub include: Vec<String>,
 }
@@ -128,11 +139,13 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let query_string = parts.uri.query().unwrap_or("");
         let mut deployment_group_id: Option<String> = None;
+        let mut name: Option<String> = None;
         let mut include: Vec<String> = Vec::new();
 
         for (key, value) in form_urlencoded::parse(query_string.as_bytes()) {
             match key.as_ref() {
                 "deploymentGroupId" => deployment_group_id = Some(value.into_owned()),
+                "name" => name = Some(value.into_owned()),
                 "include" | "include[]" => include.push(value.into_owned()),
                 _ => {}
             }
@@ -140,17 +153,26 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
 
         Ok(ListDeploymentsQuery {
             deployment_group_id,
+            name,
             include,
         })
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteQuery {
-    #[serde(default)]
-    pub force: bool,
-    pub delete_scope: Option<DeleteScope>,
+pub enum DeleteDeploymentAction {
+    Cleanup,
+    Detach,
+    Forget,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDeploymentRequest {
+    pub action: DeleteDeploymentAction,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +204,20 @@ pub struct ResourceEntry {
     pub public_url: Option<String>,
 }
 
+fn representative_public_url(
+    endpoints: &std::collections::HashMap<String, PublicEndpointOutput>,
+) -> Option<String> {
+    endpoints
+        .get("api")
+        .map(|endpoint| endpoint.url.clone())
+        .or_else(|| {
+            endpoints
+                .iter()
+                .min_by(|(left, _), (right, _)| left.cmp(right))
+                .map(|(_, endpoint)| endpoint.url.clone())
+        })
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -190,10 +226,8 @@ pub fn router() -> Router<AppState> {
             "/v1/deployments",
             post(create_deployment).get(list_deployments),
         )
-        .route(
-            "/v1/deployments/{id}",
-            get(get_deployment).delete(delete_deployment),
-        )
+        .route("/v1/deployments/{id}", get(get_deployment))
+        .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
@@ -215,6 +249,9 @@ fn record_to_response(
         platform: r.platform.clone(),
         status: r.status.clone(),
         deployment_group_id: r.deployment_group_id.clone(),
+        deployment_protocol_version: r.deployment_protocol_version,
+        project_id: "prj_standalone000000000000000000".to_string(),
+        workspace_id: "ws_standalone00000000000000".to_string(),
         stack_settings: r
             .stack_settings
             .as_ref()
@@ -236,7 +273,13 @@ fn record_to_response(
         import_source: r.import_source,
         retry_requested: r.retry_requested,
         created_at: r.created_at.to_rfc3339(),
-        updated_at: r.updated_at.map(|u| u.to_rfc3339()),
+        // Platform SDK requires `updatedAt`. Fall back to created_at when
+        // no update has happened yet.
+        updated_at: Some(
+            r.updated_at
+                .map(|u| u.to_rfc3339())
+                .unwrap_or_else(|| r.created_at.to_rfc3339()),
+        ),
         error: r.error.clone(),
         deployment_group,
         // Surface the agent self-update inventory.
@@ -378,6 +421,7 @@ async fn create_deployment(
                 stack_settings: req.stack_settings.unwrap_or_default(),
                 stack_state,
                 environment_variables: req.environment_variables,
+                input_values: Default::default(),
                 deployment_token: Some(raw_token.clone()),
             },
         )
@@ -434,6 +478,7 @@ async fn create_deployment(
     tag = "deployments",
     params(
         ("deploymentGroupId" = Option<String>, Query, description = "Filter by deployment group ID"),
+        ("name" = Option<String>, Query, description = "Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group."),
         ("include" = Option<Vec<String>>, Query, description = "Include related resources (e.g. deploymentGroup)"),
     ),
     responses(
@@ -467,8 +512,16 @@ async fn list_deployments(
         }
     };
 
+    if query.name.is_some() && deployment_group_id.is_none() {
+        return ErrorData::bad_request(
+            "name filter requires deploymentGroupId unless the token is scoped to a deployment group",
+        )
+        .into_response();
+    }
+
     let filter = DeploymentFilter {
         deployment_group_id,
+        name: query.name.clone(),
         ..Default::default()
     };
 
@@ -596,11 +649,15 @@ async fn get_deployment_info(
                 "worker" => stack_state
                     .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
                 "container" => stack_state
                     .get_resource_outputs::<ContainerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| o.url.clone()),
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
+                "daemon" => stack_state
+                    .get_resource_outputs::<DaemonOutputs>(resource_id)
+                    .ok()
+                    .and_then(|o| representative_public_url(&o.public_endpoints)),
                 _ => None,
             };
             resources.insert(
@@ -627,14 +684,13 @@ async fn get_deployment_info(
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
-    delete,
-    path = "/v1/deployments/{id}",
+    post,
+    path = "/v1/deployments/{id}/delete",
     tag = "deployments",
     params(
         ("id" = String, Path, description = "Deployment ID"),
-        ("force" = Option<bool>, Query, description = "Force delete without running cleanup (immediately removes record)"),
-        ("deleteScope" = Option<DeleteScope>, Query, description = "Delete scope: full or liveOnly"),
     ),
+    request_body = DeleteDeploymentRequest,
     responses(
         (status = 202, description = "Deployment deletion enqueued"),
         (status = 401, description = "Unauthorized"),
@@ -646,7 +702,7 @@ async fn delete_deployment(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(query): Query<DeleteQuery>,
+    Json(req): Json<DeleteDeploymentRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -662,35 +718,40 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    if query.force {
-        if let Err(e) = state
-            .deployment_store
-            .delete_deployment(&subject, &id)
-            .await
-        {
-            return e.into_response();
+    let message = match &req.action {
+        DeleteDeploymentAction::Cleanup => {
+            if let Err(e) = state
+                .deployment_store
+                .set_delete_pending(&subject, &id)
+                .await
+            {
+                return e.into_response();
+            }
+            match deployment.status.as_str() {
+                "teardown-required" => "Runtime cleanup complete; setup teardown required",
+                "teardown-failed" => {
+                    "Setup teardown failed; retry setup teardown with setup credentials"
+                }
+                _ => "Deployment deletion accepted",
+            }
         }
-    } else {
-        let Some(delete_scope) = query.delete_scope else {
-            return ErrorData::bad_request(
-                "deleteScope is required. Use deleteScope=liveOnly for setup handoff cleanup or deleteScope=full for setup/admin teardown.",
-            )
-            .into_response();
-        };
-
-        if let Err(e) = state
-            .deployment_store
-            .set_delete_pending(&subject, &id, delete_scope)
-            .await
-        {
-            return e.into_response();
+        DeleteDeploymentAction::Detach | DeleteDeploymentAction::Forget => {
+            if let Err(e) = state
+                .deployment_store
+                .delete_deployment(&subject, &id)
+                .await
+            {
+                return e.into_response();
+            }
+            "Deployment deletion accepted"
         }
-    }
+    };
 
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "message": "Deployment deletion enqueued"
+            "action": req.action,
+            "message": message
         })),
     )
         .into_response()
@@ -730,6 +791,7 @@ async fn retry_deployment(
     }
 
     let retryable_failed_statuses = [
+        "preflights-failed",
         "initial-setup-failed",
         "provisioning-failed",
         "refresh-failed",

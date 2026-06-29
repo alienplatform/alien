@@ -5,7 +5,7 @@ use crate::error::{ErrorData, Result};
 use crate::git_utils;
 use crate::interaction::InteractionMode;
 use crate::output::{can_prompt, prompt_confirm, prompt_select, prompt_text};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_platform_api::types;
 use alien_platform_api::SdkResultExt;
 use serde::{Deserialize, Serialize};
@@ -224,7 +224,7 @@ pub async fn create_new_project(
         None => {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message:
-                    "Project creation needs a name. Pass `alien link --name <project-name>` or run `alien link` in a real terminal."
+                    "Project creation needs a name. Pass `alien link --project <project-name>` or run `alien link` in a real terminal."
                         .to_string(),
             }))
         }
@@ -457,40 +457,43 @@ async fn validate_linked_project(
 pub async fn get_project_by_name(
     http: &AuthHttp,
     workspace: &str,
+    workspace_query: Option<&str>,
     project_name: &str,
 ) -> Result<ProjectLink> {
     let client = http.sdk_client();
-    let workspace_param = types::ListProjectsWorkspace::try_from(workspace)
+    let project_id_or_name = types::ProjectIdOrNamePathParam::try_from(project_name)
         .into_alien_error()
         .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: format!("Invalid workspace name format: '{workspace}'"),
+            field: "project".to_string(),
+            message: format!("Invalid project name format: '{project_name}'"),
         })?;
 
-    let response = client
-        .list_projects()
-        .workspace(&workspace_param)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to list projects".to_string(),
-            url: None,
-        })?;
+    let mut request = client.get_project().id_or_name(&project_id_or_name);
+    if let Some(workspace_query) = workspace_query {
+        let workspace_param = types::GetProjectWorkspace::try_from(workspace_query)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace name format: '{workspace_query}'"),
+            })?;
+        request = request.workspace(&workspace_param);
+    }
 
-    let project = response
-        .into_inner()
-        .items
-        .into_iter()
-        .find(|project| {
-            project.name.as_str() == project_name || project.id.as_str() == project_name
-        })
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::InvalidProjectName {
+    let project = match request.send().await.into_sdk_error() {
+        Ok(response) => response.into_inner(),
+        Err(error) if error.http_status_code == Some(404) => {
+            return Err(AlienError::new(ErrorData::InvalidProjectName {
                 project_name: project_name.to_string(),
                 reason: format!("Project '{project_name}' not found in workspace '{workspace}'"),
-            })
-        })?;
+            }));
+        }
+        Err(error) => {
+            return Err(error.context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to get project '{project_name}'"),
+                url: None,
+            }));
+        }
+    };
 
     Ok(ProjectLink::new(
         workspace.to_string(),

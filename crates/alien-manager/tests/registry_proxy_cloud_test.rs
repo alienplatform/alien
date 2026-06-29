@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    DeploymentModel, DeploymentState, DeploymentStatus, Ingress, Platform, ReadinessProbe,
-    ReleaseInfo, Stack, StackSettings, Worker, WorkerCode,
+    DeploymentModel, DeploymentState, DeploymentStatus, Platform, ReadinessProbe, ReleaseInfo,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
@@ -93,7 +93,11 @@ fn test_stack(function_id: &str, image_uri: &str) -> Stack {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .memory_mb(256)
         .timeout_seconds(30)
         .commands_enabled(false)
@@ -333,6 +337,7 @@ impl CloudProxyTest {
                     },
                     stack_state: None,
                     environment_variables: None,
+                    input_values: Default::default(),
                     deployment_token: Some(deploy_raw.clone()),
                 },
             )
@@ -432,10 +437,11 @@ impl CloudProxyTest {
             }),
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
         deployment_store
             .reconcile(
@@ -446,7 +452,6 @@ impl CloudProxyTest {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
-                    error: None,
                     suggested_delay_ms: None,
                     agent_version: None,
                     agent_os: None,

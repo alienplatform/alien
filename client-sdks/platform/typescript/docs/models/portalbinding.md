@@ -9,7 +9,7 @@ let value: PortalBinding = {
   id: "<id>",
   projectId: "<id>",
   projectName: "<value>",
-  hostname: "formal-guide.org",
+  hostname: "wilted-phrase.name",
 };
 ```
 

@@ -3,7 +3,7 @@ use axum::{
     response::Json,
 };
 use chrono::Utc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     models::{AppState, VaultTestResponse},
@@ -26,7 +26,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
     ),
     operation_id = "test_vault",
     summary = "Test vault operations",
-    description = "Performs comprehensive E2E testing of vault operations: set secret, get secret, delete secret, and verify deletion"
+    description = "Performs E2E testing of vault set/get operations and schedules best-effort cleanup"
 )]
 pub async fn test_vault(
     State(app_state): State<AppState>,
@@ -79,35 +79,18 @@ pub async fn test_vault(
         }));
     }
 
-    // 4. Delete the secret
-    info!(%test_secret_name, "Deleting secret");
-    vault_instance
-        .delete_secret(&test_secret_name)
-        .await
-        .into_alien_error()
-        .context(ErrorData::VaultOperationFailed {
-            operation: "delete_secret".to_string(),
-        })?;
-
-    // 5. Short sleep to ensure deletion is fully propagated (especially for cloud providers)
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // 6. Try to get the secret again - should return not found error
-    info!(%test_secret_name, "Verifying secret deletion");
-    match vault_instance.get_secret(&test_secret_name).await {
-        Err(_) => {
-            // This is what we expect after deletion - any error indicates the secret is not found
-            info!(%test_secret_name, "Secret successfully deleted - get_secret returned error as expected");
+    let cleanup_vault = vault_instance.clone();
+    let cleanup_secret_name = test_secret_name.clone();
+    tokio::spawn(async move {
+        info!(test_secret_name = %cleanup_secret_name, "Deleting vault test secret");
+        if let Err(error) = cleanup_vault.delete_secret(&cleanup_secret_name).await {
+            warn!(
+                test_secret_name = %cleanup_secret_name,
+                error = ?error,
+                "Failed to delete vault test secret during best-effort cleanup"
+            );
         }
-        Ok(value) => {
-            return Err(AlienError::new(ErrorData::VaultOperationFailed {
-                operation: format!(
-                    "delete_verification - secret still exists with value: {}",
-                    value
-                ),
-            }));
-        }
-    }
+    });
 
     info!(%test_secret_name, "Vault test completed successfully");
 

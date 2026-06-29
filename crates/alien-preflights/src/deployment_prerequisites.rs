@@ -8,8 +8,12 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, ComputeCluster, Container, DeploymentConfig, EnvironmentVariable,
-    ExposeProtocol, Platform, Stack, StackState, Worker,
+    ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig, EnvironmentVariable,
+    KubernetesCluster, PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack,
+    StackState, Worker,
+};
+use alien_permissions::{
+    generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
 
 fn is_cloud_platform(platform: Platform) -> bool {
@@ -28,12 +32,8 @@ fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
 
     for (resource_id, entry) in stack.resources() {
         if let Some(container) = entry.config.downcast_ref::<Container>() {
-            if container
-                .ports
-                .iter()
-                .any(|port| port.expose == Some(ExposeProtocol::Http))
-            {
-                resources.push(format!("container '{}' (exposed HTTP port)", resource_id));
+            if !container.public_endpoints.is_empty() {
+                resources.push(format!("container '{}' (public endpoint)", resource_id));
             }
         }
     }
@@ -129,6 +129,120 @@ impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
     }
 }
 
+/// Validates that AWS Live resource-scoped management permissions are emitted by setup.
+pub struct AwsLiveManagementPermissionsSetupCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AwsLiveManagementPermissionsSetupCheck {
+    fn description(&self) -> &'static str {
+        "AWS Live management permissions should be setup-owned"
+    }
+
+    fn should_run(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        stack_state.platform == Platform::Aws && stack.management().profile().is_some()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let mut errors = Vec::new();
+        let Some(profile) = stack.management().profile() else {
+            return Ok(CheckResult::success());
+        };
+
+        for (resource_id, permission_set_refs) in
+            profile.0.iter().filter(|(scope, _)| *scope != "*")
+        {
+            let Some(resource_entry) = stack.resources.get(resource_id) else {
+                continue;
+            };
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
+
+            for permission_set_ref in permission_set_refs {
+                let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.aws.is_none()
+                    || permission_set.id.ends_with("/provision")
+                {
+                    continue;
+                }
+                if aws_live_management_permission_is_setup_compilable(
+                    resource_id,
+                    resource_entry,
+                    &permission_set,
+                ) {
+                    continue;
+                }
+
+                errors.push(format!(
+                    "AWS management permission '{}' is scoped to Live resource '{}', but setup cannot compile a concrete grant for it before provisioning. The permission requires provider resource context that AWS setup does not know yet.",
+                    permission_set.id, resource_id
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
+fn aws_live_management_permission_is_setup_compilable(
+    resource_id: &str,
+    resource_entry: &ResourceEntry,
+    permission_set: &PermissionSet,
+) -> bool {
+    // This validates the provider-neutral AWS permission template with
+    // concrete setup-shaped values. Backend emitters still own Terraform or
+    // CloudFormation rendering details, so AWS permission JSONC should not use
+    // backend-only syntax such as CloudFormation ${!Sub} escapes.
+    let context = aws_live_management_setup_context(resource_id, resource_entry);
+    AwsRuntimePermissionsGenerator::new()
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .is_ok()
+}
+
+fn aws_live_management_setup_context(
+    resource_id: &str,
+    resource_entry: &ResourceEntry,
+) -> PermissionContext {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack")
+        .with_aws_region("us-east-1")
+        .with_aws_account_id("123456789012")
+        .with_managing_account_id("210987654321")
+        .with_resource_id(resource_id.to_string());
+
+    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+        return context.with_resource_name(format!("stack-{resource_id}"));
+    }
+
+    if resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .is_some()
+    {
+        return context.with_resource_name(resource_id.to_string());
+    }
+
+    context
+}
+
 /// Validates that targeted environment variables resolve to resources in the final stack.
 pub struct TargetResourcesResolveCheck;
 
@@ -178,6 +292,7 @@ fn environment_variable_target_resource_ids(stack: &Stack) -> Vec<&str> {
         .filter_map(|(id, entry)| {
             if entry.config.downcast_ref::<Worker>().is_some()
                 || entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<Daemon>().is_some()
             {
                 Some(id.as_str())
             } else {
@@ -248,12 +363,12 @@ fn target_resource_pattern_matches(
 mod tests {
     use super::*;
     use crate::runner::PreflightRunner;
-    use alien_core::permissions::PermissionProfile;
+    use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
         DomainMetadata, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-        Ingress, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
-        Storage, Worker, WorkerCode,
+        ExposeProtocol, PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry,
+        ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -276,7 +391,7 @@ mod tests {
             compute_backend: None,
             external_bindings: Default::default(),
             base_platform: None,
-            public_urls: None,
+            public_endpoints: None,
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
@@ -315,6 +430,8 @@ mod tests {
                     certificate_chain: None,
                     private_key: None,
                     issued_at: None,
+                    aliases: Vec::new(),
+                    endpoints: HashMap::new(),
                 },
             )]),
         }
@@ -337,6 +454,7 @@ mod tests {
                 PermissionProfile::new().global(["storage/data-read"]),
             ),
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 
@@ -383,7 +501,13 @@ mod tests {
                     })
                     .replicas(1)
                     .permissions("default".to_string())
-                    .expose_port(8080, ExposeProtocol::Http)
+                    .public_endpoint(PublicEndpoint {
+                        name: "api".to_string(),
+                        port: 8080,
+                        protocol: ExposeProtocol::Http,
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
                     .build(),
             ),
             lifecycle: ResourceLifecycle::Live,
@@ -400,7 +524,11 @@ mod tests {
                         image: "test:latest".to_string(),
                     })
                     .permissions("default".to_string())
-                    .ingress(Ingress::Public)
+                    .public_endpoint(WorkerPublicEndpoint {
+                        name: "api".to_string(),
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
                     .build(),
             ),
             lifecycle: ResourceLifecycle::Live,
@@ -413,6 +541,15 @@ mod tests {
         ResourceEntry {
             config: Resource::new(Storage::new(id.to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
+    fn create_live_storage_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(Storage::new(id.to_string()).build()),
+            lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
         }
@@ -509,6 +646,82 @@ mod tests {
         let check = DomainMetadataRequiredCheck;
 
         assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+    }
+
+    #[tokio::test]
+    async fn aws_live_management_permissions_allow_worker_dispatch_command() {
+        let mut resources = IndexMap::new();
+        resources.insert("job".to_string(), create_public_function_entry("job"));
+        let mut stack = create_stack(resources);
+        stack.permissions.management = ManagementPermissions::override_(
+            PermissionProfile::new().resource("job", ["worker/dispatch-command"]),
+        );
+        let config = deployment_config();
+        let check = AwsLiveManagementPermissionsSetupCheck;
+
+        assert!(check.should_run(&stack, &stack_state(Platform::Aws), &config));
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn aws_live_management_permissions_fail_for_unsupported_live_resource_scope() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_live_storage_entry("uploads"));
+        let mut stack = create_stack(resources);
+        stack.permissions.management = ManagementPermissions::override_(
+            PermissionProfile::new().resource("uploads", ["storage/data-read"]),
+        );
+        let config = deployment_config();
+        let check = AwsLiveManagementPermissionsSetupCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.errors[0].contains("storage/data-read"));
+        assert!(result.errors[0].contains("uploads"));
+        assert!(result.errors[0].contains("setup cannot compile"));
+    }
+
+    #[tokio::test]
+    async fn aws_live_management_permissions_ignore_frozen_resource_scope() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let mut stack = create_stack(resources);
+        stack.permissions.management = ManagementPermissions::override_(
+            PermissionProfile::new().resource("uploads", ["storage/data-read"]),
+        );
+        let config = deployment_config();
+        let check = AwsLiveManagementPermissionsSetupCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn aws_live_management_permissions_do_not_run_for_gcp_or_azure() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_live_storage_entry("uploads"));
+        let mut stack = create_stack(resources);
+        stack.permissions.management = ManagementPermissions::override_(
+            PermissionProfile::new().resource("uploads", ["storage/data-read"]),
+        );
+        let config = deployment_config();
+        let check = AwsLiveManagementPermissionsSetupCheck;
+
+        assert!(!check.should_run(&stack, &stack_state(Platform::Gcp), &config));
+        assert!(!check.should_run(&stack, &stack_state(Platform::Azure), &config));
     }
 
     #[tokio::test]

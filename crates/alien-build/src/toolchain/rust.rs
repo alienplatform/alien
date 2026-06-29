@@ -1,12 +1,13 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
 use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
-use alien_core::AlienEvent;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_core::{AlienEvent, CargoBuildStrategy};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Instant;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::{error, info, warn};
@@ -16,6 +17,11 @@ use tracing::{error, info, warn};
 pub struct RustToolchain {
     /// Name of the binary to build and run
     pub binary_name: String,
+}
+
+struct CargoProjectMetadata {
+    target_directory: PathBuf,
+    workspace_root: PathBuf,
 }
 
 impl RustToolchain {
@@ -75,7 +81,9 @@ impl RustToolchain {
 
     /// Generate cache key from Cargo.lock and build configuration
     async fn generate_cache_key(&self, context: &ToolchainContext) -> Result<String> {
-        let cargo_lock_hash = cache_utils::hash_files(&["**/Cargo.lock"], &context.src_dir).await?;
+        let cargo_metadata = self.get_cargo_metadata(&context.src_dir).await?;
+        let cargo_lock_hash =
+            cache_utils::hash_files(&["Cargo.lock"], &cargo_metadata.workspace_root).await?;
         let build_mode = if context.debug_mode {
             "debug"
         } else {
@@ -95,6 +103,10 @@ impl RustToolchain {
     /// In workspace scenarios, this returns the workspace target directory.
     /// Otherwise, it returns the project-local target directory.
     async fn get_target_directory(&self, src_dir: &Path) -> Result<PathBuf> {
+        Ok(self.get_cargo_metadata(src_dir).await?.target_directory)
+    }
+
+    async fn get_cargo_metadata(&self, src_dir: &Path) -> Result<CargoProjectMetadata> {
         // Use cargo metadata to get the actual target directory
         let metadata_output = Command::new("cargo")
             .args(&["metadata", "--format-version", "1", "--no-deps"])
@@ -137,14 +149,28 @@ impl RustToolchain {
                     build_output: None,
                 })
             })?;
+        let workspace_root = metadata
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ImageBuildFailed {
+                    resource_name: self.binary_name.clone(),
+                    reason: "cargo metadata missing workspace_root field".to_string(),
+                    build_output: None,
+                })
+            })?;
 
-        Ok(PathBuf::from(target_directory))
+        Ok(CargoProjectMetadata {
+            target_directory: PathBuf::from(target_directory),
+            workspace_root: PathBuf::from(workspace_root),
+        })
     }
 }
 
 #[async_trait]
 impl Toolchain for RustToolchain {
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        let build_started = Instant::now();
         info!("Building Rust project with binary: {}", self.binary_name);
 
         // Validate that this is a Rust project
@@ -203,6 +229,44 @@ impl Toolchain for RustToolchain {
                 info!("Successfully installed {}", package);
             } else {
                 info!("{} already installed", package);
+            }
+        }
+
+        if matches!(strategy, CargoBuildStrategy::Zigbuild) {
+            match Command::new("zig")
+                .arg("version")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    info!("Using zig {}", version.trim());
+                }
+                Ok(output) => {
+                    return Err(image_build_error_with_output(
+                        self.binary_name.clone(),
+                        "zig is required for cargo zigbuild but `zig version` failed",
+                        &output,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                        resource_name: self.binary_name.clone(),
+                        reason: "zig is required to build Linux musl Rust resources. Install zig and rerun `alien release`.".to_string(),
+                        build_output: None,
+                    }));
+                }
+                Err(error) => {
+                    return Err(error
+                        .into_alien_error()
+                        .context(ErrorData::ImageBuildFailed {
+                            resource_name: self.binary_name.clone(),
+                            reason: "Failed to execute `zig version`".to_string(),
+                            build_output: None,
+                        }));
+                }
             }
         }
 
@@ -335,6 +399,7 @@ impl Toolchain for RustToolchain {
         );
 
         // Use in_scope for automatic event lifecycle management
+        let compile_started = Instant::now();
         AlienEvent::CompilingCode {
             language: "rust".to_string(),
             progress: None,
@@ -394,6 +459,13 @@ impl Toolchain for RustToolchain {
             Ok(())
         })
         .await?;
+        info!(
+            "{} for binary '{}' target '{}' completed in {:.2}s",
+            build_command,
+            self.binary_name,
+            context.build_target.rust_target_triple(),
+            compile_started.elapsed().as_secs_f64()
+        );
 
         // Verify the binary was built
         if !binary_path.exists() {
@@ -415,27 +487,55 @@ impl Toolchain for RustToolchain {
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
-        // Workers on local platform use embedded runtime in agent (no runtime in image)
+        // Local native resources use embedded runtime in the agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
         let needs_runtime_in_image =
             context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Worker on local platform - runtime is embedded in operator
-            // Just package the application binary
+            // Local native resource - runtime is embedded in the agent
+            // Package the application binary, and any extra assets the project
+            // wants shipped alongside it. Convention: anything in a top-level
+            // `vendor/` directory next to Cargo.toml gets copied into the
+            // image under `/app/vendor/`. This is how a daemon can ship
+            // helper binaries or data files it needs at runtime without
+            // baking them into the Rust binary itself.
             let runtime_command = vec![format!("./{}", binary_filename)];
 
-            return Ok(ToolchainOutput {
-                build_strategy: super::ImageBuildStrategy::FromScratch {
-                    layers: vec![super::LayerSpec {
-                        files: vec![super::FileSpec {
-                            host_path: binary_path.clone(),
-                            container_path: format!("./{}", binary_filename),
-                            mode: Some(0o755), // Executable
-                        }],
-                        description: "Application binary".to_string(),
+            let mut layers = vec![super::LayerSpec {
+                files: vec![super::FileSpec {
+                    host_path: binary_path.clone(),
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755), // Executable
+                }],
+                description: "Application binary".to_string(),
+            }];
+
+            let vendor_dir = context.src_dir.join("vendor");
+            if vendor_dir.is_dir() {
+                info!(
+                    "Including vendor directory in image: {}",
+                    vendor_dir.display()
+                );
+                layers.push(super::LayerSpec {
+                    files: vec![super::FileSpec {
+                        host_path: vendor_dir,
+                        container_path: "./vendor".to_string(),
+                        mode: None,
                     }],
-                },
+                    description: "Vendor assets".to_string(),
+                });
+            }
+
+            info!(
+                "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
+                self.binary_name,
+                context.build_target.rust_target_triple(),
+                build_started.elapsed().as_secs_f64()
+            );
+
+            return Ok(ToolchainOutput {
+                build_strategy: super::ImageBuildStrategy::FromScratch { layers },
                 runtime_command,
             });
         }
@@ -448,17 +548,48 @@ impl Toolchain for RustToolchain {
         // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
         let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
 
-        Ok(ToolchainOutput {
+        let mut files_to_package = vec![super::FileSpec {
+            host_path: binary_path,
+            container_path: format!("./{}", binary_filename),
+            mode: Some(0o755),
+        }];
+
+        // Convention (mirrors the local-platform/from-scratch path): include
+        // a top-level `vendor/` directory next to Cargo.toml under `/app/vendor/`
+        // in the image. This is how a daemon ships helper binaries or data
+        // files it needs at runtime, for example a host loader bundling the
+        // binary it later installs onto the host. Without this,
+        // source-built cloud daemons can't ship vendored assets at all
+        // (the local path bundles them; this path silently dropped them).
+        let vendor_dir = context.src_dir.join("vendor");
+        if vendor_dir.is_dir() {
+            info!(
+                "Including vendor directory in image: {}",
+                vendor_dir.display()
+            );
+            files_to_package.push(super::FileSpec {
+                host_path: vendor_dir,
+                container_path: "./vendor".to_string(),
+                mode: None,
+            });
+        }
+
+        let output = ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![super::FileSpec {
-                    host_path: binary_path,
-                    container_path: format!("./{}", binary_filename),
-                    mode: Some(0o755),
-                }],
+                files_to_package,
             },
             runtime_command,
-        })
+        };
+
+        info!(
+            "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
+            self.binary_name,
+            context.build_target.rust_target_triple(),
+            build_started.elapsed().as_secs_f64()
+        );
+
+        Ok(output)
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {
@@ -567,6 +698,12 @@ version = "0.1.0"
         )
         .await
         .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src"))
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/main.rs"), "fn main() {}\n")
+            .await
+            .unwrap();
 
         fs::write(
             temp_dir.path().join("Cargo.lock"),

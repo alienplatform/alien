@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ComputeSettingsSchema } from "./compute-settings-schema.js";
 import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
@@ -16,7 +17,10 @@ import { UpdatesModeSchema } from "./updates-mode-schema.js";
  * @description User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager\'s ServiceAccount).
  */
 export const StackSettingsSchema = z.object({
-    get "deploymentModel"(){
+    get "compute"(){
+                return z.union([ComputeSettingsSchema, z.null()]).optional()
+              },
+get "deploymentModel"(){
                 return DeploymentModelSchema.describe("Deployment model: how updates are delivered to the remote environment.").optional()
               },
 get "domains"(){

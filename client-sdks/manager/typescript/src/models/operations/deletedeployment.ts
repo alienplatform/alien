@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
 export type DeleteDeploymentRequest = {
@@ -10,21 +11,13 @@ export type DeleteDeploymentRequest = {
    * Deployment ID
    */
   id: string;
-  /**
-   * Force delete without running cleanup (immediately removes record)
-   */
-  force?: boolean | undefined;
-  /**
-   * Delete scope: full or liveOnly
-   */
-  deleteScope?: models.DeleteScope | undefined;
+  deleteDeploymentRequest: models.DeleteDeploymentRequest;
 };
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
-  force?: boolean | undefined;
-  deleteScope?: string | undefined;
+  DeleteDeploymentRequest: models.DeleteDeploymentRequest$Outbound;
 };
 
 /** @internal */
@@ -33,8 +26,11 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
   DeleteDeploymentRequest
 > = z.object({
   id: z.string(),
-  force: z.boolean().optional(),
-  deleteScope: models.DeleteScope$outboundSchema.optional(),
+  deleteDeploymentRequest: models.DeleteDeploymentRequest$outboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    deleteDeploymentRequest: "DeleteDeploymentRequest",
+  });
 });
 
 export function deleteDeploymentRequestToJSON(

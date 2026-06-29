@@ -9,19 +9,12 @@
           "actions": [
             "elasticloadbalancing:CreateLoadBalancer",
             "elasticloadbalancing:CreateTargetGroup",
-            "elasticloadbalancing:CreateListener",
-            "elasticloadbalancing:AddTags"
+            "elasticloadbalancing:CreateListener"
           ]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
-            ],
+            "resources": ["*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -30,18 +23,44 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
-            ],
+            "resources": ["*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:AddTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
               }
             }
           }
@@ -82,7 +101,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -109,7 +128,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -135,7 +154,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -205,7 +224,7 @@
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -235,8 +254,39 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Containers own their ALB security group, but public managed-compute
+      // containers also need to add/remove one ingress rule on the setup-owned
+      // ComputeCluster security group so the ALB can reach host ports.
+      {
+        "label": "Manage setup compute security group ingress",
+        "grant": {
+          "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/resource-type": "compute-cluster",
+                "aws:ResourceTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/resource-type": "compute-cluster",
+                "aws:ResourceTag/${managedByTag}": "setup"
               }
             }
           }
@@ -253,6 +303,29 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
           }
         }
       },
@@ -276,7 +349,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -306,7 +379,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -350,7 +423,8 @@
             "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
-            "compute.globalForwardingRules.get"
+            "compute.globalForwardingRules.get",
+            "compute.zones.list"
           ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
@@ -366,7 +440,12 @@
       // Persistent Disks for stateful containers
       {
         "grant": {
-          "permissions": ["compute.disks.create", "compute.disks.delete", "compute.disks.get"]
+          "permissions": [
+            "compute.disks.create",
+            "compute.disks.delete",
+            "compute.disks.get",
+            "compute.zones.list"
+          ]
         },
         // Compute Engine uses project NAME in resource.name (not number).
         "binding": {

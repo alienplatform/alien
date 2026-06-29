@@ -6,35 +6,56 @@
 import { DeploymentPortalDomainResponse } from "@alienplatform/platform-api/models";
 
 let value: DeploymentPortalDomainResponse = {
-  deploymentPortalDomain: {
-    id: "dpd_56cfoqypfvtmlq2f6m54t33y",
+  deploymentPortalEndpoint: {
+    id: "dend_1bb6gdvm1bs74acqkjstcgv",
     workspaceId: "ws_It13CUaGEhLLAB87simX0",
-    projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    hostname: "lined-stay.org",
-    status: "pending-vercel",
-    managedDnsRecords: [],
-    retryAttempts: 327945,
-    createdAt: new Date("2025-09-14T17:52:57.276Z"),
-    updatedAt: new Date("2025-05-14T05:04:01.010Z"),
+    kind: "workspace_packages",
+    owner: {
+      type: "manager",
+      id: "<id>",
+    },
+    hostname: "twin-disk.biz",
+    status: "waiting_for_dns",
+    managedDnsRecords: [
+      {
+        name: "<value>",
+        type: "<value>",
+        value: "<value>",
+      },
+    ],
+    retryAttempts: 455485,
+    createdAt: new Date("2025-04-09T18:24:23.976Z"),
+    updatedAt: new Date("2025-01-30T06:43:41.751Z"),
   },
-  packageDomain: {
-    id: "pkgdom_9mgov33m1tfr2a3v80csx",
+  packageEndpoint: {
+    id: "dend_1bb6gdvm1bs74acqkjstcgv",
     workspaceId: "ws_It13CUaGEhLLAB87simX0",
     domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    hostname: "haunting-tomatillo.name",
-    status: "pending-health",
-    managedDnsRecords: [],
-    retryAttempts: 121408,
-    createdAt: new Date("2025-04-16T03:33:15.160Z"),
-    updatedAt: new Date("2025-09-25T10:57:15.624Z"),
+    kind: "manager_api",
+    owner: {
+      type: "manager",
+      id: "<id>",
+    },
+    hostname: "lively-injunction.com",
+    status: "waiting_for_health",
+    managedDnsRecords: [
+      {
+        name: "<value>",
+        type: "<value>",
+        value: "<value>",
+      },
+    ],
+    retryAttempts: 561042,
+    createdAt: new Date("2024-05-17T20:42:56.030Z"),
+    updatedAt: new Date("2026-03-18T20:42:00.688Z"),
   },
 };
 ```
 
 ## Fields
 
-| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `deploymentPortalDomain`                                             | [models.DeploymentPortalDomain](../models/deploymentportaldomain.md) | :heavy_check_mark:                                                   | N/A                                                                  |
-| `packageDomain`                                                      | [models.PackageDomain](../models/packagedomain.md)                   | :heavy_check_mark:                                                   | N/A                                                                  |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `deploymentPortalEndpoint`                           | [models.DomainEndpoint](../models/domainendpoint.md) | :heavy_check_mark:                                   | N/A                                                  |
+| `packageEndpoint`                                    | [models.DomainEndpoint](../models/domainendpoint.md) | :heavy_check_mark:                                   | N/A                                                  |

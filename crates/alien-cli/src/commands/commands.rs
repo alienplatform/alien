@@ -9,7 +9,6 @@ use crate::execution_context::ExecutionMode;
 use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_core::DeploymentStatus;
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use std::time::Duration;
 
@@ -148,74 +147,52 @@ async fn invoke_command(
     Ok(())
 }
 
-/// Resolve a deployment name to its ID using the typed manager SDK.
+/// Resolve a deployment spec to its ID and assert it's ready for commands.
+///
+/// Delegates lookup to the shared `deployment_resolver`; this wrapper layers
+/// on the "must be Running" check that's specific to command dispatch.
 async fn resolve_deployment_id(
     manager: &alien_manager_api::Client,
     name: &str,
     is_dev: bool,
 ) -> Result<String> {
-    let response = manager
-        .list_deployments()
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to list deployments".to_string(),
-            url: None,
-        })?;
+    let deployment = crate::deployment_resolver::resolve(manager, name, is_dev).await?;
 
-    let deployments = response.into_inner();
+    let status_raw = deployment.status.to_string();
+    let status = parse_deployment_status(&status_raw).ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "deployment.status".to_string(),
+            message: format!(
+                "Unknown deployment status '{}' for deployment '{}'.",
+                status_raw, name
+            ),
+        })
+    })?;
 
-    for deployment in &deployments.items {
-        if deployment.name.as_str() == name || deployment.id.as_str() == name {
-            let status_raw = deployment.status.to_string();
-            let status = parse_deployment_status(&status_raw).ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "deployment.status".to_string(),
-                    message: format!(
-                        "Unknown deployment status '{}' for deployment '{}'.",
-                        status_raw, name
-                    ),
-                })
-            })?;
-
-            if status != DeploymentStatus::Running {
-                let status_cmd = if is_dev {
-                    "alien dev deployments ls"
-                } else {
-                    "alien deployments ls"
-                };
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "deployment".to_string(),
-                    message: format!(
-                        "Deployment '{}' is '{}' and cannot receive commands yet. Wait until it reaches 'running' (check with `{}`).",
-                        name,
-                        deployment_status_str(status),
-                        status_cmd
-                    ),
-                }));
-            }
-            return Ok(deployment.id.to_string());
-        }
+    if status != DeploymentStatus::Running {
+        let status_cmd = if is_dev {
+            "alien dev deployments ls"
+        } else {
+            "alien deployments ls"
+        };
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment".to_string(),
+            message: format!(
+                "Deployment '{}' is '{}' and cannot receive commands yet. Wait until it reaches 'running' (check with `{}`).",
+                name,
+                deployment_status_str(status),
+                status_cmd
+            ),
+        }));
     }
 
-    let list_cmd = if is_dev {
-        "alien dev deployments ls"
-    } else {
-        "alien deployments ls"
-    };
-    Err(AlienError::new(ErrorData::ValidationError {
-        field: "deployment".to_string(),
-        message: format!(
-            "Deployment '{}' not found. Use '{}' to see available deployments.",
-            name, list_cmd
-        ),
-    }))
+    Ok(deployment.id.to_string())
 }
 
 fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
     match raw.to_ascii_lowercase().as_str() {
         "pending" => Some(DeploymentStatus::Pending),
+        "preflights-failed" => Some(DeploymentStatus::PreflightsFailed),
         "initial-setup" => Some(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Some(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Some(DeploymentStatus::Provisioning),
@@ -228,6 +205,8 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
         "delete-pending" => Some(DeploymentStatus::DeletePending),
         "deleting" => Some(DeploymentStatus::Deleting),
         "delete-failed" => Some(DeploymentStatus::DeleteFailed),
+        "teardown-required" => Some(DeploymentStatus::TeardownRequired),
+        "teardown-failed" => Some(DeploymentStatus::TeardownFailed),
         "deleted" => Some(DeploymentStatus::Deleted),
         "error" => Some(DeploymentStatus::Error),
         _ => None,
@@ -237,6 +216,7 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
 fn deployment_status_str(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights-failed",
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -249,6 +229,8 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::TeardownRequired => "teardown-required",
+        DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }

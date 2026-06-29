@@ -11,23 +11,28 @@ use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    ManagementConfig, NetworkSettings, Platform, ReleaseInfo, Stack, StackSettings, TelemetryMode,
-    UpdatesMode,
+    parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
+    Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo, Stack,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, TelemetryMode,
+    UpdatesMode, Worker,
 };
 use alien_deployment::{
-    loop_contract::{LoopOperation, LoopOutcome},
+    loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
-        acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+        acquire_setup_delete_deployment, acquire_setup_run_deployment, final_reconcile,
+        release_deployment, ManagerApiTransport,
     },
-    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
+    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use clap::Parser;
 use serde::Deserialize;
 use std::{
+    collections::{BTreeSet, HashMap},
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -38,6 +43,12 @@ use std::{
     after_help = "EXAMPLES:
     # Deploy to AWS using a deployment group token
     alien-deploy deploy --token ax_dg_abc123... --platform aws
+
+    # Deploy using a token file so the token is not exposed in argv
+    alien-deploy deploy --token-file /run/alien/token --platform local
+
+    # Deploy a local pull-model workload behind customer-managed ingress
+    alien-deploy deploy --token-file /run/alien/token --platform local --public-endpoint gateway.api=https://gateway.example.com
 
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
@@ -55,6 +66,10 @@ pub struct UpArgs {
     /// Authentication token (deployment or deployment group token)
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: Option<String>,
+
+    /// Read authentication token from a file.
+    #[arg(long, conflicts_with = "token")]
+    pub token_file: Option<PathBuf>,
 
     /// Manager URL override for pull-model platforms.
     /// Cloud push deployments resolve their manager and install context from
@@ -74,10 +89,6 @@ pub struct UpArgs {
     /// Base cloud platform for managed Kubernetes setup (aws, gcp, azure).
     #[arg(long, env = "ALIEN_BASE_PLATFORM")]
     pub base_platform: Option<String>,
-
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
 
     /// Deployment name (for tracking)
     #[arg(long)]
@@ -100,6 +111,14 @@ pub struct UpArgs {
     /// Defaults to ~/.alien/agent-data.
     #[arg(long)]
     pub data_dir: Option<String>,
+
+    /// Enable Local runtime debug commands and shells on the installed agent service.
+    #[arg(long)]
+    pub enable_local_debug: bool,
+
+    /// Override the shell command used by Local runtime debug shells.
+    #[arg(long)]
+    pub local_debug_shell_command: Option<String>,
 
     /// Kubernetes namespace for Helm installs.
     #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
@@ -125,6 +144,21 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Stack input value for setup (id=value).
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Secret stack input value for setup (id=value).
+    #[arg(long = "secret-input")]
+    pub secret_input_values: Vec<String>,
+
+    /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
+    ///
+    /// Intended for pull-model deployments where DNS, TLS, and ingress are
+    /// owned outside Alien. Repeat this flag for multiple endpoints.
+    #[arg(long = "public-endpoint")]
+    pub public_endpoints: Vec<String>,
+
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -144,6 +178,14 @@ struct DeployConfigFile {
     updates: Option<UpdatesMode>,
     /// Telemetry delivery mode.
     telemetry: Option<TelemetryMode>,
+    /// Static compute selections for Alien-managed runtime pools.
+    compute: Option<ComputeSettings>,
+    /// Generic public endpoint URLs for pull-model deployments.
+    public_endpoints: Option<PublicEndpointUrls>,
+    /// Deployer-provided stack inputs.
+    inputs: Option<HashMap<String, String>>,
+    /// Secret deployer-provided stack inputs.
+    secret_inputs: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -226,6 +268,8 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+    use std::io::Write;
 
     #[test]
     fn cloud_push_platforms_require_install_context() {
@@ -239,6 +283,203 @@ mod tests {
         assert!(!requires_install_context(Platform::Kubernetes));
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
+    }
+
+    #[test]
+    fn stack_settings_external_bindings_are_copied_to_deployment_config() {
+        let mut external_bindings = alien_core::ExternalBindings::new();
+        external_bindings.insert(
+            "storage",
+            alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("test-bucket")),
+        );
+        let stack_settings = StackSettings {
+            external_bindings: Some(external_bindings),
+            ..StackSettings::default()
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(stack_settings.clone())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+
+        assert!(!config.external_bindings.has("storage"));
+        apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
+
+        assert!(config.external_bindings.has("storage"));
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_public_endpoints() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+	name = "local-gateway"
+	platform = "local"
+
+	[publicEndpoints.gateway]
+	api = "https://gateway.example.test"
+	"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+
+        assert_eq!(config.name.as_deref(), Some("local-gateway"));
+        assert_eq!(
+            config
+                .public_endpoints
+                .as_ref()
+                .and_then(|resources| resources.get("gateway"))
+                .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
+    fn public_endpoint_flag_overrides_config_public_endpoint() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[publicEndpoints.gateway]
+api = "https://old.example.test"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--public-endpoint",
+            "gateway.api=https://new.example.test",
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let public_endpoints = load_public_endpoints(&args, Platform::Local, Some(&config))
+            .expect("public endpoints should load")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
+            Some("https://new.example.test")
+        );
+    }
+
+    #[test]
+    fn public_endpoint_flag_rejects_cloud_platforms() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "aws",
+            "--public-endpoint",
+            "gateway.api=https://gateway.example.test",
+        ]);
+
+        let error =
+            load_public_endpoints(&args, Platform::Aws, None).expect_err("aws should be rejected");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn public_endpoint_names_must_be_declared() {
+        let daemon = alien_core::Daemon::new("gateway".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let valid = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
+        )]);
+        validate_public_endpoint_names(&valid, &stack).expect("gateway exposes a public endpoint");
+
+        let invalid = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "missing".to_string(),
+                "https://missing.example.test".to_string(),
+            )]),
+        )]);
+        let error = validate_public_endpoint_names(&invalid, &stack)
+            .expect_err("missing endpoint should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_compute_pool_selection() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "cloud-runtime"
+platform = "aws"
+
+[compute.pools.general]
+mode = "autoscale"
+min = 2
+max = 5
+machine = "m8i.xlarge"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let settings = load_stack_settings(&args, Platform::Aws, Some(&config))
+            .expect("stack settings should load");
+        let selection = settings
+            .compute
+            .as_ref()
+            .and_then(|compute| compute.pools.get("general"))
+            .expect("general compute pool should be configured");
+
+        assert_eq!(selection.machine(), Some("m8i.xlarge"));
+        assert_eq!(selection.min_size(), 2);
+        assert_eq!(selection.max_size(), 5);
     }
 
     #[test]
@@ -297,6 +538,185 @@ mod tests {
     fn sanitize_kubernetes_dns_label_falls_back_when_empty() {
         assert_eq!(sanitize_kubernetes_dns_label("___"), "alien");
     }
+
+    #[test]
+    fn resolve_token_reads_token_file() {
+        let mut token_file = tempfile::NamedTempFile::new().expect("token file");
+        token_file
+            .write_all(b" ax_dg_file_token\n")
+            .expect("write token");
+
+        let cli = crate::Cli::try_parse_from([
+            "alien-deploy",
+            "deploy",
+            "--token-file",
+            token_file.path().to_str().expect("utf8 path"),
+            "--platform",
+            "local",
+        ])
+        .expect("parse deploy");
+        let crate::Commands::Deploy(args) = cli.command else {
+            panic!("expected deploy variant");
+        };
+
+        let token = resolve_token(&args, None).expect("token should resolve");
+        assert_eq!(token, "ax_dg_file_token");
+    }
+
+    #[test]
+    fn resolve_token_rejects_empty_token_file() {
+        let token_file = tempfile::NamedTempFile::new().expect("token file");
+
+        let cli = crate::Cli::try_parse_from([
+            "alien-deploy",
+            "deploy",
+            "--token-file",
+            token_file.path().to_str().expect("utf8 path"),
+            "--platform",
+            "local",
+        ])
+        .expect("parse deploy");
+        let crate::Commands::Deploy(args) = cli.command else {
+            panic!("expected deploy variant");
+        };
+
+        let error = resolve_token(&args, None).expect_err("empty token file should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    fn stack_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind,
+            provided_by: vec![StackInputProvider::Deployer],
+            required,
+            label: id.to_string(),
+            description: "Test input".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: vec![],
+        }
+    }
+
+    #[test]
+    fn deploy_config_file_accepts_stack_inputs() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[inputs]
+region = "us-east-1"
+
+[secretInputs]
+apiKey = "secret-value"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let values = collect_deployer_input_values(
+            &[
+                stack_input("region", StackInputKind::String, true),
+                stack_input("apiKey", StackInputKind::Secret, true),
+            ],
+            &[],
+            &[],
+            Some(&config),
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("region"), Some(&serde_json::json!("us-east-1")));
+        assert_eq!(
+            values.get("apiKey"),
+            Some(&serde_json::json!("secret-value"))
+        );
+    }
+
+    #[test]
+    fn stack_input_flags_override_config_values() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+platform = "local"
+
+[inputs]
+region = "old"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--input",
+            "region=new",
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+        let values = collect_deployer_input_values(
+            &[stack_input("region", StackInputKind::String, true)],
+            &args.input_values,
+            &args.secret_input_values,
+            Some(&config),
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("region"), Some(&serde_json::json!("new")));
+    }
+
+    #[test]
+    fn required_stack_inputs_fail_non_interactively() {
+        let error = collect_deployer_input_values(
+            &[stack_input("apiKey", StackInputKind::Secret, true)],
+            &[],
+            &[],
+            None,
+        )
+        .expect_err("missing required input should fail");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("Missing deployer input"));
+    }
+
+    #[test]
+    fn stack_input_values_are_typed() {
+        let values = collect_deployer_input_values(
+            &[
+                stack_input("replicas", StackInputKind::Integer, true),
+                stack_input("enabled", StackInputKind::Boolean, true),
+                stack_input("hosts", StackInputKind::StringList, true),
+            ],
+            &[
+                "replicas=3".to_string(),
+                "enabled=true".to_string(),
+                "hosts=a.example.com,b.example.com".to_string(),
+            ],
+            &[],
+            None,
+        )
+        .expect("input values should parse");
+
+        assert_eq!(values.get("replicas"), Some(&serde_json::json!(3)));
+        assert_eq!(values.get("enabled"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            values.get("hosts"),
+            Some(&serde_json::json!(["a.example.com", "b.example.com"]))
+        );
+    }
 }
 
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
@@ -308,19 +728,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let base_platform_str = resolved.base_platform;
     let name = resolved.name;
 
-    // Check for experimental platforms
-    if let Ok(p) = Platform::from_str(&platform_str) {
-        if p.is_experimental() && !args.experimental {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!(
-                    "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                    platform_str
-                ),
-            }));
-        }
-    }
-
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -328,6 +735,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })
     })?;
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
+    let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
+    let deployer_inputs = fetch_deployer_inputs(&resolved.base_url, &token, platform)
+        .await
+        .unwrap_or_else(|error| {
+            if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
+                output::warn(&format!(
+                    "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
+                ));
+            }
+            Vec::new()
+        });
+    let stack_input_values = collect_deployer_input_values(
+        &deployer_inputs,
+        &args.input_values,
+        &args.secret_input_values,
+        deploy_config.as_ref(),
+    )?;
 
     let display_platform = match platform_str.as_str() {
         "aws" => "AWS",
@@ -349,15 +773,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &install_context_platform_str,
             )
             .await?;
-            let management_config = context.management_config.ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                    "Platform API did not return installContext.managementConfig for {} deployment",
-                    install_context_platform.as_str()
-                ),
-                })
-            })?;
-            (context.manager_url, Some(management_config))
+            // `management_config` is required by the production SaaS API to
+            // describe the cross-account role used at provisioning time. The
+            // standalone manager returns it as `None` when it runs in a
+            // single-account setup (where the deployment account *is* the
+            // managing account and no cross-account access is involved);
+            // downstream code is already `Option<ManagementConfig>`-aware.
+            (context.manager_url, context.management_config)
         } else {
             match resolved.manager_url {
                 Some(url) => (url, None),
@@ -384,6 +806,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     }
     output::label_value("Manager", &manager_url);
     output::label_value("Name", &name);
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
+        let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
+        output::label_value("Public endpoints", &endpoint_count.to_string());
+    }
     eprintln!();
 
     let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
@@ -399,6 +825,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         base_platform,
         &name,
         &stack_settings,
+        stack_input_values,
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -430,10 +857,29 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         })?
         .into_inner();
 
-    if current_deployment.status == "running" {
+    if let Some(public_endpoints) = public_endpoints.as_ref() {
+        let release_id = current_deployment
+            .desired_release_id
+            .as_deref()
+            .or(current_deployment.current_release_id.as_deref())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "public-endpoint".to_string(),
+                    message:
+                        "Cannot validate public endpoints because the deployment has no release"
+                            .to_string(),
+                })
+            })?;
+        let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
+        validate_public_endpoint_names(public_endpoints, &stack)?;
+    }
+
+    if current_deployment.status == "running" && public_endpoints.is_none() {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
+    } else if current_deployment.status == "running" {
+        output::info("Deployment is already active; updating local agent public endpoint config.");
     }
 
     match (platform, base_platform) {
@@ -447,6 +893,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &name,
                 &stack_settings,
                 platform,
+                embedded_config,
+                public_endpoints.as_ref(),
             )
             .await?;
         }
@@ -519,6 +967,101 @@ fn release_stack_value_for_platform(
     }
 }
 
+async fn fetch_release_stack_by_id(
+    client: &ServerClient,
+    release_id: &str,
+    platform: Platform,
+) -> Result<Stack> {
+    let release = client
+        .get_release()
+        .id(release_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch release '{release_id}' from manager"),
+        })?
+        .into_inner();
+    let stack_value =
+        release_stack_value_for_platform(release.stack, platform).ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Release '{}' has no stack for platform {}",
+                    release_id,
+                    platform.as_str()
+                ),
+            })
+        })?;
+
+    serde_json::from_value(stack_value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to parse release stack from release '{release_id}'"),
+        })
+}
+
+fn validate_public_endpoint_names(
+    public_endpoints: &PublicEndpointUrls,
+    stack: &Stack,
+) -> Result<()> {
+    let valid_endpoints = public_endpoint_names(stack);
+    for (resource_id, endpoints) in public_endpoints {
+        for endpoint_name in endpoints.keys() {
+            let key = format!("{resource_id}.{endpoint_name}");
+            if valid_endpoints.contains(&key) {
+                continue;
+            }
+
+            let available = if valid_endpoints.is_empty() {
+                "none".to_string()
+            } else {
+                valid_endpoints
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!(
+                    "Endpoint '{key}' is not declared by the stack. Available public endpoints: {available}"
+                ),
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn public_endpoint_names(stack: &Stack) -> BTreeSet<String> {
+    stack
+        .resources()
+        .flat_map(|(resource_id, entry)| {
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                return daemon
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
+            }
+            if let Some(container) = entry.config.downcast_ref::<Container>() {
+                return container
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
+            }
+            if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                return worker
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| format!("{resource_id}.{}", endpoint.name))
+                    .collect::<Vec<_>>();
+            }
+            Vec::new()
+        })
+        .collect()
+}
+
 fn parse_base_platform(
     platform: Platform,
     base_platform: Option<&str>,
@@ -569,6 +1112,60 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
                 message: format!("Failed to parse deployment config {}", path.display()),
             })?;
     Ok(Some(config))
+}
+
+fn load_public_endpoints(
+    args: &UpArgs,
+    platform: Platform,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<Option<PublicEndpointUrls>> {
+    let mut public_endpoints = deploy_config
+        .and_then(|config| config.public_endpoints.clone())
+        .unwrap_or_default();
+    if !public_endpoints.is_empty() {
+        validate_public_endpoint_urls(&public_endpoints).context(ErrorData::ValidationError {
+            field: "publicEndpoints".to_string(),
+            message: "Invalid public endpoint URL in deployment config".to_string(),
+        })?;
+    }
+
+    let mut cli_endpoints = BTreeSet::new();
+    for value in &args.public_endpoints {
+        let (resource_id, endpoint_name, public_url) = parse_public_endpoint_assignment(value)
+            .context(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: "Expected --public-endpoint <resource-id>.<endpoint-name>=<absolute-url>"
+                    .to_string(),
+            })?;
+        let key = format!("{resource_id}.{endpoint_name}");
+        if !cli_endpoints.insert(key.clone()) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!("Duplicate public endpoint URL for '{key}'"),
+            }));
+        }
+        public_endpoints
+            .entry(resource_id)
+            .or_default()
+            .insert(endpoint_name, public_url);
+    }
+
+    if public_endpoints.is_empty() {
+        return Ok(None);
+    }
+
+    match platform {
+        Platform::Local => Ok(Some(public_endpoints)),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!(
+                    "--public-endpoint is currently supported only for local pull-model deployments, got '{}'",
+                    platform.as_str()
+                ),
+            }))
+        }
+    }
 }
 
 fn resolve_deployment_info(
@@ -665,6 +1262,9 @@ fn resolve_deployment_info(
 fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
     args.token
         .clone()
+        .map(Ok)
+        .or_else(|| args.token_file.as_ref().map(|path| read_token_file(path)))
+        .transpose()?
         .or_else(|| {
             embedded_config
                 .and_then(|c| c.token_env_var.as_ref())
@@ -683,6 +1283,22 @@ fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Re
                 ),
             })
         })
+}
+
+pub(crate) fn read_token_file(path: &Path) -> Result<String> {
+    let token = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: format!("Failed to read token file {}", path.display()),
+        },
+    )?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "token-file".to_string(),
+            message: format!("Token file {} is empty", path.display()),
+        }));
+    }
+    Ok(token)
 }
 
 fn resolve_base_url(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> String {
@@ -713,6 +1329,9 @@ fn load_stack_settings(
         if let Some(telemetry) = config.telemetry {
             settings.telemetry = telemetry;
         }
+        if let Some(compute) = config.compute.clone() {
+            settings.compute = Some(compute);
+        }
     }
 
     if args.network.network_mode != NetworkMode::Auto {
@@ -729,6 +1348,357 @@ fn load_stack_settings(
     }
 
     Ok(settings)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoResponse {
+    setup_config: Option<DeploymentInfoSetupConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoSetupConfig {
+    inputs: Option<Vec<StackInputDefinition>>,
+}
+
+async fn fetch_deployer_inputs(
+    base_url: &str,
+    token: &str,
+    platform: Platform,
+) -> Result<Vec<StackInputDefinition>> {
+    let http_client = {
+        use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Invalid token format".to_string(),
+                })?,
+        );
+        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to build HTTP client".to_string(),
+            })?
+    };
+
+    let url = format!("{}/v1/deployment-info", base_url.trim_end_matches('/'));
+    let response = http_client
+        .get(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to fetch deployment info from platform API".to_string(),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch deployment info (HTTP {status}): {body}"),
+        }));
+    }
+
+    let info: DeploymentInfoResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse deployment info response".to_string(),
+            })?;
+
+    Ok(info
+        .setup_config
+        .and_then(|setup_config| setup_config.inputs)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|input| stack_input_matches_context(input, platform))
+        .collect())
+}
+
+fn stack_input_matches_context(input: &StackInputDefinition, platform: Platform) -> bool {
+    if !input.provided_by.contains(&StackInputProvider::Deployer) {
+        return false;
+    }
+    if let Some(platforms) = &input.platforms {
+        if !platforms.contains(&platform) {
+            return false;
+        }
+    }
+    true
+}
+
+fn collect_deployer_input_values(
+    inputs: &[StackInputDefinition],
+    input_values: &[String],
+    secret_input_values: &[String],
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<HashMap<String, serde_json::Value>> {
+    let mut raw_values = HashMap::<String, String>::new();
+
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            raw_values.insert(id.clone(), value.clone());
+        }
+    }
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.secret_inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            raw_values.insert(id.clone(), value.clone());
+        }
+    }
+    for input in input_values {
+        let (id, value) = parse_stack_input_arg(input, "--input")?;
+        raw_values.insert(id, value);
+    }
+    for input in secret_input_values {
+        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
+        raw_values.insert(id, value);
+    }
+
+    if inputs.is_empty() {
+        return Ok(raw_values
+            .into_iter()
+            .map(|(id, value)| (id, serde_json::Value::String(value)))
+            .collect());
+    }
+
+    for id in raw_values.keys() {
+        if !inputs.iter().any(|input| input.id == *id) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("Unknown or unavailable deployer stack input '{id}'."),
+            }));
+        }
+    }
+
+    for input in inputs.iter().filter(|input| input.required) {
+        if raw_values.contains_key(&input.id) {
+            continue;
+        }
+        if !can_prompt() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!(
+                    "Missing deployer input: {}. Pass {} {}=... or add [{}] to deployment.toml.",
+                    input.label,
+                    if matches!(input.kind, StackInputKind::Secret) {
+                        "--secret-input"
+                    } else {
+                        "--input"
+                    },
+                    input.id,
+                    if matches!(input.kind, StackInputKind::Secret) {
+                        "secretInputs"
+                    } else {
+                        "inputs"
+                    }
+                ),
+            }));
+        }
+        let value = prompt_input_value(input)?;
+        raw_values.insert(input.id.clone(), value);
+    }
+
+    let mut values = HashMap::new();
+    for input in inputs {
+        let Some(raw_value) = raw_values.get(&input.id) else {
+            continue;
+        };
+        values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
+    }
+    Ok(values)
+}
+
+fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+        }));
+    };
+    if id.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id is required"),
+        }));
+    }
+    Ok((id.trim().to_string(), value.to_string()))
+}
+
+fn parse_stack_input_value(input: &StackInputDefinition, value: &str) -> Result<serde_json::Value> {
+    match input.kind {
+        StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+            validate_string_stack_input(input, value)?;
+            Ok(serde_json::Value::String(value.to_string()))
+        }
+        StackInputKind::Number => {
+            let number = value.parse::<f64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a number.", input.label),
+                })
+            })?;
+            serde_json::Number::from_f64(number)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: input.id.clone(),
+                        message: format!("{} must be a finite number.", input.label),
+                    })
+                })
+        }
+        StackInputKind::Integer => {
+            let number = value.parse::<i64>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be a whole number.", input.label),
+                })
+            })?;
+            Ok(serde_json::Value::Number(number.into()))
+        }
+        StackInputKind::Boolean => {
+            let parsed = value.parse::<bool>().map_err(|_| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be true or false.", input.label),
+                })
+            })?;
+            Ok(serde_json::Value::Bool(parsed))
+        }
+        StackInputKind::StringList => {
+            let values = value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| serde_json::Value::String(item.to_string()))
+                .collect::<Vec<_>>();
+            Ok(serde_json::Value::Array(values))
+        }
+    }
+}
+
+fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Result<()> {
+    if let Some(validation) = &input.validation {
+        if let Some(values) = &validation.values {
+            if !values.iter().any(|candidate| candidate == value) {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} must be one of: {}.", input.label, values.join(", ")),
+                }));
+            }
+        }
+        if let Some(min) = validation.min_length {
+            if value.len() < min as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too short.", input.label),
+                }));
+            }
+        }
+        if let Some(max) = validation.max_length {
+            if value.len() > max as usize {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: input.id.clone(),
+                    message: format!("{} is too long.", input.label),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn can_prompt() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+fn prompt_input_value(input: &StackInputDefinition) -> Result<String> {
+    let mut stderr = std::io::stderr();
+    let prompt = if matches!(input.kind, StackInputKind::Secret) {
+        format!("{} (secret): ", input.label)
+    } else if let Some(placeholder) = input.placeholder.as_deref() {
+        format!("{} [{}]: ", input.label, placeholder)
+    } else {
+        format!("{}: ", input.label)
+    };
+    stderr
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stderr.flush())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write input prompt".to_string(),
+        })?;
+
+    let value = if matches!(input.kind, StackInputKind::Secret) {
+        read_secret_line()?
+    } else {
+        let mut value = String::new();
+        std::io::stdin()
+            .read_line(&mut value)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to read input value".to_string(),
+            })?;
+        value
+    };
+    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        if let Some(placeholder) = input.placeholder.as_deref() {
+            return Ok(placeholder.to_string());
+        }
+    }
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn read_secret_line() -> Result<String> {
+    use std::os::fd::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    let original = unsafe {
+        if libc::tcgetattr(fd, termios.as_mut_ptr()) != 0 {
+            return read_line_with_echo();
+        }
+        termios.assume_init()
+    };
+    let mut hidden = original;
+    hidden.c_lflag &= !libc::ECHO;
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &hidden);
+    }
+
+    let result = read_line_with_echo();
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &original);
+    }
+    eprintln!();
+    result
+}
+
+#[cfg(not(unix))]
+fn read_secret_line() -> Result<String> {
+    read_line_with_echo()
+}
+
+fn read_line_with_echo() -> Result<String> {
+    let mut value = String::new();
+    std::io::stdin()
+        .read_line(&mut value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to read input value".to_string(),
+        })?;
+    Ok(value)
 }
 
 struct ManagerInstallContext {
@@ -852,6 +1822,7 @@ pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerCli
 fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
     match raw_status.to_ascii_lowercase().as_str() {
         "pending" => Ok(DeploymentStatus::Pending),
+        "preflights-failed" => Ok(DeploymentStatus::PreflightsFailed),
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
@@ -864,6 +1835,8 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "delete-pending" => Ok(DeploymentStatus::DeletePending),
         "deleting" => Ok(DeploymentStatus::Deleting),
         "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "teardown-required" => Ok(DeploymentStatus::TeardownRequired),
+        "teardown-failed" => Ok(DeploymentStatus::TeardownFailed),
         "deleted" => Ok(DeploymentStatus::Deleted),
         "error" => Ok(DeploymentStatus::Error),
         _ => Err(AlienError::new(ErrorData::ConfigurationError {
@@ -875,6 +1848,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
 fn deployment_status_str(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights-failed",
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -887,6 +1861,8 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::TeardownRequired => "teardown-required",
+        DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }
@@ -907,12 +1883,14 @@ async fn initialize_deployment(
     base_platform: Option<Platform>,
     name: &str,
     stack_settings: &StackSettings,
+    input_values: HashMap<String, serde_json::Value>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
+        input_values: input_values.into_iter().collect(),
     };
 
     let response = client
@@ -967,6 +1945,8 @@ async fn run_pull_model(
     deployment_name: &str,
     stack_settings: &StackSettings,
     platform: Platform,
+    embedded_config: Option<&DeployCliConfig>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     match platform {
         Platform::Kubernetes => {
@@ -981,7 +1961,19 @@ async fn run_pull_model(
             )
             .await
         }
-        _ => run_local_pull_model(args, manager_url, token, &platform.to_string()).await,
+        _ => {
+            run_local_pull_model(
+                args,
+                manager_url,
+                token,
+                deployment_id,
+                deployment_name,
+                &platform.to_string(),
+                embedded_config,
+                public_endpoints,
+            )
+            .await
+        }
     }
 }
 
@@ -989,26 +1981,35 @@ async fn run_local_pull_model(
     args: &UpArgs,
     manager_url: &str,
     token: &str,
+    deployment_id: &str,
+    deployment_name: &str,
     platform: &str,
+    embedded_config: Option<&DeployCliConfig>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
-    let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
-        use super::agent::generate_encryption_key_public;
-        generate_encryption_key_public()
-    });
-
     // Find or download the alien-agent binary
-    let binary_path = find_or_download_agent_binary().await?;
+    let binary_path = find_or_download_agent_binary(embedded_config).await?;
 
     output::info(&format!("Agent binary: {}", binary_path.display()));
 
     if args.foreground {
+        let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
+            use super::agent::generate_encryption_key_public;
+            generate_encryption_key_public()
+        });
+
         return run_agent_foreground(
             &binary_path,
             manager_url,
             token,
+            deployment_id,
+            deployment_name,
             platform,
             &encryption_key,
             args.data_dir.as_deref(),
+            public_endpoints,
+            args.enable_local_debug,
+            args.local_debug_shell_command.as_deref(),
         )
         .await;
     }
@@ -1020,9 +2021,14 @@ async fn run_local_pull_model(
         binary: Some(binary_path),
         sync_url: manager_url.to_string(),
         sync_token: token.to_string(),
+        deployment_id: Some(deployment_id.to_string()),
+        agent_name: Some(deployment_name.to_string()),
         platform: platform.to_string(),
         data_dir: None,
-        encryption_key: Some(encryption_key),
+        encryption_key: args.encryption_key.clone(),
+        public_endpoints: public_endpoints.cloned(),
+        enable_local_debug: args.enable_local_debug,
+        local_debug_shell_command: args.local_debug_shell_command.clone(),
     };
 
     super::agent::install_service(install_args)?;
@@ -1039,9 +2045,14 @@ async fn run_agent_foreground(
     binary_path: &std::path::Path,
     manager_url: &str,
     token: &str,
+    deployment_id: &str,
+    agent_name: &str,
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
+    public_endpoints: Option<&PublicEndpointUrls>,
+    enable_local_debug: bool,
+    local_debug_shell_command: Option<&str>,
 ) -> Result<()> {
     use std::io::Write;
 
@@ -1100,29 +2111,67 @@ async fn run_agent_foreground(
         );
     }
 
-    let status = tokio::process::Command::new(binary_path)
+    let mut public_endpoints_file = match public_endpoints {
+        Some(public_endpoints) => {
+            let mut file = tempfile::NamedTempFile::new().into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to create temp file for public endpoints".to_string(),
+                },
+            )?;
+            serde_json::to_writer(&mut file, public_endpoints)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to write public endpoints".to_string(),
+                })?;
+            Some(file)
+        }
+        None => None,
+    };
+
+    let mut command = tokio::process::Command::new(binary_path);
+    command
         .arg("--platform")
         .arg(platform)
         .arg("--sync-url")
         .arg(manager_url)
         .arg("--sync-token-file")
         .arg(sync_token_file.path())
+        .arg("--deployment-id")
+        .arg(deployment_id)
+        .arg("--agent-name")
+        .arg(agent_name)
         .arg("--encryption-key-file")
         .arg(encryption_key_file.path())
         .arg("--data-dir")
         .arg(&data_dir)
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to run agent: {}", binary_path.display()),
-        })?;
+        .stderr(std::process::Stdio::inherit());
+
+    if let Some(file) = public_endpoints_file.as_ref() {
+        command.arg("--public-endpoints-file").arg(file.path());
+    }
+    if enable_local_debug {
+        command.arg("--enable-local-debug");
+    }
+    if let Some(shell_command) = local_debug_shell_command {
+        command
+            .arg("--local-debug-shell-command")
+            .arg(shell_command);
+    }
+
+    let status =
+        command
+            .status()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to run agent: {}", binary_path.display()),
+            })?;
 
     // Tempfiles drop here, after the child exits.
     drop(sync_token_file);
     drop(encryption_key_file);
+    drop(public_endpoints_file.take());
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1432,7 +2481,9 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
 const DEFAULT_RELEASES_URL: &str = "https://releases.alien.dev";
 
 /// Find the alien-agent binary locally, or download it from the releases URL.
-async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
+async fn find_or_download_agent_binary(
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<std::path::PathBuf> {
     // Try to find it locally first
     if let Ok(path) = super::agent::which_agent_binary() {
         return Ok(path);
@@ -1456,14 +2507,18 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
 
     let binary_path = bin_dir.join("alien-agent");
 
-    let releases_url =
-        std::env::var("ALIEN_RELEASES_URL").unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
-
     let (os, arch) = detect_os_arch()?;
-    let url = format!(
-        "{}/alien-agent/latest/{}-{}/alien-agent",
-        releases_url, os, arch
-    );
+    let url = if let Some(url) = embedded_config.and_then(|config| config.agent_binary_url.as_ref())
+    {
+        url.clone()
+    } else {
+        let releases_url = std::env::var("ALIEN_RELEASES_URL")
+            .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
+        format!(
+            "{}/alien-agent/latest/{}-{}/alien-agent",
+            releases_url, os, arch
+        )
+    };
 
     output::info(&format!("Downloading alien-agent from {}...", url));
 
@@ -1576,6 +2631,15 @@ async fn run_push_model(
     .await
 }
 
+fn apply_external_bindings_from_stack_settings(
+    config: &mut DeploymentConfig,
+    stack_settings: &StackSettings,
+) {
+    if let Some(ref external_bindings) = stack_settings.external_bindings {
+        config.external_bindings = external_bindings.clone();
+    }
+}
+
 /// Run the push-model initial setup flow for a deployment.
 ///
 /// Fetches deployment and release state from the manager, acquires a sync lock,
@@ -1595,6 +2659,8 @@ pub async fn push_initial_setup(
     network_args: Option<&NetworkArgs>,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
 ) -> Result<()> {
+    let setup_management_config = management_config.clone();
+
     // Get deployment from manager
     let deployment = client
         .get_deployment()
@@ -1673,6 +2739,7 @@ pub async fn push_initial_setup(
         current_release: None,
         target_release,
         stack_state,
+        error: None,
         environment_info,
         runtime_metadata: None,
         retry_requested: deployment.retry_requested,
@@ -1741,12 +2808,7 @@ pub async fn push_initial_setup(
     config.deployment_token = Some(deployment_token.to_string());
     config.base_platform = base_platform;
 
-    // Extract external bindings from stack_settings (e.g., shared Container Apps Environment).
-    // The JSON deserialization above doesn't connect stack_settings.external_bindings to
-    // config.external_bindings, so we extract it explicitly.
-    if let Some(ref ext_bindings) = stack_settings.external_bindings {
-        config.external_bindings = ext_bindings.clone();
-    }
+    apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
     // Acquire sync lock — retry until the specific deployment is locked by us.
     // The manager's deployment loop may already hold the lock; we must wait for
@@ -1755,11 +2817,43 @@ pub async fn push_initial_setup(
     // holds the lock, it checks push-mode + Pending and releases immediately.
     // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    acquire_deployment(client, deployment_id, &session)
+    let acquired_deployment = acquire_setup_run_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock".to_string(),
         })?;
+
+    if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+        config = serde_json::from_value(acquired_config)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize deploymentConfig from acquired deployment"
+                    .to_string(),
+            })?;
+
+        if let Some(net_args) = network_args {
+            let network_platform = base_platform.unwrap_or(platform);
+            let network_override =
+                network::parse_network_settings(net_args, network_platform.as_str()).map_err(
+                    |e| {
+                        AlienError::new(ErrorData::ValidationError {
+                            field: "network".to_string(),
+                            message: e,
+                        })
+                    },
+                )?;
+            if let Some(ns) = network_override {
+                config.stack_settings.network = Some(ns);
+            }
+        }
+
+        config.manager_url = Some(manager_base_url.to_string());
+        config.deployment_token = Some(deployment_token.to_string());
+        config.management_config = setup_management_config.clone();
+        config.base_platform = base_platform.or(config.base_platform);
+        let acquired_stack_settings = config.stack_settings.clone();
+        apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
+    }
 
     // Re-fetch the deployment state now that we hold the lock.
     // The manager may have advanced the state while we were waiting.
@@ -1926,6 +3020,7 @@ pub async fn push_deletion(
         current_release: current_release.clone(),
         target_release: current_release,
         stack_state,
+        error: None,
         environment_info,
         runtime_metadata,
         retry_requested: deployment.retry_requested,
@@ -1955,9 +3050,11 @@ pub async fn push_deletion(
         message: "Failed to construct deployment config".to_string(),
     })?;
 
+    apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
+
     // Acquire sync lock with retry
     let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
-    acquire_deployment(client, deployment_id, &session)
+    acquire_setup_delete_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock for deletion".to_string(),
@@ -2003,17 +3100,62 @@ pub async fn push_deletion(
         delay_threshold: None,
     };
 
-    let runner_result = shared_run_step_loop(
-        &mut state,
-        &mut config,
-        &client_config,
-        deployment_id,
-        &policy,
-        &transport,
-        None,
-        None,
-    )
-    .await;
+    let runner_result = if matches!(
+        state.status,
+        DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
+    ) {
+        alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &client_config,
+            deployment_id,
+            &policy,
+            &transport,
+            None,
+        )
+        .await
+        .map(|setup_result| {
+            setup_result.unwrap_or_else(|| RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::Synced,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: state.status,
+                },
+                steps_executed: 0,
+            })
+        })
+    } else {
+        match shared_run_step_loop(
+            &mut state,
+            &mut config,
+            &client_config,
+            deployment_id,
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(result)
+                if result.loop_result.outcome == LoopOutcome::Success
+                    && state.status == DeploymentStatus::TeardownRequired =>
+            {
+                alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                    &mut state,
+                    &mut config,
+                    &client_config,
+                    deployment_id,
+                    &policy,
+                    &transport,
+                    None,
+                )
+                .await
+                .map(|setup_result| setup_result.unwrap_or(result))
+            }
+            other => other,
+        }
+    };
 
     // Always reconcile + release, even on error
     final_reconcile(client, deployment_id, &session, &state).await;
@@ -2029,12 +3171,17 @@ pub async fn push_deletion(
             output::success("Deployment deleted successfully.");
             Ok(())
         }
-        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
-            operation: format!(
+        LoopOutcome::Failure => {
+            let operation = format!(
                 "deletion failed at status {}",
                 deployment_status_str(result.loop_result.final_status)
-            ),
-        })),
+            );
+            if let Some(error) = state.error.clone() {
+                Err(error.context(ErrorData::DeploymentFailed { operation }))
+            } else {
+                Err(AlienError::new(ErrorData::DeploymentFailed { operation }))
+            }
+        }
         LoopOutcome::Neutral => Ok(()),
     }
 }

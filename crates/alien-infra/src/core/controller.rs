@@ -686,6 +686,14 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Returns the new state as a trait object.
     fn transition_to_delete_start(&mut self) -> Result<()>;
 
+    /// Transitions the resource state to begin privileged setup-owned teardown.
+    ///
+    /// Most resources use the same flow for runtime delete and setup teardown.
+    /// Controllers that keep runtime cleanup separate can override this.
+    fn transition_to_teardown_start(&mut self) -> Result<()> {
+        self.transition_to_delete_start()
+    }
+
     /// Transitions the resource state to begin an update process, if possible from the current state.
     /// This is typically called when the executor detects a config change for a resource in a `Running` or `UpdateFailed` status.
     /// It should update the internal state to the appropriate 'UpdateStart' status.
@@ -693,6 +701,17 @@ pub trait ResourceController: Send + Sync + Debug {
     /// # Returns
     /// Returns the new state boxed as a trait object if the transition is valid, otherwise None.
     fn transition_to_update(&mut self) -> Result<()>;
+
+    /// Returns whether this controller needs an update even when the resource
+    /// config itself is unchanged.
+    ///
+    /// Use this for deployment-level inputs that are intentionally not stored
+    /// inside `Resource`, such as managed endpoint metadata or runtime URL
+    /// overrides. The executor calls this only for stable resources that can
+    /// transition to update.
+    fn needs_update(&self, _context: &ResourceControllerContext<'_>) -> Result<bool> {
+        Ok(false)
+    }
 
     /// Derives the high-level ResourceStatus from the internal state.
     fn get_status(&self) -> ResourceStatus;
@@ -922,6 +941,12 @@ fn deserialize_controller_by_tag(
         "KubernetesContainerController" => deser!(crate::container::KubernetesContainerController),
         #[cfg(feature = "local")]
         "LocalContainerController" => deser!(crate::container::LocalContainerController),
+
+        // Daemon controllers
+        #[cfg(feature = "kubernetes")]
+        "KubernetesDaemonController" => deser!(crate::daemon::KubernetesDaemonController),
+        #[cfg(feature = "local")]
+        "LocalDaemonController" => deser!(crate::daemon::LocalDaemonController),
 
         // Container cluster controllers
         #[cfg(feature = "local")]

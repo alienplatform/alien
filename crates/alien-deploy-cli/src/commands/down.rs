@@ -8,9 +8,9 @@ use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
-use super::up::{create_manager_client, push_deletion};
+use super::up::{create_manager_client, push_deletion, read_token_file};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -34,6 +34,10 @@ pub struct DownArgs {
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: Option<String>,
 
+    /// Read authentication token from a file.
+    #[arg(long, conflicts_with = "token")]
+    pub token_file: Option<PathBuf>,
+
     /// Manager URL (optional if deployment is tracked)
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
@@ -52,8 +56,12 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
 
     let (token, manager_url, platform_str) = match tracker.get(&args.name) {
         Some(tracked) => {
-            let token = resolve_token(args.token.clone(), embedded_config)
-                .unwrap_or_else(|| tracked.token.clone());
+            let token = resolve_token(
+                args.token.clone(),
+                args.token_file.as_ref(),
+                embedded_config,
+            )?
+            .unwrap_or_else(|| tracked.token.clone());
             let url = args
                 .manager_url
                 .unwrap_or_else(|| tracked.manager_url.clone());
@@ -61,7 +69,12 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             (token, url, platform)
         }
         None => {
-            let token = resolve_token(args.token.clone(), embedded_config).ok_or_else(|| {
+            let token = resolve_token(
+                args.token.clone(),
+                args.token_file.as_ref(),
+                embedded_config,
+            )?
+            .ok_or_else(|| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "token".to_string(),
                     message: format!(
@@ -113,6 +126,10 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         .get("importSource")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
+    let deployment_status = deployment_json
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -132,7 +149,9 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         client
             .delete_deployment()
             .id(&deployment_id)
-            .force(true)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Forget,
+            })
             .send()
             .await
             .into_alien_error()
@@ -152,18 +171,28 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     }
 
     let total_steps = 3;
-    output::step(1, total_steps, "Requesting deployment deletion...");
+    if matches!(deployment_status, "teardown-required" | "teardown-failed") {
+        output::step(
+            1,
+            total_steps,
+            "Deletion already requested; continuing setup teardown...",
+        );
+    } else {
+        output::step(1, total_steps, "Requesting deployment deletion...");
 
-    client
-        .delete_deployment()
-        .id(&deployment_id)
-        .delete_scope(alien_manager_api::types::DeleteScope::Full)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::DeploymentFailed {
-            operation: "request deletion".to_string(),
-        })?;
+        client
+            .delete_deployment()
+            .id(&deployment_id)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DeploymentFailed {
+                operation: "request deletion".to_string(),
+            })?;
+    }
 
     output::step(
         2,
@@ -197,13 +226,17 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
 
 fn resolve_token(
     explicit_token: Option<String>,
+    token_file: Option<&PathBuf>,
     embedded_config: Option<&DeployCliConfig>,
-) -> Option<String> {
-    explicit_token
+) -> Result<Option<String>> {
+    Ok(explicit_token
+        .map(Ok)
+        .or_else(|| token_file.map(|path| read_token_file(path)))
+        .transpose()?
         .or_else(|| {
             embedded_config
                 .and_then(|c| c.token_env_var.as_ref())
                 .and_then(|env_var| std::env::var(env_var).ok())
         })
-        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
+        .or_else(|| embedded_config.and_then(|c| c.token.clone())))
 }

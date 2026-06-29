@@ -24,7 +24,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -84,7 +84,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -225,7 +225,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -258,7 +258,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -295,7 +295,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -332,7 +332,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -373,7 +373,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -412,7 +412,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -443,7 +443,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
@@ -478,7 +478,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
@@ -545,7 +545,6 @@
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
             "storage.buckets.get",
-            "storage.buckets.update",
             "iam.serviceAccounts.getIamPolicy",
             "iam.serviceAccounts.setIamPolicy",
             "compute.globalOperations.get",
@@ -614,6 +613,9 @@
             "Microsoft.App/managedEnvironments/daprComponents/write",
             "Microsoft.App/managedEnvironments/daprComponents/delete",
             "Microsoft.App/managedEnvironments/daprComponents/read",
+            "Microsoft.App/managedEnvironments/certificates/read",
+            "Microsoft.App/managedEnvironments/certificates/write",
+            "Microsoft.App/managedEnvironments/certificates/delete",
             "Microsoft.App/managedEnvironments/read",
             "Microsoft.App/managedEnvironments/join/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",

@@ -3,7 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
+    kubernetes_runtime_pod_labels, reconcile_environment_secret, EnvironmentVariableBuilder,
+    KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -88,6 +89,9 @@ impl KubernetesWorkerController {
         } else {
             None
         };
+        let env_secret_plan =
+            reconcile_environment_secret("worker", &config.id, &function_name, &namespace, ctx)
+                .await?;
 
         // Create the Deployment
         let deployment_client = ctx
@@ -101,6 +105,7 @@ impl KubernetesWorkerController {
                 &namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
+                env_secret_plan.as_ref(),
                 ctx,
             )
             .await?;
@@ -229,7 +234,7 @@ impl KubernetesWorkerController {
                 deployment_name,
                 namespace,
                 labels,
-                &config.ingress,
+                !config.public_endpoints.is_empty(),
                 config
                     .readiness_probe
                     .as_ref()
@@ -317,7 +322,7 @@ impl KubernetesWorkerController {
                     deployment_name,
                     namespace,
                     labels,
-                    &config.ingress,
+                    !config.public_endpoints.is_empty(),
                     config
                         .readiness_probe
                         .as_ref()
@@ -409,6 +414,9 @@ impl KubernetesWorkerController {
         } else {
             None
         };
+        let env_secret_plan =
+            reconcile_environment_secret("worker", &config.id, deployment_name, namespace, ctx)
+                .await?;
 
         let mut new_deployment = self
             .build_deployment(
@@ -417,6 +425,7 @@ impl KubernetesWorkerController {
                 namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
+                env_secret_plan.as_ref(),
                 ctx,
             )
             .await?;
@@ -537,7 +546,7 @@ impl KubernetesWorkerController {
                 deployment_name,
                 namespace,
                 labels,
-                &config.ingress,
+                !config.public_endpoints.is_empty(),
                 config
                     .readiness_probe
                     .as_ref()
@@ -712,9 +721,25 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: deployment_name.clone(),
-                url: self.public_endpoint.effective_public_url(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
-                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
+                public_endpoints: self
+                    .public_endpoint
+                    .effective_public_url()
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                host: alien_core::public_url_host(&url).unwrap_or_default(),
+                                url,
+                                wildcard_host: None,
+                                load_balancer_endpoint: self
+                                    .public_endpoint
+                                    .load_balancer_endpoint
+                                    .clone(),
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
                 commands_push_target: None, // Kubernetes uses polling
             }))
         } else {
@@ -783,7 +808,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("https://worker.example.test")
         );
     }
@@ -813,7 +841,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("http://k8s-worker.example.elb.amazonaws.com")
         );
     }
@@ -842,6 +873,7 @@ impl KubernetesWorkerController {
         namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(function_name);
@@ -872,6 +904,23 @@ impl KubernetesWorkerController {
         let (env_map, bindings) = env_builder.build_with_bindings();
 
         let mut env_vars = Vec::new();
+
+        if let Some(plan) = env_secret_plan {
+            for key in &plan.keys {
+                env_vars.push(EnvVar {
+                    name: key.clone(),
+                    value: None,
+                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
+                            name: plan.secret_name.clone(),
+                            key: key.clone(),
+                            optional: Some(false),
+                        }),
+                        ..Default::default()
+                    }),
+                });
+            }
+        }
 
         // Process bindings for Kubernetes SecretRefs
         for (binding_name, binding_json) in bindings {
@@ -971,6 +1020,9 @@ impl KubernetesWorkerController {
                 name: name.to_string(),
             }]
         });
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
+        });
 
         let pod_spec = PodSpec {
             service_account_name: Some(service_account_name.to_string()),
@@ -996,6 +1048,7 @@ impl KubernetesWorkerController {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(pod_labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),
@@ -1057,15 +1110,12 @@ mod tests {
     #[test]
     fn test_kubernetes_function_name() {
         // Test basic functionality
-        assert_eq!(
-            kubernetes_resource_name("my-stack", "my-func"),
-            "my-stack-my-func"
-        );
+        assert_eq!(kubernetes_resource_name("my-stack", "my-func"), "my-func");
 
         // Test character filtering and lowercasing
         assert_eq!(
             kubernetes_resource_name("My_Stack!", "Test#123"),
-            "my-stack-test-123"
+            "test-123"
         );
 
         // Test length truncation
@@ -1073,7 +1123,7 @@ mod tests {
         let long_id = "b".repeat(20);
         let result = kubernetes_resource_name(&long_prefix, &long_id);
         assert!(result.len() <= 63);
-        assert!(result.starts_with("aaa"));
+        assert_eq!(result, long_id);
     }
 
     #[test]

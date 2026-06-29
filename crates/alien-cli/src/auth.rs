@@ -1,7 +1,7 @@
 // Authentication module: OAuth/API-key auth and workspace/profile store
 //
 // Core types (AuthHttp, AuthOpts, load_workspace, save_workspace) are always available.
-// OAuth flow, keyring storage, and interactive login require the `platform` feature.
+// OAuth flow, session storage, and interactive login require the `platform` feature.
 
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
@@ -176,12 +176,12 @@ pub fn build_auth_http(client: Client, base_url: String, bearer_token: Option<St
     }
 }
 
-// --- Platform-only: OAuth flow, keyring, interactive login ---
+// --- Platform-only: OAuth flow, session storage, interactive login ---
 
 #[cfg(feature = "platform")]
 mod oauth_flow {
     use super::*;
-    use alien_error::{AlienError, Context, IntoAlienError};
+    use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
     use axum::extract::Query;
     use axum::response::{Html, IntoResponse};
     use axum::routing::get;
@@ -189,77 +189,133 @@ mod oauth_flow {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
     use chrono::{DateTime, Duration, Utc};
-    use oauth2::basic::BasicClient;
+    use oauth2::basic::{BasicClient, BasicErrorResponseType};
     use oauth2::TokenResponse as OAuth2TokenResponse;
     use oauth2::{
         AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
-        RedirectUrl, RefreshToken, Scope, TokenUrl,
+        RedirectUrl, RefreshToken, RequestTokenError, Scope, TokenUrl,
     };
     use std::collections::HashMap;
     use std::net::SocketAddr;
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
 
-    #[cfg(debug_assertions)]
-    use debug_keyring::Entry;
-    #[cfg(not(debug_assertions))]
-    use keyring::Entry;
-
-    const SERVICE: &str = "alien-cli";
-    const ACCESS_USER: &str = "access_token";
-    const REFRESH_USER: &str = "refresh_token";
     const DEFAULT_BASE: &str = "https://api.alien.dev";
     const CLI_CLIENT_ID: &str = "alien-cli";
 
     const OAUTH_CALLBACK_PORTS: &[u16] = &[20350, 20351, 20352, 20353, 20354];
 
-    /// In-memory cache for tokens to reduce keyring access
-    #[derive(Debug, Clone)]
-    struct TokenCache {
-        access_token: Option<String>,
+    /// Saved OAuth session, one JSON file next to `profile.json`.
+    ///
+    /// A file instead of the OS keychain: released CLI binaries are ad-hoc
+    /// signed, and macOS ties keychain items to the creating binary's
+    /// signature — after any upgrade the new binary is denied access to the
+    /// saved session and every command would need a fresh browser login.
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredTokens {
+        /// OAuth access token, sent as the Bearer credential.
+        access_token: String,
+        /// Refresh token used to mint a new access token after expiry.
         refresh_token: Option<String>,
-        last_updated: DateTime<Utc>,
     }
 
-    impl TokenCache {
-        fn new() -> Self {
-            Self {
-                access_token: None,
-                refresh_token: None,
-                last_updated: Utc::now(),
+    struct TokenStore {
+        path: PathBuf,
+    }
+
+    impl TokenStore {
+        fn new() -> Result<Self> {
+            // Refuse to fall back to the working directory: credentials
+            // written into a project tree can end up committed.
+            let config_dir = config_dir().ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "No user config directory found to store the login session"
+                        .to_string(),
+                })
+            })?;
+            Ok(Self {
+                path: config_dir.join("alien").join("credentials.json"),
+            })
+        }
+
+        /// `Ok(None)` when no session has been saved yet.
+        fn load(&self) -> Result<Option<StoredTokens>> {
+            if !self.path.exists() {
+                return Ok(None);
+            }
+            let content = fs::read_to_string(&self.path).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: self.path.display().to_string(),
+                    reason: "Failed to read the saved login session".to_string(),
+                },
+            )?;
+            let tokens = serde_json::from_str(&content).into_alien_error().context(
+                ErrorData::JsonError {
+                    operation: "parse".to_string(),
+                    reason: format!(
+                    "Saved login session at {} is not valid JSON; run `alien login` to recreate it",
+                    self.path.display()
+                ),
+                },
+            )?;
+            Ok(Some(tokens))
+        }
+
+        fn save(&self, tokens: &StoredTokens) -> Result<()> {
+            let dir = self.path.parent().expect("credentials path has a parent");
+            fs::create_dir_all(dir)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "create directory".to_string(),
+                    file_path: dir.display().to_string(),
+                    reason: "Failed to create config directory".to_string(),
+                })?;
+            let json = serde_json::to_string_pretty(tokens)
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "serialize".to_string(),
+                    reason: "Failed to serialize login session".to_string(),
+                })?;
+            alien_core::file_utils::write_secret_file(&self.path, json.as_bytes())
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: self.path.display().to_string(),
+                    reason: "Failed to write the login session".to_string(),
+                })
+        }
+
+        /// Persist tokens from a login or refresh response, keeping the
+        /// existing refresh token when the response doesn't carry a new one.
+        fn save_response(&self, t: &TokenResponse) -> Result<()> {
+            // A corrupt existing file must not block `alien login` — it gets
+            // rewritten here; only the previous refresh token would be lost.
+            let existing_refresh = self.load().ok().flatten().and_then(|s| s.refresh_token);
+            self.save(&StoredTokens {
+                access_token: t.access_token.clone(),
+                refresh_token: t.refresh_token.clone().or(existing_refresh),
+            })
+        }
+
+        fn clear(&self) -> Result<()> {
+            match fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "delete".to_string(),
+                        file_path: self.path.display().to_string(),
+                        reason: "Failed to delete the saved login session".to_string(),
+                    })),
             }
         }
-
-        fn is_stale(&self) -> bool {
-            Utc::now().signed_duration_since(self.last_updated) > Duration::minutes(5)
-        }
-
-        fn update_tokens(&mut self, access: Option<String>, refresh: Option<String>) {
-            self.access_token = access;
-            self.refresh_token = refresh;
-            self.last_updated = Utc::now();
-        }
-
-        fn clear(&mut self) {
-            self.access_token = None;
-            self.refresh_token = None;
-            self.last_updated = Utc::now();
-        }
     }
 
-    static TOKEN_CACHE: OnceLock<Mutex<TokenCache>> = OnceLock::new();
-
-    fn get_cache() -> &'static Mutex<TokenCache> {
-        TOKEN_CACHE.get_or_init(|| Mutex::new(TokenCache::new()))
-    }
-
-    fn with_cache<T>(f: impl FnOnce(&mut TokenCache) -> T) -> T {
-        let cache = get_cache();
-        let mut guard = cache.lock().unwrap();
-        f(&mut guard)
-    }
-
-    /// Build an authenticated HTTP handle (uses API key if present; else OAuth tokens)
+    /// Build an authenticated HTTP handle: API key if given, else the saved
+    /// session (refreshed when expired), else interactive login.
     pub async fn get_auth_http(opts: &AuthOpts) -> Result<AuthHttp> {
         let base_url = opts
             .base_url
@@ -272,20 +328,25 @@ mod oauth_flow {
             return Ok(build_auth_http(client, base_url, Some(api_key)));
         }
 
-        match try_bearer_client(&base_url).await {
-            Ok(client) => {
-                let token = extract_bearer_token(&client)?;
-                Ok(build_auth_http(client, base_url, Some(token)))
-            }
-            Err(_) => {
-                let success_url = derive_dashboard_success_url(&base_url);
-                let tokens = login_pkce(&base_url, opts.no_browser, success_url.as_deref()).await?;
-                store_tokens(&tokens)?;
-                let auth_value = format!("Bearer {}", tokens.access_token);
-                let client = client_with_header(&auth_value)?;
-                Ok(build_auth_http(client, base_url, Some(tokens.access_token)))
-            }
+        if let Some((client, access_token)) = saved_session_client(&base_url).await? {
+            return Ok(build_auth_http(client, base_url, Some(access_token)));
         }
+
+        // No usable session. Interactive login needs a human at a real
+        // terminal — headless, the browser callback would never complete, so
+        // fail with the next step instead of waiting forever.
+        if !crate::output::can_prompt() {
+            return Err(AlienError::new(ErrorData::LoginRequired {
+                reason: "no usable login session on this machine".to_string(),
+            }));
+        }
+
+        let success_url = derive_dashboard_success_url(&base_url);
+        let tokens = login_pkce(&base_url, opts.no_browser, success_url.as_deref()).await?;
+        store_tokens(&tokens)?;
+        let auth_value = format!("Bearer {}", tokens.access_token);
+        let client = client_with_header(&auth_value)?;
+        Ok(build_auth_http(client, base_url, Some(tokens.access_token)))
     }
 
     /// Force a fresh login flow (for explicit login command)
@@ -295,7 +356,7 @@ mod oauth_flow {
             .clone()
             .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-        logout();
+        logout()?;
 
         if let Some(api_key) = opts.api_key.clone() {
             let auth_value = format!("Bearer {}", api_key);
@@ -311,11 +372,19 @@ mod oauth_flow {
     }
 
     /// Explicit logout util
-    pub fn logout() {
-        let _ = Entry::new(SERVICE, ACCESS_USER).and_then(|e| e.delete_credential());
-        let _ = Entry::new(SERVICE, REFRESH_USER).and_then(|e| e.delete_credential());
-        let _ = std::fs::remove_file(cfg_path());
-        with_cache(|cache| cache.clear());
+    pub fn logout() -> Result<()> {
+        TokenStore::new()?.clear()?;
+        match fs::remove_file(cfg_path()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "delete".to_string(),
+                    file_path: cfg_path().display().to_string(),
+                    reason: "Failed to delete the saved workspace profile".to_string(),
+                })),
+        }
     }
 
     /* ── internals ─────────────────────────────────────────────────────────── */
@@ -356,108 +425,47 @@ mod oauth_flow {
         }))
     }
 
-    fn extract_bearer_token(_client: &Client) -> Result<String> {
-        let cached_tokens = with_cache(|cache| cache.access_token.clone());
-        cached_tokens.ok_or_else(|| {
-            AlienError::new(ErrorData::AuthenticationFailed {
-                reason: "No bearer token available".to_string(),
-            })
-        })
-    }
-
-    pub async fn try_bearer_client(base_url: &str) -> Result<Client> {
-        let cached_tokens = with_cache(|cache| {
-            if cache.is_stale() {
-                cache.clear();
-                None
-            } else {
-                cache.access_token.clone()
-            }
-        });
-
-        let access_token = if let Some(token) = cached_tokens {
-            if token_expired(&token, 30) {
-                refresh_cached_token(base_url).await?
-            } else {
-                token
-            }
-        } else {
-            load_tokens_from_keyring(base_url).await?
+    /// Resolve a usable session from the saved tokens.
+    ///
+    /// `Ok(None)` means there is no usable session — nothing saved, the access
+    /// token expired with no refresh token, or the server rejected the refresh
+    /// token — and only a fresh login can produce one. Every other failure is
+    /// an error: a new browser login wouldn't fix it, so the caller must not
+    /// fall back to one.
+    async fn saved_session_client(base_url: &str) -> Result<Option<(Client, String)>> {
+        let store = TokenStore::new()?;
+        let Some(saved) = store.load()? else {
+            return Ok(None);
         };
 
-        client_with_header(&format!("Bearer {}", access_token))
-    }
-
-    async fn load_tokens_from_keyring(base_url: &str) -> Result<String> {
-        let access = Entry::new(SERVICE, ACCESS_USER)
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to create keyring entry".to_string(),
-            })?
-            .get_password()
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to get access token from keyring".to_string(),
-            })?;
-        if access.trim().is_empty() {
-            return Err(AlienError::new(ErrorData::AuthenticationFailed {
-                reason: "No access token".to_string(),
-            }));
-        }
-
-        let refresh = Entry::new(SERVICE, REFRESH_USER)
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to create refresh token keyring entry".to_string(),
-            })?
-            .get_password()
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to get refresh token from keyring".to_string(),
-            })
-            .ok();
-
-        with_cache(|cache| {
-            cache.update_tokens(Some(access.clone()), refresh);
-        });
-
-        if token_expired(&access, 30) {
-            refresh_cached_token(base_url).await
+        let access_token = if token_expired(&saved.access_token, 30) {
+            let Some(refresh) = saved.refresh_token else {
+                return Ok(None);
+            };
+            match refresh_token(base_url, &refresh).await? {
+                RefreshOutcome::Refreshed(new_tokens) => {
+                    let access = new_tokens.access_token.clone();
+                    store.save(&StoredTokens {
+                        access_token: new_tokens.access_token,
+                        // The provider rotates refresh tokens; if a response
+                        // ever omits one, the current token is still valid.
+                        refresh_token: new_tokens.refresh_token.or(Some(refresh)),
+                    })?;
+                    access
+                }
+                RefreshOutcome::Rejected => return Ok(None),
+            }
         } else {
-            Ok(access)
-        }
-    }
-
-    async fn refresh_cached_token(base_url: &str) -> Result<String> {
-        let cached_refresh_token = with_cache(|cache| cache.refresh_token.clone());
-
-        let refresh = match cached_refresh_token {
-            Some(token) => token,
-            None => Entry::new(SERVICE, REFRESH_USER)
-                .into_alien_error()
-                .context(ErrorData::AuthenticationFailed {
-                    reason: "Failed to create refresh token keyring entry".to_string(),
-                })?
-                .get_password()
-                .into_alien_error()
-                .context(ErrorData::AuthenticationFailed {
-                    reason: "Failed to get refresh token from keyring".to_string(),
-                })?,
+            saved.access_token
         };
 
-        let new_tokens = refresh_token(base_url, &refresh).await?;
-        store_tokens(&new_tokens)?;
-
-        with_cache(|cache| {
-            cache.update_tokens(
-                Some(new_tokens.access_token.clone()),
-                new_tokens.refresh_token.clone(),
-            );
-        });
-
-        Ok(new_tokens.access_token)
+        let client = client_with_header(&format!("Bearer {}", access_token))?;
+        Ok(Some((client, access_token)))
     }
 
+    /// The provider issues JWTs with `exp`, so an unreadable token means a corrupted
+    /// store that a refresh repairs. Nothing reacts to a 401 here, so erring toward a
+    /// refresh is safer than sending a token we couldn't read.
     fn token_expired(jwt: &str, leeway_secs: i64) -> bool {
         let parts: Vec<&str> = jwt.split('.').collect();
         if parts.len() != 3 {
@@ -475,38 +483,20 @@ mod oauth_flow {
         true
     }
 
-    pub fn store_tokens(t: &TokenResponse) -> Result<()> {
-        Entry::new(SERVICE, ACCESS_USER)
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to create access token keyring entry".to_string(),
-            })?
-            .set_password(&t.access_token)
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Failed to store access token".to_string(),
-            })?;
-        if let Some(r) = &t.refresh_token {
-            Entry::new(SERVICE, REFRESH_USER)
-                .into_alien_error()
-                .context(ErrorData::AuthenticationFailed {
-                    reason: "Failed to create refresh token keyring entry".to_string(),
-                })?
-                .set_password(r)
-                .into_alien_error()
-                .context(ErrorData::AuthenticationFailed {
-                    reason: "Failed to store refresh token".to_string(),
-                })?;
-        }
-
-        with_cache(|cache| {
-            cache.update_tokens(Some(t.access_token.clone()), t.refresh_token.clone());
-        });
-
-        Ok(())
+    fn store_tokens(t: &TokenResponse) -> Result<()> {
+        TokenStore::new()?.save_response(t)
     }
 
-    async fn refresh_token(base: &str, refresh: &str) -> Result<TokenResponse> {
+    /// Result of a refresh-token exchange the server answered.
+    enum RefreshOutcome {
+        /// New tokens were issued.
+        Refreshed(TokenResponse),
+        /// The server rejected the refresh token (revoked or expired) — the
+        /// saved session is dead and only a fresh login can replace it.
+        Rejected,
+    }
+
+    async fn refresh_token(base: &str, refresh: &str) -> Result<RefreshOutcome> {
         let auth_url = AuthUrl::new(format!("{}/auth/oauth2/authorize", base))
             .into_alien_error()
             .context(ErrorData::AuthenticationFailed {
@@ -535,20 +525,48 @@ mod oauth_flow {
             .exchange_refresh_token(&RefreshToken::new(refresh.to_string()))
             .add_extra_param("resource", base)
             .request_async(&http_client)
-            .await
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                reason: "Refresh token request failed".to_string(),
-            })?;
+            .await;
 
-        Ok(TokenResponse {
-            access_token: OAuth2TokenResponse::access_token(&token_result)
-                .secret()
-                .clone(),
-            refresh_token: OAuth2TokenResponse::refresh_token(&token_result)
-                .map(|t| t.secret().clone()),
-            expires_in: OAuth2TokenResponse::expires_in(&token_result).map(|d| d.as_secs() as i64),
-        })
+        match token_result {
+            Ok(token) => Ok(RefreshOutcome::Refreshed(TokenResponse {
+                access_token: OAuth2TokenResponse::access_token(&token).secret().clone(),
+                refresh_token: OAuth2TokenResponse::refresh_token(&token)
+                    .map(|t| t.secret().clone()),
+                expires_in: OAuth2TokenResponse::expires_in(&token).map(|d| d.as_secs() as i64),
+            })),
+            // Only a definitive rejection (revoked or expired refresh token)
+            // means the session is dead; transient OAuth error responses
+            // (server_error, temporarily_unavailable) must not discard it.
+            Err(RequestTokenError::ServerResponse(e))
+                if matches!(e.error(), BasicErrorResponseType::InvalidGrant) =>
+            {
+                Ok(RefreshOutcome::Rejected)
+            }
+            Err(e) => Err(e
+                .into_alien_error()
+                .context(ErrorData::AuthenticationFailed {
+                    reason: "Refresh token request failed".to_string(),
+                })),
+        }
+    }
+
+    /// CSRF check: reject the OAuth callback unless `state` is present and matches.
+    /// Absence is a rejection, not a skip — this guards independently of PKCE.
+    fn state_is_valid(params: &HashMap<String, String>, expected: &str) -> bool {
+        params.get("state").is_some_and(|s| s == expected)
+    }
+
+    /// Escape the redirect URL for the single-quoted JS string in the inline
+    /// `<script>` — a raw `'`, `\`, or `</script>` (via `<`) would break out, and
+    /// a raw line terminator (`\n`, `\r`, U+2028, U+2029) is illegal in a JS string.
+    fn escape_js_single_quoted(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('<', "\\x3C")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
     }
 
     async fn login_pkce(
@@ -585,10 +603,8 @@ mod oauth_flow {
                     let success_redirect = success_redirect.clone();
                     let expected_state = expected_state.clone();
                     async move {
-                        if let Some(returned_state) = params.get("state") {
-                            if returned_state != &expected_state {
-                                return "Invalid state parameter".into_response();
-                            }
+                        if !state_is_valid(&params, &expected_state) {
+                            return "Invalid state parameter".into_response();
                         }
                         if let Some(code) = params.get("code").cloned() {
                             if let Some(sender) = state.lock().unwrap().take() {
@@ -597,7 +613,7 @@ mod oauth_flow {
                             match success_redirect {
                                 Some(url) => Html(format!(
                                     "<script>window.location.href = '{}';</script>",
-                                    url
+                                    escape_js_single_quoted(&url)
                                 ))
                                 .into_response(),
                                 None => {
@@ -668,10 +684,8 @@ mod oauth_flow {
                     let state = state.clone();
                     let expected_state = expected_state.clone();
                     async move {
-                        if let Some(returned_state) = params.get("state") {
-                            if returned_state != &expected_state {
-                                return "Invalid state parameter".into_response();
-                            }
+                        if !state_is_valid(&params, &expected_state) {
+                            return "Invalid state parameter".into_response();
                         }
                         if let Some(code) = params.get("code").cloned() {
                             if let Some(sender) = state.lock().unwrap().take() {
@@ -680,7 +694,7 @@ mod oauth_flow {
                             if let Some(ref url) = success_url {
                                 Html(format!(
                                     "<script>window.location.href = '{}';</script>",
-                                    url
+                                    escape_js_single_quoted(url)
                                 ))
                                 .into_response()
                             } else {
@@ -813,98 +827,207 @@ mod oauth_flow {
         })
     }
 
-    /// Simple file-based keyring for debug builds to avoid macOS keychain prompts
-    #[cfg(debug_assertions)]
-    mod debug_keyring {
-        use std::collections::HashMap;
-        use std::fs;
-        use std::path::PathBuf;
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-        #[derive(Debug)]
-        pub struct DebugKeyringError(String);
-
-        impl std::fmt::Display for DebugKeyringError {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
+        fn temp_store() -> (tempfile::TempDir, TokenStore) {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let store = TokenStore {
+                path: dir.path().join("credentials.json"),
+            };
+            (dir, store)
         }
 
-        impl std::error::Error for DebugKeyringError {}
-
-        pub struct Entry {
-            service: String,
-            user: String,
+        fn jwt_with_exp(exp: i64) -> String {
+            let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+            let payload = URL_SAFE_NO_PAD.encode(serde_json::json!({ "exp": exp }).to_string());
+            format!("{}.{}.signature", header, payload)
         }
 
-        impl Entry {
-            pub fn new(service: &str, user: &str) -> Result<Self, DebugKeyringError> {
-                Ok(Self {
-                    service: service.to_string(),
-                    user: user.to_string(),
+        #[test]
+        fn store_round_trip_preserves_tokens_and_restricts_permissions() {
+            let (_dir, store) = temp_store();
+
+            store
+                .save(&StoredTokens {
+                    access_token: "access-1".to_string(),
+                    refresh_token: Some("refresh-1".to_string()),
                 })
-            }
+                .expect("save should succeed");
 
-            pub fn set_password(&self, password: &str) -> Result<(), DebugKeyringError> {
-                let mut store = self.load_store()?;
-                let key = format!("{}:{}", self.service, self.user);
-                store.insert(key, password.to_string());
-                self.save_store(&store)
-            }
+            let loaded = store
+                .load()
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(loaded.access_token, "access-1");
+            assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-1"));
 
-            pub fn get_password(&self) -> Result<String, DebugKeyringError> {
-                let store = self.load_store()?;
-                let key = format!("{}:{}", self.service, self.user);
-                store
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| DebugKeyringError("No entry found".to_string()))
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&store.path)
+                    .expect("stat credentials file")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o600, "credentials file must be 0600");
             }
+        }
 
-            pub fn delete_credential(&self) -> Result<(), DebugKeyringError> {
-                let mut store = self.load_store()?;
-                let key = format!("{}:{}", self.service, self.user);
-                store.remove(&key);
-                self.save_store(&store)
-            }
+        #[test]
+        fn load_returns_none_when_nothing_saved() {
+            let (_dir, store) = temp_store();
+            assert!(store.load().expect("load should succeed").is_none());
+        }
 
-            fn keyring_path(&self) -> PathBuf {
-                dirs::config_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("alien")
-                    .join("debug-keyring.json")
-            }
+        #[test]
+        fn load_fails_on_corrupt_file() {
+            let (_dir, store) = temp_store();
+            fs::write(&store.path, "not-json{{{").expect("write corrupt file");
 
-            fn load_store(&self) -> Result<HashMap<String, String>, DebugKeyringError> {
-                let path = self.keyring_path();
-                if path.exists() {
-                    let content = fs::read_to_string(path).map_err(|e| {
-                        DebugKeyringError(format!("Failed to read keyring file: {}", e))
-                    })?;
-                    Ok(serde_json::from_str(&content).unwrap_or_default())
-                } else {
-                    Ok(HashMap::new())
-                }
-            }
+            let error = store.load().expect_err("corrupt file should be an error");
+            assert!(
+                format!("{:?}", error).contains("alien login"),
+                "error should tell the user how to recover: {:?}",
+                error
+            );
+        }
 
-            fn save_store(&self, store: &HashMap<String, String>) -> Result<(), DebugKeyringError> {
-                let path = self.keyring_path();
-                if let Some(dir) = path.parent() {
-                    fs::create_dir_all(dir).map_err(|e| {
-                        DebugKeyringError(format!("Failed to create config dir: {}", e))
-                    })?;
-                }
-                let content = serde_json::to_string_pretty(store).map_err(|e| {
-                    DebugKeyringError(format!("Failed to serialize keyring: {}", e))
-                })?;
-                alien_core::file_utils::write_secret_file(&path, content.as_bytes()).map_err(
-                    |e| DebugKeyringError(format!("Failed to write keyring file: {}", e)),
-                )?;
-                Ok(())
-            }
+        #[test]
+        fn save_response_keeps_existing_refresh_token_when_response_omits_it() {
+            let (_dir, store) = temp_store();
+            store
+                .save(&StoredTokens {
+                    access_token: "access-1".to_string(),
+                    refresh_token: Some("refresh-1".to_string()),
+                })
+                .expect("seed session");
+
+            store
+                .save_response(&TokenResponse {
+                    access_token: "access-2".to_string(),
+                    refresh_token: None,
+                    expires_in: Some(3600),
+                })
+                .expect("save_response should succeed");
+
+            let loaded = store
+                .load()
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(loaded.access_token, "access-2");
+            assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-1"));
+        }
+
+        #[test]
+        fn save_response_takes_rotated_refresh_token() {
+            let (_dir, store) = temp_store();
+            store
+                .save(&StoredTokens {
+                    access_token: "access-1".to_string(),
+                    refresh_token: Some("refresh-1".to_string()),
+                })
+                .expect("seed session");
+
+            store
+                .save_response(&TokenResponse {
+                    access_token: "access-2".to_string(),
+                    refresh_token: Some("refresh-2".to_string()),
+                    expires_in: Some(3600),
+                })
+                .expect("save_response should succeed");
+
+            let loaded = store
+                .load()
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-2"));
+        }
+
+        #[test]
+        fn save_response_recovers_from_corrupt_file() {
+            let (_dir, store) = temp_store();
+            fs::write(&store.path, "not-json{{{").expect("write corrupt file");
+
+            store
+                .save_response(&TokenResponse {
+                    access_token: "access-1".to_string(),
+                    refresh_token: Some("refresh-1".to_string()),
+                    expires_in: Some(3600),
+                })
+                .expect("login must overwrite a corrupt session file");
+
+            let loaded = store
+                .load()
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(loaded.access_token, "access-1");
+        }
+
+        #[test]
+        fn token_expired_for_past_and_near_expiry() {
+            let now = Utc::now().timestamp();
+            assert!(token_expired(&jwt_with_exp(now - 100), 30));
+            // Within the leeway window counts as expired.
+            assert!(token_expired(&jwt_with_exp(now + 10), 30));
+        }
+
+        #[test]
+        fn token_not_expired_with_future_expiry() {
+            let now = Utc::now().timestamp();
+            assert!(!token_expired(&jwt_with_exp(now + 3600), 30));
+        }
+
+        #[test]
+        fn token_expired_for_malformed_tokens() {
+            assert!(token_expired("opaque-token", 30));
+            assert!(token_expired("a.b", 30));
+            let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+            let payload_without_exp = URL_SAFE_NO_PAD.encode(br#"{"sub":"user"}"#);
+            assert!(token_expired(
+                &format!("{}.{}.sig", header, payload_without_exp),
+                30
+            ));
+        }
+
+        #[test]
+        fn callback_state_must_be_present_and_match() {
+            let expected = "expected-csrf-state";
+
+            // A callback carrying no `state` is the CSRF attack case — it must
+            // not pass, even though `code` alone looks like a valid response.
+            assert!(!state_is_valid(&HashMap::new(), expected));
+            let mut code_only = HashMap::new();
+            code_only.insert("code".to_string(), "the-auth-code".to_string());
+            assert!(!state_is_valid(&code_only, expected));
+
+            let mut mismatched = HashMap::new();
+            mismatched.insert("state".to_string(), "attacker-value".to_string());
+            assert!(!state_is_valid(&mismatched, expected));
+
+            let mut matching = HashMap::new();
+            matching.insert("state".to_string(), expected.to_string());
+            assert!(state_is_valid(&matching, expected));
+        }
+
+        #[test]
+        fn redirect_url_is_escaped_for_the_inline_script() {
+            // A plain URL is passed through untouched.
+            assert_eq!(
+                escape_js_single_quoted("https://app.example.com/done"),
+                "https://app.example.com/done"
+            );
+            // A crafted value can't close the JS string literal or the <script> element.
+            let escaped = escape_js_single_quoted("x'</script>");
+            assert_eq!(escaped, "x\\'\\x3C/script>");
+            assert!(!escaped.contains('<'));
+
+            // Line terminators are escaped — a raw one is illegal in a JS string.
+            assert_eq!(escape_js_single_quoted("a\u{2028}b"), "a\\u2028b");
         }
     }
 }
 
 // Re-export platform-only functions
 #[cfg(feature = "platform")]
-pub use oauth_flow::{force_login, get_auth_http, logout, store_tokens, try_bearer_client};
+pub use oauth_flow::{force_login, get_auth_http, logout};

@@ -5,15 +5,23 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
     EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
     LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, Stack, StackState,
-    TestEnvironmentInfo, ENV_ALIEN_SECRETS,
+    TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
+const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
+const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
+const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
+const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -50,6 +58,16 @@ async fn collect_aws_env_info(client_config: &ClientConfig) -> Result<Environmen
             message: "AWS client config required for environment collection".to_string(),
         })
     })?;
+
+    // `aws_config.account_id` is already resolved at credential-load time
+    // (`infer_account_id`): from AWS_ACCOUNT_ID env, AWS_ROLE_ARN, web identity,
+    // or — only as last resort — STS GetCallerIdentity. Trust it.
+    if !aws_config.account_id.is_empty() {
+        return Ok(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: aws_config.account_id.clone(),
+            region: aws_config.region.clone(),
+        }));
+    }
 
     let sts_client = StsClient::new(reqwest::Client::new(), aws_config.clone());
     let identity = sts_client.get_caller_identity().await.context(
@@ -161,35 +179,79 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
-        if resource_type == alien_core::Worker::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, true)?;
-        } else if resource_type == alien_core::Container::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, false)?;
+        if resource_type == alien_core::Worker::RESOURCE_TYPE
+            || resource_type == alien_core::Container::RESOURCE_TYPE
+            || resource_type == alien_core::Daemon::RESOURCE_TYPE
+        {
+            inject_into_compute_resource(resource_name, resource_entry, snapshot)?;
         }
     }
 
     Ok(())
 }
 
-/// Inject OTLP monitoring environment variables into all compute resources.
+/// Configuration for runtime-owned secrets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlienRuntimeSecretsConfig {
+    /// Vault key that contains `OTEL_EXPORTER_OTLP_HEADERS`.
+    otlp_logs_auth_header: Option<String>,
+    /// Vault key that contains `OTEL_EXPORTER_OTLP_METRICS_HEADERS`.
+    otlp_metrics_auth_header: Option<String>,
+    /// Hash of runtime secret values.
+    hash: String,
+}
+
+/// Whether containers and daemons get OTLP env vars on this platform.
+///
+/// On managed cloud platforms, containers and daemons run inside the hosted
+/// container runtime, which already ships their telemetry — only workers need
+/// the vars there. Self-hosted platforms have no such runtime, so every
+/// compute resource gets them. Exhaustive so a new platform must pick a side.
+fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
+    match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure => false,
+        Platform::Kubernetes | Platform::Local | Platform::Test => true,
+    }
+}
+
+/// Inject OTLP monitoring environment variables into compute resources.
+///
+/// Workers are injected on every platform; containers and daemons only where
+/// `otlp_injection_covers_containers_and_daemons` says so.
 ///
 /// When `DeploymentConfig.monitoring` is set, this injects:
 /// - `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` — the OTLP logs endpoint URL
-/// - `OTEL_EXPORTER_OTLP_HEADERS`       — auth header in "key=value" format
 /// - `OTEL_SERVICE_NAME`                — defaults to the resource name so
 ///   each resource within the stack appears as a distinct `service.name` in
 ///   logs (drives the dashboard's "Resource" column). Skipped if the user
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
 /// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
 ///   such as `alien.deployment_id`, merged with any user-provided value.
+/// - `ALIEN_RUNTIME_SECRETS`          — workers and daemons only; points
+///   alien-runtime at runtime-owned vault secrets. These are not forwarded to
+///   the child application process.
+/// - `OTEL_EXPORTER_OTLP_HEADERS` (and `..._METRICS_HEADERS`) — containers
+///   only; a container has no alien-runtime wrapper to resolve the vault
+///   pointer, so its auth header goes in as the standard plain OTEL env var.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
+    platform: Platform,
 ) -> Result<()> {
-    info!("Injecting OTLP monitoring env vars into compute resources");
+    let covers_containers_and_daemons = otlp_injection_covers_containers_and_daemons(platform);
+    info!(
+        "Injecting OTLP monitoring env vars into {} runtimes",
+        if covers_containers_and_daemons {
+            "worker, container, and daemon"
+        } else {
+            "worker"
+        }
+    );
 
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
+        let is_container = resource_type == alien_core::Container::RESOURCE_TYPE;
 
         let environment = if resource_type == alien_core::Worker::RESOURCE_TYPE {
             Some(
@@ -206,7 +268,24 @@ pub fn inject_monitoring_environment_variables(
                     })?
                     .environment,
             )
-        } else if resource_type == alien_core::Container::RESOURCE_TYPE {
+        } else if covers_containers_and_daemons
+            && resource_type == alien_core::Daemon::RESOURCE_TYPE
+        {
+            Some(
+                &mut resource_entry
+                    .config
+                    .downcast_mut::<alien_core::Daemon>()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::InternalError {
+                            message: format!(
+                                "Failed to downcast resource '{}' to Daemon",
+                                resource_name
+                            ),
+                        })
+                    })?
+                    .environment,
+            )
+        } else if covers_containers_and_daemons && is_container {
             Some(
                 &mut resource_entry
                     .config
@@ -227,12 +306,8 @@ pub fn inject_monitoring_environment_variables(
 
         if let Some(env) = environment {
             env.insert(
-                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
+                OTEL_EXPORTER_OTLP_LOGS_ENDPOINT.to_string(),
                 monitoring.logs_endpoint.clone(),
-            );
-            env.insert(
-                "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
-                monitoring.logs_auth_header.clone(),
             );
             if !monitoring.resource_attributes.is_empty() {
                 let merged =
@@ -249,24 +324,50 @@ pub fn inject_monitoring_environment_variables(
             // We only set the env var if the user hasn't already pinned
             // OTEL_SERVICE_NAME themselves (e.g. via the platform's user
             // env vars), so explicit overrides keep winning.
-            env.entry("OTEL_SERVICE_NAME".to_string())
+            env.entry(OTEL_SERVICE_NAME.to_string())
                 .or_insert_with(|| resource_name.clone());
             if let Some(metrics_endpoint) = &monitoring.metrics_endpoint {
                 env.insert(
-                    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT".to_string(),
+                    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.to_string(),
                     metrics_endpoint.clone(),
                 );
-                // Use the metrics-specific auth header if present, otherwise reuse the logs one.
-                let metrics_headers = monitoring
-                    .metrics_auth_header
-                    .as_ref()
-                    .unwrap_or(&monitoring.logs_auth_header);
-                env.insert(
-                    "OTEL_EXPORTER_OTLP_METRICS_HEADERS".to_string(),
-                    metrics_headers.clone(),
-                );
             }
-            debug!("Injected OTLP monitoring vars into '{}'", resource_name);
+            if is_container {
+                env.insert(
+                    OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+                    monitoring.logs_auth_header.clone(),
+                );
+                if monitoring.metrics_endpoint.is_some() {
+                    let metrics_header = monitoring
+                        .metrics_auth_header
+                        .as_ref()
+                        .unwrap_or(&monitoring.logs_auth_header);
+                    env.insert(
+                        OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
+                        metrics_header.clone(),
+                    );
+                }
+            } else {
+                let runtime_secrets = AlienRuntimeSecretsConfig {
+                    otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
+                    otlp_metrics_auth_header: monitoring
+                        .metrics_endpoint
+                        .as_ref()
+                        .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
+                    hash: runtime_monitoring_secrets_hash(monitoring),
+                };
+                let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
+                    .into_alien_error()
+                    .context(ErrorData::InternalError {
+                        message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
+                    })?;
+                env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
+            }
+
+            debug!(
+                "Injected runtime OTLP monitoring vars into '{}'",
+                resource_name
+            );
         }
     }
 
@@ -303,7 +404,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
     attributes
 }
 
-/// Inject environment variables into a Worker or Container compute resource.
+/// Inject environment variables into a compute resource (Worker, Container, or Daemon).
 ///
 /// - Plain variables: inserted directly into resource.environment.
 /// - Secret variables: their keys are collected into ALIEN_SECRETS so
@@ -312,34 +413,37 @@ fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
-    is_worker: bool,
 ) -> Result<()> {
-    // Get the environment map (same interface for Worker and Container)
-    let environment = if is_worker {
-        &mut resource_entry
-            .config
-            .downcast_mut::<alien_core::Worker>()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InternalError {
-                    message: format!("Failed to downcast resource '{}' to Worker", resource_name),
-                })
-            })?
-            .environment
+    if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
+        inject_into_environment(resource_name, "worker", &mut worker.environment, snapshot)
+    } else if let Some(container) = resource_entry
+        .config
+        .downcast_mut::<alien_core::Container>()
+    {
+        inject_into_environment(
+            resource_name,
+            "container",
+            &mut container.environment,
+            snapshot,
+        )
+    } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
+        inject_into_environment(resource_name, "daemon", &mut daemon.environment, snapshot)
     } else {
-        &mut resource_entry
-            .config
-            .downcast_mut::<alien_core::Container>()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InternalError {
-                    message: format!(
-                        "Failed to downcast resource '{}' to Container",
-                        resource_name
-                    ),
-                })
-            })?
-            .environment
-    };
+        Err(AlienError::new(ErrorData::InternalError {
+            message: format!(
+                "Failed to downcast resource '{}' to a compute resource",
+                resource_name
+            ),
+        }))
+    }
+}
 
+fn inject_into_environment(
+    resource_name: &str,
+    resource_type: &str,
+    environment: &mut HashMap<String, String>,
+    snapshot: &EnvironmentVariablesSnapshot,
+) -> Result<()> {
     // Filter variables that apply to this resource
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
@@ -381,7 +485,6 @@ fn inject_into_compute_resource(
 
         environment.insert(ENV_ALIEN_SECRETS.to_string(), alien_secrets_json);
 
-        let resource_type = if is_worker { "worker" } else { "container" };
         debug!(
             "Added ALIEN_SECRETS to {} '{}' with {} secret keys",
             resource_type,
@@ -427,14 +530,12 @@ pub async fn sync_secrets_to_vault(
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
     let snapshot = &config.environment_variables;
+    let sync_hash = secrets_sync_hash(config);
 
     // Check if we've already synced this exact snapshot
     if let Some(last_synced_hash) = &runtime_metadata.last_synced_env_vars_hash {
-        if last_synced_hash == &snapshot.hash {
-            debug!(
-                "Secrets already synced for hash {}, skipping",
-                snapshot.hash
-            );
+        if last_synced_hash == &sync_hash {
+            debug!("Secrets already synced for hash {}, skipping", sync_hash);
             return Ok(false);
         }
     }
@@ -447,17 +548,17 @@ pub async fn sync_secrets_to_vault(
         .collect();
 
     // Skip if no secrets to sync
-    if secret_vars.is_empty() {
+    if secret_vars.is_empty() && config.monitoring.is_none() {
         debug!("No secrets to sync to vault");
         // Still update the hash to mark as synced
-        runtime_metadata.last_synced_env_vars_hash = Some(snapshot.hash.clone());
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
         return Ok(false);
     }
 
     info!(
-        "Syncing {} secrets to vault (hash: {})",
+        "Syncing {} user secrets to vault (hash: {})",
         secret_vars.len(),
-        snapshot.hash
+        sync_hash
     );
 
     // Create provider using deployment credentials
@@ -488,11 +589,65 @@ pub async fn sync_secrets_to_vault(
         debug!("Synced secret '{}' to vault", env_var.name);
     }
 
+    if let Some(monitoring) = &config.monitoring {
+        vault
+            .set_secret(
+                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
+                &monitoring.logs_auth_header,
+            )
+            .await
+            .context(ErrorData::SecretSyncFailed {
+                vault_name: "secrets".to_string(),
+                reason: "Failed to set runtime OTLP logs auth header".to_string(),
+            })?;
+
+        if monitoring.metrics_endpoint.is_some() {
+            let metrics_header = monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header);
+            vault
+                .set_secret(RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET, metrics_header)
+                .await
+                .context(ErrorData::SecretSyncFailed {
+                    vault_name: "secrets".to_string(),
+                    reason: "Failed to set runtime OTLP metrics auth header".to_string(),
+                })?;
+        }
+        debug!("Synced runtime OTLP auth secrets to vault");
+    }
+
     // Update metadata to mark this snapshot as synced
-    runtime_metadata.last_synced_env_vars_hash = Some(snapshot.hash.clone());
+    runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
 
     info!("Successfully synced all secrets to vault");
     Ok(true)
+}
+
+fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(monitoring.logs_auth_header.as_bytes());
+    if monitoring.metrics_endpoint.is_some() {
+        hasher.update(b"\0metrics\0");
+        hasher.update(
+            monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header)
+                .as_bytes(),
+        );
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn secrets_sync_hash(config: &DeploymentConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config.environment_variables.hash.as_bytes());
+    if let Some(monitoring) = &config.monitoring {
+        hasher.update(b"\0runtime-monitoring\0");
+        hasher.update(runtime_monitoring_secrets_hash(monitoring).as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Interrupts all non-terminal, non-failed resources when a deployment failure is detected.
@@ -530,6 +685,7 @@ pub fn interrupt_in_progress_resources(
             // Already terminal — don't touch it.
             ResourceStatus::Running
             | ResourceStatus::Deleted
+            | ResourceStatus::TeardownRequired
             | ResourceStatus::ProvisionFailed
             | ResourceStatus::UpdateFailed
             | ResourceStatus::DeleteFailed
@@ -559,7 +715,8 @@ pub fn interrupt_in_progress_resources(
 /// are counted separately and excluded from `resource_errors` so the caller gets
 /// an accurate picture of what actually broke vs. what was collateral damage.
 ///
-/// Returns `None` if no resources carry any error at all.
+/// Returns `None` if no resources carry a real failure. Interrupted resources
+/// are fallout from another failure, not a standalone headline cause.
 pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Option<AlienError> {
     use crate::error::ResourceError;
 
@@ -582,7 +739,7 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
         }
     }
 
-    if resource_errors.is_empty() && interrupted_resources == 0 {
+    if resource_errors.is_empty() {
         return None;
     }
 
@@ -590,7 +747,7 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
     let failed_resources = resource_errors.len();
 
     Some(
-        AlienError::new(ErrorData::AgentDeploymentFailed {
+        AlienError::new(ErrorData::DeploymentFailed {
             resource_errors,
             total_resources,
             failed_resources,
@@ -598,6 +755,23 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
         })
         .into_generic(),
     )
+}
+
+/// Derive the single headline deployment error from durable deployment state.
+///
+/// Deployment-level errors win because they describe failures outside a
+/// specific resource. Resource controller errors remain preserved on
+/// `StackState.resources[*].error` and are summarized only when there is no
+/// deployment-level error.
+pub fn deployment_headline_error_from_state(
+    state: &alien_core::DeploymentState,
+) -> Option<AlienError> {
+    state.error.clone().or_else(|| {
+        state
+            .stack_state
+            .as_ref()
+            .and_then(create_aggregated_error_from_stack_state)
+    })
 }
 
 #[cfg(test)]
@@ -653,8 +827,10 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, ResourceEntry, ResourceLifecycle, StackSettings, Worker, WorkerCode,
+        ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
+        StackResourceState, StackSettings, Worker, WorkerCode,
     };
+    use alien_error::GenericError;
     use indexmap::IndexMap;
 
     fn make_snapshot(
@@ -724,7 +900,99 @@ mod tests {
                 management: alien_core::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: Vec::new(),
         }
+    }
+
+    fn make_worker_resource_state(id: &str, error: Option<AlienError>) -> StackResourceState {
+        let worker = Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let resource = Resource::new(worker);
+
+        StackResourceState {
+            resource_type: resource.resource_type().as_ref().to_string(),
+            internal_state: None,
+            status: ResourceStatus::ProvisionFailed,
+            outputs: None,
+            config: resource,
+            previous_config: None,
+            retry_attempt: 0,
+            error,
+            lifecycle: Some(ResourceLifecycle::Live),
+            controller_platform: None,
+            dependencies: Vec::new(),
+            last_failed_state: None,
+            remote_binding_params: None,
+        }
+    }
+
+    fn generic_error(code_message: &str) -> AlienError {
+        AlienError::new(GenericError {
+            message: code_message.to_string(),
+        })
+    }
+
+    #[test]
+    fn aggregate_error_ignores_interrupted_only_resources() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "skipped".to_string(),
+            make_worker_resource_state(
+                "skipped",
+                Some(
+                    AlienError::new(ErrorData::DeploymentInterrupted {
+                        failed_resource_id: "failed".to_string(),
+                        failed_resource_type: "worker".to_string(),
+                    })
+                    .into_generic(),
+                ),
+            ),
+        );
+
+        assert!(create_aggregated_error_from_stack_state(&stack_state).is_none());
+    }
+
+    #[test]
+    fn aggregate_error_counts_failed_and_interrupted_resources() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "failed".to_string(),
+            make_worker_resource_state("failed", Some(generic_error("worker failed"))),
+        );
+        stack_state.resources.insert(
+            "skipped".to_string(),
+            make_worker_resource_state(
+                "skipped",
+                Some(
+                    AlienError::new(ErrorData::DeploymentInterrupted {
+                        failed_resource_id: "failed".to_string(),
+                        failed_resource_type: "worker".to_string(),
+                    })
+                    .into_generic(),
+                ),
+            ),
+        );
+
+        let error = create_aggregated_error_from_stack_state(&stack_state)
+            .expect("real resource error should create aggregate deployment error");
+
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+        assert_eq!(
+            error.context.as_ref().and_then(|context| context
+                .get("failed_resources")
+                .and_then(serde_json::Value::as_u64)),
+            Some(1)
+        );
+        assert_eq!(
+            error.context.as_ref().and_then(|context| context
+                .get("interrupted_resources")
+                .and_then(serde_json::Value::as_u64)),
+            Some(1)
+        );
     }
 
     #[test]
@@ -821,7 +1089,7 @@ mod tests {
             ]),
         };
 
-        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -862,7 +1130,7 @@ mod tests {
             )]),
         };
 
-        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -876,5 +1144,163 @@ mod tests {
             func.environment.get(OTEL_RESOURCE_ATTRIBUTES).unwrap(),
             "alien.deployment_id=dep_test,custom=value"
         );
+    }
+
+    fn make_compute_stack() -> Stack {
+        let mut stack = make_single_function_stack("worker");
+
+        let container = alien_core::Container::new("web".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        stack.resources.insert(
+            "web".to_string(),
+            ResourceEntry {
+                config: Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let daemon = alien_core::Daemon::new("agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        stack.resources.insert(
+            "agent".to_string(),
+            ResourceEntry {
+                config: Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        stack
+    }
+
+    fn make_monitoring_with_metrics() -> OtlpConfig {
+        OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer logs-token".to_string(),
+            metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::new(),
+        }
+    }
+
+    fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {
+        let entry = &stack.resources.get(id).expect("resource exists").config;
+        if let Some(worker) = entry.downcast_ref::<Worker>() {
+            &worker.environment
+        } else if let Some(container) = entry.downcast_ref::<alien_core::Container>() {
+            &container.environment
+        } else if let Some(daemon) = entry.downcast_ref::<alien_core::Daemon>() {
+            &daemon.environment
+        } else {
+            panic!("resource '{id}' is not a compute resource");
+        }
+    }
+
+    #[test]
+    fn monitoring_cloud_platforms_inject_worker_only() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut stack = make_compute_stack();
+            let monitoring = make_monitoring_with_metrics();
+
+            inject_monitoring_environment_variables(&mut stack, &monitoring, platform).unwrap();
+
+            let worker_env = resource_env(&stack, "worker");
+            assert_eq!(
+                worker_env.get(OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).unwrap(),
+                "https://manager.test/v1/logs",
+                "{platform:?}: worker gets the logs endpoint"
+            );
+            assert!(
+                worker_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                "{platform:?}: worker gets the runtime-secrets pointer"
+            );
+
+            for id in ["web", "agent"] {
+                let env = resource_env(&stack, id);
+                assert!(
+                    env.is_empty(),
+                    "{platform:?}: '{id}' must get no OTLP vars (got {:?})",
+                    env.keys().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn monitoring_self_hosted_platforms_inject_all_compute() {
+        for platform in [Platform::Kubernetes, Platform::Local, Platform::Test] {
+            let mut stack = make_compute_stack();
+            let monitoring = make_monitoring_with_metrics();
+
+            inject_monitoring_environment_variables(&mut stack, &monitoring, platform).unwrap();
+
+            for id in ["worker", "web", "agent"] {
+                let env = resource_env(&stack, id);
+                assert_eq!(
+                    env.get(OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).unwrap(),
+                    "https://manager.test/v1/logs",
+                    "{platform:?}: '{id}' gets the logs endpoint"
+                );
+                assert_eq!(
+                    env.get(OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).unwrap(),
+                    "https://manager.test/v1/metrics",
+                    "{platform:?}: '{id}' gets the metrics endpoint"
+                );
+                assert_eq!(
+                    env.get(OTEL_SERVICE_NAME).unwrap(),
+                    id,
+                    "{platform:?}: '{id}' gets its name as service name"
+                );
+            }
+
+            for id in ["worker", "agent"] {
+                let env = resource_env(&stack, id);
+                assert!(
+                    env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                    "{platform:?}: '{id}' gets the runtime-secrets pointer"
+                );
+                assert!(
+                    !env.contains_key(OTEL_EXPORTER_OTLP_HEADERS),
+                    "{platform:?}: '{id}' must not carry a plain auth header"
+                );
+            }
+
+            let container_env = resource_env(&stack, "web");
+            assert_eq!(
+                container_env.get(OTEL_EXPORTER_OTLP_HEADERS).unwrap(),
+                "authorization=Bearer logs-token",
+                "{platform:?}: container gets the plain logs auth header"
+            );
+            assert_eq!(
+                container_env
+                    .get(OTEL_EXPORTER_OTLP_METRICS_HEADERS)
+                    .unwrap(),
+                "authorization=Bearer logs-token",
+                "{platform:?}: container metrics header falls back to the logs header"
+            );
+            assert!(
+                !container_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                "{platform:?}: container must not get the runtime-secrets pointer"
+            );
+        }
     }
 }

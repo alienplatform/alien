@@ -2,12 +2,20 @@ use std::collections::HashMap;
 
 use crate::core::controller_test::{test_storage_1, test_storage_2};
 use alien_core::{
-    HttpMethod, Ingress, Queue, ReadinessProbe, ResourceRef, Storage, Worker, WorkerCode,
-    WorkerTrigger,
+    HttpMethod, Queue, ReadinessProbe, ResourceRef, Storage, Worker, WorkerCode,
+    WorkerPublicEndpoint, WorkerTrigger,
 };
 use rstest::fixture;
 
 // Test fixtures for different worker configurations
+fn api_endpoint() -> WorkerPublicEndpoint {
+    WorkerPublicEndpoint {
+        name: "api".to_string(),
+        host_label: None,
+        wildcard_subdomains: false,
+    }
+}
+
 #[fixture]
 pub(crate) fn basic_function() -> Worker {
     Worker::new("basic-func".to_string())
@@ -87,7 +95,7 @@ pub(crate) fn function_public_ingress() -> Worker {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/public:latest".to_string(),
         })
         .permissions("default-profile".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(api_endpoint())
         .build()
 }
 
@@ -98,7 +106,6 @@ pub(crate) fn function_private_ingress() -> Worker {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/private:latest".to_string(),
         })
         .permissions("default-profile".to_string())
-        .ingress(Ingress::Private)
         .build()
 }
 
@@ -132,7 +139,7 @@ pub(crate) fn function_with_readiness_probe() -> Worker {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/probe:latest".to_string(),
         })
         .permissions("default-profile".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(api_endpoint())
         .readiness_probe(ReadinessProbe {
             method: HttpMethod::Get,
             path: "/health/ready".to_string(),
@@ -154,7 +161,7 @@ pub(crate) fn function_complete_test() -> Worker {
         .memory_mb(128)
         .environment(env_vars)
         .permissions("default-profile".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(api_endpoint())
         .readiness_probe(ReadinessProbe {
             path: "/health".to_string(),
             method: HttpMethod::Get,

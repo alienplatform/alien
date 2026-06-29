@@ -9,10 +9,7 @@ use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
-use alien_core::{
-    ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform,
-    RemoteStackManagement, RemoteStackManagementOutputs, StackState,
-};
+use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
@@ -63,27 +60,19 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         let status = parse_status(&deployment.status);
 
-        // During Pending, use the management SA directly because no remote
-        // stack management identity exists yet.
-        if matches!(status, DeploymentStatus::Pending) {
+        // InitialSetup is still setup-owned. Even after the remote stack
+        // management identity exists in state, setup credentials must finish
+        // attaching its management policies and creating the remaining Frozen
+        // resources. Runtime impersonation starts after handoff.
+        if uses_direct_management_credentials(status) {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
             return apply_target_environment(base_config, deployment.environment_info.as_ref());
         }
 
         // After initial setup, resolve via the remote stack management identity
-        // in the stack state (two-hop: management SA → target identity). Imported
-        // stacks can be in InitialSetup with remote-stack-management already
-        // present, so use it as soon as its outputs exist.
+        // in the stack state (two-hop: management SA → target identity).
         if let Some(ref stack_state) = deployment.stack_state {
-            if matches!(status, DeploymentStatus::InitialSetup)
-                && !has_remote_stack_management_outputs(stack_state)
-            {
-                let provider = self.provider_for_target(platform);
-                let base_config = impersonate_management_sa(&**provider, platform).await?;
-                return apply_target_environment(base_config, deployment.environment_info.as_ref());
-            }
-
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
 
@@ -121,7 +110,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             Platform::Local | Platform::Test | Platform::Kubernetes
         ) || !matches!(
             status,
-            DeploymentStatus::Pending | DeploymentStatus::InitialSetup
+            DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed
         );
 
         Ok(ResolvedCredentials {
@@ -154,17 +143,6 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         Ok(Some(management_config_from_info(info, platform)?))
     }
-}
-
-fn has_remote_stack_management_outputs(stack_state: &StackState) -> bool {
-    stack_state.resources.values().any(|resource_state| {
-        resource_state.resource_type == RemoteStackManagement::RESOURCE_TYPE.to_string()
-            && resource_state.outputs.as_ref().is_some_and(|outputs| {
-                outputs
-                    .downcast_ref::<RemoteStackManagementOutputs>()
-                    .is_some()
-            })
-    })
 }
 
 /// Impersonate the management service account to get base credentials.
@@ -321,13 +299,21 @@ fn parse_status(status: &str) -> DeploymentStatus {
         .unwrap_or(DeploymentStatus::Pending)
 }
 
+fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{
         AwsClientConfig, AwsCredentials, AwsEnvironmentInfo, AzureClientConfig, AzureCredentials,
-        AzureEnvironmentInfo, GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, Resource,
-        ResourceOutputs, ResourceStatus, StackResourceState,
+        AzureEnvironmentInfo, GcpClientConfig, GcpCredentials, GcpEnvironmentInfo,
     };
 
     #[test]
@@ -406,44 +392,21 @@ mod tests {
     }
 
     #[test]
-    fn remote_stack_management_outputs_are_detected() {
-        let mut state = StackState::with_resource_prefix(Platform::Aws, "e2e-33".to_string());
-        state.resources.insert(
-            "remote-stack-management".to_string(),
-            StackResourceState::builder()
-                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
-                .status(ResourceStatus::Running)
-                .config(Resource::new(RemoteStackManagement {
-                    id: "remote-stack-management".to_string(),
-                }))
-                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
-                    management_resource_id: "arn:aws:iam::123456789012:role/e2e-33-management"
-                        .to_string(),
-                    access_configuration: "arn:aws:iam::123456789012:role/e2e-33-management"
-                        .to_string(),
-                }))
-                .dependencies(Vec::new())
-                .build(),
-        );
-
-        assert!(has_remote_stack_management_outputs(&state));
-    }
-
-    #[test]
-    fn remote_stack_management_without_outputs_is_not_ready_for_remote_access() {
-        let mut state = StackState::with_resource_prefix(Platform::Aws, "e2e-33".to_string());
-        state.resources.insert(
-            "remote-stack-management".to_string(),
-            StackResourceState::builder()
-                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
-                .status(ResourceStatus::Provisioning)
-                .config(Resource::new(RemoteStackManagement {
-                    id: "remote-stack-management".to_string(),
-                }))
-                .dependencies(Vec::new())
-                .build(),
-        );
-
-        assert!(!has_remote_stack_management_outputs(&state));
+    fn initial_setup_uses_direct_management_credentials_until_handoff() {
+        assert!(uses_direct_management_credentials(
+            DeploymentStatus::Pending
+        ));
+        assert!(uses_direct_management_credentials(
+            DeploymentStatus::PreflightsFailed
+        ));
+        assert!(uses_direct_management_credentials(
+            DeploymentStatus::InitialSetup
+        ));
+        assert!(!uses_direct_management_credentials(
+            DeploymentStatus::Provisioning
+        ));
+        assert!(!uses_direct_management_credentials(
+            DeploymentStatus::Running
+        ));
     }
 }

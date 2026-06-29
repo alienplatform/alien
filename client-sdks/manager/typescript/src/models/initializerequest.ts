@@ -12,6 +12,14 @@ import {
 
 export type InitializeRequest = {
   basePlatform?: PlatformEnum | null | undefined;
+  /**
+   * Deployer-provided stack inputs. Embedded platform managers resolve
+   *
+   * @remarks
+   * these before creating the deployment; standalone managers accept the
+   * field so generated setup clients have one stable initialize contract.
+   */
+  inputValues?: { [k: string]: any } | undefined;
   name?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
   stackSettings?: StackSettings | null | undefined;
@@ -20,6 +28,7 @@ export type InitializeRequest = {
 /** @internal */
 export type InitializeRequest$Outbound = {
   basePlatform?: string | null | undefined;
+  inputValues?: { [k: string]: any } | undefined;
   name?: string | null | undefined;
   platform?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
@@ -31,6 +40,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   InitializeRequest
 > = z.object({
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   name: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),

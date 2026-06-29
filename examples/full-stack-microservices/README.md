@@ -59,8 +59,8 @@ The stack supports Kubernetes:
 
 ```bash
 cd alien/examples/full-stack-microservices
-alien build --platform kubernetes --experimental
-alien release --platform kubernetes --experimental
+alien build --platform kubernetes
+alien release --platform kubernetes
 ```
 
 The rendered stack should contain five first-party Dockerfile-based containers,

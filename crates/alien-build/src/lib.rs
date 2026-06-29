@@ -1,28 +1,37 @@
 pub(crate) mod command_output;
 pub mod dependencies;
 pub mod error;
+pub mod merge;
+pub mod plan;
 pub mod settings;
 pub mod toolchain;
 
 use alien_core::{
-    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Platform, Stack,
-    ToolchainConfig, Worker, WorkerCode,
+    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
+    Stack, ToolchainConfig, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
 use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
+use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
+use oci_client::manifest::{
+    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
+    OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
+};
+use oci_client::Reference;
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs;
+use tokio::process::Command;
 use tokio::time::sleep;
 
 use tracing::{info, warn};
@@ -33,6 +42,32 @@ const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ArtifactCacheMetadata {
     cache_key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoMetadataPackage>,
+    resolve: Option<CargoMetadataResolve>,
+    workspace_root: PathBuf,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataPackage {
+    id: String,
+    manifest_path: PathBuf,
+    source: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataResolve {
+    root: Option<String>,
+    nodes: Vec<CargoMetadataNode>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadataNode {
+    id: String,
+    dependencies: Vec<String>,
 }
 
 /// Dedupe key for identifying containers that can share the same binary build.
@@ -76,6 +111,15 @@ impl DedupeKey {
     }
 }
 
+/// True when the caller explicitly requested only non-Linux (host-binary) targets, so a
+/// container — which is always a Linux image — has nothing to build here. `None` (the
+/// default, host OS) returns false, so a plain `alien build --platforms local` still builds
+/// containers as a host-Linux image; only an explicit `--targets darwin-arm64` (the macOS /
+/// Windows runner group of a native-runner CI build) skips them.
+fn requested_host_binary_only(targets: Option<&[BinaryTarget]>) -> bool {
+    targets.is_some_and(|ts| !ts.is_empty() && ts.iter().all(|t| t.oci_os() != "linux"))
+}
+
 /// Builds a given `Stack`, processing `WorkerCode::Source` into `WorkerCode::Image`,
 /// building and pushing container images, generating platform-specific templates,
 /// and saving the result to the output directory.
@@ -83,6 +127,7 @@ impl DedupeKey {
     stack: stack.id().to_string(),
 })]
 pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<Stack> {
+    let build_stack_started = Instant::now();
     info!(
         "Starting stack build process for platform: {:?}...",
         settings.platform.runtime_platform()
@@ -90,6 +135,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
+    let preflight_started = Instant::now();
     let preflight_summary = AlienEvent::RunningPreflights {
         stack: stack.id().to_string(),
         platform: settings.platform.runtime_platform().as_str().to_string(),
@@ -112,8 +158,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     info!(
-        "Build-time preflights completed: {} checks passed, {} warnings",
-        preflight_summary.passed_checks, preflight_summary.warning_count
+        "Build-time preflights completed in {:.2}s: {} checks passed, {} warnings",
+        preflight_started.elapsed().as_secs_f64(),
+        preflight_summary.passed_checks,
+        preflight_summary.warning_count
     );
 
     let base_output_dir = PathBuf::from(&settings.output_directory);
@@ -138,6 +186,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
+    let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
         if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
@@ -159,35 +208,71 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     info!("Worker '{}' already has an image. Skipping.", func.id);
                 }
             }
-        }
-    }
-
-    // Collect containers that need building or exporting
-    let mut containers_to_build = Vec::new();
-    let mut containers_to_export = Vec::new();
-
-    for (id, resource_entry) in stack.resources() {
-        if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-            info!("Processing container: {}", container.id);
-            match &container.code {
-                ContainerCode::Source { src, toolchain } => {
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            info!("Processing daemon: {}", daemon.id);
+            match &daemon.code {
+                DaemonCode::Source { src, toolchain } => {
                     info!(
-                        "Container '{}' has source code. Queued for parallel build.",
-                        container.id
+                        "Daemon '{}' has source code. Queued for parallel build.",
+                        daemon.id
                     );
-                    containers_to_build.push((
+                    daemons_to_build.push((
                         id.clone(),
-                        container.clone(),
+                        daemon.clone(),
                         src.clone(),
                         toolchain.clone(),
                     ));
                 }
-                ContainerCode::Image { image } => {
-                    info!(
-                        "Container '{}' has image reference '{}'. Queued for pull and export.",
-                        container.id, image
-                    );
-                    containers_to_export.push((id.clone(), container.clone(), image.clone()));
+                DaemonCode::Image { .. } => {
+                    info!("Daemon '{}' already has an image. Skipping.", daemon.id);
+                }
+            }
+        }
+    }
+
+    // Collect containers that need building or exporting. On a host-binary-only build
+    // there is nothing to collect — see `requested_host_binary_only`; the containers'
+    // Linux images come from the Linux runner groups and are combined by `alien build merge`.
+    let mut containers_to_build = Vec::new();
+    let mut containers_to_export = Vec::new();
+    let skip_containers = requested_host_binary_only(settings.targets.as_deref());
+
+    if skip_containers {
+        let container_count = stack
+            .resources()
+            .filter(|(_, e)| e.config.downcast_ref::<Container>().is_some())
+            .count();
+        if container_count > 0 {
+            info!(
+                "Skipping {} container(s) for host-binary-only targets {:?}; their Linux images come from the Linux runner groups.",
+                container_count,
+                settings.get_targets()
+            );
+        }
+    } else {
+        for (id, resource_entry) in stack.resources() {
+            if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
+                info!("Processing container: {}", container.id);
+                match &container.code {
+                    ContainerCode::Source { src, toolchain } => {
+                        info!(
+                            "Container '{}' has source code. Queued for parallel build.",
+                            container.id
+                        );
+                        containers_to_build.push((
+                            id.clone(),
+                            container.clone(),
+                            src.clone(),
+                            toolchain.clone(),
+                        ));
+                    }
+                    ContainerCode::Image { image } => {
+                        info!(
+                            "Container '{}' has image reference '{}'. Queued for pull and export.",
+                            container.id, image
+                        );
+                        containers_to_export.push((id.clone(), container.clone(), image.clone()));
+                    }
                 }
             }
         }
@@ -362,6 +447,157 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             "Completed parallel building of {} functions",
             completed_tasks
         );
+    }
+
+    // Build all daemons in parallel with fail-fast behavior.
+    // Daemons are long-lived native subprocesses (TransportType::Passthrough);
+    // their build path mirrors workers: produce an OCI tarball per target,
+    // then rewrite the resource's `code` to `DaemonCode::Image` so the local
+    // platform's LocalDaemonController can hand the path to extract_daemon_image.
+    if !daemons_to_build.is_empty() {
+        let build_targets = settings.get_targets();
+
+        info!(
+            "Building {} daemons for {} target(s): {:?}",
+            daemons_to_build.len(),
+            build_targets.len(),
+            build_targets
+        );
+
+        let current_bus = alien_core::EventBus::current();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let build_tasks: Vec<_> = daemons_to_build
+            .into_iter()
+            .map(|(resource_id, daemon, src, toolchain)| {
+                let daemon_id = daemon.id.clone();
+                let stack_id = stack_id.clone();
+                let settings = settings.clone();
+                let output_dir = output_dir.clone();
+                let bus = current_bus.clone();
+                let cancel_token = cancel_token.clone();
+
+                tokio::spawn(async move {
+                    let daemon_id_for_warning = daemon_id.clone();
+
+                    let build_work = async move {
+                        info!("Starting parallel build for resource: {}", daemon_id);
+
+                        if cancel_token.is_cancelled() {
+                            return (
+                                resource_id.clone(),
+                                daemon,
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: daemon_id.clone(),
+                                })),
+                            );
+                        }
+
+                        let result = tokio::select! {
+                            result = build_resource(
+                                &src,
+                                &toolchain,
+                                &daemon_id,
+                                &stack_id,
+                                &settings,
+                                &output_dir,
+                                false, // is_container = false for Daemon resources
+                                "daemon",
+                                &[],
+                            ) => result,
+                            _ = cancel_token.cancelled() => {
+                                info!("Build for daemon '{}' was cancelled", daemon_id);
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: daemon_id.clone()
+                                }))
+                            }
+                        };
+
+                        match &result {
+                            Ok(image_uri) => {
+                                info!(
+                                    "Successfully built OCI image for resource '{}' to: {}",
+                                    daemon_id, image_uri
+                                );
+                            }
+                            Err(e) => {
+                                info!("Failed to build daemon '{}': {}", daemon_id, e);
+                            }
+                        }
+
+                        (resource_id, daemon, result)
+                    };
+
+                    match bus {
+                        Some(bus) => bus.run(|| build_work).await,
+                        None => {
+                            tracing::debug!(
+                                "No event bus context available for parallel build of daemon '{}'",
+                                daemon_id_for_warning
+                            );
+                            build_work.await
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let mut build_results: Vec<(String, Daemon)> = Vec::new();
+        let mut completed_tasks = 0;
+        let mut remaining_tasks = build_tasks;
+        let mut first_error: Option<AlienError<ErrorData>> = None;
+
+        while !remaining_tasks.is_empty() {
+            let (result, _index, rest) = futures::future::select_all(remaining_tasks).await;
+            remaining_tasks = rest;
+
+            match result {
+                Ok((resource_id, daemon, build_result)) => match build_result {
+                    Ok(image_uri) => {
+                        let mut updated_daemon = daemon;
+                        updated_daemon.code = DaemonCode::Image { image: image_uri };
+                        build_results.push((resource_id, updated_daemon));
+                        completed_tasks += 1;
+                    }
+                    Err(e) => {
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                            cancel_token.cancel();
+                            for task in remaining_tasks {
+                                task.abort();
+                            }
+                            break;
+                        }
+                    }
+                },
+                Err(join_error) => {
+                    if join_error.is_cancelled() {
+                        info!("Build task was cancelled");
+                    } else {
+                        tracing::warn!("Build task failed: {}", join_error);
+                        if first_error.is_none() {
+                            first_error = Some(AlienError::new(ErrorData::BuildConfigInvalid {
+                                message: format!("Build task failed: {}", join_error),
+                            }));
+                            cancel_token.cancel();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        for (resource_id, updated_daemon) in build_results {
+            if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id)
+            {
+                resource_entry.1.config = alien_core::Resource::new(updated_daemon);
+            }
+        }
+
+        info!("Completed parallel building of {} daemons", completed_tasks);
     }
 
     // Build all containers in parallel with fail-fast behavior
@@ -752,6 +988,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         info!("Completed exporting {} container images", completed_tasks);
     }
 
+    strip_local_daemon_only_compute_clusters(&mut stack, settings.platform.runtime_platform());
+
     // Save the modified stack configuration to stack.json
     let stack_json_path = output_dir.join("stack.json");
     let stack_json_content = serde_json::to_string_pretty(&stack)
@@ -772,8 +1010,64 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         stack_json_path.display()
     );
 
-    info!("Stack build process completed.");
+    info!(
+        "Stack build process completed in {:.2}s.",
+        build_stack_started.elapsed().as_secs_f64()
+    );
     Ok(stack)
+}
+
+fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Local {
+        return;
+    }
+
+    let daemon_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+        .filter_map(|daemon| daemon.cluster.clone())
+        .collect();
+
+    if daemon_clusters.is_empty() {
+        return;
+    }
+
+    let container_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+        .filter_map(|container| container.cluster.clone())
+        .collect();
+
+    let removed_clusters: HashSet<String> = stack
+        .resources()
+        .filter(|(id, entry)| {
+            entry.config.resource_type().as_ref() == "compute-cluster"
+                && daemon_clusters.contains(*id)
+                && !container_clusters.contains(*id)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    if removed_clusters.is_empty() {
+        return;
+    }
+
+    stack
+        .resources
+        .retain(|id, _| !removed_clusters.contains(id));
+
+    for (_, entry) in stack.resources_mut() {
+        let Some(daemon) = entry.config.downcast_mut::<Daemon>() else {
+            continue;
+        };
+        if daemon
+            .cluster
+            .as_ref()
+            .is_some_and(|cluster| removed_clusters.contains(cluster))
+        {
+            daemon.cluster = None;
+        }
+    }
 }
 
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
@@ -911,6 +1205,33 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                     }));
                 }
             }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => {
+                    let path = PathBuf::from(image);
+                    if path.exists() && path.is_dir() {
+                        info!(
+                            "Daemon '{}' has local image directory, queuing for push",
+                            daemon.id
+                        );
+                        add_push_target_resource(
+                            &mut targets,
+                            resource_id.clone(),
+                            daemon.id.clone(),
+                            "daemon",
+                            path,
+                        );
+                    } else {
+                        info!("Daemon '{}' already has remote image: {}", daemon.id, image);
+                    }
+                }
+                DaemonCode::Source { .. } => {
+                    return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: daemon.id.clone(),
+                        reason: "Daemon has source code instead of built image. Run 'alien build' first.".to_string(),
+                    }));
+                }
+            }
         }
     }
 
@@ -928,6 +1249,8 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
                 func.code = WorkerCode::Image { image: image_uri };
             } else if let Some(container) = resource_entry.1.config.downcast_mut::<Container>() {
                 container.code = ContainerCode::Image { image: image_uri };
+            } else if let Some(daemon) = resource_entry.1.config.downcast_mut::<Daemon>() {
+                daemon.code = DaemonCode::Image { image: image_uri };
             }
         }
     }
@@ -946,6 +1269,7 @@ pub async fn push_stack(
     platform: Platform,
     push_settings: &PushSettings,
 ) -> Result<Stack> {
+    let push_started = Instant::now();
     info!(
         "Starting image push process to registry: {}",
         push_settings.repository
@@ -1109,7 +1433,8 @@ pub async fn push_stack(
     apply_pushed_images(&mut stack, push_results);
 
     info!(
-        "Image push process completed. Stack updated with {} resource image URL(s).",
+        "Image push process completed in {:.2}s. Stack updated with {} resource image URL(s).",
+        push_started.elapsed().as_secs_f64(),
         resource_count
     );
 
@@ -1129,6 +1454,7 @@ async fn push_resource_images(
     repository: &str,
     push_options: &dockdash::PushOptions,
 ) -> Result<String> {
+    let push_resource_started = Instant::now();
     info!(
         "Pushing images for resource '{}' from {}",
         display_resource_name,
@@ -1218,27 +1544,180 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Push each OCI tarball (multi-architecture manifest)
-    for oci_file in &oci_files {
-        info!("Pushing {}", oci_file.display());
+    // Container images are linux; darwin/windows tarballs (produced for `local` host
+    // binaries) are not registry container images, so they're excluded from the push.
+    let linux_tarballs = select_linux_tarballs(&oci_files);
 
-        // Load the OCI tarball
-        let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+    // No linux image (unusual) — push whatever tarballs are present.
+    if linux_tarballs.is_empty() {
+        for oci_file in &oci_files {
+            let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+            image
+                .push(&image_uri, &push_opts_with_progress)
+                .await
+                .map_dockdash_err()?;
+        }
+        info!(
+            "Pushed resource '{}' in {:.2}s",
+            display_resource_name,
+            push_resource_started.elapsed().as_secs_f64()
+        );
 
-        // Push to registry with progress callback
+        return Ok(image_uri);
+    }
+
+    // Single arch: push the image straight to the tag — no index needed.
+    if let [(_, only)] = linux_tarballs.as_slice() {
+        info!("Pushing {} to {}", only.display(), image_uri);
+        let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
         image
             .push(&image_uri, &push_opts_with_progress)
             .await
             .map_dockdash_err()?;
-
         info!(
-            "Successfully pushed {} to {}",
-            oci_file.display(),
-            image_uri
+            "Pushed resource '{}' in {:.2}s",
+            display_resource_name,
+            push_resource_started.elapsed().as_secs_f64()
         );
+
+        return Ok(image_uri);
     }
 
+    // Multi-arch: push each image to a per-arch child tag, then publish a manifest list
+    // (OCI image index) at the shared tag — otherwise the last single-arch push wins the tag.
+    let oci_client = OciClient::new(OciClientConfig {
+        protocol: push_options.protocol.clone(),
+        ..Default::default()
+    });
+    let mut entries = Vec::new();
+    for (target, oci_file) in &linux_tarballs {
+        let child_uri = format!("{}-{}", image_uri, target.runtime_platform_id());
+        info!("Pushing {} as {}", oci_file.display(), child_uri);
+        let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
+        image
+            .push(&child_uri, &push_opts_with_progress)
+            .await
+            .map_dockdash_err()?;
+
+        // The index entry's digest+size must reflect the manifest the registry stored
+        // (dockdash pushes a converted manifest), so read it back rather than hashing the tarball.
+        let child_ref = Reference::try_from(child_uri.as_str())
+            .into_alien_error()
+            .context(ErrorData::InvalidResourceConfig {
+                resource_id: resource_name.to_string(),
+                reason: format!("Invalid image reference '{child_uri}'"),
+            })?;
+        let (manifest_bytes, digest) = oci_client
+            .pull_manifest_raw(
+                &child_ref,
+                &push_options.auth,
+                &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImagePushFailed {
+                image: child_uri.clone(),
+                reason: "Failed to read back the pushed manifest".to_string(),
+            })?;
+        let media_type = manifest_media_type(&manifest_bytes)
+            .unwrap_or_else(|| OCI_IMAGE_MEDIA_TYPE.to_string());
+        entries.push(image_index_entry(
+            *target,
+            digest,
+            manifest_bytes.len() as i64,
+            media_type,
+        ));
+    }
+
+    let index = assemble_image_index(entries);
+    let index_ref = Reference::try_from(image_uri.as_str())
+        .into_alien_error()
+        .context(ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: format!("Invalid image reference '{image_uri}'"),
+        })?;
+    oci_client
+        .push_manifest_list(&index_ref, &push_options.auth, index)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImagePushFailed {
+            image: image_uri.clone(),
+            reason: "Failed to push the multi-arch manifest list".to_string(),
+        })?;
+    info!(
+        "Pushed multi-arch image {} ({} arches)",
+        image_uri,
+        linux_tarballs.len()
+    );
+
+    info!(
+        "Pushed resource '{}' in {:.2}s",
+        display_resource_name,
+        push_resource_started.elapsed().as_secs_f64()
+    );
+
     Ok(image_uri)
+}
+
+/// Pair each linux OCI tarball with its target, sorted for deterministic ordering.
+/// darwin/windows tarballs are excluded — they are host binaries, not container images.
+fn select_linux_tarballs(oci_files: &[PathBuf]) -> Vec<(BinaryTarget, PathBuf)> {
+    let mut out: Vec<(BinaryTarget, PathBuf)> = oci_files
+        .iter()
+        .filter_map(|path| oci_tarball_target(path).map(|target| (target, path.clone())))
+        .filter(|(target, _)| target.oci_os() == "linux")
+        .collect();
+    out.sort_by_key(|(target, _)| target.runtime_platform_id());
+    out
+}
+
+/// `<runtime_platform_id>.oci.tar` → its `BinaryTarget`.
+fn oci_tarball_target(path: &Path) -> Option<BinaryTarget> {
+    let name = path.file_name()?.to_str()?;
+    BinaryTarget::from_runtime_platform_id(name.strip_suffix(".oci.tar")?)
+}
+
+/// One OCI image index entry for a built target.
+fn image_index_entry(
+    target: BinaryTarget,
+    digest: String,
+    size: i64,
+    media_type: String,
+) -> ImageIndexEntry {
+    ImageIndexEntry {
+        media_type,
+        digest,
+        size,
+        platform: Some(OciPlatform {
+            architecture: target.oci_arch().to_string(),
+            os: target.oci_os().to_string(),
+            os_version: None,
+            os_features: None,
+            variant: None,
+            features: None,
+        }),
+        annotations: None,
+    }
+}
+
+/// Wrap per-arch manifest entries in an OCI image index (manifest list).
+fn assemble_image_index(manifests: Vec<ImageIndexEntry>) -> OciImageIndex {
+    OciImageIndex {
+        schema_version: 2,
+        media_type: Some(OCI_IMAGE_INDEX_MEDIA_TYPE.to_string()),
+        manifests,
+        artifact_type: None,
+        annotations: None,
+    }
+}
+
+/// Read the `mediaType` field from a raw manifest, if present.
+fn manifest_media_type(bytes: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()?
+        .get("mediaType")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 fn generate_unique_tag() -> String {
@@ -1306,6 +1785,7 @@ async fn build_resource(
     resource_type: &str,
     related_resources: &[String],
 ) -> Result<String> {
+    let resource_started = Instant::now();
     // Get target list from settings (uses platform defaults if not specified)
     let targets = settings.get_targets();
 
@@ -1329,9 +1809,10 @@ async fn build_resource(
     .await?
     {
         info!(
-            "Reusing cached build artifacts for resource '{}' at {}",
+            "Reusing cached build artifacts for resource '{}' at {} after {:.2}s",
             resource_name,
-            cached_dir.display()
+            cached_dir.display(),
+            resource_started.elapsed().as_secs_f64()
         );
         return Ok(cached_dir.to_string_lossy().into_owned());
     }
@@ -1421,8 +1902,9 @@ async fn build_resource(
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
-        "Completed build for resource '{}'. Images directory: {} (hash: {})",
+        "Completed build for resource '{}' in {:.2}s. Images directory: {} (hash: {})",
         resource_name,
+        resource_started.elapsed().as_secs_f64(),
         final_output_dir.display(),
         short_hash
     );
@@ -1446,10 +1928,13 @@ async fn compute_source_artifact_cache_key(
                 message: "Failed to serialize toolchain config for build cache key".to_string(),
             })?,
     );
-    hasher.update(settings.platform.runtime_platform().as_str().as_bytes());
-    if let Some(base_platform) = settings.platform.base_platform() {
-        hasher.update(base_platform.as_str().as_bytes());
-    }
+    // Source artifact bytes are platform-independent for equivalent target sets.
+    // The actual differences are target triples, debug/release mode, container
+    // packaging, base image, and whether the runtime is packaged into the image.
+    // This lets e.g. GCP and Azure reuse the same linux-x64 artifacts.
+    let needs_runtime_in_image =
+        is_container || settings.platform.runtime_platform() != Platform::Local;
+    hasher.update(needs_runtime_in_image.to_string().as_bytes());
     hasher.update(settings.debug_mode.to_string().as_bytes());
     hasher.update(is_container.to_string().as_bytes());
     if let Some(override_base_image) = &settings.override_base_image {
@@ -1459,9 +1944,153 @@ async fn compute_source_artifact_cache_key(
         hasher.update(target.runtime_platform_id().as_bytes());
     }
 
-    hash_source_directory(Path::new(src), &mut hasher).await?;
+    hash_build_input_source(src, toolchain_config, &mut hasher).await?;
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn hash_build_input_source(
+    src: &str,
+    toolchain_config: &alien_core::ToolchainConfig,
+    hasher: &mut Sha256,
+) -> Result<()> {
+    match toolchain_config {
+        ToolchainConfig::Rust { .. } => hash_rust_build_input_graph(Path::new(src), hasher).await,
+        _ => hash_source_directory(Path::new(src), hasher).await,
+    }
+}
+
+async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
+    let metadata = read_cargo_metadata(src_dir).await?;
+    hasher.update(b"rust-cargo-metadata-v1");
+
+    let lockfile = metadata.workspace_root.join("Cargo.lock");
+    if lockfile.is_file() {
+        hasher.update(b"cargo-lock");
+        let lockfile_bytes = fs::read(&lockfile).await.into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "read file".to_string(),
+                file_path: lockfile.display().to_string(),
+                reason: "Failed to read Cargo.lock for build cache key".to_string(),
+            },
+        )?;
+        hasher.update(lockfile_bytes);
+    }
+
+    let local_package_ids = local_cargo_package_ids(&metadata);
+    let mut local_packages: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|package| local_package_ids.contains(&package.id))
+        .collect();
+    local_packages.sort_by(|left, right| left.id.cmp(&right.id));
+
+    for package in local_packages {
+        hasher.update(b"local-package");
+        hasher.update(package.id.as_bytes());
+        hasher.update(package.manifest_path.to_string_lossy().as_bytes());
+        let package_dir = package.manifest_path.parent().ok_or_else(|| {
+            AlienError::new(ErrorData::BuildConfigInvalid {
+                message: format!(
+                    "Cargo metadata package '{}' has manifest path without parent: {}",
+                    package.id,
+                    package.manifest_path.display()
+                ),
+            })
+        })?;
+        hash_source_directory(package_dir, hasher).await?;
+    }
+
+    Ok(())
+}
+
+async fn read_cargo_metadata(src_dir: &Path) -> Result<CargoMetadata> {
+    let manifest_path = src_dir.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--manifest-path"])
+        .arg(&manifest_path)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: src_dir.display().to_string(),
+            reason: "Failed to execute cargo metadata for build cache key".to_string(),
+            build_output: None,
+        })?;
+
+    if !output.status.success() {
+        let mut build_output = String::new();
+        build_output.push_str(&String::from_utf8_lossy(&output.stdout));
+        build_output.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: src_dir.display().to_string(),
+            reason: "cargo metadata failed while computing build cache key".to_string(),
+            build_output: Some(build_output),
+        }));
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationError {
+            message: "Failed to parse cargo metadata JSON for build cache key".to_string(),
+        })
+}
+
+fn local_cargo_package_ids(metadata: &CargoMetadata) -> HashSet<String> {
+    let packages_by_id: HashMap<_, _> = metadata
+        .packages
+        .iter()
+        .map(|package| (package.id.as_str(), package))
+        .collect();
+
+    let Some(resolve) = &metadata.resolve else {
+        return metadata
+            .packages
+            .iter()
+            .filter(|package| package.source.is_none())
+            .map(|package| package.id.clone())
+            .collect();
+    };
+    let Some(root) = &resolve.root else {
+        return metadata
+            .packages
+            .iter()
+            .filter(|package| package.source.is_none())
+            .map(|package| package.id.clone())
+            .collect();
+    };
+
+    let nodes_by_id: HashMap<_, _> = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut visited = HashSet::new();
+    let mut stack = vec![root.as_str()];
+
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id.to_string()) {
+            continue;
+        }
+
+        let Some(node) = nodes_by_id.get(id) else {
+            continue;
+        };
+
+        for dependency in &node.dependencies {
+            stack.push(dependency);
+        }
+    }
+
+    visited
+        .into_iter()
+        .filter(|id| {
+            packages_by_id
+                .get(id.as_str())
+                .map(|package| package.source.is_none())
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 async fn hash_source_directory(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
@@ -1507,7 +2136,7 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
 
-        if file_name == ".git" || file_name == ".alien" {
+        if is_ignored_source_cache_path(file_name.as_ref()) {
             continue;
         }
 
@@ -1539,7 +2168,78 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
     Ok(())
 }
 
+fn is_ignored_source_cache_path(file_name: &str) -> bool {
+    matches!(
+        file_name,
+        ".git" | ".alien" | ".alien-build" | "target" | "node_modules"
+    ) || file_name.ends_with(".bun-build")
+}
+
 async fn find_cached_artifact_dir(
+    build_output_dir: &Path,
+    resource_name: &str,
+    targets: &[BinaryTarget],
+    artifact_cache_key: &str,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) =
+        find_cached_artifact_dir_in(build_output_dir, resource_name, targets, artifact_cache_key)
+            .await?
+    {
+        return Ok(Some(path));
+    }
+
+    let Some(parent_dir) = build_output_dir.parent() else {
+        return Ok(None);
+    };
+
+    let mut platform_entries = fs::read_dir(parent_dir).await.into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read directory".to_string(),
+            file_path: parent_dir.display().to_string(),
+            reason: "Failed to read sibling build directories for artifact cache".to_string(),
+        },
+    )?;
+
+    while let Some(entry) = platform_entries
+        .next_entry()
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "read directory entry".to_string(),
+            file_path: parent_dir.display().to_string(),
+            reason: "Failed to iterate sibling build directories for artifact cache".to_string(),
+        })?
+    {
+        let path = entry.path();
+        if path == build_output_dir {
+            continue;
+        }
+
+        let file_type =
+            entry
+                .file_type()
+                .await
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read metadata".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read sibling artifact cache directory metadata".to_string(),
+                })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        if let Some(cached) =
+            find_cached_artifact_dir_in(&path, resource_name, targets, artifact_cache_key).await?
+        {
+            return Ok(Some(cached));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn find_cached_artifact_dir_in(
     build_output_dir: &Path,
     resource_name: &str,
     targets: &[BinaryTarget],
@@ -1954,12 +2654,37 @@ fn base_image_build_retry_delay(attempt: usize) -> Duration {
 
 fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
     match error {
-        dockdash::Error::ImagePull { source, .. } => source
-            .as_deref()
-            .map(is_retryable_image_pull_source)
-            .unwrap_or(false),
+        dockdash::Error::ImagePull { source, .. } => {
+            source
+                .as_deref()
+                .map(is_retryable_image_pull_source)
+                .unwrap_or(false)
+                || is_retryable_image_pull_text(&error.to_string())
+        }
         _ => false,
     }
+}
+
+fn is_retryable_image_pull_text(message: &str) -> bool {
+    const RETRYABLE_MARKERS: &[&str] = &[
+        "error sending request",
+        "client error (sendrequest)",
+        "connection error",
+        "connection aborted",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "timed out",
+        "unexpected eof",
+        "broken pipe",
+        "temporary failure in name resolution",
+        "dns error",
+    ];
+
+    let message = message.to_ascii_lowercase();
+    RETRYABLE_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
 }
 
 fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static)) -> bool {
@@ -2126,6 +2851,12 @@ async fn pull_and_export_image(
             ));
         }
 
+        // Flatten the saved archive to a single image manifest before the OCI reader sees it.
+        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+            &output_tarball,
+            arch_str,
+        )?;
+
         info!(
             "Successfully exported {} to {}",
             image,
@@ -2216,12 +2947,101 @@ mod tests {
     use std::process::Command;
     use tempfile::tempdir;
 
+    #[test]
+    fn requested_host_binary_only_gates_container_skip() {
+        use BinaryTarget::*;
+        // None (defaults to host OS) and empty → containers still build.
+        assert!(!requested_host_binary_only(None));
+        assert!(!requested_host_binary_only(Some(&[])));
+        // Explicit non-Linux-only → nothing for a container to build, skip it.
+        assert!(requested_host_binary_only(Some(&[DarwinArm64])));
+        assert!(requested_host_binary_only(Some(&[WindowsX64])));
+        assert!(requested_host_binary_only(Some(&[DarwinArm64, WindowsX64])));
+        // Any Linux target present → containers build for it.
+        assert!(!requested_host_binary_only(Some(&[LinuxArm64])));
+        assert!(!requested_host_binary_only(Some(&[LinuxX64])));
+        assert!(!requested_host_binary_only(Some(&[
+            DarwinArm64,
+            LinuxArm64
+        ])));
+    }
+
+    #[test]
+    fn local_build_strips_daemon_only_compute_cluster() {
+        let cluster = alien_core::ComputeCluster::new("host-runtime".to_string())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let daemon = Daemon::new("host-loader".to_string())
+            .cluster("host-runtime".to_string())
+            .permissions("loader".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/host-loader:latest".to_string(),
+            })
+            .build();
+        let mut stack = Stack::new("host-loader-stack".to_string())
+            .add(cluster, alien_core::ResourceLifecycle::Frozen)
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        strip_local_daemon_only_compute_clusters(&mut stack, Platform::Local);
+
+        assert!(!stack.resources.contains_key("host-runtime"));
+        let daemon = stack
+            .resources()
+            .find(|(id, _)| *id == "host-loader")
+            .and_then(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+            .expect("daemon should remain");
+        assert_eq!(daemon.cluster, None);
+    }
+
+    #[test]
+    fn source_cache_hash_ignores_build_artifacts() {
+        let src = tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join(".alien-build")).unwrap();
+        std::fs::create_dir_all(src.path().join("node_modules")).unwrap();
+        std::fs::write(src.path().join("package.json"), "{}").unwrap();
+        std::fs::write(
+            src.path().join(".alien-build/__alien_bootstrap.ts"),
+            "generated",
+        )
+        .unwrap();
+        std::fs::write(
+            src.path().join(".18ba89dff9ff58bf-00000000.bun-build"),
+            "generated",
+        )
+        .unwrap();
+        std::fs::write(src.path().join("node_modules/module.js"), "dependency").unwrap();
+
+        let mut files = Vec::new();
+        collect_source_files(src.path(), src.path(), &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files, vec![PathBuf::from("package.json")]);
+    }
+
     fn docker_available() -> bool {
         Command::new("docker")
             .arg("info")
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    /// True if a real OCI registry answers at `base/v2/` (200 or 401). Used to gate the
+    /// multi-arch push test. Run one with: `docker run -d -p 5050:5000 registry:2`.
+    async fn registry_available(base: &str) -> bool {
+        match reqwest::get(format!("{base}/v2/")).await {
+            Ok(resp) => resp.status().is_success() || resp.status().as_u16() == 401,
+            Err(_) => false,
+        }
     }
 
     fn test_container(name: &str, image: String) -> Container {
@@ -2257,6 +3077,19 @@ mod tests {
     }
 
     #[test]
+    fn retryable_image_pull_detects_opaque_transport_errors() {
+        let error = dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/example/base:tag".to_string(),
+            message: "Failed to pull layer blob sha256:abc".to_string(),
+            source: Some(Box::new(std::io::Error::other(
+                "error sending request for url (https://ghcr.io/v2/example/base/blobs/sha256:abc): client error (SendRequest): connection error",
+            ))),
+        };
+
+        assert!(is_retryable_dockdash_image_pull_error(&error));
+    }
+
+    #[test]
     fn retryable_image_pull_rejects_auth_and_not_found_errors() {
         let auth_error = dockdash::Error::ImagePull {
             image_ref: "ghcr.io/example/base:tag".to_string(),
@@ -2279,6 +3112,68 @@ mod tests {
 
         assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
+    }
+
+    #[test]
+    fn oci_tarball_target_maps_runtime_platform_ids() {
+        assert_eq!(
+            oci_tarball_target(Path::new("/x/linux-aarch64.oci.tar")),
+            Some(BinaryTarget::LinuxArm64)
+        );
+        assert_eq!(
+            oci_tarball_target(Path::new("linux-x64.oci.tar")),
+            Some(BinaryTarget::LinuxX64)
+        );
+        assert_eq!(oci_tarball_target(Path::new("stack.json")), None);
+        assert_eq!(oci_tarball_target(Path::new("linux-arm64.oci.tar")), None); // CLI spelling, not a tarball name
+    }
+
+    #[test]
+    fn select_linux_tarballs_keeps_only_linux_sorted() {
+        let files = vec![
+            PathBuf::from("/b/windows-x64.oci.tar"),
+            PathBuf::from("/b/linux-x64.oci.tar"),
+            PathBuf::from("/b/darwin-aarch64.oci.tar"),
+            PathBuf::from("/b/linux-aarch64.oci.tar"),
+        ];
+        let selected = select_linux_tarballs(&files);
+        assert_eq!(
+            selected.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec![BinaryTarget::LinuxArm64, BinaryTarget::LinuxX64], // sorted by runtime id: linux-aarch64 < linux-x64
+        );
+    }
+
+    #[test]
+    fn assemble_image_index_sets_oci_index_shape() {
+        let entry = image_index_entry(
+            BinaryTarget::LinuxArm64,
+            "sha256:abc".to_string(),
+            123,
+            OCI_IMAGE_MEDIA_TYPE.to_string(),
+        );
+        let platform = entry.platform.as_ref().unwrap();
+        assert_eq!(platform.architecture, "arm64");
+        assert_eq!(platform.os, "linux");
+
+        let index = assemble_image_index(vec![entry]);
+        assert_eq!(index.schema_version, 2);
+        assert_eq!(
+            index.media_type.as_deref(),
+            Some(OCI_IMAGE_INDEX_MEDIA_TYPE)
+        );
+        assert_eq!(index.manifests.len(), 1);
+        assert_eq!(index.manifests[0].digest, "sha256:abc");
+        assert_eq!(index.manifests[0].size, 123);
+    }
+
+    #[test]
+    fn manifest_media_type_reads_field_or_none() {
+        assert_eq!(
+            manifest_media_type(br#"{"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#),
+            Some("application/vnd.oci.image.manifest.v1+json".to_string())
+        );
+        assert_eq!(manifest_media_type(br#"{"schemaVersion":2}"#), None);
+        assert_eq!(manifest_media_type(b"not json"), None);
     }
 
     #[test]
@@ -2358,6 +3253,74 @@ mod tests {
             images.get("remote").unwrap(),
             "registry.example.com/remote:latest"
         );
+    }
+
+    #[test]
+    fn collect_push_targets_handles_daemons_like_other_compute() {
+        let temp_root = tempdir().unwrap();
+        let agent_dir = temp_root.path().join("agent-image");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let local_daemon = Daemon::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: agent_dir.to_string_lossy().into_owned(),
+            })
+            .build();
+        let remote_daemon = Daemon::new("collector".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/collector:latest".to_string(),
+            })
+            .build();
+
+        let mut stack = Stack::new("daemon-push".to_string())
+            .add(local_daemon, alien_core::ResourceLifecycle::Live)
+            .add(remote_daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let targets = collect_push_targets(&stack).unwrap();
+        assert_eq!(
+            targets.len(),
+            1,
+            "only the local-dir daemon is queued for push"
+        );
+        assert_eq!(targets[0].resource_names, vec!["agent".to_string()]);
+        assert_eq!(targets[0].resource_type, "daemon");
+        assert_eq!(targets[0].local_image_dir, agent_dir);
+
+        let updates = targets[0].push_result_updates("registry.example.com/agent:tag".into());
+        apply_pushed_images(&mut stack, updates);
+        let agent = stack
+            .resources()
+            .find(|(id, _)| *id == "agent")
+            .and_then(|(_, e)| e.config.downcast_ref::<Daemon>().cloned())
+            .expect("agent daemon should exist");
+        assert_eq!(
+            agent.code,
+            DaemonCode::Image {
+                image: "registry.example.com/agent:tag".to_string()
+            }
+        );
+
+        // An unbuilt source daemon fails fast, same as workers and containers.
+        let source_daemon = Daemon::new("raw".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Source {
+                src: ".".to_string(),
+                toolchain: ToolchainConfig::Rust {
+                    binary_name: "raw".to_string(),
+                },
+            })
+            .build();
+        let source_stack = Stack::new("daemon-source".to_string())
+            .add(source_daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        let error = match collect_push_targets(&source_stack) {
+            Err(error) => error,
+            Ok(_) => panic!("source daemon must be rejected"),
+        };
+        assert!(error.to_string().contains("Run 'alien build' first"));
     }
 
     #[tokio::test]
@@ -2522,6 +3485,152 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_artifact_cache_key_is_shared_for_equivalent_cloud_builds() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let gcp = BuildSettings {
+            output_directory: src_dir.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: Some("registry.example.com/base:tag".to_string()),
+            debug_mode: false,
+        };
+        let azure = BuildSettings {
+            platform: PlatformBuildSettings::Azure {},
+            ..gcp.clone()
+        };
+
+        let gcp_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+        let azure_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(gcp_key, azure_key);
+    }
+
+    #[tokio::test]
+    async fn rust_source_artifact_cache_key_includes_local_path_dependencies() {
+        let workspace_dir = tempdir().unwrap();
+        let app_dir = workspace_dir.path().join("app");
+        let dep_dir = workspace_dir.path().join("dep");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::create_dir_all(dep_dir.join("src")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() { dep::value(); }\n").unwrap();
+        std::fs::write(
+            dep_dir.join("Cargo.toml"),
+            "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(dep_dir.join("src/lib.rs"), "pub fn value() -> u32 { 1 }\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let settings = BuildSettings {
+            output_directory: workspace_dir
+                .path()
+                .join("out")
+                .to_string_lossy()
+                .into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let first_key = compute_source_artifact_cache_key(
+            app_dir.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        std::fs::write(dep_dir.join("src/lib.rs"), "pub fn value() -> u32 { 2 }\n").unwrap();
+
+        let second_key = compute_source_artifact_cache_key(
+            app_dir.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(first_key, second_key);
+    }
+
+    #[tokio::test]
+    async fn artifact_cache_lookup_reuses_sibling_platform_directory() {
+        let temp_root = tempdir().unwrap();
+        let build_root = temp_root.path().join("build");
+        let gcp_dir = build_root.join("gcp");
+        let azure_dir = build_root.join("azure");
+        let cached_dir = gcp_dir.join("alien-manager-abcdef12");
+
+        fs::create_dir_all(&cached_dir).await.unwrap();
+        fs::create_dir_all(&azure_dir).await.unwrap();
+        fs::write(cached_dir.join("linux-x64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        write_artifact_cache_metadata(&cached_dir, "cache-key")
+            .await
+            .unwrap();
+
+        let found = find_cached_artifact_dir(
+            &azure_dir,
+            "alien-manager",
+            &[BinaryTarget::LinuxX64],
+            "cache-key",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(found, Some(cached_dir));
+    }
+
+    #[tokio::test]
     async fn finalize_artifact_dir_reuses_existing_final_directory() {
         let temp_root = tempdir().unwrap();
         let temp_dir = temp_root.path().join(".agent-tmp-1234");
@@ -2569,5 +3678,422 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with(".agent-tmp-"));
+    }
+
+    /// End-to-end: build two arches into one resource dir, push, and assert the pushed tag
+    /// resolves to a real multi-arch manifest list (not a single overwritten arch).
+    /// Gated on docker + a local registry (`docker run -d -p 5050:5000 registry:2`).
+    #[tokio::test]
+    async fn multiarch_push_produces_manifest_list() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping multiarch_push_produces_manifest_list: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping multiarch_push_produces_manifest_list: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let build_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build both linux arches into the same resource dir.
+        for target in [BinaryTarget::LinuxArm64, BinaryTarget::LinuxX64] {
+            let toolchain = DockerToolchain {
+                dockerfile: None,
+                build_args: None,
+                target: None,
+            };
+            let context = ToolchainContext {
+                src_dir: src.path().to_path_buf(),
+                build_dir: build_dir.path().to_path_buf(),
+                cache_store: None,
+                cache_prefix: "test".to_string(),
+                build_target: target,
+                runtime_platform_name: "aws".to_string(),
+                debug_mode: false,
+                is_container: true,
+            };
+            toolchain
+                .build(&context)
+                .await
+                .expect("docker build should succeed");
+        }
+        assert!(build_dir.path().join("linux-aarch64.oci.tar").exists());
+        assert!(build_dir.path().join("linux-x64.oci.tar").exists());
+
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: build_dir.path().to_string_lossy().into_owned(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let stack = Stack::new("multiarch-test".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-multiarch-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+        assert!(
+            image_uri.contains(REGISTRY),
+            "expected a registry URI, got {image_uri}"
+        );
+
+        // The pushed tag must resolve to an image index with both linux arches.
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[
+                    OCI_IMAGE_INDEX_MEDIA_TYPE,
+                    "application/vnd.docker.distribution.manifest.list.v2+json",
+                ],
+            )
+            .await
+            .expect("should pull a manifest list");
+        let index: OciImageIndex =
+            serde_json::from_slice(&bytes).expect("pushed tag should be an image index");
+        let mut platforms: Vec<(String, String)> = index
+            .manifests
+            .iter()
+            .filter_map(|m| {
+                m.platform
+                    .as_ref()
+                    .map(|p| (p.os.clone(), p.architecture.clone()))
+            })
+            .collect();
+        platforms.sort();
+        assert_eq!(
+            platforms,
+            vec![
+                ("linux".to_string(), "amd64".to_string()),
+                ("linux".to_string(), "arm64".to_string()),
+            ],
+            "pushed tag must be a real multi-arch index"
+        );
+    }
+
+    /// End-to-end: build a single arch into a resource dir, push, and assert the pushed tag
+    /// resolves to a plain image manifest (not an index). This is the path every current
+    /// single-platform release (aws/gcp/azure) takes, so the direct branch must stay intact.
+    /// Gated on docker + a local registry (`docker run -d -p 5050:5000 registry:2`).
+    #[tokio::test]
+    async fn singlearch_push_produces_single_manifest() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping singlearch_push_produces_single_manifest: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping singlearch_push_produces_single_manifest: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let build_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build a single linux arch into the resource dir.
+        let toolchain = DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let context = ToolchainContext {
+            src_dir: src.path().to_path_buf(),
+            build_dir: build_dir.path().to_path_buf(),
+            cache_store: None,
+            cache_prefix: "test".to_string(),
+            build_target: BinaryTarget::LinuxArm64,
+            runtime_platform_name: "aws".to_string(),
+            debug_mode: false,
+            is_container: true,
+        };
+        toolchain
+            .build(&context)
+            .await
+            .expect("docker build should succeed");
+        assert!(build_dir.path().join("linux-aarch64.oci.tar").exists());
+
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: build_dir.path().to_string_lossy().into_owned(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let stack = Stack::new("singlearch-test".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-singlearch-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+        assert!(
+            image_uri.contains(REGISTRY),
+            "expected a registry URI, got {image_uri}"
+        );
+
+        // The pushed tag must resolve to a plain image manifest, NOT an index: it has a
+        // `config` descriptor and no `manifests` array.
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            )
+            .await
+            .expect("should pull a manifest");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("pushed tag should be valid JSON");
+        assert!(
+            value.get("config").is_some(),
+            "single-arch push must produce an image manifest with a config descriptor, got: {value}"
+        );
+        assert!(
+            value.get("manifests").is_none(),
+            "single-arch push must not produce a manifest index, got: {value}"
+        );
+    }
+
+    /// End-to-end seam: build two arches into two separate partial outputs (one per native
+    /// runner), run `merge_build_outputs` to combine them, load the merged stack exactly as
+    /// the release path does (deserialize stack.json), then push — asserting the merged dir
+    /// resolves to a real multi-arch index. This exercises the merge→load→push chain as one
+    /// flow, not as independent halves. Gated on docker + a local registry.
+    #[tokio::test]
+    async fn merge_then_push_produces_manifest_list() {
+        use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
+
+        const REGISTRY: &str = "localhost:5050";
+        if !docker_available() {
+            eprintln!("Skipping merge_then_push_produces_manifest_list: docker not available");
+            return;
+        }
+        if !registry_available(&format!("http://{REGISTRY}")).await {
+            eprintln!(
+                "Skipping merge_then_push_produces_manifest_list: no registry at {REGISTRY} (run: docker run -d -p 5050:5000 registry:2)"
+            );
+            return;
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        let input_root = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("Dockerfile"),
+            "FROM alpine:latest\nCMD [\"echo\", \"hi\"]\n",
+        )
+        .unwrap();
+
+        // Build each arch into its own partial: <input>/<partial>/build/aws/<dir>/<tarball>,
+        // with a stack.json whose code.image is that partial's absolute artifact dir — the
+        // exact shape a native-runner `alien build --output-dir` upload produces.
+        for (partial, target, dir_name) in [
+            ("arm", BinaryTarget::LinuxArm64, "web-aaaa1111"),
+            ("x64", BinaryTarget::LinuxX64, "web-bbbb2222"),
+        ] {
+            let platform_dir = input_root.path().join(partial).join("build").join("aws");
+            let artifact_dir = platform_dir.join(dir_name);
+            std::fs::create_dir_all(&artifact_dir).unwrap();
+
+            let toolchain = DockerToolchain {
+                dockerfile: None,
+                build_args: None,
+                target: None,
+            };
+            let context = ToolchainContext {
+                src_dir: src.path().to_path_buf(),
+                build_dir: artifact_dir.clone(),
+                cache_store: None,
+                cache_prefix: "test".to_string(),
+                build_target: target,
+                runtime_platform_name: "aws".to_string(),
+                debug_mode: false,
+                is_container: true,
+            };
+            toolchain
+                .build(&context)
+                .await
+                .expect("docker build should succeed");
+
+            let image = artifact_dir
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let container = Container::new("web".to_string())
+                .code(ContainerCode::Image { image })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions("web".to_string())
+                .build();
+            let stack = Stack::new("merge-push-test".to_string())
+                .add(container, alien_core::ResourceLifecycle::Live)
+                .build();
+            std::fs::write(
+                platform_dir.join("stack.json"),
+                serde_json::to_string_pretty(&stack).unwrap(),
+            )
+            .unwrap();
+        }
+
+        // Merge the two partials into one .alien.
+        let platforms = crate::merge::merge_build_outputs(input_root.path(), out.path())
+            .expect("merge should succeed");
+        assert_eq!(platforms, vec!["aws".to_string()]);
+
+        // Load the merged stack the way the release path does, then push it.
+        let merged_json = std::fs::read_to_string(out.path().join("build/aws/stack.json")).unwrap();
+        let merged_stack: Stack =
+            serde_json::from_str(&merged_json).expect("merged stack.json should deserialize");
+
+        let push_settings = PushSettings {
+            repository: format!("{REGISTRY}/alien-merge-push-test"),
+            destination_label: None,
+            options: dockdash::PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+
+        let pushed = push_stack(merged_stack, Platform::Aws, &push_settings)
+            .await
+            .expect("push of the merged stack should succeed");
+
+        let image_uri = pushed
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .find_map(|c| match &c.code {
+                ContainerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .expect("container should carry a pushed image URI");
+
+        let client = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let reference = Reference::try_from(image_uri.as_str()).unwrap();
+        let (bytes, _digest) = client
+            .pull_manifest_raw(
+                &reference,
+                &dockdash::RegistryAuth::Anonymous,
+                &[
+                    OCI_IMAGE_INDEX_MEDIA_TYPE,
+                    "application/vnd.docker.distribution.manifest.list.v2+json",
+                ],
+            )
+            .await
+            .expect("should pull a manifest list");
+        let index: OciImageIndex = serde_json::from_slice(&bytes)
+            .expect("merged-then-pushed tag should be an image index");
+        let mut platforms: Vec<(String, String)> = index
+            .manifests
+            .iter()
+            .filter_map(|m| {
+                m.platform
+                    .as_ref()
+                    .map(|p| (p.os.clone(), p.architecture.clone()))
+            })
+            .collect();
+        platforms.sort();
+        assert_eq!(
+            platforms,
+            vec![
+                ("linux".to_string(), "amd64".to_string()),
+                ("linux".to_string(), "arm64".to_string()),
+            ],
+            "merged stack must push as a real multi-arch index"
+        );
     }
 }

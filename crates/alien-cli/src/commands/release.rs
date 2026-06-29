@@ -6,7 +6,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Platform, Stack, Worker, WorkerCode,
+    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack,
+    StackInputDefinition, StackInputKind, StackInputProvider, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -18,8 +19,9 @@ use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -37,7 +39,7 @@ use tracing::info;
     alien release --platforms aws
     alien release --platforms aws,gcp
 
-    # Use pre-built and pre-pushed images (skip build and push)
+    # Skip the build and release the existing build output (still pushes local artifacts)
     alien release --prebuilt
 
     # Output JSON (for scripting/automation)
@@ -67,20 +69,26 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
-
     /// Base cloud platform for Kubernetes auto-builds. This keeps the release
     /// stack under Kubernetes while using the managed cluster's default
     /// architecture when auto-building missing artifacts.
     #[arg(long)]
     pub base_platform: Option<String>,
 
-    /// Use pre-built and pre-pushed images. Skips both build and push steps.
-    /// Requires that stack.json already contains remote image URIs.
+    /// Skip the build and release the existing `.alien` output. Still pushes any local
+    /// artifacts it contains, and reuses images that are already remote URIs.
     #[arg(long)]
     pub prebuilt: bool,
+
+    /// Target OS/architecture combinations to build for (comma-separated).
+    /// Same format as `alien build --targets` — e.g. `linux-x64`,
+    /// `linux-arm64`. When omitted, the default is picked from the
+    /// platform AND the stack: AWS deploys with a daemon that declares
+    /// `nestedVirtualization(true)` automatically build for `linux-x64`
+    /// (nested virt isn't available on Graviton); all other AWS deploys
+    /// keep AWS's `linux-arm64` default.
+    #[arg(long, value_delimiter = ',')]
+    pub targets: Option<Vec<String>>,
 
     /// Override the runtime base image used for source-built cloud containers.
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
@@ -162,6 +170,13 @@ struct ReleaseConfig {
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
+    stack: Stack,
+}
+
+#[derive(Clone)]
+struct AutoBuildPlan {
+    platform: String,
+    settings: alien_build::settings::BuildSettings,
 }
 
 /// Load and validate all release configuration from args + execution context.
@@ -172,6 +187,7 @@ async fn load_release_config(
     allow_bootstrap: bool,
     show_human_output: bool,
 ) -> Result<ReleaseConfig> {
+    let config_started = Instant::now();
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
@@ -184,7 +200,6 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
 
-    // In dev mode, default platforms to ["local"] and skip experimental gating
     let is_dev = ctx.is_dev();
 
     // Load stack config (needed for supported_platforms validation and auto-build)
@@ -200,22 +215,6 @@ async fn load_release_config(
     // 3. stack.supported_platforms if declared
     // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
-        // Validate explicit platforms against experimental gating (skip in dev mode)
-        if !args.experimental && !is_dev {
-            for p in platforms {
-                if let Ok(platform) = Platform::from_str(p) {
-                    if platform.is_experimental() {
-                        return Err(AlienError::new(ErrorData::ValidationError {
-                            field: "platforms".to_string(),
-                            message: format!(
-                                "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                                p
-                            ),
-                        }));
-                    }
-                }
-            }
-        }
         // Validate against stack's supported platforms
         validate_platforms_against_stack(platforms, &stack)?;
         platforms.clone()
@@ -226,7 +225,7 @@ async fn load_release_config(
         // Use declared supported platforms from alien.ts
         supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if !discovered.is_empty() {
             discovered
         } else {
@@ -246,17 +245,16 @@ async fn load_release_config(
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
-        for platform_str in &target_platforms {
-            auto_build_for_platform(
-                platform_str,
-                &stack,
-                &output_dir,
-                show_human_output,
-                args.override_base_image.clone(),
-                kubernetes_base_platform,
-            )
-            .await?;
-        }
+        auto_build_for_platforms(
+            &target_platforms,
+            &stack,
+            &output_dir,
+            show_human_output,
+            args.override_base_image.clone(),
+            kubernetes_base_platform,
+            args.targets.as_deref(),
+        )
+        .await?;
     }
 
     // Re-discover platforms after potential auto-build
@@ -268,7 +266,7 @@ async fn load_release_config(
         // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if discovered.is_empty() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "build output".to_string(),
@@ -303,6 +301,11 @@ async fn load_release_config(
         }
     };
 
+    info!(
+        "Release configuration loaded in {:.2}s",
+        config_started.elapsed().as_secs_f64()
+    );
+
     Ok(ReleaseConfig {
         output_dir,
         manager,
@@ -310,6 +313,7 @@ async fn load_release_config(
         project_link,
         git_metadata,
         platforms,
+        stack,
     })
 }
 
@@ -321,6 +325,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         .await?;
 
     let platforms_label = format_platform_summary(&config.platforms);
+    let onboard_hint = onboard_command_hint(&config);
     println!(
         "{}",
         contextual_heading(
@@ -334,12 +339,9 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
     println!("{}", success_line("Release created."));
     println!("{} {}", dim_label("Release"), release_id);
     if !is_dev {
-        println!(
-            "{} run {} for a new customer, or {} to check existing deployments.",
-            dim_label("Next"),
-            command("alien onboard <customer-name>"),
-            command("alien deployments ls")
-        );
+        println!("{}", dim_label("Next create a deployment link:"));
+        println!("  {}", command(&onboard_hint));
+        println!("{} {}", dim_label("Then"), command("alien deployments ls"));
     }
     Ok(release_id)
 }
@@ -353,12 +355,14 @@ async fn release_task_core(
     config: ReleaseConfig,
     ctx: &ExecutionMode,
 ) -> Result<ReleaseResult> {
+    let release_started = Instant::now();
     let ReleaseConfig {
         output_dir,
         manager,
         project_link,
         git_metadata,
         platforms: platforms_to_release,
+        stack: _stack,
         ..
     } = config;
     // Process each platform: load stack, push images, collect pushed stacks
@@ -372,6 +376,7 @@ async fn release_task_core(
     };
 
     for platform_str in &platforms_to_release {
+        let platform_started = Instant::now();
         info!("Processing {} platform...", platform_str);
 
         // Parse platform
@@ -385,13 +390,14 @@ async fn release_task_core(
         // Load built stack
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
 
-        // Push images if needed (test platform and --prebuilt skip pushing).
+        // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
+        // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
         // Local platform pushes to a cloud registry — the alien-agent pulls from it.
-        let pushed_stack = if args.prebuilt {
-            // Validate all images are remote URIs when using --prebuilt
-            validate_prebuilt_stack(&built_stack)?;
-            built_stack
-        } else if platform != Platform::Test {
+        let pushed_stack = if platform != Platform::Test {
+            if args.prebuilt {
+                rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
+            }
+
             // Load push cache — maps content-hashed dir names to previously pushed URIs
             let mut push_cache = load_push_cache(&output_dir, platform_str);
 
@@ -423,11 +429,17 @@ async fn release_task_core(
 
             info!("   Pushing images to {}...", push_settings.repository);
 
+            let push_started = Instant::now();
             let pushed = alien_build::push_stack(built_stack, platform.clone(), &push_settings)
                 .await
                 .context(ErrorData::ReleaseFailed {
                     message: format!("Failed to push images for {} platform", platform_str),
                 })?;
+            info!(
+                "Push for platform '{}' completed in {:.2}s",
+                platform_str,
+                push_started.elapsed().as_secs_f64()
+            );
 
             // Update and persist the push cache with newly pushed URIs
             collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
@@ -458,10 +470,15 @@ async fn release_task_core(
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
 
-        info!("   ✓ {} platform ready", platform_str);
+        info!(
+            "   ✓ {} platform ready in {:.2}s",
+            platform_str,
+            platform_started.elapsed().as_secs_f64()
+        );
     }
 
     // Create release
+    let create_release_started = Instant::now();
     let release_id = if let Some(ref manager) = manager {
         // Standalone/Dev mode: create release on the manager
         let sdk_git_metadata = git_metadata.and_then(|m| {
@@ -498,6 +515,14 @@ async fn release_task_core(
             }));
         }
     };
+    info!(
+        "Release creation API call completed in {:.2}s",
+        create_release_started.elapsed().as_secs_f64()
+    );
+    info!(
+        "Release task core completed in {:.2}s",
+        release_started.elapsed().as_secs_f64()
+    );
 
     Ok(release_id)
 }
@@ -614,23 +639,14 @@ async fn create_platform_release(
 }
 
 /// Discover which platforms have been built
-fn discover_built_platforms(
-    output_dir: &PathBuf,
-    include_experimental: bool,
-) -> Result<Vec<String>> {
+fn discover_built_platforms(output_dir: &PathBuf) -> Result<Vec<String>> {
     let build_dir = output_dir.join("build");
     if !build_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let search_platforms = if include_experimental {
-        Platform::DEPLOYABLE
-    } else {
-        Platform::STABLE
-    };
-
     let mut platforms = Vec::new();
-    for platform in search_platforms {
+    for platform in Platform::DEPLOYABLE {
         let stack_file = build_dir.join(platform.as_str()).join("stack.json");
         if stack_file.exists() {
             platforms.push(platform.as_str().to_string());
@@ -640,15 +656,105 @@ fn discover_built_platforms(
     Ok(platforms)
 }
 
-/// Build for a single platform.
-async fn auto_build_for_platform(
-    platform_str: &str,
+/// True if any ComputeCluster in this stack has a capacity group with
+/// `nestedVirtualization: true`. On AWS this implies x86_64 — nested
+/// virtualization is not available on Graviton, so a build targeting
+/// `linux-arm64` (the AWS default) for such a stack would produce an image
+/// the deploy can't actually run.
+fn stack_requires_x86_64_on_aws(stack: &Stack) -> bool {
+    use alien_core::ComputeCluster;
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .is_some_and(|cluster| {
+                cluster
+                    .capacity_groups
+                    .iter()
+                    .any(|g| g.nested_virtualization == Some(true))
+            })
+    })
+}
+
+async fn auto_build_for_platforms(
+    platform_strs: &[String],
     stack: &Stack,
     output_dir: &PathBuf,
     _show_human_output: bool,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
+    user_targets: Option<&[String]>,
 ) -> Result<()> {
+    let stack_needs_x86_64_on_aws = stack_requires_x86_64_on_aws(stack);
+
+    let mut plans = Vec::new();
+    for platform_str in platform_strs {
+        // Resolve targets in priority order:
+        //   1. Explicit --targets always wins
+        //   2. AWS + nested-virt in the stack → linux-x64 (the only AWS
+        //      target that supports nested virt today)
+        //   3. None → let alien-build pick the platform default
+        let effective_targets = if let Some(targets) = user_targets {
+            Some(targets.to_vec())
+        } else if platform_str.eq_ignore_ascii_case("aws") && stack_needs_x86_64_on_aws {
+            tracing::info!(
+                "AWS daemon requires nested virtualization; defaulting target to linux-x64 \
+                 (override with `alien release --targets <...>`)."
+            );
+            Some(vec!["linux-x64".to_string()])
+        } else {
+            None
+        };
+
+        plans.push(AutoBuildPlan {
+            platform: platform_str.clone(),
+            settings: auto_build_settings_for_platform(
+                platform_str,
+                output_dir,
+                override_base_image.clone(),
+                kubernetes_base_platform,
+                effective_targets,
+            )?,
+        });
+    }
+
+    let groups = group_auto_builds(plans);
+    if groups.len() > 1 {
+        info!(
+            "Auto-building {} independent target group(s) in parallel",
+            groups.len()
+        );
+    }
+
+    let group_futures = groups.into_iter().map(|group| {
+        let stack = stack.clone();
+        async move {
+            for plan in group {
+                let platform_build_started = Instant::now();
+                alien_build::build_stack(stack.clone(), &plan.settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+                info!(
+                    "Auto-build for platform '{}' completed in {:.2}s",
+                    plan.platform,
+                    platform_build_started.elapsed().as_secs_f64()
+                );
+            }
+            Ok::<_, AlienError<ErrorData>>(())
+        }
+    });
+
+    futures::future::try_join_all(group_futures).await?;
+    Ok(())
+}
+
+fn auto_build_settings_for_platform(
+    platform_str: &str,
+    output_dir: &PathBuf,
+    override_base_image: Option<String>,
+    kubernetes_base_platform: Option<Platform>,
+    effective_targets: Option<Vec<String>>,
+) -> Result<alien_build::settings::BuildSettings> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -669,25 +775,74 @@ async fn auto_build_for_platform(
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
 
-    let targets = match platform {
-        Platform::Local => Some(vec![alien_core::BinaryTarget::current_os()]),
-        _ => None,
+    // Resolve targets in priority order:
+    //   1. The caller (release_task) passed an effective_targets list (either
+    //      --targets verbatim or a stack-aware default like x86_64-for-nested-virt).
+    //   2. Local releases target Linux install hosts. Same-host development
+    //      builds can still use `alien build --platform local` defaults.
+    //   3. Otherwise pass None and let alien-build apply its platform default.
+    let targets = if let Some(targets) = effective_targets {
+        Some(
+            targets
+                .iter()
+                .map(|t| parse_target(t))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    } else if matches!(platform, Platform::Local) {
+        Some(alien_core::BinaryTarget::LINUX.to_vec())
+    } else {
+        None
     };
 
-    let settings = alien_build::settings::BuildSettings {
+    Ok(alien_build::settings::BuildSettings {
         output_directory: output_dir.to_str().unwrap().to_string(),
         platform: platform_build_settings,
         targets,
         cache_url: None,
         override_base_image,
         debug_mode: false,
-    };
+    })
+}
 
-    alien_build::build_stack(stack.clone(), &settings)
-        .await
-        .context(ErrorData::BuildFailed)?;
+fn parse_target(target_str: &str) -> Result<alien_core::BinaryTarget> {
+    use alien_core::BinaryTarget;
+    match target_str.to_ascii_lowercase().as_str() {
+        "windows-x64" => Ok(BinaryTarget::WindowsX64),
+        "linux-x64" => Ok(BinaryTarget::LinuxX64),
+        "linux-arm64" => Ok(BinaryTarget::LinuxArm64),
+        "darwin-arm64" => Ok(BinaryTarget::DarwinArm64),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "targets".to_string(),
+            message: format!(
+                "Unknown target '{target_str}'. Supported targets: \
+                 windows-x64, linux-x64, linux-arm64, darwin-arm64"
+            ),
+        })),
+    }
+}
 
-    Ok(())
+fn group_auto_builds(plans: Vec<AutoBuildPlan>) -> Vec<Vec<AutoBuildPlan>> {
+    let mut groups: Vec<(String, Vec<AutoBuildPlan>)> = Vec::new();
+
+    for plan in plans {
+        let key = auto_build_target_group_key(&plan.settings);
+        if let Some((_, group)) = groups.iter_mut().find(|(group_key, _)| *group_key == key) {
+            group.push(plan);
+        } else {
+            groups.push((key, vec![plan]));
+        }
+    }
+
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) -> String {
+    settings
+        .get_targets()
+        .iter()
+        .map(|target| target.runtime_platform_id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Load a built stack from .alien/build/{platform}/stack.json
@@ -973,6 +1128,64 @@ fn display_platform_name(platform: &str) -> &str {
     }
 }
 
+fn onboard_command_hint(config: &ReleaseConfig) -> String {
+    let selected_platforms = config
+        .platforms
+        .iter()
+        .filter_map(|platform| Platform::from_str(platform).ok())
+        .collect::<Vec<_>>();
+    let mut command_parts = vec!["alien onboard <customer-name>".to_string()];
+
+    if !config.platforms.is_empty() {
+        command_parts.push(format!("--platforms {}", config.platforms.join(",")));
+    }
+
+    let required_inputs = config
+        .stack
+        .inputs
+        .iter()
+        .filter(|input| input.required)
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
+        .collect::<Vec<_>>();
+
+    for input in required_inputs.iter().take(3) {
+        command_parts.push(format!(
+            "{} {}={}",
+            if matches!(input.kind, StackInputKind::Secret) {
+                "--secret-input"
+            } else {
+                "--input"
+            },
+            input.id,
+            stack_input_placeholder(input),
+        ));
+    }
+
+    if required_inputs.len() > 3 {
+        command_parts.push("...".to_string());
+    }
+
+    command_parts.join(" ")
+}
+
+fn input_applies_to_any_platform(input: &StackInputDefinition, platforms: &[Platform]) -> bool {
+    let Some(input_platforms) = &input.platforms else {
+        return true;
+    };
+    platforms
+        .iter()
+        .any(|platform| input_platforms.contains(platform))
+}
+
+fn stack_input_placeholder(input: &StackInputDefinition) -> &'static str {
+    if matches!(input.kind, StackInputKind::Boolean) {
+        "true"
+    } else {
+        "..."
+    }
+}
+
 fn format_platform_summary(platforms: &[String]) -> String {
     platforms
         .iter()
@@ -1042,61 +1255,144 @@ fn parse_kubernetes_base_platform(
     }
 }
 
-/// Validate that all compute resources in the stack have remote image URIs (not local paths).
-/// Used with `--prebuilt` to ensure images were already pushed externally.
-fn validate_prebuilt_stack(stack: &Stack) -> Result<()> {
-    for (_resource_id, resource_entry) in stack.resources() {
+/// Rebase copied prebuilt artifact paths to the current checkout.
+///
+/// `alien build` writes local artifact directories into stack.json. CI may build
+/// those artifacts in one checkout and copy `.alien/build` into another image,
+/// so a prebuilt release must resolve stale `.alien/build/{platform}/{artifact}`
+/// paths before pushing. The artifact path may point at a different platform
+/// than the release currently being pushed when platforms share a built image.
+fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Result<()> {
+    for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
-            if let WorkerCode::Image { ref image } = func.code {
-                let path = PathBuf::from(image);
-                if path.exists() && path.is_dir() {
-                    return Err(AlienError::new(ErrorData::ValidationError {
-                        field: "prebuilt".to_string(),
-                        message: format!(
-                            "Function '{}' has a local image path '{}'. \
-                             --prebuilt requires all images to be pre-pushed remote URIs. \
-                             Run `alien release` without --prebuilt first.",
-                            func.id, image
-                        ),
-                    }));
+            match &func.code {
+                WorkerCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("worker", &func.id, image, output_dir)?
+                    {
+                        let mut updated = func.clone();
+                        updated.code = WorkerCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
                 }
-            } else {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "prebuilt".to_string(),
-                    message: format!(
-                        "Function '{}' has source code instead of a built image. \
-                         --prebuilt requires pre-built and pre-pushed images.",
-                        func.id
-                    ),
-                }));
+                WorkerCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Worker", &func.id));
+                }
             }
         } else if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-            if let ContainerCode::Image { ref image } = container.code {
-                let path = PathBuf::from(image);
-                if path.exists() && path.is_dir() {
-                    return Err(AlienError::new(ErrorData::ValidationError {
-                        field: "prebuilt".to_string(),
-                        message: format!(
-                            "Container '{}' has a local image path '{}'. \
-                             --prebuilt requires all images to be pre-pushed remote URIs. \
-                             Run `alien release` without --prebuilt first.",
-                            container.id, image
-                        ),
-                    }));
+            match &container.code {
+                ContainerCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("container", &container.id, image, output_dir)?
+                    {
+                        let mut updated = container.clone();
+                        updated.code = ContainerCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
                 }
-            } else {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "prebuilt".to_string(),
-                    message: format!(
-                        "Container '{}' has source code instead of a built image. \
-                         --prebuilt requires pre-built and pre-pushed images.",
-                        container.id
-                    ),
-                }));
+                ContainerCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Container", &container.id));
+                }
+            }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("daemon", &daemon.id, image, output_dir)?
+                    {
+                        let mut updated = daemon.clone();
+                        updated.code = DaemonCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
+                }
+                DaemonCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Daemon", &daemon.id));
+                }
             }
         }
     }
     Ok(())
+}
+
+fn rebase_prebuilt_image_path(
+    resource_type: &str,
+    resource_id: &str,
+    image: &str,
+    output_dir: &Path,
+) -> Result<Option<String>> {
+    let image_path = PathBuf::from(image);
+    if image_path.exists() {
+        return Ok(None);
+    }
+
+    if let Some((artifact_platform, artifact_dir)) = artifact_location_from_build_path(&image_path)
+    {
+        let rebased_path = output_dir
+            .join("build")
+            .join(&artifact_platform)
+            .join(&artifact_dir);
+        if rebased_path.exists() && rebased_path.is_dir() {
+            info!(
+                "Rebased prebuilt {} '{}' image artifact from '{}' to '{}'",
+                resource_type,
+                resource_id,
+                image,
+                rebased_path.display()
+            );
+            return Ok(Some(rebased_path.to_string_lossy().into_owned()));
+        }
+
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "prebuilt".to_string(),
+            message: format!(
+                "{} '{}' references prebuilt artifact '{}', but '{}' does not exist. \
+                 Rebuild the prebuilt artifacts or run without --prebuilt.",
+                resource_type,
+                resource_id,
+                image,
+                rebased_path.display()
+            ),
+        }));
+    }
+
+    if image_path.is_absolute() || image.starts_with("./") || image.starts_with("../") {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "prebuilt".to_string(),
+            message: format!(
+                "{} '{}' references local image path '{}', but it does not exist. \
+                 Rebuild the prebuilt artifacts or run without --prebuilt.",
+                resource_type, resource_id, image
+            ),
+        }));
+    }
+
+    Ok(None)
+}
+
+fn artifact_location_from_build_path(path: &Path) -> Option<(String, String)> {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+
+    components.windows(4).find_map(|window| {
+        if window[0] == ".alien" && window[1] == "build" {
+            Some((window[2].to_string(), window[3].to_string()))
+        } else {
+            None
+        }
+    })
+}
+
+fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ValidationError {
+        field: "prebuilt".to_string(),
+        message: format!(
+            "{} '{}' has source code instead of a built image. \
+             --prebuilt requires .alien/build artifacts.",
+            resource_type, resource_id
+        ),
+    })
 }
 
 // --- Push cache ---
@@ -1196,6 +1492,21 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
                     }
                 }
             }
+        } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
+            if let DaemonCode::Image { ref image } = daemon.code {
+                if let Some(key) = cache_key_from_path(image) {
+                    if let Some(cached_uri) = cache.get(&key) {
+                        info!(
+                            "Push cache hit for daemon '{}': {} → {}",
+                            daemon.id, key, cached_uri
+                        );
+                        daemon.code = DaemonCode::Image {
+                            image: cached_uri.clone(),
+                        };
+                        hits += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -1223,6 +1534,11 @@ fn collect_push_cache_entries(
                     return Some((id.clone(), image.clone()));
                 }
             }
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                if let DaemonCode::Image { ref image } = daemon.code {
+                    return Some((id.clone(), image.clone()));
+                }
+            }
             None
         })
         .collect();
@@ -1236,6 +1552,12 @@ fn collect_push_cache_entries(
             }
         } else if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
+                Some(image.clone())
+            } else {
+                None
+            }
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+            if let DaemonCode::Image { ref image } = daemon.code {
                 Some(image.clone())
             } else {
                 None
@@ -1264,6 +1586,116 @@ fn collect_push_cache_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::ResourceLifecycle;
+
+    fn daemon_with_image(image: &str) -> Daemon {
+        Daemon::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(DaemonCode::Image {
+                image: image.to_string(),
+            })
+            .build()
+    }
+
+    #[test]
+    fn push_cache_applies_and_collects_for_daemons() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("agent-a1b2c3d4");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+
+        // apply: a cached URI for the artifact dir's key replaces the daemon's local path.
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "agent-a1b2c3d4".to_string(),
+            "registry.example.com/agent:tag".to_string(),
+        )]);
+        let hits = apply_push_cache(&mut stack, &cache);
+        assert_eq!(hits, 1, "daemon local path should hit the cache");
+        let daemon = stack
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Daemon>().cloned())
+            .expect("daemon should exist");
+        assert_eq!(
+            daemon.code,
+            DaemonCode::Image {
+                image: "registry.example.com/agent:tag".to_string()
+            }
+        );
+
+        // collect: pushed daemon URI lands in the cache keyed by the original dir name.
+        let pre_push = Stack::new("cache-test".to_string())
+            .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let pushed = Stack::new("cache-test".to_string())
+            .add(
+                daemon_with_image("registry.example.com/agent:pushed"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut collected = HashMap::new();
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        assert_eq!(
+            collected.get("agent-a1b2c3d4").map(String::as_str),
+            Some("registry.example.com/agent:pushed")
+        );
+    }
+
+    #[test]
+    fn stack_with_no_daemons_does_not_require_x86_64() {
+        let stack = Stack::new("nothing".to_string()).build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_cluster_no_nested_virt_does_not_require_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        let stack = Stack::new("no-nested".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_cluster_capacity_group_nested_virt_requires_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let stack = Stack::new("nested".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(stack_requires_x86_64_on_aws(&stack));
+    }
 
     #[test]
     fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_releases() {
@@ -1290,5 +1722,160 @@ mod tests {
     fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
         assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
         assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
+    }
+
+    #[test]
+    fn group_auto_builds_keeps_equivalent_targets_in_order() {
+        let plans = vec![
+            test_plan(
+                "aws",
+                alien_build::settings::PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+            ),
+            test_plan("gcp", alien_build::settings::PlatformBuildSettings::Gcp {}),
+            test_plan(
+                "azure",
+                alien_build::settings::PlatformBuildSettings::Azure {},
+            ),
+        ];
+
+        let groups = group_auto_builds(plans);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0][0].platform, "aws");
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|plan| plan.platform.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gcp", "azure"]
+        );
+    }
+
+    #[test]
+    fn local_release_auto_build_defaults_to_linux_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = auto_build_settings_for_platform(
+            "local",
+            &temp.path().join(".alien"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.targets,
+            Some(alien_core::BinaryTarget::LINUX.to_vec())
+        );
+    }
+
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_rewrites_copied_artifact_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let artifact_dir = output_dir.join("build").join("gcp").join("writer-12345678");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+
+        let original_image = "/tmp/original-checkout/.alien/build/gcp/writer-12345678";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("writer", original_image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(
+            container_image(container),
+            artifact_dir.to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_rewrites_cross_platform_artifact_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let artifact_dir = output_dir.join("build").join("aws").join("web-12345678");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+
+        let original_image = "/tmp/original-checkout/.alien/build/aws/web-12345678";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("web", original_image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(
+            container_image(container),
+            artifact_dir.to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_keeps_remote_image_refs() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let image = "registry.example.com/demo/writer:latest";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("writer", image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir).unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(container_image(container), image);
+    }
+
+    fn test_plan(
+        platform: &str,
+        platform_settings: alien_build::settings::PlatformBuildSettings,
+    ) -> AutoBuildPlan {
+        AutoBuildPlan {
+            platform: platform.to_string(),
+            settings: alien_build::settings::BuildSettings {
+                output_directory: ".alien".to_string(),
+                platform: platform_settings,
+                targets: None,
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            },
+        }
+    }
+
+    fn test_container(name: &str, image: String) -> Container {
+        Container::new(name.to_string())
+            .code(ContainerCode::Image { image })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build()
+    }
+
+    fn container_image(container: &Container) -> &str {
+        match &container.code {
+            ContainerCode::Image { image } => image,
+            ContainerCode::Source { .. } => panic!("expected image container"),
+        }
     }
 }

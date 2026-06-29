@@ -1,0 +1,36 @@
+{
+  "id": "storage/trigger-management",
+  "description": "Allows attaching and removing event trigger wiring on an existing storage bucket",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["s3:GetBucketNotification", "s3:PutBucketNotification"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["storage.buckets.get", "storage.buckets.update"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

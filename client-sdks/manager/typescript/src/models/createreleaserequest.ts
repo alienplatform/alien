@@ -21,6 +21,13 @@ export type CreateReleaseRequest = {
    *
    * @remarks
    * uses the canonical value `"default"`.
+   *
+   * The OSS CLI sends this field as `project` on `alien release`
+   * (see `alien-cli` release flow); the underlying alien-managerx
+   * release endpoint accepts both forms. Accept both here too so
+   * `alien release` against an OSS standalone manager doesn't fail
+   * at the schema layer with a confusing
+   * `unknown field "project", expected "projectId"`.
    */
   projectId: string;
   /**

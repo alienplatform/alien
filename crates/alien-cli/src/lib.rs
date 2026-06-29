@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod commands;
 pub mod config;
+pub mod deployment_resolver;
 pub mod deployment_tracking;
 pub mod error;
 pub mod execution_context;
@@ -23,12 +24,13 @@ use crate::commands::platform::{
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, deploy_task, deployments_task, destroy_task,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, onboard_task, prepare_dev_session_deployment,
-    release_command, releases_task, render_task, vault_remote_task, vault_task, whoami_task,
-    write_dev_status, BuildArgs, CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
-    InitArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
+    vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
+    DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs,
+    ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -81,20 +83,27 @@ pub struct Cli {
 impl Cli {
     pub fn wants_json_output(&self) -> bool {
         match &self.command {
-            Some(Commands::Build(args)) => args.json,
+            Some(Commands::Build(args)) => match &args.command {
+                Some(BuildSubcommand::Plan(plan)) => plan.json,
+                Some(BuildSubcommand::Merge(merge)) => merge.json,
+                None => args.json,
+            },
             Some(Commands::Release(args)) => args.json,
             Some(Commands::Render(args)) => args.json,
             Some(Commands::Onboard(args)) => args.json,
+            Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
+            Some(Commands::Debug(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
+                Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
                 _ => false,
             },
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Link(args))) => args.json,
             #[cfg(feature = "platform")]
-            Some(Commands::Platform(PlatformCommand::Login(args))) => args.json,
+            Some(Commands::Platform(PlatformCommand::Login(_))) => false,
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Workspaces(args))) => args.json,
             #[cfg(feature = "platform")]
@@ -121,6 +130,8 @@ pub enum Commands {
     /// Deployment commands
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
+    /// Search deployment and manager logs
+    Logs(LogsArgs),
     /// Release commands
     Releases(ReleasesArgs),
     /// Deploy to a cloud platform
@@ -132,6 +143,8 @@ pub enum Commands {
     /// Invoke remote commands on deployments
     #[command(alias = "command")]
     Commands(CommandsArgs),
+    /// Run a local command against a deployment using manager-side credentials
+    Debug(DebugArgs),
     /// Start a standalone alien-manager server
     Serve(ServeArgs),
     /// Local development commands
@@ -224,6 +237,8 @@ pub enum DevSubcommand {
     /// Invoke remote commands on local dev deployments
     #[command(alias = "command")]
     Commands(CommandsArgs),
+    /// Run a local command against a local dev deployment using manager-side credentials
+    Debug(DebugArgs),
 }
 
 pub fn get_current_dir() -> Result<std::path::PathBuf> {
@@ -868,6 +883,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
         Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
         Some(DevSubcommand::Commands(args)) => commands_task_dev(args, port).await?,
+        Some(DevSubcommand::Debug(args)) => debug_task_dev(args, port).await?,
     }
 
     Ok(())
@@ -1015,9 +1031,9 @@ async fn run_dev_server_only(
 }
 
 fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
-    // For AGENT_DEPLOYMENT_FAILED errors, extract per-resource root causes
+    // For DEPLOYMENT_FAILED errors, extract per-resource root causes
     // instead of the generic "Deployment failed: N resource error(s)..." summary.
-    if error.get("code").and_then(|v| v.as_str()) == Some("AGENT_DEPLOYMENT_FAILED") {
+    if error.get("code").and_then(|v| v.as_str()) == Some("DEPLOYMENT_FAILED") {
         if let Some(resource_errors) = error
             .get("context")
             .and_then(|c| c.get("resource_errors"))
@@ -1443,11 +1459,13 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
             Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
+            Some(Commands::Logs(args)) => logs_task(args, ctx).await?,
             Some(Commands::Releases(args)) => releases_task(args, ctx).await?,
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
+            Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
             Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,
             Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
             #[cfg(feature = "platform")]

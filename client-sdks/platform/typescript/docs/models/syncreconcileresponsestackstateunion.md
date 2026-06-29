@@ -15,7 +15,7 @@ const value: models.SyncReconcileResponseStackState = {
         id: "<id>",
         type: "<value>",
       },
-      status: "delete-failed",
+      status: "teardown-required",
       type: "<value>",
     },
   },

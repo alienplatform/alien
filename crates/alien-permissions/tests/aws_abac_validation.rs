@@ -48,7 +48,7 @@ fn runtime_aws_system_generated_resources_are_abac_guarded() {
             {
                 for action in actions {
                     if binding.resources.iter().any(|resource| resource == "*") {
-                        if wildcard_action_allowed(action, binding) {
+                        if wildcard_action_allowed(permission_set_id, action, binding) {
                             continue;
                         }
 
@@ -375,7 +375,7 @@ fn aws_wildcard_resources_are_read_only_or_conditioned_unless_documented() {
                 }
 
                 for action in actions {
-                    if wildcard_action_allowed(action, binding) {
+                    if wildcard_action_allowed(permission_set_id, action, binding) {
                         continue;
                     }
 
@@ -469,9 +469,16 @@ fn has_condition_key(binding: &AwsBindingSpec, expected_key: &str) -> bool {
     })
 }
 
-fn wildcard_action_allowed(action: &str, binding: &AwsBindingSpec) -> bool {
+fn wildcard_action_allowed(
+    permission_set_id: &str,
+    action: &str,
+    binding: &AwsBindingSpec,
+) -> bool {
     action_is_forced_wildcard_read(action)
         || action_is_documented_cross_account_exception(action)
+        || action_is_documented_lambda_vpc_eni_exception(permission_set_id, action)
+        || (action_requires_service_name_condition(action)
+            && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
             && has_condition_key(binding, "aws:RequestTag/${stackTag}"))
 }
@@ -492,6 +499,26 @@ fn action_is_forced_wildcard_read(action: &str) -> bool {
 
 fn action_is_documented_cross_account_exception(action: &str) -> bool {
     matches!(action, "ecr:GetAuthorizationToken")
+}
+
+fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action: &str) -> bool {
+    if permission_set_id != "worker/execute" {
+        return false;
+    }
+
+    // AWS Lambda VPC execution-role docs require these EC2 ENI permissions
+    // with Resource "*"; Lambda uses them to manage Hyperplane ENIs.
+    matches!(
+        action,
+        "ec2:CreateNetworkInterface"
+            | "ec2:DeleteNetworkInterface"
+            | "ec2:AssignPrivateIpAddresses"
+            | "ec2:UnassignPrivateIpAddresses"
+    )
+}
+
+fn action_requires_service_name_condition(action: &str) -> bool {
+    matches!(action, "iam:CreateServiceLinkedRole")
 }
 
 fn action_requires_tag_condition(action: &str) -> bool {

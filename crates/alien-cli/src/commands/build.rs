@@ -3,15 +3,18 @@ use crate::error::{ErrorData, Result};
 use crate::get_current_dir;
 use crate::output::print_json;
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line};
+use alien_build::plan::{plan_runner_groups, stack_targets_native_host_binaries};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::events::AlienEvent;
 use alien_core::{BinaryTarget, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,18 +36,32 @@ pub struct BuildOutput {
     pub build_time_seconds: f64,
 }
 
+#[derive(Clone)]
+struct PlatformBuildPlan {
+    platform: String,
+    settings: BuildSettings,
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Build the Alien application locally",
     long_about = "Build the Alien application locally, creating OCI tarballs without pushing to a registry. Use `alien release` to push images and create a release.",
+    args_conflicts_with_subcommands = true,
     after_help = "EXAMPLES:
     alien build --platform aws
     alien build --platforms aws,gcp
     alien build --platform aws --targets linux-arm64
     alien build --config ../my-app/alien.ts --output-dir ./build --platform aws
-    alien build --platform aws --json"
+    alien build --platform aws --json
+    alien build plan --json
+    alien build merge --input ./build-artifacts --output .alien"
 )]
 pub struct BuildArgs {
+    /// Subcommand: `plan` (compute native-runner groups) or `merge` (combine partial outputs).
+    /// When omitted, runs a normal build.
+    #[command(subcommand)]
+    pub command: Option<BuildSubcommand>,
+
     /// Path to alien.ts/js/json file or directory containing it
     #[arg(short = 'c', long)]
     pub config: Option<String>,
@@ -56,10 +73,6 @@ pub struct BuildArgs {
     /// Target platforms (comma-separated). Examples: aws, gcp, azure, aws,gcp
     #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
     pub platforms: Vec<String>,
-
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
 
     /// Target OS/architecture combinations (comma-separated)
     #[arg(long, value_delimiter = ',')]
@@ -88,7 +101,52 @@ pub struct BuildArgs {
     pub json: bool,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum BuildSubcommand {
+    /// Compute the native-runner build groups for the stack's supported platforms
+    #[command(after_help = "EXAMPLES:
+    alien build plan
+    alien build plan --json")]
+    Plan(BuildPlanArgs),
+    /// Merge partial build outputs (one per native runner) into one `.alien` directory
+    #[command(after_help = "EXAMPLES:
+    alien build merge --input ./build-artifacts --output .alien")]
+    Merge(BuildMergeArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct BuildPlanArgs {
+    /// Path to alien.ts/js/json file or directory containing it
+    #[arg(short = 'c', long)]
+    pub config: Option<String>,
+
+    /// Emit structured JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct BuildMergeArgs {
+    /// Directory of downloaded partial outputs (each subdir holds `build/<platform>/`)
+    #[arg(long)]
+    pub input: String,
+
+    /// Output directory for the merged `.alien` build
+    #[arg(long)]
+    pub output: String,
+
+    /// Emit structured JSON output
+    #[arg(long)]
+    pub json: bool,
+}
+
 pub async fn build_command(args: BuildArgs) -> Result<()> {
+    match &args.command {
+        Some(BuildSubcommand::Plan(plan_args)) => return plan_command(plan_args).await,
+        Some(BuildSubcommand::Merge(merge_args)) => return merge_command(merge_args),
+        None => {}
+    }
+
     if args.platforms.is_empty() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "platforms".to_string(),
@@ -112,8 +170,73 @@ pub async fn build_command(args: BuildArgs) -> Result<()> {
     Ok(())
 }
 
+/// `alien build plan` — derive the native-runner groups from the stack's supported platforms.
+async fn plan_command(args: &BuildPlanArgs) -> Result<()> {
+    let current_dir = get_current_dir()?;
+    let config_path = args
+        .config
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_dir.clone());
+
+    let stack = load_configuration(config_path)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load configuration".to_string(),
+        })?;
+
+    // None means the stack supports every deployable platform.
+    let supported: Vec<Platform> = match stack.supported_platforms() {
+        Some(platforms) => platforms.to_vec(),
+        None => Platform::DEPLOYABLE.to_vec(),
+    };
+    let groups = plan_runner_groups(&supported, stack_targets_native_host_binaries(&stack));
+
+    if args.json {
+        print_json(&groups)?;
+    } else {
+        println!(
+            "{}",
+            contextual_heading(
+                "Build plan",
+                stack.id(),
+                &[("groups", &groups.len().to_string())]
+            )
+        );
+        for group in &groups {
+            println!(
+                "  {} {} ({})",
+                accent(&group.name),
+                dim_label(&group.runner),
+                group.platforms.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `alien build merge` — combine partial native-runner outputs into one `.alien` directory.
+fn merge_command(args: &BuildMergeArgs) -> Result<()> {
+    let input = PathBuf::from(&args.input);
+    let output = PathBuf::from(&args.output);
+    let platforms =
+        alien_build::merge::merge_build_outputs(&input, &output).context(ErrorData::BuildFailed)?;
+
+    if args.json {
+        print_json(&serde_json::json!({
+            "success": true,
+            "output": args.output,
+            "platforms": platforms,
+        }))?;
+    } else {
+        println!("{}", success_line("Merge complete."));
+        println!("{} {}", dim_label("Output"), accent(&args.output));
+        println!("{} {}", dim_label("Platforms"), platforms.join(", "));
+    }
+    Ok(())
+}
+
 pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
-    let start_time = std::time::Instant::now();
     let current_dir = get_current_dir()?;
     let output_dir = args
         .output_dir
@@ -153,7 +276,6 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             message: "Failed to load configuration".to_string(),
         })?;
 
-    let mut outputs = Vec::new();
     let has_kubernetes_platform = args
         .platforms
         .iter()
@@ -161,21 +283,11 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
     let kubernetes_base_platform =
         parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
 
+    let mut plans = Vec::new();
     for platform_str in &args.platforms {
         let platform_str = platform_str.to_ascii_lowercase();
 
         if let Ok(platform) = Platform::from_str(&platform_str) {
-            // Check for experimental platforms
-            if platform.is_experimental() && !args.experimental {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "platform".to_string(),
-                    message: format!(
-                        "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                        platform_str
-                    ),
-                }));
-            }
-
             // Validate against stack's supported platforms
             if !stack.supports_platform(&platform) {
                 let supported_list: Vec<&str> = stack
@@ -226,23 +338,26 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             }
         };
 
-        let settings = BuildSettings {
-            output_directory: output_dir.clone(),
-            platform: target_platform,
-            targets: targets.clone(),
-            cache_url: args.cache_url.clone(),
-            override_base_image: args.override_base_image.clone(),
-            debug_mode: false,
-        };
+        plans.push(PlatformBuildPlan {
+            platform: platform_str,
+            settings: BuildSettings {
+                output_directory: output_dir.clone(),
+                platform: target_platform,
+                targets: targets.clone(),
+                cache_url: args.cache_url.clone(),
+                override_base_image: args.override_base_image.clone(),
+                debug_mode: false,
+            },
+        });
+    }
 
-        alien_build::build_stack(stack.clone(), &settings)
-            .await
-            .context(ErrorData::BuildFailed)?;
-
+    let timings = build_platform_groups(stack, plans.clone()).await?;
+    let mut outputs = Vec::new();
+    for plan in &plans {
         let output = load_build_output(
-            &platform_str,
+            &plan.platform,
             &output_dir,
-            start_time.elapsed().as_secs_f64(),
+            *timings.get(&plan.platform).unwrap_or(&0.0),
         )?;
         outputs.push(output);
     }
@@ -253,6 +368,61 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .ok();
 
     Ok(outputs)
+}
+
+async fn build_platform_groups(
+    stack: alien_core::Stack,
+    plans: Vec<PlatformBuildPlan>,
+) -> Result<HashMap<String, f64>> {
+    let groups = group_platform_builds(plans);
+    if groups.len() > 1 {
+        info!(
+            "Building {} independent target group(s) in parallel",
+            groups.len()
+        );
+    }
+
+    let group_futures = groups.into_iter().map(|group| {
+        let stack = stack.clone();
+        async move {
+            let mut timings = Vec::new();
+            for plan in group {
+                let platform_started = Instant::now();
+                alien_build::build_stack(stack.clone(), &plan.settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+                timings.push((plan.platform, platform_started.elapsed().as_secs_f64()));
+            }
+            Ok::<_, AlienError<ErrorData>>(timings)
+        }
+    });
+
+    let grouped_timings = futures::future::try_join_all(group_futures).await?;
+    Ok(grouped_timings.into_iter().flatten().collect())
+}
+
+fn group_platform_builds(plans: Vec<PlatformBuildPlan>) -> Vec<Vec<PlatformBuildPlan>> {
+    let mut groups: Vec<(String, Vec<PlatformBuildPlan>)> = Vec::new();
+
+    for plan in plans {
+        let key = build_target_group_key(&plan.settings);
+        if let Some((_, group)) = groups.iter_mut().find(|(group_key, _)| *group_key == key) {
+            group.push(plan);
+        } else {
+            groups.push((key, vec![plan]));
+        }
+    }
+
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+fn build_target_group_key(settings: &BuildSettings) -> String {
+    settings
+        .get_targets()
+        .iter()
+        .map(|target| target.runtime_platform_id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn parse_kubernetes_base_platform(
@@ -485,5 +655,45 @@ mod tests {
         assert!(output.resources.contains(&"test-storage".to_string()));
         assert!(output.artifacts.contains_key("test-storage"));
         assert!(!output.artifacts.contains_key("test-function"));
+    }
+
+    #[test]
+    fn group_platform_builds_keeps_equivalent_targets_in_order() {
+        let plans = vec![
+            test_plan(
+                "aws",
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+            ),
+            test_plan("gcp", PlatformBuildSettings::Gcp {}),
+            test_plan("azure", PlatformBuildSettings::Azure {}),
+        ];
+
+        let groups = group_platform_builds(plans);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0][0].platform, "aws");
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|plan| plan.platform.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gcp", "azure"]
+        );
+    }
+
+    fn test_plan(platform: &str, platform_settings: PlatformBuildSettings) -> PlatformBuildPlan {
+        PlatformBuildPlan {
+            platform: platform.to_string(),
+            settings: BuildSettings {
+                output_directory: ".alien".to_string(),
+                platform: platform_settings,
+                targets: None,
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            },
+        }
     }
 }

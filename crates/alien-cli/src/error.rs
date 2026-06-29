@@ -177,6 +177,33 @@ pub enum ErrorData {
         field: String,
     },
 
+    /// No usable login session and no terminal to start an interactive one.
+    #[error(
+        code = "LOGIN_REQUIRED",
+        message = "Not logged in to the Alien platform: {reason}",
+        hint = "Run `alien login` from a terminal, or set the ALIEN_API_KEY environment variable.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    LoginRequired {
+        /// Why no usable session exists
+        reason: String,
+    },
+
+    /// Several workspaces exist but one can't be chosen without a terminal.
+    #[error(
+        code = "WORKSPACE_SELECTION_REQUIRED",
+        message = "Several workspaces are available; selecting one needs an interactive terminal",
+        hint = "Run `alien workspaces ls` to see them, then `alien workspaces set <name>` (or pass `--workspace <name>`).",
+        retryable = "false",
+        internal = "false"
+    )]
+    WorkspaceSelectionRequired {
+        /// Names the caller can pass to `--workspace`, exposed under `context.workspaces`.
+        workspaces: Vec<String>,
+    },
+
     /// Invalid project name specified.
     #[error(
         code = "INVALID_PROJECT_NAME",
@@ -294,3 +321,28 @@ pub enum ErrorData {
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_error::AlienErrorData;
+
+    #[test]
+    fn workspace_selection_required_exposes_names_in_context() {
+        let err = ErrorData::WorkspaceSelectionRequired {
+            workspaces: vec!["alpha".to_string(), "beta".to_string()],
+        };
+
+        assert_eq!(err.code(), "WORKSPACE_SELECTION_REQUIRED");
+
+        let context = err.context().expect("variant exposes a context payload");
+        let names: Vec<&str> = context
+            .get("workspaces")
+            .and_then(|value| value.as_array())
+            .expect("context.workspaces is an array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+}

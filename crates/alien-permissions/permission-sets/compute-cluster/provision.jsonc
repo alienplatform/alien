@@ -55,6 +55,129 @@
           }
         }
       },
+      // Auto Scaling validates launch template use with an ec2:RunInstances
+      // dry run before creating an ASG. Provision-created ComputeCluster
+      // launch templates and security groups are runtime-owned.
+      {
+        "label": "Use runtime launch templates and security groups",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "Create runtime worker instances",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "Use RunInstances companion resources",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          }
+        }
+      },
+      // Launch-template tag specifications trigger an ec2:CreateTags
+      // authorization check as part of RunInstances.
+      {
+        "label": "Tag runtime worker resources",
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "RunInstances",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "RunInstances",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       // ASG creation is name-scoped and must include Alien boundary tags.
       {
         "grant": {
@@ -199,6 +322,7 @@
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
             "compute.instanceGroupManagers.update",
+            "compute.zones.list",
             "compute.zoneOperations.get",
             "compute.instances.getSerialPortOutput"
           ]

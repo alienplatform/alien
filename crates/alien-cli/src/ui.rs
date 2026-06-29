@@ -245,7 +245,7 @@ fn build_output_from_context(context: Option<&Value>) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod event_tests {
     use super::*;
     use alien_error::Context;
 
@@ -906,7 +906,8 @@ impl FixedSteps {
                     ResourceStatus::Pending
                     | ResourceStatus::Provisioning
                     | ResourceStatus::Updating
-                    | ResourceStatus::Deleting => RowState::Active,
+                    | ResourceStatus::Deleting
+                    | ResourceStatus::TeardownRequired => RowState::Active,
                 };
 
                 let entry = guard
@@ -1014,6 +1015,7 @@ pub fn format_resource_status(status: ResourceStatus) -> &'static str {
         ResourceStatus::Deleting => "Deleting",
         ResourceStatus::DeleteFailed => "Failed",
         ResourceStatus::Deleted => "Deleted",
+        ResourceStatus::TeardownRequired => "Teardown Required",
         ResourceStatus::RefreshFailed => "Failed",
     }
 }
@@ -1021,6 +1023,7 @@ pub fn format_resource_status(status: ResourceStatus) -> &'static str {
 pub fn format_deployment_status(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "Queued",
+        DeploymentStatus::PreflightsFailed => "Failed",
         DeploymentStatus::InitialSetup => "Initializing",
         DeploymentStatus::InitialSetupFailed => "Failed",
         DeploymentStatus::Provisioning => "Provisioning",
@@ -1033,6 +1036,8 @@ pub fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "Queued",
         DeploymentStatus::Deleting => "Deleting",
         DeploymentStatus::DeleteFailed => "Failed",
+        DeploymentStatus::TeardownRequired => "Teardown Required",
+        DeploymentStatus::TeardownFailed => "Teardown Failed",
         DeploymentStatus::Deleted => "Deleted",
         DeploymentStatus::Error => "Error",
     }
@@ -1531,7 +1536,7 @@ fn build_resource_noun(
 }
 
 #[cfg(test)]
-mod tests {
+mod command_event_tests {
     use super::*;
 
     fn empty_command_state() -> CommandEventState {
@@ -1647,10 +1652,13 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
     let (status_icon, status_label): (&str, &str) = match card.status {
         DeploymentStatus::Running => ("●", "running"),
         DeploymentStatus::Pending => ("◐", "pending"),
+        DeploymentStatus::PreflightsFailed => ("✗", "preflights failed"),
         DeploymentStatus::InitialSetup => ("◐", "initial setup"),
         DeploymentStatus::Provisioning => ("◐", "provisioning"),
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating => ("◐", "updating"),
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => ("◐", "stopping"),
+        DeploymentStatus::TeardownRequired => ("◐", "teardown required"),
+        DeploymentStatus::TeardownFailed => ("✗", "teardown failed"),
         _ => ("✗", "failed"),
     };
 
@@ -1723,7 +1731,8 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
         DeploymentStatus::UpdatePending
         | DeploymentStatus::Updating
         | DeploymentStatus::DeletePending
-        | DeploymentStatus::Deleting => style(format!("{status_icon} {status_label}"))
+        | DeploymentStatus::Deleting
+        | DeploymentStatus::TeardownRequired => style(format!("{status_icon} {status_label}"))
             .yellow()
             .to_string(),
         _ => style(format!("{status_icon} {status_label}"))

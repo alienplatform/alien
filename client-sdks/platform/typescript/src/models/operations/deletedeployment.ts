@@ -3,22 +3,8 @@
  */
 
 import * as z from "zod/v4";
-import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
-import { Result as SafeParseResult } from "../../types/fp.js";
-import { SDKValidationError } from "../errors/sdkvalidationerror.js";
-
-/**
- * Delete scope: full or liveOnly
- */
-export const DeleteScope = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Delete scope: full or liveOnly
- */
-export type DeleteScope = ClosedEnum<typeof DeleteScope>;
+import { remap as remap$ } from "../../lib/primitives.js";
+import * as models from "../index.js";
 
 export type DeleteDeploymentRequest = {
   /**
@@ -26,34 +12,17 @@ export type DeleteDeploymentRequest = {
    */
   id: string;
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
-  force?: boolean | null | undefined;
-  /**
-   * Delete scope: full or liveOnly
-   */
-  deleteScope?: DeleteScope | undefined;
+  deleteDeploymentRequest?: models.DeleteDeploymentRequest | undefined;
 };
-
-/**
- * Deployment deletion enqueued successfully.
- */
-export type DeleteDeploymentResponse = {
-  message: string;
-};
-
-/** @internal */
-export const DeleteScope$outboundSchema: z.ZodEnum<typeof DeleteScope> = z.enum(
-  DeleteScope,
-);
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
-  force: boolean | null;
-  deleteScope?: string | undefined;
+  DeleteDeploymentRequest?: models.DeleteDeploymentRequest$Outbound | undefined;
 };
 
 /** @internal */
@@ -63,8 +32,12 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
-  force: z.nullable(z.boolean().default(false)),
-  deleteScope: DeleteScope$outboundSchema.optional(),
+  deleteDeploymentRequest: models.DeleteDeploymentRequest$outboundSchema
+    .optional(),
+}).transform((v) => {
+  return remap$(v, {
+    deleteDeploymentRequest: "DeleteDeploymentRequest",
+  });
 });
 
 export function deleteDeploymentRequestToJSON(
@@ -72,23 +45,5 @@ export function deleteDeploymentRequestToJSON(
 ): string {
   return JSON.stringify(
     DeleteDeploymentRequest$outboundSchema.parse(deleteDeploymentRequest),
-  );
-}
-
-/** @internal */
-export const DeleteDeploymentResponse$inboundSchema: z.ZodType<
-  DeleteDeploymentResponse,
-  unknown
-> = z.object({
-  message: z.string(),
-});
-
-export function deleteDeploymentResponseFromJSON(
-  jsonString: string,
-): SafeParseResult<DeleteDeploymentResponse, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeleteDeploymentResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeleteDeploymentResponse' from JSON`,
   );
 }

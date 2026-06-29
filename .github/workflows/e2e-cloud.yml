@@ -192,7 +192,7 @@ jobs:
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "build_base_image=true" >> $GITHUB_OUTPUT
             echo "build_agent_image=true" >> $GITHUB_OUTPUT
-            echo "skip_cleanup=false" >> $GITHUB_OUTPUT
+            echo "skip_cleanup=true" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
             echo "network_mode=none" >> $GITHUB_OUTPUT
             exit 0
@@ -654,6 +654,105 @@ jobs:
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
+      - name: Import existing EKS bootstrap resources
+        if: inputs.run_kubernetes_aws_terraform_helm == true
+        working-directory: infra/test
+        run: |
+          set -euo pipefail
+
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y awscli
+          fi
+
+          cluster_name="$(terraform output -raw e2e_eks_cluster_name 2>/dev/null || true)"
+          if [ -z "$cluster_name" ]; then
+            echo "No existing EKS cluster output found; Terraform will create the OIDC provider if needed."
+            exit 0
+          fi
+
+          region="$(terraform output -raw target_aws_region)"
+          account_id="$(terraform output -raw target_aws_account_id)"
+          issuer="$(aws eks describe-cluster \
+            --name "$cluster_name" \
+            --region "$region" \
+            --query 'cluster.identity.oidc.issuer' \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "$issuer" ] || [ "$issuer" = "None" ]; then
+            echo "No existing EKS OIDC issuer found for $cluster_name; Terraform will create the provider if needed."
+            exit 0
+          fi
+
+          provider_path="${issuer#https://}"
+          provider_arn="arn:aws:iam::${account_id}:oidc-provider/${provider_path}"
+
+          if terraform state show module.aws.aws_iam_openid_connect_provider.e2e_eks >/dev/null 2>&1; then
+            echo "EKS OIDC provider is already managed by Terraform state."
+          elif aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$provider_arn" >/dev/null 2>&1; then
+            terraform import module.aws.aws_iam_openid_connect_provider.e2e_eks "$provider_arn"
+          else
+            echo "EKS OIDC provider $provider_arn does not exist; Terraform will create it."
+          fi
+
+          suffix="$(terraform state show module.aws.random_id.suffix | awk -F'"' '/hex =/ { print $2; exit }')"
+          if [ -z "$suffix" ]; then
+            echo "Could not resolve shared EKS suffix; Terraform will create missing bootstrap resources if needed."
+            exit 0
+          fi
+
+          ebs_role_name="alien-e2e-eks-ebs-csi-${suffix}"
+          if ! terraform state show module.aws.aws_iam_role.e2e_eks_ebs_csi >/dev/null 2>&1; then
+            if aws iam get-role --role-name "$ebs_role_name" >/dev/null 2>&1; then
+              terraform import module.aws.aws_iam_role.e2e_eks_ebs_csi "$ebs_role_name"
+            else
+              echo "EKS EBS CSI role $ebs_role_name does not exist; Terraform will create it."
+            fi
+          fi
+
+          ebs_policy_arn="arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+          if ! terraform state show module.aws.aws_iam_role_policy_attachment.e2e_eks_ebs_csi >/dev/null 2>&1; then
+            if aws iam list-attached-role-policies --role-name "$ebs_role_name" \
+              --query "AttachedPolicies[?PolicyArn=='${ebs_policy_arn}'].PolicyArn | [0]" \
+              --output text 2>/dev/null | grep -qx "$ebs_policy_arn"; then
+              terraform import module.aws.aws_iam_role_policy_attachment.e2e_eks_ebs_csi "${ebs_role_name}/${ebs_policy_arn}"
+            else
+              echo "EKS EBS CSI policy attachment does not exist; Terraform will create it."
+            fi
+          fi
+
+          if ! terraform state show module.aws.aws_eks_addon.e2e_ebs_csi >/dev/null 2>&1; then
+            if aws eks describe-addon --cluster-name "$cluster_name" --addon-name aws-ebs-csi-driver --region "$region" >/dev/null 2>&1; then
+              terraform import module.aws.aws_eks_addon.e2e_ebs_csi "${cluster_name}:aws-ebs-csi-driver"
+            else
+              echo "EKS EBS CSI add-on does not exist; Terraform will create it."
+            fi
+          fi
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          TF_VAR_aws_management_access_key_id: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
+          TF_VAR_aws_management_secret_access_key: ${{ secrets.TEST_AWS_MGMT_SECRET_ACCESS_KEY }}
+          TF_VAR_aws_target_access_key_id: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          TF_VAR_aws_target_secret_access_key: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          TF_VAR_google_management_service_account_key: ${{ secrets.TEST_GCP_MGMT_SA_KEY }}
+          TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
+          TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
+          TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_google_target_1_service_account_key: ${{ secrets.TEST_GCP_TARGET_1_SA_KEY }}
+          TF_VAR_google_target_1_project_id: ${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}
+          TF_VAR_google_target_3_service_account_key: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
+          TF_VAR_google_target_3_project_id: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
+          TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
+          TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
+          TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
+          TF_VAR_azure_management_client_secret: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
+          TF_VAR_azure_target_subscription_id: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+
       - name: Terraform apply
         working-directory: infra/test
         run: terraform apply -auto-approve
@@ -705,6 +804,10 @@ jobs:
         run: ./scripts/configure-e2e-provider-ingress.sh
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          ALIEN_E2E_CONFIGURE_EKS: ${{ inputs.run_kubernetes_aws_terraform_helm && 'true' || 'false' }}
+          ALIEN_E2E_CONFIGURE_GKE: ${{ inputs.run_kubernetes_gcp_terraform_helm && 'true' || 'false' }}
+          ALIEN_E2E_CONFIGURE_AKS: ${{ inputs.run_kubernetes_azure_terraform_helm && 'true' || 'false' }}
+          ALIEN_E2E_GCP_TARGET: ${{ inputs.gcp_target || 'gcp-target-3' }}
 
       - name: Set up Azure OIDC token
         run: |
@@ -752,16 +855,6 @@ jobs:
             val="${val#\"}" && val="${val%\"}"
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
-
-      - name: Ensure EKS OIDC provider
-        if: inputs.run_kubernetes_aws_terraform_helm == true
-        run: |
-          set -a && source .env.test && set +a
-          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
-          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
-          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
-          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          ./scripts/ensure-aws-eks-oidc-provider.sh
 
       - name: Pre-clean stale AWS E2E resources
         if: |
@@ -1106,6 +1199,11 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
+      - uses: google-github-actions/setup-gcloud@v2
+        if: contains(matrix.test_filter, 'gke')
+        with:
+          install_components: gke-gcloud-auth-plugin
+
       - name: Install kubectl and kind
         run: |
           case "$(uname -m)" in
@@ -1143,6 +1241,22 @@ jobs:
             val="${val#\"}" && val="${val%\"}"
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
+
+      - name: Configure GKE kubeconfig auth
+        if: contains(matrix.test_filter, 'gke')
+        run: |
+          set -a && source .env.test && set +a
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$GOOGLE_TARGET_SERVICE_ACCOUNT_KEY" > "$key_file"
+          ./scripts/write-gke-kubeconfig.sh \
+            --key-file "$key_file" \
+            --project "$GOOGLE_TARGET_PROJECT_ID" \
+            --cluster "$ALIEN_TEST_GKE_CLUSTER_NAME" \
+            --location "$ALIEN_TEST_GKE_CLUSTER_LOCATION" \
+            --kubeconfig "$ALIEN_TEST_GKE_KUBECONFIG"
+          gke_context="$(KUBECONFIG="$ALIEN_TEST_GKE_KUBECONFIG" kubectl config current-context)"
+          printf "\nALIEN_TEST_GKE_KUBE_CONTEXT='%s'\n" "$gke_context" >> .env.test
 
       - name: Run E2E Terraform distribution test
         env:
@@ -1314,7 +1428,10 @@ jobs:
 
   cleanup:
     needs: [compute-matrix, setup, push-test, cloudformation-test, terraform-test, local-test]
-    if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
+    if: |
+      always() &&
+      needs.compute-matrix.outputs.skip_cleanup != 'true' &&
+      needs.setup.result == 'success'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -1339,19 +1456,102 @@ jobs:
             ./scripts/cleanup-aws-e2e-resources.sh
           done
 
+      - uses: google-github-actions/setup-gcloud@v2
+
       - name: Clean up GCP resources
         if: always()
         continue-on-error: true
         run: |
           set -a && source .env.test && set +a
-          echo "$GOOGLE_TARGET_SERVICE_ACCOUNT_KEY" > /tmp/gcp-key.json
-          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json --quiet || true
-          gcloud config set project "$GOOGLE_TARGET_PROJECT_ID" --quiet || true
+          key_file="$(mktemp)"
+          policy_file="$(mktemp)"
+          clean_policy_file="$(mktemp)"
+          trap 'rm -f "$key_file" "$policy_file" "$clean_policy_file"' EXIT
+
+          printf '%s' "$GOOGLE_TARGET_SERVICE_ACCOUNT_KEY" > "$key_file"
+          gcloud auth activate-service-account --key-file="$key_file" --quiet
+          gcloud config set project "$GOOGLE_TARGET_PROJECT_ID" --quiet
+
+          cleanup_deleted_service_account_bindings() {
+            gcloud projects get-iam-policy "$GOOGLE_TARGET_PROJECT_ID" --format=json > "$policy_file"
+            jq '
+              .bindings |= [
+                .[]
+                | .members = ([.members[]? | select(startswith("deleted:serviceAccount:") | not)])
+                | select((.members | length) > 0)
+              ]
+            ' "$policy_file" > "$clean_policy_file"
+            if ! cmp -s "$policy_file" "$clean_policy_file"; then
+              echo "Removing IAM bindings for deleted service accounts..."
+              gcloud projects set-iam-policy "$GOOGLE_TARGET_PROJECT_ID" "$clean_policy_file" >/dev/null
+            fi
+          }
+
+          e2e_resource_prefixes=()
+          e2e_role_prefixes=()
+          for suffix in "" "-gcpcr" "-gcpct" "-tfgcpcr" "-tfgkecr" "-tfgkefs"; do
+            resource_prefix="e2e-${ALIEN_E2E_SLOT}${suffix}"
+            e2e_resource_prefixes+=("$resource_prefix")
+            role_prefix="role_${resource_prefix//-/_}_"
+            e2e_role_prefixes+=("$role_prefix")
+          done
+
+          matches_e2e_resource_name() {
+            local name="$1"
+            local prefix
+            for prefix in "${e2e_resource_prefixes[@]}"; do
+              case "$name" in
+                "$prefix"|"$prefix"-*) return 0 ;;
+              esac
+            done
+            return 1
+          }
+
+          list_slot_custom_roles() {
+            gcloud iam roles list --project="$GOOGLE_TARGET_PROJECT_ID" --format='value(name)' \
+              | sed 's|.*/roles/||' \
+              | while IFS= read -r role_id; do
+                  for role_prefix in "${e2e_role_prefixes[@]}"; do
+                    case "$role_id" in
+                      "$role_prefix"*) echo "$role_id"; break ;;
+                    esac
+                  done
+                done
+          }
+
+          cleanup_slot_custom_roles() {
+            mapfile -t role_ids < <(list_slot_custom_roles)
+            if [ "${#role_ids[@]}" -eq 0 ]; then
+              return 0
+            fi
+
+            printf 'Deleting slot-scoped custom IAM roles:\n'
+            printf '  %s\n' "${role_ids[@]}"
+
+            gcloud projects get-iam-policy "$GOOGLE_TARGET_PROJECT_ID" --format=json > "$policy_file"
+            jq --arg project "$GOOGLE_TARGET_PROJECT_ID" '
+              ($ARGS.positional | map("projects/" + $project + "/roles/" + .)) as $roles
+              | .bindings |= [.[] | select((.role as $role | $roles | index($role)) | not)]
+            ' "$policy_file" --args "${role_ids[@]}" > "$clean_policy_file"
+            if ! cmp -s "$policy_file" "$clean_policy_file"; then
+              echo "Removing IAM bindings for slot-scoped custom roles..."
+              gcloud projects set-iam-policy "$GOOGLE_TARGET_PROJECT_ID" "$clean_policy_file" >/dev/null
+            fi
+
+            for role_id in "${role_ids[@]}"; do
+              gcloud iam roles delete "$role_id" --project="$GOOGLE_TARGET_PROJECT_ID" --quiet || true
+            done
+          }
+
+          cleanup_deleted_service_account_bindings
 
           echo "Deleting Cloud Run services in target project..."
           SERVICES=$(gcloud run services list --platform=managed --region="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for svc in $SERVICES; do
+            if ! matches_e2e_resource_name "$svc"; then
+              continue
+            fi
             echo "Deleting Cloud Run service: $svc"
             gcloud run services delete "$svc" --platform=managed --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
@@ -1360,53 +1560,180 @@ jobs:
           FUNCTIONS=$(gcloud functions list --regions="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for fn in $FUNCTIONS; do
+            if ! matches_e2e_resource_name "$fn"; then
+              continue
+            fi
             echo "Deleting Cloud Function: $fn"
             gcloud functions delete "$fn" --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
 
-          echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
-          TOPICS=$(gcloud pubsub topics list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          echo "Deleting slot-scoped Pub/Sub topics..."
+          TOPICS=$(gcloud pubsub topics list --format='value(name)' 2>/dev/null) || true
           for topic in $TOPICS; do
+            topic_name="${topic##*/}"
+            if ! matches_e2e_resource_name "$topic_name"; then
+              continue
+            fi
             echo "Deleting Pub/Sub topic: $topic"
             gcloud pubsub topics delete "$topic" --quiet || true
           done
 
-          echo "Deleting orphaned Secret Manager secrets with alien- prefix..."
-          SECRETS=$(gcloud secrets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          echo "Deleting slot-scoped Secret Manager secrets..."
+          SECRETS=$(gcloud secrets list --format='value(name)' 2>/dev/null) || true
           for secret in $SECRETS; do
+            secret_name="${secret##*/}"
+            if ! matches_e2e_resource_name "$secret_name"; then
+              continue
+            fi
             echo "Deleting secret: $secret"
             gcloud secrets delete "$secret" --quiet || true
           done
 
-          echo "Deleting orphaned GCS buckets with alien- prefix..."
-          BUCKETS=$(gcloud storage buckets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          echo "Deleting slot-scoped Firestore databases..."
+          DATABASES=$(gcloud firestore databases list --project="$GOOGLE_TARGET_PROJECT_ID" \
+            --format='value(name)' 2>/dev/null) || true
+          for database in $DATABASES; do
+            database_id="${database##*/}"
+            if ! matches_e2e_resource_name "$database_id"; then
+              continue
+            fi
+            echo "Deleting Firestore database: $database_id"
+            gcloud firestore databases delete --database="$database_id" \
+              --project="$GOOGLE_TARGET_PROJECT_ID" --quiet || true
+          done
+
+          echo "Deleting slot-scoped Artifact Registry repositories..."
+          REPOSITORIES=$(gcloud artifacts repositories list --location="$GOOGLE_TARGET_REGION" \
+            --format='value(name)' 2>/dev/null) || true
+          for repository in $REPOSITORIES; do
+            repository_name="${repository##*/}"
+            if ! matches_e2e_resource_name "$repository_name"; then
+              continue
+            fi
+            echo "Deleting Artifact Registry repository: $repository_name"
+            gcloud artifacts repositories delete "$repository_name" \
+              --location="$GOOGLE_TARGET_REGION" --quiet || true
+          done
+
+          echo "Deleting slot-scoped GCS buckets..."
+          BUCKETS=$(gcloud storage buckets list --format='value(name)' 2>/dev/null) || true
           for bucket in $BUCKETS; do
-            echo "Deleting GCS bucket: $bucket"
-            gcloud storage rm -r "gs://$bucket" --quiet || true
+            bucket_name="${bucket#gs://}"
+            if ! matches_e2e_resource_name "$bucket_name"; then
+              continue
+            fi
+            echo "Deleting GCS bucket: $bucket_name"
+            gcloud storage rm -r "gs://$bucket_name" --quiet || true
           done
 
-          echo "Deleting orphaned service accounts with alien- prefix..."
-          SAS=$(gcloud iam service-accounts list --format='value(email)' --filter='email:alien-' 2>/dev/null) || true
+          should_delete_e2e_service_account() {
+            local sa="$1"
+            local local_part="${sa%@*}"
+            local domain="${sa#*@}"
+
+            if [ "$domain" != "${GOOGLE_TARGET_PROJECT_ID}.iam.gserviceaccount.com" ]; then
+              return 1
+            fi
+
+            case "$local_part" in
+              alien-test-target|alien-terraform-bootstrap|iam-condition-test|test-custom-sa|horizon-cloud-tests)
+                return 1
+                ;;
+            esac
+
+            matches_e2e_resource_name "$local_part" \
+              || [[ "$local_part" =~ ^[a-z0-9]{8}-(management|execution-sa|build-execution-sa)$ ]]
+          }
+
+          echo "Deleting orphaned generated E2E service accounts..."
+          SAS=$(gcloud iam service-accounts list --format='value(email)' 2>/dev/null) || true
           for sa in $SAS; do
-            echo "Deleting service account: $sa"
-            gcloud iam service-accounts delete "$sa" --quiet || true
+            if should_delete_e2e_service_account "$sa"; then
+              echo "Deleting service account: $sa"
+              gcloud iam service-accounts delete "$sa" --quiet || true
+            else
+              echo "Preserving service account: $sa"
+            fi
           done
 
-          rm -f /tmp/gcp-key.json
+          cleanup_deleted_service_account_bindings
+          cleanup_slot_custom_roles
 
       - name: Clean up Azure resources
         if: always()
         continue-on-error: true
         run: |
+          set -u
           set -a && source .env.test && set +a
           az login --service-principal \
             -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
             --output none || true
           az account set --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" || true
 
-          echo "Deleting resource groups in target subscription (excluding shared env)..."
-          GROUPS=$(az group list --query "[?!starts_with(name, 'alien-e2e-shared-')].name" -o tsv 2>/dev/null) || true
-          for rg in $GROUPS; do
+          echo "Deleting E2E resource groups in target subscription..."
+          MATCHED_GROUPS=()
+          while IFS= read -r rg; do
+            [ -n "$rg" ] || continue
+            case "$rg" in
+              alien-e2e-shared-*)
+                continue
+                ;;
+            esac
+            if [[ ! "$rg" =~ ^[a-z][0-9a-f]{7}-default-resource-group$ ]] \
+              && [[ ! "$rg" =~ ^alien-e2e-[0-9a-f]{8}$ ]] \
+              && [[ ! "$rg" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              continue
+            fi
+            MATCHED_GROUPS+=("$rg")
             echo "Deleting resource group: $rg"
-            az group delete --name "$rg" --yes --no-wait || true
+            az group delete --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" --name "$rg" --yes --no-wait || true
+          done < <(az group list \
+            --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+            --query "[].name" \
+            -o tsv 2>/dev/null || true)
+
+          if [ "${#MATCHED_GROUPS[@]}" -eq 0 ]; then
+            echo "No matching Azure E2E resource groups found."
+          fi
+
+          for rg in "${MATCHED_GROUPS[@]}"; do
+            echo "Waiting for resource group deletion: $rg"
+            az group wait \
+              --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+              --name "$rg" \
+              --deleted \
+              --timeout 1800 || true
           done
+
+          echo "Purging soft-deleted E2E Key Vaults..."
+          DELETED_VAULTS=$(timeout 60 az keyvault list-deleted \
+            --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+            --query "[].[name,properties.location]" \
+            -o tsv 2>/dev/null || true)
+          while IFS=$'\t' read -r vault_name vault_location; do
+            [ -n "$vault_name" ] || continue
+            if [[ ! "$vault_name" =~ ^[a-z][0-9a-f]{7}- ]] \
+              && [[ ! "$vault_name" =~ ^alien-e2e-[0-9a-f]{8} ]] \
+              && [[ ! "$vault_name" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              continue
+            fi
+            echo "Purging soft-deleted Key Vault: $vault_name"
+            timeout 60 az keyvault purge \
+              --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+              --name "$vault_name" \
+              --location "$vault_location" || true
+          done <<< "$DELETED_VAULTS"
+
+          echo "Deleting E2E subscription-scope management role assignments..."
+          SUBSCRIPTION_SCOPE="/subscriptions/$AZURE_TARGET_SUBSCRIPTION_ID"
+          while IFS=$'\t' read -r assignment_id assignment_description; do
+            [ -n "$assignment_id" ] || continue
+            [ -n "${assignment_description:-}" ] || continue
+            if [[ "$assignment_description" =~ ^management\ uami\ .*\((e2e-[0-9]{2}(-[a-z0-9]+)?|alien-e2e-[0-9a-f]{8}|[a-z][0-9a-f]{7})\)$ ]]; then
+              echo "Deleting role assignment: $assignment_id ($assignment_description)"
+              az role assignment delete --ids "$assignment_id" || true
+            fi
+          done < <(az role assignment list \
+            --scope "$SUBSCRIPTION_SCOPE" \
+            --query "[?description!=null].[id,description]" \
+            -o tsv 2>/dev/null || true)

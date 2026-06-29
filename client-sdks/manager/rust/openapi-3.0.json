@@ -617,6 +617,15 @@
             }
           },
           {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "include",
             "in": "query",
             "description": "Include related resources (e.g. deploymentGroup)",
@@ -726,8 +735,10 @@
             "description": "Not found"
           }
         }
-      },
-      "delete": {
+      }
+    },
+    "/v1/deployments/{id}/delete": {
+      "post": {
         "tags": [
           "deployments"
         ],
@@ -741,26 +752,18 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "force",
-            "in": "query",
-            "description": "Force delete without running cleanup (immediately removes record)",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "deleteScope",
-            "in": "query",
-            "description": "Delete scope: full or liveOnly",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DeleteScope"
-            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "description": "Deployment deletion enqueued"
@@ -1361,6 +1364,10 @@
           "session"
         ],
         "properties": {
+          "acquireMode": {
+            "type": "string",
+            "nullable": true
+          },
           "deploymentIds": {
             "type": "array",
             "items": {
@@ -1382,6 +1389,10 @@
           },
           "session": {
             "type": "string"
+          },
+          "setupMethod": {
+            "type": "string",
+            "nullable": true
           },
           "statuses": {
             "type": "array",
@@ -4690,6 +4701,85 @@
           }
         }
       },
+      "ComputePoolSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Fixed number of machines.",
+            "required": [
+              "machines",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": "string",
+                "description": "Provider machine type selected for this deployment.",
+                "nullable": true
+              },
+              "machines": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of machines to run.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Autoscaling machine pool.",
+            "required": [
+              "min",
+              "max",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": "string",
+                "description": "Provider machine type selected for this deployment.",
+                "nullable": true
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Maximum machine count.",
+                "minimum": 0
+              },
+              "min": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Minimum machine count.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "autoscale"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "User-selected deployment settings for one compute pool."
+      },
+      "ComputeSettings": {
+        "type": "object",
+        "description": "Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.",
+        "properties": {
+          "pools": {
+            "type": "object",
+            "description": "Selected compute choices keyed by pool ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ComputePoolSelection"
+            }
+          }
+        }
+      },
       "ContainerHeartbeatData": {
         "oneOf": [
           {
@@ -4903,7 +4993,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`."
+            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -5079,13 +5169,24 @@
           }
         ]
       },
-      "DeleteScope": {
+      "DeleteDeploymentAction": {
         "type": "string",
-        "description": "Scope for a delete operation.\n\nFull deletes are setup/admin owned and may remove both Frozen and Live\nresources. Live-only deletes are used by setup handoff resources\n(Terraform/CloudFormation) so Alien removes only the resources it owns\nbefore setup tears down Frozen resources.",
         "enum": [
-          "full",
-          "liveOnly"
+          "cleanup",
+          "detach",
+          "forget"
         ]
+      },
+      "DeleteDeploymentRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/DeleteDeploymentAction"
+          }
+        }
       },
       "DeploymentGroupMinimal": {
         "type": "object",
@@ -5109,7 +5210,9 @@
           "name",
           "maxDeployments",
           "deploymentCount",
-          "createdAt"
+          "createdAt",
+          "projectId",
+          "workspaceId"
         ],
         "properties": {
           "createdAt": {
@@ -5128,6 +5231,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema. Standalone\nOSS mode is single-tenant, so we synthesize a project id\nmatching the workspace id."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema."
           }
         }
       },
@@ -5174,6 +5285,9 @@
           "platform",
           "status",
           "deploymentGroupId",
+          "deploymentProtocolVersion",
+          "projectId",
+          "workspaceId",
           "retryRequested",
           "createdAt"
         ],
@@ -5208,6 +5322,12 @@
           "deploymentGroupId": {
             "type": "string"
           },
+          "deploymentProtocolVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Required by the platform-SDK Deployment schema. Hard-coded to\nalien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI\naccepts the response.",
+            "minimum": 0
+          },
           "desiredReleaseId": {
             "type": "string",
             "nullable": true
@@ -5226,6 +5346,10 @@
           },
           "platform": {
             "$ref": "#/components/schemas/Platform"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
           },
           "regime": {
             "type": "string",
@@ -5247,6 +5371,10 @@
           "updatedAt": {
             "type": "string",
             "nullable": true
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema."
           }
         }
       },
@@ -6486,6 +6614,11 @@
             "$ref": "#/components/schemas/Platform",
             "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
             "nullable": true
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Deployer-provided stack inputs. Embedded platform managers resolve\nthese before creating the deployment; standalone managers accept the\nfield so generated setup clients have one stable initialize contract.",
+            "additionalProperties": {}
           },
           "name": {
             "type": "string",
@@ -9420,7 +9553,6 @@
           "deploymentId": {
             "type": "string"
           },
-          "error": {},
           "heartbeats": {
             "type": "array",
             "items": {
@@ -9524,6 +9656,11 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "setupFingerprints": {
+            "type": "object",
+            "description": "Setup-step fingerprints — used by `alien release` to short-circuit\nre-pushing artifacts that haven't changed across releases. The\nplatform-API client requires this field to be present (even if\nempty). The OSS standalone manager doesn't track per-setup-step\nfingerprints, so we return an empty map.",
+            "additionalProperties": {}
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -10094,6 +10231,7 @@
           "update-failed",
           "deleting",
           "delete-failed",
+          "teardown-required",
           "deleted",
           "refresh-failed"
         ]
@@ -10395,6 +10533,11 @@
             "type": "string",
             "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
           },
+          "inputValues": {
+            "type": "object",
+            "description": "Deployer-provided stack input values collected by generated setup\nsurfaces. Platform-backed managers resolve these into runtime\nenvironment variables before deployment creation; standalone managers\naccept the field for setup package compatibility.",
+            "additionalProperties": {}
+          },
           "managementConfig": {
             "$ref": "#/components/schemas/ManagementConfig",
             "description": "Platform-derived management configuration, when this setup creates a\ncross-account/cross-tenant management identity.",
@@ -10439,6 +10582,9 @@
             "format": "int32",
             "description": "Wire-format version for the setup import payload.",
             "minimum": 0
+          },
+          "setupMetadata": {
+            "description": "Setup source metadata needed by the control plane to guide privileged\nteardown. The manager treats this as opaque JSON."
           },
           "setupTarget": {
             "type": "string",
@@ -10557,6 +10703,11 @@
         "type": "object",
         "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
         "properties": {
+          "compute": {
+            "$ref": "#/components/schemas/ComputeSettings",
+            "description": "Deployment-time compute selections for Alien-managed compute pools.\n\nThis is where provider machine names such as EC2 instance types, GCE\nmachine types, or Azure VM SKUs belong. Application source should\ndeclare portable requirements instead.",
+            "nullable": true
+          },
           "deploymentModel": {
             "$ref": "#/components/schemas/DeploymentModel",
             "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."
@@ -10985,6 +11136,7 @@
           "kind",
           "id",
           "workspaceId",
+          "workspaceName",
           "role",
           "scope"
         ],
@@ -11003,6 +11155,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "workspaceName": {
+            "type": "string",
+            "description": "Required by the platform-SDK `ServiceAccountSubject` parser when\nthe CLI looks up a deployment-group token by workspace name."
           }
         }
       },
