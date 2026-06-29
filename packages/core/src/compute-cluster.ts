@@ -135,7 +135,9 @@ function selectedScaleBounds(scale: ComputePoolScale): { minSize: number; maxSiz
   }
 }
 
-function scalePolicyFromInput(scale: ComputePoolScale): ComputeClusterConfig["capacityGroups"][number]["scalePolicy"] {
+function scalePolicyFromInput(
+  scale: ComputePoolScale,
+): ComputeClusterConfig["capacityGroups"][number]["scalePolicy"] {
   if (scale.type === "fixed") {
     return {
       type: "fixed",
