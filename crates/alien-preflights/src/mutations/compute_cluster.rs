@@ -806,9 +806,9 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 mod tests {
     use super::*;
     use alien_core::{
-        ComputePoolSelection, ComputeSettings, ContainerAutoscaling, ContainerCode, DaemonCode,
-        EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, ResourceSpec,
-        StackSettings,
+        ComputeChoiceRange, ComputePoolSelection, ComputeSettings, ContainerAutoscaling,
+        ContainerCode, DaemonCode, EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings,
+        ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -854,14 +854,19 @@ mod tests {
                     pools: selections
                         .iter()
                         .map(|(pool_id, machine, min_size, max_size)| {
-                            (
-                                (*pool_id).to_string(),
+                            let selection = if min_size == max_size {
+                                ComputePoolSelection::Fixed {
+                                    machines: *min_size,
+                                    machine: Some((*machine).to_string()),
+                                }
+                            } else {
                                 ComputePoolSelection::Autoscale {
                                     min: *min_size,
                                     max: *max_size,
                                     machine: Some((*machine).to_string()),
-                                },
-                            )
+                                }
+                            };
+                            ((*pool_id).to_string(), selection)
                         })
                         .collect(),
                 }),
@@ -909,12 +914,12 @@ mod tests {
             (Platform::Gcp, "n2-standard-4"),
             (Platform::Azure, "Standard_D4s_v5"),
         ] {
-            let config = deployment_config_with_compute_pool(expected_instance, 2, 4);
+            let config = deployment_config_with_compute_pool(expected_instance, 1, 10);
             let group =
                 build_capacity_group_for_id("general", &refs, platform, false, &config).unwrap();
             assert_eq!(group.instance_type.as_deref(), Some(expected_instance));
-            assert_eq!(group.min_size, 2);
-            assert_eq!(group.max_size, 4);
+            assert_eq!(group.min_size, 1);
+            assert_eq!(group.max_size, 10);
         }
     }
 
@@ -1715,7 +1720,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.xlarge", 1, 1);
+        let config = deployment_config_with_compute_pool("m7g.xlarge", 1, 8);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         let cluster_entry = result.resources.get("compute").unwrap();
@@ -1927,7 +1932,13 @@ mod tests {
                 profile: None,
                 min_size: 0,
                 max_size: 0,
-                scale_policy: None,
+                scale_policy: Some(CapacityGroupScalePolicy::Fixed {
+                    machines: ComputeChoiceRange {
+                        min: 0,
+                        max: 5,
+                        default: 0,
+                    },
+                }),
                 nested_virtualization: None,
             })
             .build();
