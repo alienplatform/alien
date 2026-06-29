@@ -360,6 +360,7 @@ resource "terraform_data" "deployment_registration" {
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
+    inputValues                 = {}
     basePlatform                = local.deployment_base_platform
   }
   depends_on = [
