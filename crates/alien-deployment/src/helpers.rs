@@ -896,6 +896,7 @@ mod tests {
                 management: alien_core::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: Vec::new(),
         }
     }
 

@@ -146,6 +146,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     }
 }
 
@@ -190,6 +191,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     }
 }
 
@@ -614,6 +616,7 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     };
 
     let config = create_test_config("hash_v1", false);
@@ -730,6 +733,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     };
 
     let release_v2 = ReleaseInfo {
@@ -930,6 +934,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     }
 }
 
@@ -992,6 +997,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             management: alien_core::ManagementPermissions::Auto,
         },
         supported_platforms: None,
+        inputs: Vec::new(),
     }
 }
 
