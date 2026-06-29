@@ -206,6 +206,7 @@ pub struct Container {
 
     /// Public endpoints exposed by the container.
     #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
 
     /// ComputeCluster resource ID that this container runs on.

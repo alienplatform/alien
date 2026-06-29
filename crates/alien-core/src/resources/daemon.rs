@@ -69,6 +69,7 @@ pub struct Daemon {
     pub links: Vec<ResourceRef>,
     /// Public endpoints exposed by the daemon.
     #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
     /// HTTP health check for public daemon endpoint load balancers.
     #[serde(skip_serializing_if = "Option::is_none")]

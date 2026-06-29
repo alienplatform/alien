@@ -250,7 +250,10 @@ impl From<&Stack> for StackRef {
 mod tests {
     use super::*;
     use crate::resource::ResourceLifecycle;
-    use crate::{PermissionSetReference, Storage, Worker};
+    use crate::{
+        Container, ContainerCode, Daemon, DaemonCode, PermissionSetReference, ResourceSpec,
+        Storage, Worker, WorkerCode,
+    };
     use insta::assert_json_snapshot;
 
     #[test]
@@ -338,6 +341,75 @@ mod tests {
         settings.bind(|| {
             assert_json_snapshot!("empty_stack_serialization_account", stack);
         });
+    }
+
+    #[test]
+    fn stack_deserializes_resources_without_public_endpoints() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .build();
+        let daemon = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .build();
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:latest".to_string(),
+            })
+            .permissions("worker-execution".to_string())
+            .build();
+        let stack = Stack::new("legacy-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .add(daemon, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let mut legacy_json = serde_json::to_value(stack).expect("stack should serialize");
+        for resource_id in ["api", "agent", "worker"] {
+            legacy_json
+                .pointer_mut(&format!("/resources/{resource_id}/config"))
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("resource config should be an object")
+                .remove("publicEndpoints");
+        }
+
+        let stack: Stack =
+            serde_json::from_value(legacy_json).expect("legacy stack should deserialize");
+
+        let container = stack
+            .resources
+            .get("api")
+            .and_then(|entry| entry.config.downcast_ref::<Container>())
+            .expect("api should be a container");
+        assert!(container.public_endpoints.is_empty());
+
+        let daemon = stack
+            .resources
+            .get("agent")
+            .and_then(|entry| entry.config.downcast_ref::<Daemon>())
+            .expect("agent should be a daemon");
+        assert!(daemon.public_endpoints.is_empty());
+
+        let worker = stack
+            .resources
+            .get("worker")
+            .and_then(|entry| entry.config.downcast_ref::<Worker>())
+            .expect("worker should be a worker");
+        assert!(worker.public_endpoints.is_empty());
     }
 
     #[test]

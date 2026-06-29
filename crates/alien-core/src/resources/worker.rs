@@ -145,6 +145,7 @@ pub struct Worker {
 
     /// Public endpoints exposed by this worker.
     #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<WorkerPublicEndpoint>,
 
     /// Permission profile name that defines the permissions granted to this worker.
