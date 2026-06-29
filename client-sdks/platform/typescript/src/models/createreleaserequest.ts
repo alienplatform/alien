@@ -15,21 +15,21 @@ import {
 } from "./stackbyplatform.js";
 
 export type CreateReleaseRequest = {
-  gitMetadata?: GitMetadata | null | undefined;
-  stack: StackByPlatform;
-  rootDirectory?: string | null | undefined;
   /**
    * Project ID or name
    */
   project: string;
+  gitMetadata?: GitMetadata | null | undefined;
+  stack?: StackByPlatform | undefined;
+  rootDirectory?: string | null | undefined;
 };
 
 /** @internal */
 export type CreateReleaseRequest$Outbound = {
-  gitMetadata?: GitMetadata$Outbound | null | undefined;
-  stack: StackByPlatform$Outbound;
-  rootDirectory?: string | null | undefined;
   project: string;
+  gitMetadata?: GitMetadata$Outbound | null | undefined;
+  stack?: StackByPlatform$Outbound | undefined;
+  rootDirectory?: string | null | undefined;
 };
 
 /** @internal */
@@ -37,10 +37,10 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   CreateReleaseRequest$Outbound,
   CreateReleaseRequest
 > = z.object({
-  gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
-  stack: StackByPlatform$outboundSchema,
-  rootDirectory: z.nullable(z.string()).optional(),
   project: z.string(),
+  gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
+  stack: StackByPlatform$outboundSchema.optional(),
+  rootDirectory: z.nullable(z.string()).optional(),
 });
 
 export function createReleaseRequestToJSON(

@@ -270,6 +270,7 @@ mod tests {
                 management,
             },
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 

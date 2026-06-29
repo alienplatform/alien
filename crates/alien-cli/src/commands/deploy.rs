@@ -6,6 +6,7 @@
 //! 3. Run step loop via manager (acquire → step → reconcile → release)
 
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
+
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
     wait_for_dev_deployment_ready_with_progress,
@@ -15,16 +16,18 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
+use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
-    acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+    acquire_deployment, acquire_setup_run_deployment, final_reconcile, release_deployment,
+    ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::info;
 use uuid::Uuid;
@@ -60,10 +63,6 @@ pub struct DeployArgs {
     /// Omit to let the manager generate one.
     #[arg(long, value_parser = parse_resource_prefix)]
     pub resource_prefix: Option<String>,
-
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
 
     /// Disable heartbeat capability
     #[arg(long)]
@@ -114,19 +113,6 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     if let ExecutionMode::Dev { port } = ctx {
         return deploy_local_dev_task(args, port).await;
-    }
-
-    // Check for experimental platforms
-    if let Ok(platform) = Platform::from_str(&args.platform) {
-        if platform.is_experimental() && !args.experimental {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!(
-                    "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                    args.platform
-                ),
-            }));
-        }
     }
 
     info!("Starting deploy command");
@@ -241,8 +227,15 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         })
                         .transpose()?;
 
+                    // AWS managed deployments require push model; pull is for K8s/manager-side.
+                    let deployment_model = if args.platform == "aws" {
+                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
+                    } else {
+                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
+                    };
                     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        deployment_model: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull),
+                        compute: None,
+                        deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
                         } else {
@@ -301,6 +294,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             environment_variables: None,
                             deployment_group_id: None,
                             environment_info: None,
+                            input_values: HashMap::new(),
                             setup_method: None,
                             setup_metadata: None,
                         })
@@ -453,6 +447,49 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
 
+    // Standalone path: the deployment record carries a `desiredReleaseId` and
+    // the platform-mode CLI normally relies on the manager to inject the
+    // target_release. The standalone manager doesn't do that injection on
+    // get_deployment, so fetch the release directly here and populate
+    // `target_release` ourselves — otherwise pending::handle_pending fails
+    // immediately with "Target release required for deployment".
+    if current.target_release.is_none() {
+        if let Some(release_id) = deployment.desired_release_id.as_ref() {
+            let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
+            if let Ok(resp) = manager_ctx
+                .http_client
+                .get(&url)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", tracked_deployment.api_key),
+                )
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(release_json) = resp.json::<serde_json::Value>().await {
+                        let stack_for_platform = release_json
+                            .get("stack")
+                            .and_then(|s| s.get(args.platform.as_str()))
+                            .cloned();
+                        if let Some(stack_json) = stack_for_platform {
+                            if let Ok(stack) =
+                                serde_json::from_value::<alien_core::Stack>(stack_json)
+                            {
+                                current.target_release = Some(alien_core::ReleaseInfo {
+                                    release_id: release_id.clone(),
+                                    version: None,
+                                    description: None,
+                                    stack,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Running deploy on a failed deployment is an implicit retry request
     if current.status.is_failed() {
         info!(
@@ -477,7 +514,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         })?
         .unwrap_or_default();
 
-    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+    let mut config: alien_core::DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
         "environmentVariables": {
             "variables": [],
@@ -490,13 +527,29 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         message: "Failed to construct deployment config".to_string(),
     })?;
 
+    let setup_owned_status = matches!(
+        current.status,
+        DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+    );
+
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
-    acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire deployment lock".to_string(),
-        })?;
+    if setup_owned_status {
+        acquire_setup_run_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to acquire setup deployment lock".to_string(),
+            })?;
+    } else {
+        acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to acquire deployment lock".to_string(),
+            })?;
+    }
 
     // Re-fetch under lock (manager may have advanced the state)
     let deployment = manager_client
@@ -535,7 +588,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     let transport = ManagerApiTransport::new(manager_client.clone(), session.clone());
     let policy = RunnerPolicy {
         max_steps: 400,
-        operation: LoopOperation::Deploy,
+        operation: if setup_owned_status {
+            LoopOperation::InitialSetup
+        } else {
+            LoopOperation::Deploy
+        },
         delay_threshold: None,
     };
 

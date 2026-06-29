@@ -26,9 +26,10 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
-    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, Tag,
+    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeRouteTablesRequest,
+    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
+    DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
+    ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Tag,
     TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -134,6 +135,24 @@ fn has_ipv4_all_protocol_rule(
     })
 }
 
+/// Return the subset of `desired` subnet IDs that are not already attached
+/// via `existing` associations. Used when reusing a route table found by
+/// `find_existing_route_table_by_name` so we don't double-associate subnets
+/// that survived a crash mid-way through `creating_route_tables`.
+fn subnets_needing_association<'a>(
+    desired: &'a [String],
+    existing: &[RouteTableAssociation],
+) -> Vec<&'a String> {
+    let already: HashSet<&str> = existing
+        .iter()
+        .filter_map(|a| a.subnet_id.as_deref())
+        .collect();
+    desired
+        .iter()
+        .filter(|s| !already.contains(s.as_str()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use alien_aws_clients::ec2::{IpPermissionSet, IpRangeResponse, IpRangeSet};
@@ -206,6 +225,95 @@ mod tests {
         assert!(!has_ipv4_all_protocol_rule(Some(&set.items), "0.0.0.0/0"));
         assert!(!has_ipv4_all_protocol_rule(None, "0.0.0.0/0"));
     }
+
+    fn assoc(rtb_assoc_id: &str, subnet_id: &str) -> RouteTableAssociation {
+        RouteTableAssociation {
+            route_table_association_id: Some(rtb_assoc_id.to_string()),
+            route_table_id: None,
+            subnet_id: Some(subnet_id.to_string()),
+            main: Some(false),
+        }
+    }
+
+    #[test]
+    fn associates_all_subnets_when_route_table_has_none() {
+        let desired = vec!["subnet-a".to_string(), "subnet-b".to_string()];
+        let existing: Vec<RouteTableAssociation> = vec![];
+
+        let to_attach: Vec<_> = subnets_needing_association(&desired, &existing)
+            .into_iter()
+            .map(String::as_str)
+            .collect();
+
+        assert_eq!(to_attach, vec!["subnet-a", "subnet-b"]);
+    }
+
+    #[test]
+    fn skips_subnets_already_attached_to_reused_route_table() {
+        // Scenario: a prior iteration crashed after associating subnet-a but
+        // before associating subnet-b. The retry finds the same RT (by tag)
+        // and should only associate subnet-b — re-associating subnet-a would
+        // either fail or leak a duplicate association_id we already hold.
+        let desired = vec!["subnet-a".to_string(), "subnet-b".to_string()];
+        let existing = vec![assoc("rtbassoc-001", "subnet-a")];
+
+        let to_attach: Vec<_> = subnets_needing_association(&desired, &existing)
+            .into_iter()
+            .map(String::as_str)
+            .collect();
+
+        assert_eq!(to_attach, vec!["subnet-b"]);
+    }
+
+    #[test]
+    fn skips_nothing_when_all_already_attached() {
+        // If the prior iteration finished associations before crashing, the
+        // retry should be a no-op for the association step.
+        let desired = vec!["subnet-a".to_string(), "subnet-b".to_string()];
+        let existing = vec![
+            assoc("rtbassoc-001", "subnet-a"),
+            assoc("rtbassoc-002", "subnet-b"),
+        ];
+
+        let to_attach: Vec<_> = subnets_needing_association(&desired, &existing)
+            .into_iter()
+            .map(String::as_str)
+            .collect();
+
+        assert!(to_attach.is_empty());
+    }
+
+    #[test]
+    fn ignores_main_route_table_associations_in_existing_set() {
+        // A real RouteTableAssociationSet from AWS includes the implicit
+        // "main" association (no subnet_id, main=true). The helper must skip
+        // those (filter_map drops them when `subnet_id` is None) so the
+        // desired subnets still get processed.
+        let desired = vec!["subnet-a".to_string()];
+        let existing = vec![RouteTableAssociation {
+            route_table_association_id: Some("rtbassoc-main".to_string()),
+            route_table_id: Some("rtb-xxx".to_string()),
+            subnet_id: None,
+            main: Some(true),
+        }];
+
+        let to_attach: Vec<_> = subnets_needing_association(&desired, &existing)
+            .into_iter()
+            .map(String::as_str)
+            .collect();
+
+        assert_eq!(to_attach, vec!["subnet-a"]);
+    }
+
+    #[test]
+    fn handles_empty_desired() {
+        let desired: Vec<String> = vec![];
+        let existing = vec![assoc("rtbassoc-001", "subnet-a")];
+
+        let to_attach = subnets_needing_association(&desired, &existing);
+
+        assert!(to_attach.is_empty());
+    }
 }
 
 /// AWS Network Controller state machine.
@@ -242,6 +350,10 @@ pub struct AwsNetworkController {
 }
 
 impl AwsNetworkController {
+    pub fn private_subnets_ready_for_runtime(&self) -> bool {
+        self.is_byo_vpc || matches!(self.state, AwsNetworkState::Ready)
+    }
+
     async fn find_security_group_id_by_name(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -276,6 +388,54 @@ impl AwsNetworkController {
         Ok(response
             .security_group_info
             .and_then(|set| set.items.into_iter().find_map(|sg| sg.group_id)))
+    }
+
+    /// Look up an existing route table in this VPC by its `Name` tag.
+    ///
+    /// Returns `Ok(None)` when no matching table exists. The result carries
+    /// the full `RouteTable` so callers can inspect `association_set` and
+    /// avoid re-associating subnets already attached.
+    ///
+    /// Used by `creating_route_tables` to make a retried state-machine
+    /// iteration reuse the table from a prior partial attempt instead of
+    /// leaking a fresh one. The reference pattern is `create_route`'s
+    /// `RemoteResourceConflict` short-circuit; that one can't apply to
+    /// `CreateRouteTable` because AWS doesn't surface a conflict when a
+    /// tagged duplicate already exists.
+    async fn find_existing_route_table_by_name(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        name: &str,
+        resource_id: &str,
+    ) -> Result<Option<RouteTable>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let response = client
+            .describe_route_tables(
+                DescribeRouteTablesRequest::builder()
+                    .filters(vec![
+                        Filter {
+                            name: "vpc-id".to_string(),
+                            values: vec![vpc_id.to_string()],
+                        },
+                        Filter {
+                            name: "tag:Name".to_string(),
+                            values: vec![name.to_string()],
+                        },
+                    ])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to describe existing route tables".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        Ok(response
+            .route_table_set
+            .and_then(|set| set.items.into_iter().next()))
     }
 
     async fn find_security_group_by_id(
@@ -979,40 +1139,69 @@ impl AwsNetworkController {
             })
         })?;
 
-        info!("Creating public route table");
+        let public_rt_name = format!("{}-public-rt", ctx.resource_prefix);
+        let private_rt_name = format!("{}-private-rt", ctx.resource_prefix);
 
-        // Create public route table
-        let public_rt_response = client
-            .create_route_table(
-                CreateRouteTableRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![self.create_tag_specification(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "route-table",
-                        format!("{}-public-rt", ctx.resource_prefix),
-                        [],
-                    )])
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create public route table".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        // Look up an existing public route table by tag:Name first. AWS
+        // CreateRouteTable doesn't enforce tag uniqueness, so without this
+        // lookup every retried iteration of the state machine creates a fresh
+        // RT, leaking orphans in the VPC. Mirrors the `create_route`
+        // idempotency pattern in `waiting_for_nat_gateway`.
+        let existing_public = self
+            .find_existing_route_table_by_name(ctx, vpc_id, &public_rt_name, &config.id)
+            .await?;
 
-        let public_rt_id = public_rt_response
-            .route_table
-            .and_then(|rt| rt.route_table_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "Public route table created but no ID returned".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        let (public_rt_id, public_existing_assocs) = match existing_public {
+            Some(rt) => {
+                let id = rt.route_table_id.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Existing public route table has no ID".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })
+                })?;
+                let assocs = rt.association_set.map(|set| set.items).unwrap_or_default();
+                info!(
+                    route_table_id = %id,
+                    "Public route table already exists from a prior attempt — reusing"
+                );
+                (id, assocs)
+            }
+            None => {
+                info!("Creating public route table");
+                let public_rt_response = client
+                    .create_route_table(
+                        CreateRouteTableRequest::builder()
+                            .vpc_id(vpc_id.clone())
+                            .tag_specifications(vec![self.create_tag_specification(
+                                ctx.resource_prefix,
+                                &config.id,
+                                "route-table",
+                                public_rt_name.clone(),
+                                [],
+                            )])
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to create public route table".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                let id = public_rt_response
+                    .route_table
+                    .and_then(|rt| rt.route_table_id)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: "Public route table created but no ID returned".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+                (id, Vec::new())
+            }
+        };
 
-        // Add route to Internet Gateway
-        client
+        // Add route to Internet Gateway. Idempotent: when reusing an existing
+        // RT the route may already be there.
+        match client
             .create_route(
                 CreateRouteRequest::builder()
                     .route_table_id(public_rt_id.clone())
@@ -1021,13 +1210,34 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create route to Internet Gateway".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(_) => {}
+            Err(err)
+                if matches!(
+                    &err.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                info!(
+                    route_table_id = %public_rt_id,
+                    "0.0.0.0/0 → IGW route already exists from a prior attempt — reusing"
+                );
+            }
+            Err(err) => {
+                return Err(err).context(ErrorData::CloudPlatformError {
+                    message: "Failed to create route to Internet Gateway".to_string(),
+                    resource_id: Some(config.id.clone()),
+                });
+            }
+        }
 
-        // Associate public subnets with public route table
-        for subnet_id in &self.public_subnet_ids {
+        // Associate only public subnets that aren't already attached. AWS
+        // returns the existing association_id on a duplicate associate call,
+        // but skipping the call keeps the log clean and avoids needless API
+        // traffic per retry.
+        for subnet_id in
+            subnets_needing_association(&self.public_subnet_ids, &public_existing_assocs)
+        {
             let assoc_response = client
                 .associate_route_table(
                     AssociateRouteTableRequest::builder()
@@ -1045,46 +1255,81 @@ impl AwsNetworkController {
                 })?;
 
             if let Some(assoc_id) = assoc_response.association_id {
-                self.route_table_association_ids.push(assoc_id);
+                if !self.route_table_association_ids.contains(&assoc_id) {
+                    self.route_table_association_ids.push(assoc_id);
+                }
+            }
+        }
+
+        // Preserve any association IDs the existing RT was already carrying,
+        // so cleanup on destroy can disassociate them too.
+        for assoc in &public_existing_assocs {
+            if let Some(assoc_id) = assoc.route_table_association_id.clone() {
+                if !self.route_table_association_ids.contains(&assoc_id) {
+                    self.route_table_association_ids.push(assoc_id);
+                }
             }
         }
 
         self.public_route_table_id = Some(public_rt_id);
 
-        info!("Creating private route table");
+        // Same lookup-or-create dance for the private route table.
+        let existing_private = self
+            .find_existing_route_table_by_name(ctx, vpc_id, &private_rt_name, &config.id)
+            .await?;
 
-        // Create private route table
-        let private_rt_response = client
-            .create_route_table(
-                CreateRouteTableRequest::builder()
-                    .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![self.create_tag_specification(
-                        ctx.resource_prefix,
-                        &config.id,
-                        "route-table",
-                        format!("{}-private-rt", ctx.resource_prefix),
-                        [],
-                    )])
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create private route table".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let (private_rt_id, private_existing_assocs) = match existing_private {
+            Some(rt) => {
+                let id = rt.route_table_id.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Existing private route table has no ID".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })
+                })?;
+                let assocs = rt.association_set.map(|set| set.items).unwrap_or_default();
+                info!(
+                    route_table_id = %id,
+                    "Private route table already exists from a prior attempt — reusing"
+                );
+                (id, assocs)
+            }
+            None => {
+                info!("Creating private route table");
+                let private_rt_response = client
+                    .create_route_table(
+                        CreateRouteTableRequest::builder()
+                            .vpc_id(vpc_id.clone())
+                            .tag_specifications(vec![self.create_tag_specification(
+                                ctx.resource_prefix,
+                                &config.id,
+                                "route-table",
+                                private_rt_name.clone(),
+                                [],
+                            )])
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to create private route table".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                let id = private_rt_response
+                    .route_table
+                    .and_then(|rt| rt.route_table_id)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: "Private route table created but no ID returned".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+                (id, Vec::new())
+            }
+        };
 
-        let private_rt_id = private_rt_response
-            .route_table
-            .and_then(|rt| rt.route_table_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: "Private route table created but no ID returned".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
-
-        // Associate private subnets with private route table
-        for subnet_id in &self.private_subnet_ids {
+        // Associate only private subnets that aren't already attached.
+        for subnet_id in
+            subnets_needing_association(&self.private_subnet_ids, &private_existing_assocs)
+        {
             let assoc_response = client
                 .associate_route_table(
                     AssociateRouteTableRequest::builder()
@@ -1102,7 +1347,17 @@ impl AwsNetworkController {
                 })?;
 
             if let Some(assoc_id) = assoc_response.association_id {
-                self.route_table_association_ids.push(assoc_id);
+                if !self.route_table_association_ids.contains(&assoc_id) {
+                    self.route_table_association_ids.push(assoc_id);
+                }
+            }
+        }
+
+        for assoc in &private_existing_assocs {
+            if let Some(assoc_id) = assoc.route_table_association_id.clone() {
+                if !self.route_table_association_ids.contains(&assoc_id) {
+                    self.route_table_association_ids.push(assoc_id);
+                }
             }
         }
 
@@ -1263,7 +1518,12 @@ impl AwsNetworkController {
                     })
                 })?;
 
-                client
+                // Idempotent: a retried iteration of the state machine may have
+                // already added the 0.0.0.0/0 route in a prior partial attempt;
+                // AWS surfaces that as `RemoteResourceConflict` /
+                // `RouteAlreadyExists`. Treat as success so the state machine
+                // can advance.
+                match client
                     .create_route(
                         CreateRouteRequest::builder()
                             .route_table_id(private_rt_id.clone())
@@ -1272,10 +1532,27 @@ impl AwsNetworkController {
                             .build(),
                     )
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to create route to NAT Gateway".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(err)
+                        if matches!(
+                            &err.error,
+                            Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                        ) =>
+                    {
+                        info!(
+                            route_table_id = %private_rt_id,
+                            nat_gateway_id = %nat_gateway_id,
+                            "0.0.0.0/0 → NAT route already exists from a prior attempt — reusing"
+                        );
+                    }
+                    Err(err) => {
+                        return Err(err).context(ErrorData::CloudPlatformError {
+                            message: "Failed to create route to NAT Gateway".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        });
+                    }
+                }
 
                 Ok(HandlerAction::Continue {
                     state: CreatingSecurityGroup,
@@ -2116,6 +2393,14 @@ impl AwsNetworkController {
             is_byo_vpc: false,
             _internal_stay_count: None,
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn mock_waiting_for_private_subnet_egress(vpc_id: &str, az_count: usize) -> Self {
+        let mut controller = Self::mock_ready(vpc_id, az_count);
+        controller.state = AwsNetworkState::WaitingForNatGateway;
+        controller.nat_gateway_id = None;
+        controller
     }
 
     /// Creates a BYO-VPC controller in ready state for testing.

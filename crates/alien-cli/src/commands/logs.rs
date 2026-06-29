@@ -71,6 +71,10 @@ pub struct LogsArgs {
     #[arg(long, default_value_t = DEFAULT_LIMIT)]
     pub limit: usize,
 
+    /// Include logs from Alien system components (hidden by default).
+    #[arg(long)]
+    pub system: bool,
+
     /// Keep polling for new logs.
     #[arg(long)]
     pub follow: bool,
@@ -232,7 +236,12 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         deployment_group_name: target.deployment_group_name.clone(),
         database_id: database_id.clone(),
     };
-    let query = build_logs_query(&args.query, &args.level, target.deployment_id.as_deref())?;
+    let query = build_logs_query(
+        &args.query,
+        &args.level,
+        target.deployment_id.as_deref(),
+        args.system,
+    )?;
     let (start_time, end_time) = resolve_time_window(&args);
 
     if args.follow {
@@ -367,7 +376,7 @@ async fn resolve_deployment_target(
                 url: None,
             })?
             .into_inner();
-        return target_from_deployment_detail(response, None);
+        return target_from_deployment_detail(response, None).await;
     }
 
     let Some((group_name, deployment_name)) = deployment.split_once('/') else {
@@ -442,20 +451,9 @@ async fn resolve_deployment_target(
             })
         })?;
 
-    let manager_id = deployment
-        .manager_id
-        .clone()
-        .map(String::from)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "Deployment {}/{} does not have a manager assigned yet.",
-                    group_name, deployment_name
-                ),
-            })
-        })?;
     let deployment_id: String = deployment.id.clone().into();
     let deployment_project_id: String = deployment.project_id.clone().into();
+    let manager_id = String::from(deployment.manager_id.clone());
 
     Ok(ResolvedLogsTarget {
         manager_id,
@@ -467,23 +465,13 @@ async fn resolve_deployment_target(
     })
 }
 
-fn target_from_deployment_detail(
+async fn target_from_deployment_detail(
     deployment: types::DeploymentDetailResponse,
     group_name: Option<String>,
 ) -> Result<ResolvedLogsTarget> {
     let deployment_id: String = deployment.id.clone().into();
-    let manager_id = deployment
-        .manager_id
-        .clone()
-        .map(String::from)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "Deployment {deployment_id} does not have a manager assigned yet."
-                ),
-            })
-        })?;
     let project_id: String = deployment.project_id.clone().into();
+    let manager_id = String::from(deployment.manager_id.clone());
     let deployment_name: String = deployment.name.clone().into();
     let project_name = deployment
         .project
@@ -947,6 +935,7 @@ fn build_logs_query(
     user_query: &str,
     levels: &[LogLevel],
     deployment_id: Option<&str>,
+    include_system: bool,
 ) -> Result<String> {
     let mut filters = Vec::new();
     let query = user_query.trim();
@@ -966,13 +955,27 @@ fn build_logs_query(
     }
     if let Some(deployment_id) = deployment_id {
         filters.push(format!(
-            "resource_attributes.alien.deployment_id:\"{}\"",
+            "{}:\"{}\"",
+            deployment_id_resource_attribute_field(),
             escape_query_string(deployment_id)
+        ));
+    }
+    if !include_system {
+        // Hide Alien system-component logs (e.g. infrastructure daemons) unless
+        // explicitly requested. `NOT field:value` keeps documents that lack the
+        // attribute entirely, so user workload logs are always shown.
+        filters.push(format!(
+            "NOT {}:\"true\"",
+            system_resource_attribute_field()
         ));
     }
 
     if filters.is_empty() {
         Ok("*".to_string())
+    } else if filters.iter().all(|filter| filter.starts_with("NOT ")) {
+        // Quickwit/tantivy rejects a query made up of only negative clauses, so
+        // prepend a match-all positive term.
+        Ok(format!("* AND {}", filters.join(" AND ")))
     } else {
         Ok(filters.join(" AND "))
     }
@@ -991,6 +994,22 @@ fn severity_range(level: LogLevel) -> (u8, u8) {
 
 fn escape_query_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn deployment_id_resource_attribute_field() -> &'static str {
+    // `alien.deployment_id` is a single OpenTelemetry resource attribute key
+    // nested under `resource_attributes`, not two nested JSON fields.
+    "resource_attributes.alien\\.deployment_id"
+}
+
+fn system_resource_attribute_field() -> String {
+    // The marker key contains a dot that is part of the attribute name, not a
+    // path separator — escape it so Quickwit treats the segment under
+    // `resource_attributes.` as a single field name.
+    format!(
+        "resource_attributes.{}",
+        alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE.replace('.', "\\.")
+    )
 }
 
 fn parse_rfc3339_arg(value: &str) -> std::result::Result<DateTime<Utc>, String> {
@@ -1033,16 +1052,64 @@ mod tests {
 
     #[test]
     fn builds_query_with_levels_and_deployment() {
+        // `include_system = true` keeps the system-exclusion clause out of the
+        // way so this asserts only the level + deployment composition.
         let query = build_logs_query(
             "service_name:api",
             &[LogLevel::Warn, LogLevel::Error],
             Some("dep_123"),
+            true,
         )
         .unwrap();
 
         assert_eq!(
             query,
-            "(service_name:api) AND ((severity_number:>=13 AND severity_number:<=16) OR (severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien.deployment_id:\"dep_123\""
+            "(service_name:api) AND ((severity_number:>=13 AND severity_number:<=16) OR (severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\""
+        );
+    }
+
+    #[test]
+    fn deployment_filter_escapes_resource_attribute_key_dot() {
+        let query = build_logs_query("*", &[], Some("dep_123"), true).unwrap();
+
+        assert_eq!(
+            query,
+            "resource_attributes.alien\\.deployment_id:\"dep_123\""
+        );
+    }
+
+    #[test]
+    fn hides_system_components_by_default_with_match_all_base() {
+        // Default (no query, levels, or deployment) must not produce a
+        // pure-negative query — it needs a positive `*` base.
+        let query = build_logs_query("*", &[], None, false).unwrap();
+
+        assert_eq!(
+            query,
+            "* AND NOT resource_attributes.alien\\.system:\"true\""
+        );
+    }
+
+    #[test]
+    fn system_flag_omits_exclusion() {
+        let query = build_logs_query("*", &[], None, true).unwrap();
+
+        assert_eq!(query, "*");
+    }
+
+    #[test]
+    fn system_exclusion_appends_after_positive_clauses() {
+        let query = build_logs_query(
+            "service_name:api",
+            &[LogLevel::Error],
+            Some("dep_123"),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            query,
+            "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\""
         );
     }
 

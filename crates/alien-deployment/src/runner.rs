@@ -497,7 +497,7 @@ mod tests {
             compute_backend: None,
             allow_frozen_changes: false,
             domain_metadata: None,
-            public_urls: None,
+            public_endpoints: None,
             monitoring: None,
             manager_url: None,
             deployment_token: None,

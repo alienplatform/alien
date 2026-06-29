@@ -72,11 +72,15 @@ export type ListDeploymentsRequest = {
    */
   deploymentGroup?: string | undefined;
   /**
+   * Filter by exact deployment name. Must be used with deploymentGroup.
+   */
+  name?: string | undefined;
+  /**
    * Filter by manager ID
    */
   managerId?: string | undefined;
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**
@@ -138,6 +142,7 @@ export const ListDeploymentsInclude$outboundSchema: z.ZodEnum<
 export type ListDeploymentsRequest$Outbound = {
   project?: string | undefined;
   deploymentGroup?: string | undefined;
+  name?: string | undefined;
   managerId?: string | undefined;
   workspace?: string | undefined;
   search?: string | undefined;
@@ -155,6 +160,7 @@ export const ListDeploymentsRequest$outboundSchema: z.ZodType<
 > = z.object({
   project: z.string().optional(),
   deploymentGroup: z.string().optional(),
+  name: z.string().optional(),
   managerId: z.string().optional(),
   workspace: z.string().optional(),
   search: z.string().optional(),

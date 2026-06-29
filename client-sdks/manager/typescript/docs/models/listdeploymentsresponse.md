@@ -10,11 +10,14 @@ let value: ListDeploymentsResponse = {
     {
       createdAt: "1716598022475",
       deploymentGroupId: "<id>",
+      deploymentProtocolVersion: 897895,
       id: "<id>",
       name: "<value>",
-      platform: "test",
-      retryRequested: true,
+      platform: "aws",
+      projectId: "<id>",
+      retryRequested: false,
       status: "<value>",
+      workspaceId: "<id>",
     },
   ],
 };

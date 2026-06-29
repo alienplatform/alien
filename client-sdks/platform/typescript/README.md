@@ -98,7 +98,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -128,7 +128,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -175,9 +175,17 @@ run();
 * [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 
+### [DebugSessions](docs/sdks/debugsessions/README.md)
+
+* [list](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
+* [create](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
+* [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+
 ### [Deployment](docs/sdks/deployment/README.md)
 
 * [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+* [planCompute](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 * [prepareStack](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
@@ -290,10 +298,10 @@ run();
 
 ### [User](docs/sdks/user/README.md)
 
+* [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [getProfile](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 * [updateProfile](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 * [completeProfileSetup](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
-* [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [createWorkspace](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 * [listGitNamespaces](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
 * [syncGitNamespaces](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
@@ -345,6 +353,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+- [`debugSessionsCreate`](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+- [`debugSessionsGet`](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
+- [`debugSessionsList`](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
+- [`debugSessionsUpdate`](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
 - [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
@@ -352,6 +364,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+- [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateSetupRegistrationOperation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
@@ -457,7 +470,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile({
+  const result = await alien.user.listMemberships({
     retries: {
       strategy: "backoff",
       backoff: {
@@ -496,7 +509,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }
@@ -531,7 +544,7 @@ const alien = new Alien({
 
 async function run() {
   try {
-    const result = await alien.user.getProfile();
+    const result = await alien.user.listMemberships();
 
     console.log(result);
   } catch (error) {
@@ -598,7 +611,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.getProfile();
+  const result = await alien.user.listMemberships();
 
   console.log(result);
 }

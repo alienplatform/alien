@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,11 +58,9 @@ pub struct DeploymentRecord {
     pub management_config: Option<ManagementConfig>,
     /// Full config supplied by an external control plane.
     ///
-    /// Platform mode builds deployment config from database-backed domain,
-    /// monitoring, Horizon, and token state. The manager must preserve that
-    /// config instead of reconstructing a standalone config from the flattened
-    /// record fields.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// This can include deployment secrets, so records may deserialize it from
+    /// trusted control-plane responses but never serialize it back to clients.
+    #[serde(default, skip_serializing)]
     pub deployment_config: Option<DeploymentConfig>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
@@ -133,6 +133,8 @@ pub struct CreateDeploymentParams {
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    /// Stack input values collected before deployment creation.
+    pub input_values: HashMap<String, serde_json::Value>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,
 }
@@ -162,6 +164,8 @@ pub struct CreateImportedDeploymentParams {
     pub setup_fingerprint_version: u32,
     pub deployment_token: Option<String>,
     pub management_config: Option<ManagementConfig>,
+    /// Stack input values collected by setup artifacts.
+    pub input_values: HashMap<String, serde_json::Value>,
 }
 
 /// A deployment group record.
@@ -192,6 +196,7 @@ pub struct CreateDeploymentGroupParams {
 #[derive(Debug, Clone, Default)]
 pub struct DeploymentFilter {
     pub deployment_group_id: Option<String>,
+    pub name: Option<String>,
     pub deployment_ids: Option<Vec<String>>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,

@@ -7,7 +7,7 @@ const agent = new alien.Worker("agent")
     toolchain: { type: "rust", binaryName: "basic-worker" },
   })
   .commandsEnabled(true)
-  .ingress("public")
+  .publicEndpoint("api")
   .permissions("execution")
   .build()
 

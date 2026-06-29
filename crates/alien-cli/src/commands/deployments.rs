@@ -801,6 +801,7 @@ async fn create_deployment_task(
         .transpose()?;
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+        compute: None,
         deployment_model: Some(if no_push {
             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
         } else {
@@ -860,6 +861,7 @@ async fn create_deployment_task(
         manager_id: None,
         pinned_release_id: None,
         environment_info: None,
+        input_values: std::collections::HashMap::new(),
         setup_method: None,
         setup_metadata: None,
     };

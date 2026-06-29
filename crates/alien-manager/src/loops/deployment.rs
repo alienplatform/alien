@@ -21,7 +21,7 @@ use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
     ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -44,6 +44,54 @@ pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+
+/// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
+/// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
+/// the production resolver stays in charge.
+fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineImage> {
+    use alien_core::{
+        HorizonAwsMachineImages, HorizonMachineArchitecture, HorizonMachineBaseImage,
+        HorizonMachineImage,
+    };
+
+    let amd64 = std::env::var("ALIEN_BYO_HORIZON_AMI_AMD64").ok();
+    let arm64 = std::env::var("ALIEN_BYO_HORIZON_AMI_ARM64").ok();
+    if amd64.as_deref().unwrap_or("").is_empty() && arm64.as_deref().unwrap_or("").is_empty() {
+        return None;
+    }
+
+    let region = std::env::var("AWS_REGION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let mut amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>> = HashMap::new();
+    if let Some(ami) = amd64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Amd64, by_region);
+    }
+    if let Some(ami) = arm64.filter(|s| !s.is_empty()) {
+        let mut by_region = HashMap::new();
+        by_region.insert(region.clone(), ami);
+        amis.insert(HorizonMachineArchitecture::Arm64, by_region);
+    }
+
+    Some(HorizonMachineImage {
+        channel: "byo".to_string(),
+        machine_image_version: "byo-local".to_string(),
+        horizond_version: "byo".to_string(),
+        git_sha: "byo".to_string(),
+        created_at: "1970-01-01T00:00:00Z".to_string(),
+        base_image: HorizonMachineBaseImage {
+            name: "byo".to_string(),
+            version: "byo".to_string(),
+        },
+        aws: Some(HorizonAwsMachineImages { amis }),
+        gcp: None,
+        azure: None,
+    })
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ProcessOptions {
@@ -459,7 +507,10 @@ impl DeploymentLoop {
         let environment_variables = self
             .build_environment_variables(&deployment_id, &deployment)
             .await?;
-        let monitoring = self.build_monitoring_config(&deployment);
+        let provided_config = deployment.deployment_config.as_ref();
+        let monitoring = provided_config
+            .and_then(|config| config.monitoring.clone())
+            .or_else(|| self.build_monitoring_config(&deployment));
 
         // 5. Build deployment config.
         // Management config resolution:
@@ -492,52 +543,69 @@ impl DeploymentLoop {
         )
         .await;
 
-        let config = if let Some(mut config) = deployment.deployment_config.clone() {
-            if config.deployment_name.is_none() {
-                config.deployment_name = Some(deployment.name.clone());
-            }
-            if config.management_config.is_none() {
-                config.management_config = management_config;
-            }
-            if config.deployment_token.is_none() {
-                config.deployment_token = deployment.deployment_token.clone();
-            }
-            if config.base_platform.is_none() {
-                config.base_platform = deployment.base_platform;
-            }
-            if config.monitoring.is_none() {
-                config.monitoring = monitoring;
-            }
-            config.manager_url = Some(self.config.base_url());
-            config.native_image_host = native_image_host;
-            config
-        } else {
-            DeploymentConfig {
-                deployment_name: Some(deployment.name.clone()),
-                stack_settings: deployment
-                    .stack_settings
-                    .clone()
-                    .expect("stored deployment carries stack_settings"),
-                management_config,
-                environment_variables,
-                allow_frozen_changes: false,
-                compute_backend: None,
-                external_bindings: deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .external_bindings
-                    .clone()
-                    .unwrap_or_default(),
-                base_platform: deployment.base_platform,
-                public_urls: None,
-                domain_metadata: None,
-                monitoring,
-                manager_url: Some(self.config.base_url()),
-                deployment_token: deployment.deployment_token.clone(),
-                native_image_host,
-            }
+        let stack_settings = deployment
+            .stack_settings
+            .clone()
+            .or_else(|| provided_config.map(|config| config.stack_settings.clone()))
+            .expect("stored deployment carries stack_settings");
+
+        let mut config = DeploymentConfig {
+            deployment_name: Some(deployment.name.clone()),
+            stack_settings: stack_settings.clone(),
+            management_config,
+            environment_variables,
+            allow_frozen_changes: provided_config
+                .map(|config| config.allow_frozen_changes)
+                .unwrap_or(false),
+            compute_backend: provided_config.and_then(|config| config.compute_backend.clone()),
+            external_bindings: deployment
+                .stack_settings
+                .as_ref()
+                .or_else(|| provided_config.map(|config| &config.stack_settings))
+                .expect("stored deployment carries stack_settings")
+                .external_bindings
+                .clone()
+                .unwrap_or_default(),
+            base_platform: provided_config
+                .and_then(|config| config.base_platform)
+                .or(deployment.base_platform),
+            public_endpoints: provided_config.and_then(|config| config.public_endpoints.clone()),
+            domain_metadata: provided_config.and_then(|config| config.domain_metadata.clone()),
+            monitoring,
+            manager_url: Some(self.config.base_url()),
+            deployment_token: provided_config
+                .and_then(|config| config.deployment_token.clone())
+                .or_else(|| deployment.deployment_token.clone()),
+            native_image_host,
         };
+
+        // Standalone-mode bridge: inject a BYO Horizon backend from env vars
+        // when an external control plane did not supply one.
+        if config.compute_backend.is_none() {
+            if let (Ok(url), Ok(cluster_id), Ok(token)) = (
+                std::env::var("ALIEN_BYO_HORIZON_URL"),
+                std::env::var("ALIEN_BYO_HORIZON_CLUSTER_ID"),
+                std::env::var("ALIEN_BYO_HORIZON_MANAGEMENT_TOKEN"),
+            ) {
+                if !url.is_empty() && !cluster_id.is_empty() && !token.is_empty() {
+                    let mut clusters = std::collections::HashMap::new();
+                    clusters.insert(
+                        cluster_id.clone(),
+                        alien_core::HorizonClusterConfig {
+                            cluster_id,
+                            management_token: token,
+                        },
+                    );
+                    config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
+                        alien_core::HorizonConfig {
+                            url,
+                            horizon_machine_image: synthesize_byo_horizon_machine_image(),
+                            clusters,
+                        },
+                    ));
+                }
+            }
+        }
 
         // 6. Build service provider.
         // Use LocalBindingsProvider for local platform, default provider for cloud platforms.
@@ -672,6 +740,7 @@ impl DeploymentLoop {
     ///
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
+    /// - `ALIEN_DEPLOYMENT_NAME`
     /// - Commands polling configuration
     async fn build_environment_variables(
         &self,
@@ -687,8 +756,14 @@ impl DeploymentLoop {
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
         });
+        vars.push(EnvironmentVariable {
+            name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
+            value: deployment.name.clone(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
+        });
 
-        // 2. Commands configuration — only inject polling for K8s/Local.
+        // 3. Commands configuration — only inject polling for K8s/Local.
         // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
         // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
         // regardless of deployment model. K8s/Local run as containers that must poll.
@@ -875,8 +950,8 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
-            deployment_config: None,
             deployment_token: None,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,

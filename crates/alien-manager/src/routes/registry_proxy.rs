@@ -391,6 +391,24 @@ async fn version_check(State(state): State<AppState>, headers: HeaderMap) -> Res
 // ---------------------------------------------------------------------------
 
 /// Push: authenticate as admin, forward to upstream unchanged.
+///
+/// Two auth shapes are accepted:
+///
+/// * **Bearer**: the normal `alien release` push flow — the CLI sends an
+///   `Authorization: Bearer <workspace-token>` on every request and we
+///   validate it through `require_auth`.
+///
+/// * **Signed upload-session URL**: cloud OCI registries (ECR, GCR, etc.)
+///   return pre-signed S3/GCS URLs in the `Location` header of a successful
+///   POST to `/v2/{repo}/blobs/uploads/`. Push clients (`dockdash` included)
+///   treat that URL as self-authenticating — they PUT/PATCH to it WITHOUT
+///   the Bearer token they were sending on the initial POST. To stay
+///   compatible we sign the rewritten Location ourselves
+///   (`rewrite_location_with_upload_session_auth` below), and accept
+///   subsequent PUT/PATCH requests to the same path on the basis of the
+///   signature alone. Without this branch every `alien release` push
+///   would die at the layer-upload PUT with a confusing
+///   `UNAUTHORIZED: Authentication required`.
 async fn proxy_push(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -399,18 +417,47 @@ async fn proxy_push(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
-    let subject = match super::auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
+    let oci_path_str = path.trim_start_matches('/');
+    // The signing flow in `rewrite_location_with_upload_session_auth` signs
+    // the URL's full path (`/v2/...`). axum's `Path` extractor on the
+    // `/v2/{*path}` route strips the leading `/v2/`, so rebuild it before
+    // calling the verifier so the path-component of the HMAC matches the
+    // one used when signing.
+    let full_path = format!("/v2/{}", oci_path_str);
+    let signed_session_repo = if is_oci_upload_session_path(&full_path)
+        && query.contains_key(UPLOAD_SESSION_VERSION_PARAM)
+    {
+        match verify_upload_session_auth(&state.config.response_signing_key, &full_path, &query) {
+            Ok(repo) => Some(repo),
+            Err(e) => return e,
+        }
+    } else {
+        None
     };
 
-    let repo_name = extract_repo_name(&path);
-    if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
-        return e;
-    }
+    let repo_name = if let Some(ref repo) = signed_session_repo {
+        // Signed-URL bypass: the path's repo is implied by the signature,
+        // not by Bearer auth. Trust the signature's repo.
+        repo.clone()
+    } else {
+        let subject = match super::auth::require_auth(&state, &headers).await {
+            Ok(s) => s,
+            Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
+        };
+        let repo_name = extract_repo_name(&path);
+        if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
+            return e;
+        }
+        repo_name
+    };
 
-    let qs = query_string(&query);
-    let oci_path = format!("{}{}", path.trim_start_matches('/'), qs);
+    let upstream_query = if signed_session_repo.is_some() {
+        strip_upload_session_auth_params(&query)
+    } else {
+        query
+    };
+    let qs = query_string(&upstream_query);
+    let oci_path = format!("{}{}", oci_path_str, qs);
     forward_to_upstream(
         &state,
         &method,
@@ -420,6 +467,22 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
+}
+
+/// True if the path matches an OCI blob-upload-session URL —
+/// `/v2/{repo}/blobs/uploads/{session-id}` with a session-id segment after
+/// `/uploads/`. The initial POST to `/v2/{repo}/blobs/uploads/` (no
+/// session-id segment) returns false here so it still requires Bearer.
+fn is_oci_upload_session_path(path: &str) -> bool {
+    let path = path.trim_start_matches('/');
+    if !path.starts_with("v2/") {
+        return false;
+    }
+    let Some(idx) = path.find("/blobs/uploads/") else {
+        return false;
+    };
+    let after = &path[idx + "/blobs/uploads/".len()..];
+    !after.is_empty() && !after.starts_with('?')
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +875,12 @@ fn rewrite_location_with_upload_session_auth(
         Err(_) => return Ok(location.to_string()),
     };
 
-    if !url.path().starts_with("/artifacts-uploads/") {
+    // Sign URLs the proxy needs to keep authenticating itself: both
+    // GAR's `/artifacts-uploads/...` (separate handler at
+    // `proxy_upload_session`) and OCI's `/v2/{repo}/blobs/uploads/{id}`
+    // (handled inline in `proxy_push` via the signed-URL bypass).
+    // Anything else passes through unchanged.
+    if !url.path().starts_with("/artifacts-uploads/") && !is_oci_upload_session_path(url.path()) {
         return Ok(location.to_string());
     }
 
@@ -1002,7 +1070,23 @@ async fn validate_pull_access(
                 "Registry proxy pulls require a deployment token",
             ))
         }
-        Scope::Deployment { deployment_id, .. } => deployment_id.as_str(),
+        Scope::Deployment {
+            project_id,
+            deployment_id,
+        } => {
+            // A deployment token may always pull from its own project's
+            // artifact repository. Source-built resources (Worker/Container/
+            // Daemon) publish their images there under `{prefix}-{project_id}`,
+            // and those repos are not discoverable from the stack's `image`
+            // fields — so the per-release allow-list below would otherwise
+            // reject them (e.g. a source-built Daemon).
+            if state.registry_routing_table.project_id_for_repo(repo_name)
+                == Some(project_id.as_str())
+            {
+                return Ok(());
+            }
+            deployment_id.as_str()
+        }
     };
 
     // Check cache first.
@@ -1100,7 +1184,7 @@ async fn validate_pull_access(
 /// Extract the set of repo names from a release's stack.
 fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Worker, WorkerCode};
+    use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
 
     let mut repos = Vec::new();
 
@@ -1114,6 +1198,11 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
             match &container.code {
                 ContainerCode::Image { image } => Some(image.as_str()),
                 ContainerCode::Source { .. } => None,
+            }
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            match &daemon.code {
+                DaemonCode::Image { image } => Some(image.as_str()),
+                DaemonCode::Source { .. } => None,
             }
         } else {
             None
@@ -1330,6 +1419,7 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
+    use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1382,6 +1472,24 @@ mod tests {
         assert_eq!(
             extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
             "alien-e2e"
+        );
+    }
+
+    #[test]
+    fn extract_repo_names_includes_daemon_image_resources() {
+        let daemon = Daemon::new("host-loader".to_string())
+            .code(DaemonCode::Image {
+                image: "manager.example.com/artifacts/prj_test:host-loader-v1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+
+        assert_eq!(
+            extract_repo_names(&stack),
+            vec!["artifacts/prj_test".to_string()]
         );
     }
 
@@ -1640,8 +1748,34 @@ mod tests {
     }
 
     #[test]
-    fn non_gar_location_is_not_signed() {
+    fn oci_upload_session_location_gets_signed_for_dockdash_compat() {
+        // Cloud OCI registries (ECR, GCR, …) return `/v2/{repo}/blobs/
+        // uploads/{session-id}` Location URLs that push clients treat as
+        // self-authenticating (no further Bearer token sent). The proxy
+        // has to sign these URLs the same way it signs GAR's
+        // `/artifacts-uploads/` URLs, otherwise the subsequent PUT/PATCH
+        // arrives at the proxy with no Authorization and fails with 401.
         let location = "https://manager.example.com/v2/repo/blobs/uploads/session-1";
+
+        let signed = rewrite_location_with_upload_session_auth(
+            location,
+            Some("cloud-project/artifacts/prj_123"),
+            b"test-key",
+        )
+        .expect("OCI upload-session location should be signed");
+
+        assert_ne!(signed, location, "URL should have been signed");
+        assert!(signed.contains(UPLOAD_SESSION_VERSION_PARAM));
+        assert!(signed.contains(UPLOAD_SESSION_SIGNATURE_PARAM));
+        assert!(signed.contains(UPLOAD_SESSION_EXPIRES_PARAM));
+    }
+
+    #[test]
+    fn non_session_location_is_not_signed() {
+        // Locations that aren't upload-session URLs (e.g. a manifest URL
+        // returned on push, or any other generic OCI path) must NOT get
+        // signed — they go through Bearer auth like the rest of the API.
+        let location = "https://manager.example.com/v2/repo/manifests/latest";
 
         assert_eq!(
             rewrite_location_with_upload_session_auth(
@@ -1649,9 +1783,30 @@ mod tests {
                 Some("cloud-project/artifacts/prj_123"),
                 b"test-key",
             )
-            .expect("non-GAR location should be unchanged"),
+            .expect("non-session location should be unchanged"),
             location
         );
+    }
+
+    #[test]
+    fn is_oci_upload_session_path_matches_session_urls_only() {
+        // Initial upload POST has no session-id suffix — must NOT be
+        // recognized as a session URL, so Bearer auth still kicks in.
+        assert!(!is_oci_upload_session_path("/v2/repo/blobs/uploads/"));
+        assert!(!is_oci_upload_session_path("v2/repo/blobs/uploads/"));
+
+        // Real session URLs.
+        assert!(is_oci_upload_session_path(
+            "/v2/repo/blobs/uploads/3403bc14-cbcd-3760-a4b1-c678a3c6ea61"
+        ));
+        assert!(is_oci_upload_session_path(
+            "v2/alien-artifacts/host-loader/blobs/uploads/abc-123"
+        ));
+
+        // Other OCI paths.
+        assert!(!is_oci_upload_session_path("/v2/repo/manifests/latest"));
+        assert!(!is_oci_upload_session_path("/v2/repo/blobs/sha256:abc"));
+        assert!(!is_oci_upload_session_path("/artifacts-uploads/something"));
     }
 
     #[test]

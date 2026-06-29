@@ -9,7 +9,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Args, Subcommand};
 use service_manager::*;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const SERVICE_LABEL: &str = "dev.alien.agent";
 
@@ -47,6 +47,14 @@ pub struct InstallArgs {
     #[arg(long)]
     pub sync_token: String,
 
+    /// Deployment ID this service should manage.
+    #[arg(long)]
+    pub deployment_id: Option<String>,
+
+    /// Human-readable deployment name this service should manage.
+    #[arg(long)]
+    pub agent_name: Option<String>,
+
     /// Target platform (aws, gcp, azure)
     #[arg(long, default_value = "local")]
     pub platform: String,
@@ -58,6 +66,18 @@ pub struct InstallArgs {
     /// Encryption key (64-char hex). Generated if not provided.
     #[arg(long)]
     pub encryption_key: Option<String>,
+
+    /// Generic public endpoint URLs for exposed resources.
+    #[arg(skip)]
+    pub public_endpoints: Option<alien_core::PublicEndpointUrls>,
+
+    /// Enable Local runtime debug commands and shells.
+    #[arg(long)]
+    pub enable_local_debug: bool,
+
+    /// Override the shell command used by Local runtime debug shells.
+    #[arg(long)]
+    pub local_debug_shell_command: Option<String>,
 }
 
 pub async fn agent_command(args: AgentArgs) -> Result<()> {
@@ -106,8 +126,6 @@ fn install(args: InstallArgs) -> Result<()> {
         }));
     }
 
-    let encryption_key = args.encryption_key.unwrap_or_else(generate_encryption_key);
-
     let data_dir = args.data_dir.unwrap_or_else(|| {
         if cfg!(windows) {
             r"C:\ProgramData\alien-agent".to_string()
@@ -128,6 +146,7 @@ fn install(args: InstallArgs) -> Result<()> {
     // the current user on macOS launchd), which owns these files.
     let sync_token_path = std::path::Path::new(&data_dir).join("sync-token");
     let encryption_key_path = std::path::Path::new(&data_dir).join("encryption-key");
+    let encryption_key = resolve_encryption_key(args.encryption_key, &encryption_key_path)?;
 
     alien_core::file_utils::write_secret_file(&sync_token_path, args.sync_token.as_bytes())
         .into_alien_error()
@@ -146,7 +165,32 @@ fn install(args: InstallArgs) -> Result<()> {
             ),
         })?;
 
-    let service_args = vec![
+    let public_endpoints_path = std::path::Path::new(&data_dir).join("public-endpoints.json");
+    if let Some(public_endpoints) = &args.public_endpoints {
+        let public_endpoints_json = serde_json::to_vec(public_endpoints)
+            .into_alien_error()
+            .context(ErrorData::AgentServiceError {
+                message: "Failed to serialize public endpoints".to_string(),
+            })?;
+        std::fs::write(&public_endpoints_path, public_endpoints_json)
+            .into_alien_error()
+            .context(ErrorData::AgentServiceError {
+                message: format!(
+                    "Failed to write public endpoints to {}",
+                    public_endpoints_path.display()
+                ),
+            })?;
+    } else if let Err(e) = std::fs::remove_file(&public_endpoints_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            output::warn(&format!(
+                "Could not remove stale public endpoints file {}: {}",
+                public_endpoints_path.display(),
+                e
+            ));
+        }
+    }
+
+    let mut service_args = vec![
         OsString::from("--service"),
         OsString::from("--platform"),
         OsString::from(&args.platform),
@@ -159,10 +203,37 @@ fn install(args: InstallArgs) -> Result<()> {
         OsString::from("--encryption-key-file"),
         OsString::from(&encryption_key_path),
     ];
+    if args.public_endpoints.is_some() {
+        service_args.push(OsString::from("--public-endpoints-file"));
+        service_args.push(OsString::from(&public_endpoints_path));
+    }
+    if args.enable_local_debug {
+        service_args.push(OsString::from("--enable-local-debug"));
+    }
+    if let Some(shell_command) = &args.local_debug_shell_command {
+        service_args.push(OsString::from("--local-debug-shell-command"));
+        service_args.push(OsString::from(shell_command));
+    }
+    let service_args = if let Some(deployment_id) = &args.deployment_id {
+        let mut service_args = service_args;
+        service_args.push(OsString::from("--deployment-id"));
+        service_args.push(OsString::from(deployment_id));
+        service_args
+    } else {
+        service_args
+    };
+    let service_args = if let Some(agent_name) = &args.agent_name {
+        let mut service_args = service_args;
+        service_args.push(OsString::from("--agent-name"));
+        service_args.push(OsString::from(agent_name));
+        service_args
+    } else {
+        service_args
+    };
 
     let manager = get_manager()?;
 
-    output::step(1, 2, &format!("Registering service ({})", SERVICE_LABEL));
+    output::step(1, 3, &format!("Registering service ({})", SERVICE_LABEL));
 
     manager
         .install(ServiceInstallCtx {
@@ -183,7 +254,14 @@ fn install(args: InstallArgs) -> Result<()> {
             message: "Failed to install service".to_string(),
         })?;
 
-    output::step(2, 2, "Starting service");
+    output::step(2, 3, "Stopping existing service");
+
+    // `install` updates the service definition and secret files, but an already
+    // running service keeps its old argv and open state until it is restarted.
+    // Ignore stop errors: first install has nothing to stop.
+    let _ = manager.stop(ServiceStopCtx { label: label() });
+
+    output::step(3, 3, "Starting service");
 
     manager
         .start(ServiceStartCtx { label: label() })
@@ -199,6 +277,34 @@ fn install(args: InstallArgs) -> Result<()> {
     output::info(&format!("  Sync URL:   {}", args.sync_url));
 
     Ok(())
+}
+
+fn resolve_encryption_key(
+    explicit_key: Option<String>,
+    encryption_key_path: &Path,
+) -> Result<String> {
+    if let Some(key) = explicit_key {
+        return Ok(key);
+    }
+
+    match std::fs::read_to_string(encryption_key_path) {
+        Ok(key) => {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(key);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            output::warn(&format!(
+                "Could not read existing encryption key from {}: {}",
+                encryption_key_path.display(),
+                e
+            ));
+        }
+    }
+
+    Ok(generate_encryption_key())
 }
 
 fn start() -> Result<()> {
@@ -423,6 +529,32 @@ mod tests {
         let key1 = generate_encryption_key();
         let key2 = generate_encryption_key();
         assert_ne!(key1, key2, "two generated keys should differ");
+    }
+
+    #[test]
+    fn test_resolve_encryption_key_reuses_existing_file() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let key_path = dir.path().join("encryption-key");
+        let existing_key = "a".repeat(64);
+        std::fs::write(&key_path, format!("{existing_key}\n")).expect("key file should be written");
+
+        let resolved =
+            resolve_encryption_key(None, &key_path).expect("key should resolve from file");
+
+        assert_eq!(resolved, existing_key);
+    }
+
+    #[test]
+    fn test_resolve_encryption_key_prefers_explicit_key() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let key_path = dir.path().join("encryption-key");
+        std::fs::write(&key_path, "a".repeat(64)).expect("key file should be written");
+        let explicit_key = "b".repeat(64);
+
+        let resolved = resolve_encryption_key(Some(explicit_key.clone()), &key_path)
+            .expect("explicit key should resolve");
+
+        assert_eq!(resolved, explicit_key);
     }
 
     #[test]

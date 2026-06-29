@@ -262,7 +262,6 @@ use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -320,8 +319,8 @@ pub struct SingleControllerExecutor {
     environment_variables: EnvironmentVariablesSnapshot,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
-    // Public URL overrides for testing (resource_id -> url)
-    public_urls: Option<HashMap<String, String>>,
+    // Public endpoint URL overrides for testing.
+    public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
     desired_stack: Stack,
     stack_state: StackState,
@@ -380,7 +379,7 @@ impl SingleControllerExecutor {
                 .external_bindings(alien_core::ExternalBindings::default())
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
-                .maybe_public_urls(self.public_urls.clone())
+                .maybe_public_endpoints(self.public_endpoints.clone())
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
@@ -448,6 +447,48 @@ impl SingleControllerExecutor {
             self.controller.get_status(),
             step_count
         );
+        Ok(())
+    }
+
+    /// Runs the controller until it reaches the expected status.
+    pub async fn run_until_status(&mut self, expected: ResourceStatus) -> Result<()> {
+        let max_steps = 100;
+        let mut step_count = 0;
+
+        while self.controller.get_status() != expected {
+            if self.is_synced() {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Controller reached terminal status {:?} before expected status {:?}",
+                        self.controller.get_status(),
+                        expected
+                    ),
+                    operation: Some("run_until_status".to_string()),
+                    resource_id: Some(self.resource_id.clone()),
+                }));
+            }
+
+            if step_count >= max_steps {
+                return Err(AlienError::new(ErrorData::ExecutionMaxStepsReached {
+                    max_steps: max_steps as u64,
+                    pending_resources: vec![self.resource_id.clone()],
+                }));
+            }
+
+            let step_result = self.step().await?;
+            if self.controller.get_status() != expected {
+                if let Some(delay) = step_result.suggested_delay {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    tokio::time::sleep(delay).await;
+                } else {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+
+            step_count += 1;
+        }
+
         Ok(())
     }
 
@@ -527,6 +568,19 @@ impl SingleControllerExecutor {
         Ok(())
     }
 
+    /// Transitions a resource from teardown-required into its teardown flow.
+    pub fn teardown(&mut self) -> Result<()> {
+        self.controller
+            .transition_to_teardown_start()
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to transition controller to teardown state".to_string(),
+                operation: Some("teardown_transition".to_string()),
+                resource_id: Some(self.resource_id.clone()),
+            })?;
+
+        Ok(())
+    }
+
     /// Gets the current status of the controller.
     pub fn status(&self) -> ResourceStatus {
         self.controller.get_status()
@@ -560,7 +614,7 @@ pub struct SingleControllerExecutorBuilder {
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
     domain_metadata: Option<DomainMetadata>,
-    public_urls: Option<HashMap<String, String>>,
+    public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
 }
@@ -580,7 +634,7 @@ impl SingleControllerExecutorBuilder {
                 created_at: String::new(),
             },
             domain_metadata: None,
-            public_urls: None,
+            public_endpoints: None,
             dependencies: Vec::new(),
             service_provider: None,
         }
@@ -616,11 +670,11 @@ impl SingleControllerExecutorBuilder {
         self
     }
 
-    /// Sets public URL overrides for testing (resource_id -> full URL).
+    /// Sets public endpoint URL overrides for testing.
     /// Overrides the FQDN-derived URL from domain_metadata, useful for pointing
     /// readiness probes at mock HTTP servers during tests.
-    pub fn public_urls(mut self, urls: HashMap<String, String>) -> Self {
-        self.public_urls = Some(urls);
+    pub fn public_endpoints(mut self, urls: alien_core::PublicEndpointUrls) -> Self {
+        self.public_endpoints = Some(urls);
         self
     }
 
@@ -916,6 +970,7 @@ impl SingleControllerExecutorBuilder {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Set resource prefix in stack state
@@ -1024,7 +1079,7 @@ impl SingleControllerExecutorBuilder {
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
             domain_metadata: self.domain_metadata,
-            public_urls: self.public_urls,
+            public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,
             registry: Arc::new(ResourceRegistry::with_built_ins()),

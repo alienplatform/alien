@@ -6,10 +6,20 @@ import {
   ContainerSchema,
   type HealthCheck,
   type PersistentStorage,
+  type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
+
+export type PublicEndpointOptions =
+  | "http"
+  | "tcp"
+  | {
+      protocol: "http" | "tcp"
+      hostLabel?: string
+      wildcardSubdomains?: boolean
+    }
 
 export type {
   Container as ContainerConfig,
@@ -18,6 +28,7 @@ export type {
   ContainerAutoscaling,
   ContainerPort,
   ExposeProtocol,
+  PublicEndpoint,
   ContainerGpuSpec,
   ContainerStatus,
   HealthCheck,
@@ -53,6 +64,7 @@ export class Container {
   private _config: Partial<ContainerConfig> = {
     links: [],
     ports: [],
+    publicEndpoints: [],
     environment: {},
     stateful: false,
     // cluster is optional - if not set, ComputeClusterMutation will auto-assign
@@ -231,40 +243,40 @@ export class Container {
   }
 
   /**
-   * Exposes a specific port publicly via load balancer.
+   * Exposes a named public endpoint for a container port.
+   *
+   * Endpoint names are the stable contract for URLs, DNS, and runtime
+   * environment injection.
+   *
+   * @param name Endpoint name, unique within this container.
    * @param port Port number to expose.
-   * @param protocol "http" for HTTPS with TLS termination, "tcp" for TCP passthrough.
+   * @param options "http"/"tcp" or endpoint options.
    * @returns The Container builder instance.
    */
-  public exposePort(port: number, protocol: "http" | "tcp"): this {
+  public publicEndpoint(name: string, port: number, options: PublicEndpointOptions = "http"): this {
     if (!this._config.ports) {
       this._config.ports = []
     }
+    if (!this._config.publicEndpoints) {
+      this._config.publicEndpoints = []
+    }
+    const endpoint =
+      typeof options === "string"
+        ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
+        : options
 
-    // Find existing port or add new one
-    const existingPort = this._config.ports.find(p => p.port === port)
-    if (existingPort) {
-      existingPort.expose = protocol
-    } else {
-      this._config.ports.push({ port, expose: protocol })
+    if (!this._config.ports.some(p => p.port === port)) {
+      this._config.ports.push({
+        port,
+      })
     }
-    return this
-  }
-
-  /**
-   * Convenience method to expose the first/primary port publicly.
-   * Must be called after .port() or .ports().
-   * @param protocol "http" for HTTPS with TLS termination, "tcp" for TCP passthrough.
-   * @returns The Container builder instance.
-   */
-  public expose(protocol: "http" | "tcp"): this {
-    if (!this._config.ports || this._config.ports.length === 0) {
-      throw new Error("Cannot expose port: no ports defined. Call .port() first.")
-    }
-    if (!this._config.ports[0]) {
-      throw new Error("Cannot expose port: ports array is empty")
-    }
-    this._config.ports[0].expose = protocol
+    this._config.publicEndpoints.push({
+      name,
+      port,
+      protocol: endpoint.protocol,
+      hostLabel: endpoint.hostLabel,
+      wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
+    } satisfies PublicEndpoint)
     return this
   }
 

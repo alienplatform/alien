@@ -206,6 +206,61 @@ export type SyncListResponseEnvironmentInfoUnion =
   | SyncListResponseEnvironmentInfoTest
   | any;
 
+export type SyncListResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncListResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncListResponsePoolsUnion =
+  | SyncListResponsePoolsFixed
+  | SyncListResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncListResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]: SyncListResponsePoolsFixed | SyncListResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncListResponseComputeUnion = SyncListResponseCompute | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1176,6 +1231,7 @@ export type SyncListResponseUpdates = ClosedEnum<
  * User-provided configuration (network, deployment model, approvals)
  */
 export type SyncListResponseStackSettings = {
+  compute?: SyncListResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1523,6 +1579,248 @@ export type SyncListResponseStackState = {
    * The state of individual resources, keyed by resource ID.
    */
   resources: { [k: string]: SyncListResponseStackStateResources };
+};
+
+export const SyncListResponseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncListResponseTypeStringList = ClosedEnum<
+  typeof SyncListResponseTypeStringList
+>;
+
+export type SyncListResponseDefaultStringList = {
+  type: SyncListResponseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncListResponseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncListResponseTypeBoolean = ClosedEnum<
+  typeof SyncListResponseTypeBoolean
+>;
+
+export type SyncListResponseDefaultBoolean = {
+  type: SyncListResponseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncListResponseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncListResponseTypeNumber = ClosedEnum<
+  typeof SyncListResponseTypeNumber
+>;
+
+export type SyncListResponseDefaultNumber = {
+  type: SyncListResponseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncListResponseTypeString = {
+  String: "string",
+} as const;
+export type SyncListResponseTypeString = ClosedEnum<
+  typeof SyncListResponseTypeString
+>;
+
+export type SyncListResponseDefaultString = {
+  type: SyncListResponseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncListResponseDefaultUnion =
+  | SyncListResponseDefaultString
+  | SyncListResponseDefaultNumber
+  | SyncListResponseDefaultBoolean
+  | SyncListResponseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncListResponseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncListResponseTypeEnvEnum = ClosedEnum<
+  typeof SyncListResponseTypeEnvEnum
+>;
+
+export type SyncListResponseTypeUnion = SyncListResponseTypeEnvEnum | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncListResponseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncListResponseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncListResponseKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncListResponseKind = ClosedEnum<typeof SyncListResponseKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncListResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncListResponsePreparedStackPlatform = ClosedEnum<
+  typeof SyncListResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncListResponseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncListResponseProvidedBy = ClosedEnum<
+  typeof SyncListResponseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncListResponseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncListResponseValidationUnion = SyncListResponseValidation | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncListResponseInput = {
+  default?:
+    | SyncListResponseDefaultString
+    | SyncListResponseDefaultNumber
+    | SyncListResponseDefaultBoolean
+    | SyncListResponseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncListResponseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncListResponseKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<SyncListResponsePreparedStackPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncListResponseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: SyncListResponseValidation | any | null | undefined;
 };
 
 export const SyncListResponseManagementEnum = {
@@ -2700,6 +2998,10 @@ export type SyncListResponsePreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncListResponseInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncListResponsePermissions | undefined;
@@ -3057,10 +3359,7 @@ export type SyncListResponseDeployment = {
   error?: SyncListResponseError | null | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -3265,6 +3564,106 @@ export function syncListResponseEnvironmentInfoUnionFromJSON(
     (x) =>
       SyncListResponseEnvironmentInfoUnion$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncListResponseEnvironmentInfoUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncListResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncListResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncListResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncListResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncListResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncListResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncListResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCompute$inboundSchema: z.ZodType<
+  SyncListResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncListResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncListResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncListResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncListResponseComputeUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseCompute$inboundSchema), z.any()]);
+
+export function syncListResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseComputeUnion' from JSON`,
   );
 }
 
@@ -4858,6 +5257,9 @@ export const SyncListResponseStackSettings$inboundSchema: z.ZodType<
   SyncListResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => SyncListResponseCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: SyncListResponseDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
     z.union([z.lazy(() => SyncListResponseDomains$inboundSchema), z.any()]),
@@ -5192,6 +5594,264 @@ export function syncListResponseStackStateFromJSON(
     jsonString,
     (x) => SyncListResponseStackState$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncListResponseStackState' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeStringList$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeStringList
+> = z.enum(SyncListResponseTypeStringList);
+
+/** @internal */
+export const SyncListResponseDefaultStringList$inboundSchema: z.ZodType<
+  SyncListResponseDefaultStringList,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function syncListResponseDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeBoolean
+> = z.enum(SyncListResponseTypeBoolean);
+
+/** @internal */
+export const SyncListResponseDefaultBoolean$inboundSchema: z.ZodType<
+  SyncListResponseDefaultBoolean,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function syncListResponseDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeNumber$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeNumber
+> = z.enum(SyncListResponseTypeNumber);
+
+/** @internal */
+export const SyncListResponseDefaultNumber$inboundSchema: z.ZodType<
+  SyncListResponseDefaultNumber,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function syncListResponseDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeString$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeString
+> = z.enum(SyncListResponseTypeString);
+
+/** @internal */
+export const SyncListResponseDefaultString$inboundSchema: z.ZodType<
+  SyncListResponseDefaultString,
+  unknown
+> = z.object({
+  type: SyncListResponseTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function syncListResponseDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseDefaultUnion$inboundSchema: z.ZodType<
+  SyncListResponseDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseDefaultString$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
+  z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeEnvEnum
+> = z.enum(SyncListResponseTypeEnvEnum);
+
+/** @internal */
+export const SyncListResponseTypeUnion$inboundSchema: z.ZodType<
+  SyncListResponseTypeUnion,
+  unknown
+> = z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]);
+
+export function syncListResponseTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseEnv$inboundSchema: z.ZodType<
+  SyncListResponseEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function syncListResponseEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseKind$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseKind
+> = z.enum(SyncListResponseKind);
+
+/** @internal */
+export const SyncListResponsePreparedStackPlatform$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackPlatform
+> = z.enum(SyncListResponsePreparedStackPlatform);
+
+/** @internal */
+export const SyncListResponseProvidedBy$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProvidedBy
+> = z.enum(SyncListResponseProvidedBy);
+
+/** @internal */
+export const SyncListResponseValidation$inboundSchema: z.ZodType<
+  SyncListResponseValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function syncListResponseValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseValidationUnion$inboundSchema: z.ZodType<
+  SyncListResponseValidationUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]);
+
+export function syncListResponseValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseInput$inboundSchema: z.ZodType<
+  SyncListResponseInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseDefaultString$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
+      z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => SyncListResponseEnv$inboundSchema)).optional(),
+  id: z.string(),
+  kind: SyncListResponseKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncListResponsePreparedStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(SyncListResponseProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function syncListResponseInputFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseInput' from JSON`,
   );
 }
 
@@ -6823,6 +7483,7 @@ export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => SyncListResponseInput$inboundSchema)).optional(),
   permissions: z.lazy(() => SyncListResponsePermissions$inboundSchema)
     .optional(),
   resources: z.record(
@@ -7105,7 +7766,7 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
     .optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string(),
   workspaceId: z.string(),
   userEnvironmentVariables: z.nullable(
     z.array(EnvironmentVariableConfig$inboundSchema),

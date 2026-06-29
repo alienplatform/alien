@@ -895,7 +895,7 @@ async fn apply_render_mutations_with_management_config(
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: None,
-        public_urls: None,
+        public_endpoints: None,
         domain_metadata: None,
         monitoring: None,
         manager_url: None,
@@ -1776,7 +1776,7 @@ async fn terraform_kubernetes_stack_for_target(
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: target.base_platform(),
-        public_urls: None,
+        public_endpoints: None,
         domain_metadata: None,
         monitoring: None,
         manager_url: None,
@@ -2393,6 +2393,7 @@ fn cloudformation_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config: Some(management_config),
+        input_values: Default::default(),
         resources,
     })
 }
@@ -2586,6 +2587,7 @@ fn terraform_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config,
+        input_values: Default::default(),
         resources,
     })
 }

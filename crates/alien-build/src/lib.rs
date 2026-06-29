@@ -186,6 +186,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
+    let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
         if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
@@ -207,17 +208,14 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     info!("Worker '{}' already has an image. Skipping.", func.id);
                 }
             }
-        }
-    }
-
-    let mut daemons_to_build = Vec::new();
-
-    for (id, resource_entry) in stack.resources() {
-        if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+        } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
             info!("Processing daemon: {}", daemon.id);
             match &daemon.code {
                 DaemonCode::Source { src, toolchain } => {
-                    info!("Daemon '{}' has source code. Queued for build.", daemon.id);
+                    info!(
+                        "Daemon '{}' has source code. Queued for parallel build.",
+                        daemon.id
+                    );
                     daemons_to_build.push((
                         id.clone(),
                         daemon.clone(),
@@ -451,44 +449,155 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         );
     }
 
-    // Build daemons through the same per-resource pipeline as workers. Sequential across
-    // resources: stacks carry few daemons and `build_resource` already parallelizes across
-    // targets, so the worker block's spawn/cancellation scaffolding buys nothing here.
+    // Build all daemons in parallel with fail-fast behavior.
+    // Daemons are long-lived native subprocesses (TransportType::Passthrough);
+    // their build path mirrors workers: produce an OCI tarball per target,
+    // then rewrite the resource's `code` to `DaemonCode::Image` so the local
+    // platform's LocalDaemonController can hand the path to extract_daemon_image.
     if !daemons_to_build.is_empty() {
         let build_targets = settings.get_targets();
+
         info!(
-            "Building {} daemon(s) for {} target(s): {:?}",
+            "Building {} daemons for {} target(s): {:?}",
             daemons_to_build.len(),
             build_targets.len(),
             build_targets
         );
 
-        for (resource_id, daemon, src, toolchain) in daemons_to_build {
-            let image_uri = build_resource(
-                &src,
-                &toolchain,
-                &daemon.id,
-                &stack_id,
-                settings,
-                &output_dir,
-                false, // is_container = false: daemons run as native processes on local
-                "daemon",
-                &[],
-            )
-            .await?;
+        let current_bus = alien_core::EventBus::current();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
 
-            info!(
-                "Successfully built OCI image for daemon '{}' to: {}",
-                daemon.id, image_uri
-            );
+        let build_tasks: Vec<_> = daemons_to_build
+            .into_iter()
+            .map(|(resource_id, daemon, src, toolchain)| {
+                let daemon_id = daemon.id.clone();
+                let stack_id = stack_id.clone();
+                let settings = settings.clone();
+                let output_dir = output_dir.clone();
+                let bus = current_bus.clone();
+                let cancel_token = cancel_token.clone();
 
-            let mut updated_daemon = daemon;
-            updated_daemon.code = DaemonCode::Image { image: image_uri };
+                tokio::spawn(async move {
+                    let daemon_id_for_warning = daemon_id.clone();
+
+                    let build_work = async move {
+                        info!("Starting parallel build for resource: {}", daemon_id);
+
+                        if cancel_token.is_cancelled() {
+                            return (
+                                resource_id.clone(),
+                                daemon,
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: daemon_id.clone(),
+                                })),
+                            );
+                        }
+
+                        let result = tokio::select! {
+                            result = build_resource(
+                                &src,
+                                &toolchain,
+                                &daemon_id,
+                                &stack_id,
+                                &settings,
+                                &output_dir,
+                                false, // is_container = false for Daemon resources
+                                "daemon",
+                                &[],
+                            ) => result,
+                            _ = cancel_token.cancelled() => {
+                                info!("Build for daemon '{}' was cancelled", daemon_id);
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: daemon_id.clone()
+                                }))
+                            }
+                        };
+
+                        match &result {
+                            Ok(image_uri) => {
+                                info!(
+                                    "Successfully built OCI image for resource '{}' to: {}",
+                                    daemon_id, image_uri
+                                );
+                            }
+                            Err(e) => {
+                                info!("Failed to build daemon '{}': {}", daemon_id, e);
+                            }
+                        }
+
+                        (resource_id, daemon, result)
+                    };
+
+                    match bus {
+                        Some(bus) => bus.run(|| build_work).await,
+                        None => {
+                            tracing::debug!(
+                                "No event bus context available for parallel build of daemon '{}'",
+                                daemon_id_for_warning
+                            );
+                            build_work.await
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let mut build_results: Vec<(String, Daemon)> = Vec::new();
+        let mut completed_tasks = 0;
+        let mut remaining_tasks = build_tasks;
+        let mut first_error: Option<AlienError<ErrorData>> = None;
+
+        while !remaining_tasks.is_empty() {
+            let (result, _index, rest) = futures::future::select_all(remaining_tasks).await;
+            remaining_tasks = rest;
+
+            match result {
+                Ok((resource_id, daemon, build_result)) => match build_result {
+                    Ok(image_uri) => {
+                        let mut updated_daemon = daemon;
+                        updated_daemon.code = DaemonCode::Image { image: image_uri };
+                        build_results.push((resource_id, updated_daemon));
+                        completed_tasks += 1;
+                    }
+                    Err(e) => {
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                            cancel_token.cancel();
+                            for task in remaining_tasks {
+                                task.abort();
+                            }
+                            break;
+                        }
+                    }
+                },
+                Err(join_error) => {
+                    if join_error.is_cancelled() {
+                        info!("Build task was cancelled");
+                    } else {
+                        tracing::warn!("Build task failed: {}", join_error);
+                        if first_error.is_none() {
+                            first_error = Some(AlienError::new(ErrorData::BuildConfigInvalid {
+                                message: format!("Build task failed: {}", join_error),
+                            }));
+                            cancel_token.cancel();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        for (resource_id, updated_daemon) in build_results {
             if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id)
             {
                 resource_entry.1.config = alien_core::Resource::new(updated_daemon);
             }
         }
+
+        info!("Completed parallel building of {} daemons", completed_tasks);
     }
 
     // Build all containers in parallel with fail-fast behavior
@@ -879,6 +988,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         info!("Completed exporting {} container images", completed_tasks);
     }
 
+    strip_local_daemon_only_compute_clusters(&mut stack, settings.platform.runtime_platform());
+
     // Save the modified stack configuration to stack.json
     let stack_json_path = output_dir.join("stack.json");
     let stack_json_content = serde_json::to_string_pretty(&stack)
@@ -904,6 +1015,59 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         build_stack_started.elapsed().as_secs_f64()
     );
     Ok(stack)
+}
+
+fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Local {
+        return;
+    }
+
+    let daemon_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+        .filter_map(|daemon| daemon.cluster.clone())
+        .collect();
+
+    if daemon_clusters.is_empty() {
+        return;
+    }
+
+    let container_clusters: HashSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+        .filter_map(|container| container.cluster.clone())
+        .collect();
+
+    let removed_clusters: HashSet<String> = stack
+        .resources()
+        .filter(|(id, entry)| {
+            entry.config.resource_type().as_ref() == "compute-cluster"
+                && daemon_clusters.contains(*id)
+                && !container_clusters.contains(*id)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    if removed_clusters.is_empty() {
+        return;
+    }
+
+    stack
+        .resources
+        .retain(|id, _| !removed_clusters.contains(id));
+
+    for (_, entry) in stack.resources_mut() {
+        let Some(daemon) = entry.config.downcast_mut::<Daemon>() else {
+            continue;
+        };
+        if daemon
+            .cluster
+            .as_ref()
+            .is_some_and(|cluster| removed_clusters.contains(cluster))
+        {
+            daemon.cluster = None;
+        }
+    }
 }
 
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
@@ -2800,6 +2964,41 @@ mod tests {
             DarwinArm64,
             LinuxArm64
         ])));
+    }
+
+    #[test]
+    fn local_build_strips_daemon_only_compute_cluster() {
+        let cluster = alien_core::ComputeCluster::new("host-runtime".to_string())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let daemon = Daemon::new("host-loader".to_string())
+            .cluster("host-runtime".to_string())
+            .permissions("loader".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/host-loader:latest".to_string(),
+            })
+            .build();
+        let mut stack = Stack::new("host-loader-stack".to_string())
+            .add(cluster, alien_core::ResourceLifecycle::Frozen)
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        strip_local_daemon_only_compute_clusters(&mut stack, Platform::Local);
+
+        assert!(!stack.resources.contains_key("host-runtime"));
+        let daemon = stack
+            .resources()
+            .find(|(id, _)| *id == "host-loader")
+            .and_then(|(_, entry)| entry.config.downcast_ref::<Daemon>())
+            .expect("daemon should remain");
+        assert_eq!(daemon.cluster, None);
     }
 
     #[test]

@@ -1,7 +1,11 @@
 import {
   type DaemonCode,
   type Daemon as DaemonConfig,
+  type DaemonRuntime,
   DaemonSchema,
+  type ExposeProtocol,
+  type HealthCheck,
+  type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
@@ -11,13 +15,26 @@ export type {
   Daemon as DaemonConfig,
   DaemonCode,
   DaemonOutputs,
+  DaemonRuntime,
+  ExposeProtocol,
+  HealthCheck,
+  PublicEndpoint,
   ResourceSpec,
 } from "./generated/index.js"
 export {
   DaemonCodeSchema,
   DaemonSchema as DaemonConfigSchema,
   DaemonOutputsSchema,
+  PublicEndpointSchema,
 } from "./generated/index.js"
+
+export type DaemonPublicEndpointOptions =
+  | ExposeProtocol
+  | {
+      protocol: ExposeProtocol
+      hostLabel?: string
+      wildcardSubdomains?: boolean
+    }
 
 /**
  * Represents a resident process that runs once per eligible machine or node.
@@ -28,6 +45,7 @@ export {
 export class Daemon {
   private _config: Partial<DaemonConfig> = {
     links: [],
+    publicEndpoints: [],
     environment: {},
     cpu: { min: "0.1", desired: "0.1" },
     memory: { min: "128Mi", desired: "128Mi" },
@@ -102,6 +120,67 @@ export class Daemon {
    */
   public command(command: string[]): this {
     this._config.command = command
+    return this
+  }
+
+  /**
+   * Sets backend runtime options for trusted daemon infrastructure.
+   *
+   * Use this only for daemons that intentionally need host-level access, such
+   * as a privileged loader that installs or supervises a native host process.
+   */
+  public runtime(runtime: DaemonRuntime): this {
+    this._config.runtime = runtime
+    return this
+  }
+
+  /**
+   * Exposes a named public endpoint for a daemon port.
+   */
+  public publicEndpoint(
+    name: string,
+    port: number,
+    options: DaemonPublicEndpointOptions = "http",
+  ): this {
+    if (!this._config.publicEndpoints) {
+      this._config.publicEndpoints = []
+    }
+
+    const endpoint =
+      typeof options === "string"
+        ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
+        : options
+
+    const publicEndpoint: PublicEndpoint = {
+      name,
+      port,
+      protocol: endpoint.protocol,
+      hostLabel: endpoint.hostLabel,
+      wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
+    }
+
+    this._config.publicEndpoints.push(publicEndpoint)
+    return this
+  }
+
+  /**
+   * Configures the HTTP health check used by public daemon endpoint load balancers.
+   */
+  public healthCheck(config: HealthCheck): this {
+    this._config.healthCheck = config
+    return this
+  }
+
+  /**
+   * Configures readiness probe (alias for healthCheck).
+   */
+  public readinessProbe(config: { method: string; path: string }): this {
+    this._config.healthCheck = {
+      path: config.path,
+      method: config.method,
+      timeoutSeconds: 1,
+      failureThreshold: 3,
+    }
     return this
   }
 

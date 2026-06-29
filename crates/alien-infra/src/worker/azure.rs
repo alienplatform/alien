@@ -14,7 +14,7 @@ use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
-    Ingress, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
@@ -818,7 +818,7 @@ impl AzureWorkerController {
                             // Branch based on ingress type
                             // If public, resolve domain and proceed to certificate flow
                             // If private, skip directly to Dapr component configuration
-                            if func_cfg.ingress == Ingress::Public {
+                            if !func_cfg.public_endpoints.is_empty() {
                                 match Self::resolve_domain_info(ctx, &func_cfg.id) {
                                     Ok(domain_info) => {
                                         info!(fqdn=%domain_info.fqdn, "Resolved domain for public worker");
@@ -1812,7 +1812,7 @@ impl AzureWorkerController {
         }
 
         // Only run probe for public ingress where we have a URL.
-        if func_cfg.ingress != Ingress::Public {
+        if func_cfg.public_endpoints.is_empty() {
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -1984,7 +1984,7 @@ impl AzureWorkerController {
         }
 
         // Check for certificate renewal on auto-managed public domains.
-        if func_cfg.ingress == Ingress::Public && !self.uses_custom_domain {
+        if !func_cfg.public_endpoints.is_empty() && !self.uses_custom_domain {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -2038,7 +2038,7 @@ impl AzureWorkerController {
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
 
-        if func_cfg.ingress != Ingress::Public || self.uses_custom_domain {
+        if func_cfg.public_endpoints.is_empty() || self.uses_custom_domain {
             return Ok(HandlerAction::Continue {
                 state: UpdateStart,
                 suggested_delay: None,
@@ -2328,9 +2328,10 @@ impl AzureWorkerController {
                     // Check for URL override in deployment config, otherwise use Container App URL
                     self.url = ctx
                         .deployment_config
-                        .public_urls
+                        .public_endpoints
                         .as_ref()
-                        .and_then(|urls| urls.get(&func_cfg.id).cloned())
+                        .and_then(|resources| resources.get(&func_cfg.id))
+                        .and_then(|endpoints| endpoints.values().next().cloned())
                         .or(container_app_url);
 
                     Ok(HandlerAction::Continue {
@@ -2626,7 +2627,7 @@ impl AzureWorkerController {
     ) -> Result<HandlerAction> {
         // Re‑use the same readiness‑probe helper.
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        if func_cfg.readiness_probe.is_none() || func_cfg.ingress != Ingress::Public {
+        if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -3225,9 +3226,22 @@ impl AzureWorkerController {
                     .container_app_name
                     .clone()
                     .unwrap_or_else(|| "worker-name-placeholder".to_string()),
-                url: self.url.clone(),
                 identifier: Some(id.clone()),
-                load_balancer_endpoint,
+                public_endpoints: self
+                    .url
+                    .as_ref()
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                host: alien_core::public_url_host(url).unwrap_or_default(),
+                                url: url.clone(),
+                                wildcard_host: None,
+                                load_balancer_endpoint,
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
                 commands_push_target: match (
                     &self.commands_namespace_name,
                     &self.commands_queue_name,
@@ -3673,9 +3687,10 @@ impl AzureWorkerController {
                 if self.url.is_none() {
                     self.url = ctx
                         .deployment_config
-                        .public_urls
+                        .public_endpoints
                         .as_ref()
-                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .and_then(|resources| resources.get(resource_id))
+                        .and_then(|endpoints| endpoints.values().next().cloned())
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -3707,9 +3722,10 @@ impl AzureWorkerController {
         if let Ok(config) = ctx.desired_resource_config::<Worker>() {
             self.url = ctx
                 .deployment_config
-                .public_urls
+                .public_endpoints
                 .as_ref()
-                .and_then(|urls| urls.get(&config.id).cloned())
+                .and_then(|resources| resources.get(&config.id))
+                .and_then(|endpoints| endpoints.values().next().cloned())
                 .or(container_app_url);
         } else {
             self.url = container_app_url;
@@ -3867,7 +3883,7 @@ impl AzureWorkerController {
         let _resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_id = azure_utils::get_container_apps_environment_resource_id(ctx.state)?;
 
-        let ingress_cfg = if func.ingress == Ingress::Public {
+        let ingress_cfg = if !func.public_endpoints.is_empty() {
             Some(alien_azure_clients::models::container_apps::Ingress {
                 external: true,
                 target_port: Some(8080),
@@ -4032,7 +4048,7 @@ impl AzureWorkerController {
             scale: Some(Scale {
                 cooldown_period: None,
                 max_replicas: func.concurrency_limit.map(|c| c as i32).unwrap_or(10),
-                min_replicas: Some(if func.ingress == Ingress::Private {
+                min_replicas: Some(if func.public_endpoints.is_empty() {
                     0
                 } else {
                     1
@@ -4556,7 +4572,7 @@ mod tests {
 
     use alien_azure_clients::models::container_apps::{
         Configuration, ConfigurationActiveRevisionsMode, ContainerApp, ContainerAppProperties,
-        ContainerAppPropertiesProvisioningState, IngressTransport, TrafficWeight,
+        ContainerAppPropertiesProvisioningState, TrafficWeight,
     };
     use alien_azure_clients::{
         container_apps::MockContainerAppsApi,
@@ -4565,7 +4581,7 @@ mod tests {
         },
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
-    use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
+    use alien_core::{Platform, ResourceStatus, Worker, WorkerOutputs};
     use alien_error::{AlienError, ContextError};
     use httpmock::MockServer;
     use rstest::rstest;
@@ -4601,13 +4617,17 @@ mod tests {
 
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
-            Some("https://test-worker.azurecontainerapps.io")
+            endpoint.url.as_str(),
+            "https://test-worker.azurecontainerapps.io"
         );
         assert_eq!(
-            worker_outputs
+            endpoint
                 .load_balancer_endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.dns_name.as_str()),
@@ -4990,7 +5010,7 @@ mod tests {
         app_name: &str,
         for_deletion: bool,
     ) -> (Arc<MockPlatformServiceProvider>, Option<MockServer>) {
-        let has_url = worker.ingress == Ingress::Public;
+        let has_url = !worker.public_endpoints.is_empty();
         let needs_readiness_probe = has_url && worker.readiness_probe.is_some();
 
         // Set up mock server for readiness probe if needed
@@ -5369,11 +5389,11 @@ mod tests {
         let mut ready_controller = AzureWorkerController::mock_ready(&app_name);
 
         // If the target worker has a readiness probe, update the controller URL to point to mock server
-        if to_function.readiness_probe.is_some() && to_function.ingress == Ingress::Public {
+        if to_function.readiness_probe.is_some() && !to_function.public_endpoints.is_empty() {
             if let Some(ref server) = mock_server {
                 ready_controller.url = Some(server.base_url());
             }
-        } else if to_function.ingress == Ingress::Public {
+        } else if !to_function.public_endpoints.is_empty() {
             // Ensure the controller has a URL for public workers
             ready_controller.url = Some(format!("https://{}.azurecontainerapps.io", app_name));
         }
@@ -5417,7 +5437,7 @@ mod tests {
 
         // Start with a ready controller
         let mut ready_controller = AzureWorkerController::mock_ready(&app_name);
-        if worker.ingress == Ingress::Public {
+        if !worker.public_endpoints.is_empty() {
             ready_controller.url = Some(format!("https://{}.azurecontainerapps.io", app_name));
         }
 
@@ -5527,12 +5547,11 @@ mod tests {
         // Verify URL is in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_some());
-        assert!(function_outputs
-            .url
-            .as_ref()
-            .unwrap()
-            .contains("azurecontainerapps.io"));
+        let endpoint = function_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
+        assert!(endpoint.url.contains("azurecontainerapps.io"));
     }
 
     /// Test that verifies private workers don't get URL in outputs
@@ -5585,7 +5604,7 @@ mod tests {
         // Verify no URL in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.url.is_none());
+        assert!(function_outputs.public_endpoints.is_empty());
     }
 
     /// Test that verifies correct container app configuration parameters

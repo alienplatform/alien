@@ -11,7 +11,7 @@ use clap::Parser;
 pub struct LogoutArgs {}
 
 pub async fn logout_task(_args: LogoutArgs) -> Result<()> {
-    logout();
+    logout()?;
     println!("{}", success_line("Logged out."));
     Ok(())
 }

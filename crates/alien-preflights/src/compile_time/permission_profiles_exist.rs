@@ -120,8 +120,7 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        Ingress, PermissionProfile, PermissionsConfig, ResourceEntry, ResourceLifecycle, Worker,
-        WorkerCode,
+        PermissionProfile, PermissionsConfig, ResourceEntry, ResourceLifecycle, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -132,7 +131,6 @@ mod tests {
                 image: "api:latest".to_string(),
             })
             .permissions("api-profile".to_string())
-            .ingress(Ingress::Private)
             .build();
 
         let mut resources = IndexMap::new();
@@ -160,6 +158,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesExistCheck;
@@ -174,7 +173,6 @@ mod tests {
                 image: "api:latest".to_string(),
             })
             .permissions("nonexistent".to_string()) // Profile doesn't exist!
-            .ingress(Ingress::Private)
             .build();
 
         let mut resources = IndexMap::new();
@@ -196,6 +194,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesExistCheck;
@@ -212,7 +211,6 @@ mod tests {
                 image: "api:latest".to_string(),
             })
             .permissions("api-profile".to_string()) // Exists
-            .ingress(Ingress::Private)
             .build();
 
         let worker = Worker::new("worker".to_string())
@@ -220,7 +218,6 @@ mod tests {
                 image: "worker:latest".to_string(),
             })
             .permissions("worker-profile".to_string()) // Doesn't exist!
-            .ingress(Ingress::Private)
             .build();
 
         let mut resources = IndexMap::new();
@@ -257,6 +254,7 @@ mod tests {
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let check = PermissionProfilesExistCheck;

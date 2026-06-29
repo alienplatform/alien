@@ -13,6 +13,18 @@ export type DeploymentGroupResponse = {
   id: string;
   maxDeployments: number;
   name: string;
+  /**
+   * Required by the platform-SDK DeploymentGroup schema. Standalone
+   *
+   * @remarks
+   * OSS mode is single-tenant, so we synthesize a project id
+   * matching the workspace id.
+   */
+  projectId: string;
+  /**
+   * Required by the platform-SDK DeploymentGroup schema.
+   */
+  workspaceId: string;
 };
 
 /** @internal */
@@ -25,6 +37,8 @@ export const DeploymentGroupResponse$inboundSchema: z.ZodType<
   id: z.string(),
   maxDeployments: z.int(),
   name: z.string(),
+  projectId: z.string(),
+  workspaceId: z.string(),
 });
 
 export function deploymentGroupResponseFromJSON(

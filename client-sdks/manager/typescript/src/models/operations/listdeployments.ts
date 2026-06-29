@@ -10,6 +10,10 @@ export type ListDeploymentsRequest = {
    */
   deploymentGroupId?: string | undefined;
   /**
+   * Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group.
+   */
+  name?: string | undefined;
+  /**
    * Include related resources (e.g. deploymentGroup)
    */
   include?: Array<string> | undefined;
@@ -18,6 +22,7 @@ export type ListDeploymentsRequest = {
 /** @internal */
 export type ListDeploymentsRequest$Outbound = {
   deploymentGroupId?: string | undefined;
+  name?: string | undefined;
   include?: Array<string> | undefined;
 };
 
@@ -27,6 +32,7 @@ export const ListDeploymentsRequest$outboundSchema: z.ZodType<
   ListDeploymentsRequest
 > = z.object({
   deploymentGroupId: z.string().optional(),
+  name: z.string().optional(),
   include: z.array(z.string()).optional(),
 });
 

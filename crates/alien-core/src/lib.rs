@@ -1,6 +1,9 @@
 mod stack;
 pub use stack::*;
 
+mod stack_input;
+pub use stack_input::*;
+
 pub mod permissions;
 pub use permissions::*;
 
@@ -49,6 +52,9 @@ pub use stack_state::*;
 mod stack_settings;
 pub use stack_settings::*;
 
+mod public_urls;
+pub use public_urls::*;
+
 pub mod bindings;
 pub use bindings::*;
 
@@ -78,6 +84,7 @@ pub use commands_types::*;
 
 pub mod debug_session;
 
+pub mod compute_planner;
 pub mod crontab_to_eventbridge;
 pub mod file_utils;
 pub mod image_rewrite;

@@ -76,7 +76,7 @@ jobs:
 
       - name: TypeScript typecheck
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
       - name: Rust tests (non-cloud)

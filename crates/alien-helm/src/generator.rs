@@ -11,10 +11,9 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
-    ErrorData, ExposeProtocol, Ingress, KubernetesCluster, KubernetesClusterOutputs,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
-    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
-    WorkerCode,
+    ErrorData, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
+    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -248,7 +247,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         options.base_platform,
     );
     append_services(&mut yaml, &analysis);
-    yaml.push_str("\npublicUrls: {}\n");
+    yaml.push_str("\npublicEndpoints: {}\n");
 
     Ok(yaml)
 }
@@ -307,7 +306,7 @@ impl ChartAnalysis {
             if let Some(function) = entry.config.downcast_ref::<Worker>() {
                 fail_if_worker_source_remains(resource_id, function)?;
                 service_accounts.insert(function.permissions.clone());
-                if function.ingress == Ingress::Public {
+                if !function.public_endpoints.is_empty() {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
                         component: "worker".to_string(),
@@ -317,15 +316,11 @@ impl ChartAnalysis {
             }
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 fail_if_container_source_remains(resource_id, container)?;
-                if let Some(port) = container
-                    .ports
-                    .iter()
-                    .find(|port| port.expose == Some(ExposeProtocol::Http))
-                {
+                if let Some(endpoint) = container.public_endpoints.first() {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
                         component: "container".to_string(),
-                        target_port: port.port,
+                        target_port: endpoint.port,
                     });
                 }
             }
@@ -649,7 +644,7 @@ clusterBootstrap:
     append_stack_settings(&mut yaml, stack_settings)?;
     yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
-    yaml.push_str("\npublicUrls: {}\n");
+    yaml.push_str("\npublicEndpoints: {}\n");
 
     yaml.push_str(
         r#"
@@ -1540,7 +1535,13 @@ fn values_schema_json() -> String {
         }
       }
     },
-    "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
+    "publicEndpoints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
     "persistentStorage": { "type": "object" },
     "ephemeralStorage": { "type": "object" }
   },
@@ -1865,7 +1866,7 @@ data:
 {{ .Files.Get "files/stack.json" | indent 4 }}
   stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
   services.json: {{ toJson .Values.services | quote }}
-  public-urls.json: {{ toJson (default dict .Values.publicUrls) | quote }}
+  public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 "#
     .to_string()
 }
@@ -2030,8 +2031,8 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            - name: PUBLIC_URLS_FILE
-              value: /etc/deployment/config/public-urls.json
+            - name: PUBLIC_ENDPOINTS_FILE
+              value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
@@ -2736,7 +2737,8 @@ mod tests {
         import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
         KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
         PermissionProfile, Queue, RemoteStackManagement, Resource, ResourceLifecycle,
-        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode, WorkerTrigger,
+        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode,
+        WorkerPublicEndpoint, WorkerTrigger,
     };
 
     const TEST_RUNTIME_ENCRYPTION_KEY: &str =
@@ -2750,7 +2752,11 @@ mod tests {
                 image: "example.com/api:1".to_string(),
             })
             .permissions("runtime".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .link(&storage)
             .trigger(WorkerTrigger::queue(&queue))
             .build();

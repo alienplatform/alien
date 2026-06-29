@@ -12,9 +12,7 @@ let value: ManagerRetryResponseSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [
-      "google-oauth",
-    ],
+    allowedSetupMethods: [],
   },
   environmentVariables: [],
 };
@@ -26,4 +24,5 @@ let value: ManagerRetryResponseSetupConfig = {
 | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `metadata`                                                                                               | Record<string, *any*>                                                                                    | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `policy`                                                                                                 | [models.DeploymentSetupPolicy](../models/deploymentsetuppolicy.md)                                       | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `inputValues`                                                                                            | Record<string, [models.EncryptedStackInputValue](../models/encryptedstackinputvalue.md)>                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
 | `environmentVariables`                                                                                   | [models.ManagerRetryResponseEnvironmentVariable](../models/managerretryresponseenvironmentvariable.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

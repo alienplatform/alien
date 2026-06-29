@@ -11,14 +11,12 @@
 //! This module is the single resolver. It accepts exactly two spec forms:
 //!
 //! - `dep_<id>` — looked up directly via `get_deployment(id)`.
-//! - `<group>/<name>` — listed with the `deployment_group` filter pinned
-//!   to `<group>` (the platform resolves the group name to an ID
-//!   server-side); the result set is then filtered locally for an exact
-//!   `name` match.
+//! - `<group>/<name>` — listed with exact group and name filters. The
+//!   platform resolves the group name to an ID server-side.
 //!
 //! Anything else (bare names, empty parts, more than one `/`) is rejected
 //! up front with an actionable error. There is intentionally no fuzzy
-//! search or pagination walk — both invite the same class of bug.
+//! search or pagination walk.
 
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context};
@@ -29,11 +27,7 @@ use alien_manager_api::{Client, SdkResultExt};
 ///
 /// `is_dev` only affects the hint surfaced in error messages
 /// (`alien dev deployments ls` vs `alien deployments ls`).
-pub async fn resolve(
-    manager: &Client,
-    spec: &str,
-    is_dev: bool,
-) -> Result<DeploymentResponse> {
+pub async fn resolve(manager: &Client, spec: &str, is_dev: bool) -> Result<DeploymentResponse> {
     if spec.starts_with("dep_") {
         return resolve_by_id(manager, spec).await;
     }
@@ -66,16 +60,13 @@ async fn resolve_by_group_and_name(
     name: &str,
     is_dev: bool,
 ) -> Result<DeploymentResponse> {
-    // The platform's `deploymentGroup` filter accepts either an ID or an
-    // exact name (it resolves name→id internally) — so this is the strict
-    // path: server narrows by group, we then filter the (small) result set
-    // for an exact name match.
     // The manager SDK exposes the filter as `deployment_group_id`, but the
     // platform accepts either an ID or a group *name* on that param — it
     // resolves name→id internally. We pass the user-supplied group name.
     let response = manager
         .list_deployments()
         .deployment_group_id(group)
+        .name(name)
         .include(vec!["deploymentGroup".to_string()])
         .send()
         .await
@@ -94,10 +85,7 @@ async fn resolve_by_group_and_name(
         .into_iter()
         .filter(|d| {
             d.name.as_str() == name
-                && d.deployment_group
-                    .as_ref()
-                    .map(|dg| dg.name.as_str())
-                    == Some(group)
+                && d.deployment_group.as_ref().map(|dg| dg.name.as_str()) == Some(group)
         })
         .collect();
 

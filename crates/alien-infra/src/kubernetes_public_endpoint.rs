@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, Ingress, KubernetesCertificateMode, KubernetesExposureSettings,
+    CertificateStatus, KubernetesCertificateMode, KubernetesExposureSettings,
     KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesRouteProviderOptions, KubernetesTlsSecretRef, LoadBalancerEndpoint,
 };
@@ -736,7 +736,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
     workload_name: &'a str,
     namespace: &'a str,
     selector: BTreeMap<String, String>,
-    ingress: &Ingress,
+    public: bool,
     health_check_path: Option<&str>,
 ) -> KubernetesPublicEndpointTarget<'a> {
     KubernetesPublicEndpointTarget {
@@ -748,7 +748,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         service_port: 80,
         target_port: 8080,
         health_check_path: health_check_path.map(ToString::to_string),
-        public: matches!(ingress, Ingress::Public),
+        public,
     }
 }
 
@@ -757,13 +757,13 @@ pub(crate) fn container_public_endpoint_target<'a>(
     workload_name: &'a str,
     namespace: &'a str,
     selector: BTreeMap<String, String>,
-    ports: &'a [alien_core::ContainerPort],
+    public_endpoints: &'a [alien_core::PublicEndpoint],
     health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
-    let http_port = ports
+    let http_port = public_endpoints
         .iter()
-        .find(|port| port.expose == Some(alien_core::ExposeProtocol::Http))
-        .map(|port| port.port);
+        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+        .map(|endpoint| endpoint.port);
 
     Ok(KubernetesPublicEndpointTarget {
         resource_id,
@@ -1899,7 +1899,7 @@ fn aws_hosted_zone_id(profile: &KubernetesIngressRouteProfile) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ContainerPort, ExposeProtocol};
+    use alien_core::{ExposeProtocol, PublicEndpoint};
     use httpmock::prelude::*;
 
     fn endpoint_target() -> KubernetesPublicEndpointTarget<'static> {
@@ -1918,15 +1918,19 @@ mod tests {
 
     #[test]
     fn container_target_is_public_only_for_http_exposed_port() {
+        let public_endpoints = [PublicEndpoint {
+            name: "default".to_string(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        }];
         let target = container_public_endpoint_target(
             "api",
             "api",
             "default",
             BTreeMap::new(),
-            &[ContainerPort {
-                port: 8080,
-                expose: Some(ExposeProtocol::Http),
-            }],
+            &public_endpoints,
             None,
         )
         .expect("target");

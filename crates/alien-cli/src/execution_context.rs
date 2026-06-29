@@ -223,6 +223,18 @@ impl ExecutionMode {
             Self::Dev { .. } => Ok("local-dev".to_string()),
             Self::Standalone { .. } => Ok("default".to_string()),
             #[cfg(feature = "platform")]
+            Self::Platform {
+                api_key: Some(_),
+                workspace,
+                ..
+            } => {
+                if let Some(workspace) = workspace.clone() {
+                    return Ok(workspace);
+                }
+
+                self.resolve_api_key_workspace_name().await
+            }
+            #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
                 if let Some(workspace) = workspace.clone().or_else(load_workspace) {
                     return Ok(workspace);
@@ -292,28 +304,7 @@ impl ExecutionMode {
             Self::Platform {
                 api_key: Some(_), ..
             } => {
-                let http = self.auth_http().await?;
-                let subject = http
-                    .sdk_client()
-                    .whoami()
-                    .send()
-                    .await
-                    .into_sdk_error()
-                    .context(ErrorData::ApiRequestFailed {
-                        message: "Failed to resolve API key workspace".to_string(),
-                        url: None,
-                    })?
-                    .into_inner();
-
-                let workspace_name = match subject {
-                    Subject::ServiceAccountSubject(subject) => subject.workspace_name,
-                    Subject::UserSubject(_) => None,
-                }
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ConfigurationError {
-                        message: "API key subject is missing workspace name".to_string(),
-                    })
-                })?;
+                let workspace_name = self.resolve_api_key_workspace_name().await?;
 
                 Ok(PlatformWorkspaceContext {
                     name: workspace_name,
@@ -335,6 +326,16 @@ impl ExecutionMode {
                 name: "default".to_string(),
                 query: Some("default".to_string()),
             }),
+        }
+    }
+
+    /// Workspace from the `--workspace` flag or the saved profile, if any.
+    /// `None` in single-tenant modes (dev, standalone) — they don't need one.
+    pub fn configured_workspace(&self) -> Option<String> {
+        match self {
+            #[cfg(feature = "platform")]
+            Self::Platform { workspace, .. } => workspace.clone().or_else(load_workspace),
+            _ => None,
         }
     }
 
@@ -734,6 +735,37 @@ impl ExecutionMode {
                 base_url: Some(format!("http://localhost:{}", port)),
                 no_browser: true,
             },
+        }
+    }
+
+    #[cfg(feature = "platform")]
+    async fn resolve_api_key_workspace_name(&self) -> Result<String> {
+        let http = self.auth_http().await?;
+        let subject = http
+            .sdk_client()
+            .whoami()
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to resolve API key workspace".to_string(),
+                url: None,
+            })?
+            .into_inner();
+
+        match subject {
+            Subject::ServiceAccountSubject(subject) => subject.workspace_name.ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message:
+                        "API key subject is missing workspace name. Pass `--workspace <name>` explicitly."
+                            .to_string(),
+                })
+            }),
+            Subject::UserSubject(_) => Err(AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "API key subject is not scoped to a workspace. Pass `--workspace <name>` explicitly."
+                        .to_string(),
+            })),
         }
     }
 }

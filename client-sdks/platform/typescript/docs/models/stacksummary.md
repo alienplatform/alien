@@ -14,6 +14,7 @@ let value: StackSummary = {
     externalInfra: 58173,
     total: 40735,
   },
+  publicEndpoints: [],
 };
 ```
 
@@ -23,3 +24,4 @@ let value: StackSummary = {
 | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `platforms`                                                        | [models.StackSummaryPlatform](../models/stacksummaryplatform.md)[] | :heavy_check_mark:                                                 | Platforms supported by the active release                          |
 | `resourceCounts`                                                   | [models.ResourceCounts](../models/resourcecounts.md)               | :heavy_check_mark:                                                 | N/A                                                                |
+| `publicEndpoints`                                                  | [models.PublicEndpoint](../models/publicendpoint.md)[]             | :heavy_check_mark:                                                 | Public endpoints declared by the active release stack              |

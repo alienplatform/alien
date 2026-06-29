@@ -97,8 +97,8 @@ impl LocalContainerController {
             }
         };
 
-        // Determine if this container should be exposed publicly (any exposed port)
-        let expose_public = config.ports.iter().any(|p| p.expose.is_some());
+        // Determine if this container should be exposed publicly.
+        let expose_public = !config.public_endpoints.is_empty();
 
         // First, collect bind mounts for linked filesystem resources (Storage, KV, Vault)
         // We need to know the container paths before building env vars so we can rewrite bindings
@@ -417,9 +417,22 @@ impl LocalContainerController {
                 current_replicas: 1,
                 desired_replicas: 1,
                 internal_dns: info.internal_dns.clone(),
-                url: info.host_port.map(|p| format!("http://localhost:{}", p)),
-                replicas: Vec::new(),         // TODO: Add replica status
-                load_balancer_endpoint: None, // Local containers don't have load balancers
+                public_endpoints: info
+                    .host_port
+                    .map(|p| {
+                        let url = format!("http://localhost:{p}");
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                host: alien_core::public_url_host(&url).unwrap_or_default(),
+                                url,
+                                wildcard_host: None,
+                                load_balancer_endpoint: None,
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
+                replicas: Vec::new(), // TODO: Add replica status
             })
         })
     }

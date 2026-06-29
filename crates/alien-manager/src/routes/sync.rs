@@ -23,8 +23,8 @@ use alien_error::AlienError;
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, ReconcileData,
-    ReleaseRecord, TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
+    DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
 };
 
 use super::{auth, AppState};
@@ -42,6 +42,10 @@ pub struct AcquireRequest {
     pub platforms: Option<Vec<Platform>>,
     #[serde(default)]
     pub statuses: Option<Vec<String>>,
+    #[serde(default)]
+    pub setup_method: Option<String>,
+    #[serde(default)]
+    pub acquire_mode: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: u32,
 }
@@ -140,6 +144,11 @@ pub struct InitializeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
     pub stack_settings: Option<alien_core::StackSettings>,
+    /// Deployer-provided stack inputs. Embedded platform managers resolve
+    /// these before creating the deployment; standalone managers accept the
+    /// field so generated setup clients have one stable initialize contract.
+    #[serde(default)]
+    pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -219,11 +228,23 @@ async fn acquire(
         .into_response();
     }
 
+    let acquire_mode = match req.acquire_mode.as_deref() {
+        None => None,
+        Some("runtime") => Some(DeploymentAcquireMode::Runtime),
+        Some("setup-run") => Some(DeploymentAcquireMode::SetupRun),
+        Some("setup-teardown") => Some(DeploymentAcquireMode::SetupTeardown),
+        Some(other) => {
+            return ErrorData::bad_request(format!("Invalid acquireMode: {other}")).into_response();
+        }
+    };
+
     let filter = DeploymentFilter {
         deployment_group_id: None,
         deployment_ids: req.deployment_ids,
         statuses: req.statuses,
         platforms: req.platforms,
+        setup_method: req.setup_method,
+        acquire_mode,
         limit: Some(req.limit),
         ..DeploymentFilter::default()
     };
@@ -240,8 +261,17 @@ async fn acquire(
     let deployments: Vec<AcquiredDeploymentResponse> = match acquired
         .into_iter()
         .map(|a| {
-            serde_json::to_value(&a.deployment)
-                .map(|deployment| AcquiredDeploymentResponse { deployment })
+            let mut deployment = serde_json::to_value(&a.deployment)?;
+            if let (Some(config), Some(object)) = (
+                a.deployment.deployment_config.as_ref(),
+                deployment.as_object_mut(),
+            ) {
+                object.insert(
+                    "deploymentConfig".to_string(),
+                    serde_json::to_value(config)?,
+                );
+            }
+            Ok::<_, serde_json::Error>(AcquiredDeploymentResponse { deployment })
         })
         .collect::<Result<Vec<_>, _>>()
     {
@@ -316,6 +346,24 @@ async fn reconcile(
         &mut final_state,
     )
     .await;
+
+    // 1a. Inject target_release from the deployment record's
+    //     desired_release_id. The CLI's deploy command initializes state with
+    //     `target_release: None` and depends on the manager to populate it on
+    //     reconcile — without this, handlers like `pending::handle_pending`
+    //     fail with "Target release required for deployment" on the first
+    //     step.
+    if final_state.target_release.is_none() {
+        if let Some(ref release_id) = deployment.desired_release_id {
+            let system = crate::auth::Subject::system();
+            if let Ok(Some(rel)) = state.release_store.get_release(&system, release_id).await {
+                let release_stack_platform = release_stack_platform(deployment.platform);
+                if let Some(info) = release_info_from_record(&rel, release_stack_platform) {
+                    final_state.target_release = Some(info);
+                }
+            }
+        }
+    }
 
     // 2. Persist the step result (including any registry access changes).
     let _result = match state
@@ -411,18 +459,21 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, ResourceHeartbeatData, StackSettings,
-        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
+        ExternalBindings, Platform, ResourceHeartbeatData, StackSettings, StackState,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
+    use std::collections::HashMap;
 
     use crate::traits::DeploymentRecord;
 
     use super::{
-        deployment_needs_target, deployment_state_from_record, management_platform,
-        release_stack_platform, should_ignore_agent_state_report,
-        validate_initialize_base_platform, ReconcileRequest,
+        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
+        management_platform, release_stack_platform, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        ReconcileRequest,
     };
 
     #[test]
@@ -565,6 +616,31 @@ mod tests {
     }
 
     #[test]
+    fn returns_current_state_when_retry_is_pending() {
+        let mut deployment = deployment_record_with_state(
+            "provisioning-failed",
+            Some(StackState::new(Platform::Local)),
+        );
+        deployment.retry_requested = true;
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
+            &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_current_state_when_agent_blank_state_was_ignored() {
+        let deployment =
+            deployment_record_with_state("running", Some(StackState::new(Platform::Local)));
+
+        assert!(should_return_current_state_for_agent_sync(
+            true,
+            &deployment
+        ));
+    }
+
+    #[test]
     fn builds_authoritative_state_from_manager_record() {
         let stack_state = StackState::with_resource_prefix(Platform::Aws, "abc123".to_string());
         let deployment = deployment_record_with_state("initial-setup", Some(stack_state.clone()));
@@ -606,6 +682,34 @@ mod tests {
         assert!(deployment_needs_target(&deployment));
     }
 
+    #[test]
+    fn target_config_preserves_control_plane_public_endpoints() {
+        let mut deployment = deployment_record_with_state("provisioning", None);
+        let public_endpoints = HashMap::from([(
+            "host-loader".to_string(),
+            HashMap::from([(
+                "wildcard".to_string(),
+                "https://wildcard.byoc.example.test".to_string(),
+            )]),
+        )]);
+        deployment.deployment_config = Some(DeploymentConfig {
+            public_endpoints: Some(public_endpoints.clone()),
+            ..test_deployment_config()
+        });
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            Some("ax_dep_test".to_string()),
+            None,
+        );
+
+        assert_eq!(config.public_endpoints, Some(public_endpoints));
+    }
+
     fn uninitialized_state() -> DeploymentState {
         DeploymentState {
             platform: Platform::Kubernetes,
@@ -618,6 +722,29 @@ mod tests {
             runtime_metadata: None,
             retry_requested: false,
             protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn test_deployment_config() -> DeploymentConfig {
+        DeploymentConfig {
+            deployment_name: None,
+            stack_settings: StackSettings::default(),
+            management_config: None,
+            environment_variables: EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            },
+            allow_frozen_changes: false,
+            compute_backend: None,
+            external_bindings: ExternalBindings::default(),
+            base_platform: None,
+            public_endpoints: None,
+            domain_metadata: None,
+            monitoring: None,
+            manager_url: None,
+            deployment_token: None,
+            native_image_host: None,
         }
     }
 
@@ -650,8 +777,8 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
-            deployment_config: None,
             deployment_token: None,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -840,52 +967,25 @@ async fn agent_sync(
                     .clone()
                     .unwrap_or_default();
 
-                let config = if let Some(mut config) = deployment.deployment_config.clone() {
-                    if config.deployment_name.is_none() {
-                        config.deployment_name = Some(deployment.name.clone());
-                    }
-                    if config.management_config.is_none() {
-                        config.management_config = management_config;
-                    }
-                    config.deployment_token = agent_token.clone();
-                    if config.base_platform.is_none() {
-                        config.base_platform = deployment.base_platform;
-                    }
-                    config.manager_url = Some(manager_url);
-                    config.native_image_host = native_image_host;
-                    config
-                } else {
-                    // Records loaded for sync always carry stack settings; in a
-                    // handler, answer with a 500 rather than panic-dropping the
-                    // connection if that invariant is ever broken.
-                    let stack_settings = match deployment.stack_settings.clone() {
-                        Some(settings) => settings,
-                        None => {
-                            return ErrorData::internal(
-                                "synced deployment is missing stack_settings",
-                            )
+                // Records loaded for sync always carry stack settings; in a
+                // handler, answer with a 500 rather than panic-dropping the
+                // connection if that invariant is ever broken.
+                let stack_settings = match deployment.stack_settings.clone() {
+                    Some(settings) => settings,
+                    None => {
+                        return ErrorData::internal("synced deployment is missing stack_settings")
                             .into_response();
-                        }
-                    };
-                    DeploymentConfig::builder()
-                        .deployment_name(deployment.name.clone())
-                        .stack_settings(stack_settings.clone())
-                        .maybe_management_config(management_config)
-                        .environment_variables(EnvironmentVariablesSnapshot {
-                            variables: env_vars,
-                            hash: String::new(),
-                            created_at: String::new(),
-                        })
-                        .allow_frozen_changes(false)
-                        .external_bindings(
-                            stack_settings.external_bindings.clone().unwrap_or_default(),
-                        )
-                        .maybe_base_platform(deployment.base_platform)
-                        .maybe_manager_url(Some(manager_url))
-                        .maybe_deployment_token(agent_token)
-                        .maybe_native_image_host(native_image_host)
-                        .build()
+                    }
                 };
+                let config = build_target_deployment_config(
+                    &deployment,
+                    stack_settings,
+                    management_config,
+                    env_vars,
+                    manager_url,
+                    agent_token,
+                    native_image_host,
+                );
 
                 Some(TargetDeployment {
                     release_info: ReleaseInfo {
@@ -903,7 +1003,9 @@ async fn agent_sync(
         None
     };
 
-    let current_state = if ignored_agent_state_report {
+    let should_return_current_state =
+        should_return_current_state_for_agent_sync(ignored_agent_state_report, &deployment);
+    let current_state = if should_return_current_state {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
             let system = crate::auth::Subject::system();
@@ -958,6 +1060,41 @@ fn release_stack_platform(platform: Platform) -> Platform {
     platform
 }
 
+fn build_target_deployment_config(
+    deployment: &DeploymentRecord,
+    stack_settings: alien_core::StackSettings,
+    management_config: Option<alien_core::ManagementConfig>,
+    env_vars: Vec<EnvironmentVariable>,
+    manager_url: String,
+    agent_token: Option<String>,
+    native_image_host: Option<String>,
+) -> DeploymentConfig {
+    let deployment_config = deployment.deployment_config.as_ref();
+
+    DeploymentConfig::builder()
+        .deployment_name(deployment.name.clone())
+        .stack_settings(stack_settings.clone())
+        .maybe_management_config(management_config)
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: env_vars,
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .allow_frozen_changes(false)
+        .maybe_compute_backend(deployment_config.and_then(|config| config.compute_backend.clone()))
+        .external_bindings(stack_settings.external_bindings.clone().unwrap_or_default())
+        .maybe_base_platform(deployment.base_platform)
+        .maybe_public_endpoints(
+            deployment_config.and_then(|config| config.public_endpoints.clone()),
+        )
+        .maybe_domain_metadata(deployment_config.and_then(|config| config.domain_metadata.clone()))
+        .maybe_monitoring(deployment_config.and_then(|config| config.monitoring.clone()))
+        .maybe_manager_url(Some(manager_url))
+        .maybe_deployment_token(agent_token)
+        .maybe_native_image_host(native_image_host)
+        .build()
+}
+
 fn management_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {
     base_platform.unwrap_or(platform)
 }
@@ -1006,6 +1143,13 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
         || deployment.runtime_metadata.is_some()
         || deployment.current_release_id.is_some()
         || deployment.status != "pending"
+}
+
+fn should_return_current_state_for_agent_sync(
+    ignored_agent_state_report: bool,
+    deployment: &DeploymentRecord,
+) -> bool {
+    ignored_agent_state_report || deployment.retry_requested
 }
 
 fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
@@ -1177,6 +1321,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,
+                        input_values: req.input_values,
                         deployment_token: dep_token,
                     },
                 )

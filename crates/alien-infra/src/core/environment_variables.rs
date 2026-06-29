@@ -3,14 +3,16 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
     kubernetes_base_platform_runtime_environment_plan,
-    passthrough_transport_runtime_environment_plan, render_runtime_environment_entries,
-    render_runtime_environment_plan, standard_runtime_environment_plan,
-    validate_prepared_runtime_environment_map, worker_runtime_environment_contract, ResourceRef,
-    ResourceStatus, RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer,
-    RuntimeEnvironmentValue, ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
-    ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+    passthrough_transport_runtime_environment_plan, public_url_host,
+    render_runtime_environment_entries, render_runtime_environment_plan,
+    standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
+    worker_runtime_environment_contract, Container, Daemon, ResourceRef, ResourceStatus,
+    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
+    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Common environment variable preparation for worker controllers.
@@ -96,6 +98,78 @@ impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_>
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicEndpointEnv {
+    url: String,
+    host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wildcard_host: Option<String>,
+}
+
+fn current_resource_wildcard_endpoints(
+    ctx: &ResourceControllerContext<'_>,
+) -> HashMap<String, bool> {
+    if let Some(container) = ctx.desired_config.downcast_ref::<Container>() {
+        return container
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+    if let Some(daemon) = ctx.desired_config.downcast_ref::<Daemon>() {
+        return daemon
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+    if let Some(worker) = ctx.desired_config.downcast_ref::<Worker>() {
+        return worker
+            .public_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.clone(), endpoint.wildcard_subdomains))
+            .collect();
+    }
+
+    HashMap::new()
+}
+
+fn current_resource_public_endpoint_urls(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> HashMap<String, String> {
+    if let Some(endpoint_urls) = ctx
+        .deployment_config
+        .public_endpoints
+        .as_ref()
+        .and_then(|resources| resources.get(resource_id))
+    {
+        return endpoint_urls.clone();
+    }
+
+    let Some(resource) = ctx
+        .deployment_config
+        .domain_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.resources.get(resource_id))
+    else {
+        return HashMap::new();
+    };
+
+    if !resource.endpoints.is_empty() {
+        return resource
+            .endpoints
+            .iter()
+            .map(|(endpoint_name, endpoint)| {
+                (endpoint_name.clone(), format!("https://{}", endpoint.fqdn))
+            })
+            .collect();
+    }
+
+    HashMap::from([("default".to_string(), format!("https://{}", resource.fqdn))])
+}
+
 impl EnvironmentVariableBuilder {
     /// Create a new builder starting with the initial environment variables.
     pub fn new(initial_env: &HashMap<String, String>) -> Self {
@@ -141,6 +215,51 @@ impl EnvironmentVariableBuilder {
             self.env_vars.insert(name.to_string(), value);
         }
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
+
+        Ok(self)
+    }
+
+    pub fn add_current_resource_public_endpoint(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<Self> {
+        let endpoint_urls = current_resource_public_endpoint_urls(ctx, resource_id);
+        if endpoint_urls.is_empty() {
+            return Ok(self);
+        }
+
+        let wildcard_endpoints = current_resource_wildcard_endpoints(ctx);
+        let mut env_endpoints = HashMap::new();
+        for (endpoint_name, public_url) in &endpoint_urls {
+            let Some(host) = public_url_host(public_url) else {
+                continue;
+            };
+            let wildcard_host = wildcard_endpoints
+                .get(endpoint_name)
+                .copied()
+                .unwrap_or(false)
+                .then(|| format!("*.{host}"));
+            env_endpoints.insert(
+                endpoint_name.clone(),
+                PublicEndpointEnv {
+                    url: public_url.clone(),
+                    host,
+                    wildcard_host,
+                },
+            );
+        }
+
+        if !env_endpoints.is_empty() {
+            let json = serde_json::to_string(&env_endpoints)
+                .into_alien_error()
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "failed to serialize public endpoint environment metadata".to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            self.env_vars
+                .insert(ENV_ALIEN_PUBLIC_ENDPOINTS_JSON.to_string(), json);
+        }
 
         Ok(self)
     }
@@ -447,5 +566,22 @@ mod tests {
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(bindings.len(), 0);
+    }
+
+    #[test]
+    fn public_url_host_extracts_host_from_common_public_urls() {
+        assert_eq!(
+            public_url_host("https://gateway.dep123.byoc.example.test"),
+            Some("gateway.dep123.byoc.example.test".to_string())
+        );
+        assert_eq!(
+            public_url_host("https://gateway.dep123.byoc.example.test:8443"),
+            Some("gateway.dep123.byoc.example.test".to_string())
+        );
+        assert_eq!(
+            public_url_host("http://[::1]:8080"),
+            Some("[::1]".to_string())
+        );
+        assert_eq!(public_url_host(""), None);
     }
 }

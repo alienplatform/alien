@@ -5,6 +5,7 @@
 import { authWhoami } from "../funcs/authWhoami.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
+import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Auth extends ClientSDK {
@@ -12,10 +13,12 @@ export class Auth extends ClientSDK {
    * Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
    */
   async whoami(
+    request?: operations.WhoamiRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.Subject> {
     return unwrapAsync(authWhoami(
       this,
+      request,
       options,
     ));
   }

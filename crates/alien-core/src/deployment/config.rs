@@ -52,21 +52,21 @@ pub struct DeploymentConfig {
     /// runtime deployment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<crate::Platform>,
-    /// Public URLs for exposed resources (optional override).
+    /// Public endpoint URLs for exposed resources (optional override).
     ///
     /// Use this only when a caller already knows the public URL. Managed public
     /// endpoint flows should prefer `domain_metadata` plus controller-reported
     /// load balancer outputs so DNS, certificate renewal, and route readiness
     /// stay tied to the resource state.
     ///
-    /// If not set, platforms determine public URLs from other sources:
+    /// If not set, platforms determine public endpoint URLs from other sources:
     /// - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
     /// - Local: `http://localhost:{allocated_port}`
-    /// - Custom or disabled exposure: no public URL unless a controller reports one
+    /// - Custom or disabled exposure: no public endpoint URL unless a controller reports one
     ///
-    /// Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
+    /// Outer key: resource ID. Inner key: endpoint name. Value: public URL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_urls: Option<HashMap<String, String>>,
+    pub public_endpoints: Option<HashMap<String, HashMap<String, String>>>,
     /// Domain metadata for auto-managed public resources.
     ///
     /// Contains generated hostnames, DNS record state, certificate material,
@@ -109,6 +109,16 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_image_host: Option<String>,
 }
+
+/// Resource-attribute key marking OTLP telemetry as Alien system-component
+/// output (infrastructure daemons and internal runtimes) rather than user
+/// workload. Log consumers — the CLI log viewer and the dashboard — hide
+/// telemetry carrying this attribute by default. The value is the string
+/// `"true"`.
+///
+/// System components set this on their own telemetry's resource attributes so
+/// consumers can filter generically, without enumerating component names.
+pub const ALIEN_SYSTEM_RESOURCE_ATTRIBUTE: &str = "alien.system";
 
 /// OTLP log export configuration for a deployment.
 ///

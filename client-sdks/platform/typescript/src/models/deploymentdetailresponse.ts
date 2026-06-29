@@ -220,6 +220,65 @@ export type DeploymentDetailResponseEnvironmentInfoUnion =
   | DeploymentDetailResponseEnvironmentInfoTest
   | any;
 
+export type DeploymentDetailResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentDetailResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentDetailResponsePoolsUnion =
+  | DeploymentDetailResponsePoolsFixed
+  | DeploymentDetailResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentDetailResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | DeploymentDetailResponsePoolsFixed
+      | DeploymentDetailResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type DeploymentDetailResponseComputeUnion =
+  | DeploymentDetailResponseCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1218,6 +1277,7 @@ export type DeploymentDetailResponseUpdates = ClosedEnum<
  * User-provided configuration (network, deployment model, approvals)
  */
 export type DeploymentDetailResponseStackSettings = {
+  compute?: DeploymentDetailResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1582,6 +1642,257 @@ export type DeploymentDetailResponseStackState = {
    * The state of individual resources, keyed by resource ID.
    */
   resources: { [k: string]: DeploymentDetailResponseStackStateResources };
+};
+
+export const DeploymentDetailResponseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type DeploymentDetailResponseTypeStringList = ClosedEnum<
+  typeof DeploymentDetailResponseTypeStringList
+>;
+
+export type DeploymentDetailResponseDefaultStringList = {
+  type: DeploymentDetailResponseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const DeploymentDetailResponseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type DeploymentDetailResponseTypeBoolean = ClosedEnum<
+  typeof DeploymentDetailResponseTypeBoolean
+>;
+
+export type DeploymentDetailResponseDefaultBoolean = {
+  type: DeploymentDetailResponseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const DeploymentDetailResponseTypeNumber = {
+  Number: "number",
+} as const;
+export type DeploymentDetailResponseTypeNumber = ClosedEnum<
+  typeof DeploymentDetailResponseTypeNumber
+>;
+
+export type DeploymentDetailResponseDefaultNumber = {
+  type: DeploymentDetailResponseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const DeploymentDetailResponseTypeString = {
+  String: "string",
+} as const;
+export type DeploymentDetailResponseTypeString = ClosedEnum<
+  typeof DeploymentDetailResponseTypeString
+>;
+
+export type DeploymentDetailResponseDefaultString = {
+  type: DeploymentDetailResponseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type DeploymentDetailResponseDefaultUnion =
+  | DeploymentDetailResponseDefaultString
+  | DeploymentDetailResponseDefaultNumber
+  | DeploymentDetailResponseDefaultBoolean
+  | DeploymentDetailResponseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const DeploymentDetailResponseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type DeploymentDetailResponseTypeEnvEnum = ClosedEnum<
+  typeof DeploymentDetailResponseTypeEnvEnum
+>;
+
+export type DeploymentDetailResponseTypeUnion =
+  | DeploymentDetailResponseTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type DeploymentDetailResponseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: DeploymentDetailResponseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const DeploymentDetailResponseKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type DeploymentDetailResponseKind = ClosedEnum<
+  typeof DeploymentDetailResponseKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentDetailResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentDetailResponsePreparedStackPlatform = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const DeploymentDetailResponseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type DeploymentDetailResponseProvidedBy = ClosedEnum<
+  typeof DeploymentDetailResponseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type DeploymentDetailResponseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type DeploymentDetailResponseValidationUnion =
+  | DeploymentDetailResponseValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type DeploymentDetailResponseInput = {
+  default?:
+    | DeploymentDetailResponseDefaultString
+    | DeploymentDetailResponseDefaultNumber
+    | DeploymentDetailResponseDefaultBoolean
+    | DeploymentDetailResponseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<DeploymentDetailResponseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: DeploymentDetailResponseKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<DeploymentDetailResponsePreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<DeploymentDetailResponseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: DeploymentDetailResponseValidation | any | null | undefined;
 };
 
 export const DeploymentDetailResponseManagementEnum = {
@@ -2787,6 +3098,10 @@ export type DeploymentDetailResponsePreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<DeploymentDetailResponseInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: DeploymentDetailResponsePermissions | undefined;
@@ -3114,10 +3429,7 @@ export type DeploymentDetailResponse = {
     | undefined;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -3313,6 +3625,113 @@ export function deploymentDetailResponseEnvironmentInfoUnionFromJSON(
         JSON.parse(x),
       ),
     `Failed to parse 'DeploymentDetailResponseEnvironmentInfoUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function deploymentDetailResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePoolsFixed$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function deploymentDetailResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePoolsUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponsePoolsFixed$inboundSchema),
+  z.lazy(() => DeploymentDetailResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function deploymentDetailResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseCompute$inboundSchema: z.ZodType<
+  DeploymentDetailResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentDetailResponsePoolsFixed$inboundSchema),
+      z.lazy(() => DeploymentDetailResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function deploymentDetailResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseComputeUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseComputeUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponseCompute$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDetailResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseComputeUnion' from JSON`,
   );
 }
 
@@ -5122,6 +5541,12 @@ export const DeploymentDetailResponseStackSettings$inboundSchema: z.ZodType<
   DeploymentDetailResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseCompute$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: DeploymentDetailResponseDeploymentModel$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -5510,6 +5935,289 @@ export function deploymentDetailResponseStackStateFromJSON(
     (x) =>
       DeploymentDetailResponseStackState$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentDetailResponseStackState' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeStringList$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeStringList
+> = z.enum(DeploymentDetailResponseTypeStringList);
+
+/** @internal */
+export const DeploymentDetailResponseDefaultStringList$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDefaultStringList,
+  unknown
+> = z.object({
+  type: DeploymentDetailResponseTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function deploymentDetailResponseDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeBoolean
+> = z.enum(DeploymentDetailResponseTypeBoolean);
+
+/** @internal */
+export const DeploymentDetailResponseDefaultBoolean$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDefaultBoolean,
+  unknown
+> = z.object({
+  type: DeploymentDetailResponseTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function deploymentDetailResponseDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeNumber$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeNumber
+> = z.enum(DeploymentDetailResponseTypeNumber);
+
+/** @internal */
+export const DeploymentDetailResponseDefaultNumber$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDefaultNumber,
+  unknown
+> = z.object({
+  type: DeploymentDetailResponseTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDetailResponseDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeString$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeString
+> = z.enum(DeploymentDetailResponseTypeString);
+
+/** @internal */
+export const DeploymentDetailResponseDefaultString$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDefaultString,
+  unknown
+> = z.object({
+  type: DeploymentDetailResponseTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDetailResponseDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseDefaultUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponseDefaultString$inboundSchema),
+  z.lazy(() => DeploymentDetailResponseDefaultNumber$inboundSchema),
+  z.lazy(() => DeploymentDetailResponseDefaultBoolean$inboundSchema),
+  z.lazy(() => DeploymentDetailResponseDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDetailResponseDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeEnvEnum
+> = z.enum(DeploymentDetailResponseTypeEnvEnum);
+
+/** @internal */
+export const DeploymentDetailResponseTypeUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseTypeUnion,
+  unknown
+> = z.union([DeploymentDetailResponseTypeEnvEnum$inboundSchema, z.any()]);
+
+export function deploymentDetailResponseTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseEnv$inboundSchema: z.ZodType<
+  DeploymentDetailResponseEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([DeploymentDetailResponseTypeEnvEnum$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function deploymentDetailResponseEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseKind$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseKind
+> = z.enum(DeploymentDetailResponseKind);
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackPlatform$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackPlatform> = z.enum(
+    DeploymentDetailResponsePreparedStackPlatform,
+  );
+
+/** @internal */
+export const DeploymentDetailResponseProvidedBy$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseProvidedBy
+> = z.enum(DeploymentDetailResponseProvidedBy);
+
+/** @internal */
+export const DeploymentDetailResponseValidation$inboundSchema: z.ZodType<
+  DeploymentDetailResponseValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentDetailResponseValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseValidationUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseValidationUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponseValidation$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDetailResponseValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseValidationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseInput$inboundSchema: z.ZodType<
+  DeploymentDetailResponseInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseDefaultString$inboundSchema),
+      z.lazy(() => DeploymentDetailResponseDefaultNumber$inboundSchema),
+      z.lazy(() => DeploymentDetailResponseDefaultBoolean$inboundSchema),
+      z.lazy(() => DeploymentDetailResponseDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => DeploymentDetailResponseEnv$inboundSchema))
+    .optional(),
+  id: z.string(),
+  kind: DeploymentDetailResponseKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(DeploymentDetailResponsePreparedStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(DeploymentDetailResponseProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseValidation$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function deploymentDetailResponseInputFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseInput' from JSON`,
   );
 }
 
@@ -7409,6 +8117,8 @@ export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => DeploymentDetailResponseInput$inboundSchema))
+    .optional(),
   permissions: z.lazy(() => DeploymentDetailResponsePermissions$inboundSchema)
     .optional(),
   resources: z.record(
@@ -7638,7 +8348,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string(),
   workspaceId: z.string(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),

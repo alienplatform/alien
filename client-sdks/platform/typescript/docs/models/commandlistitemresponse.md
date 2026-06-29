@@ -24,6 +24,7 @@ let value: CommandListItemResponse = {
   deployment: {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     name: "<value>",
+    managerId: "<id>",
   },
   project: {
     id: "prj_mcytp6z3j91f7tn5ryqsfwtr",

@@ -86,6 +86,7 @@ async function $do(
   const query = encodeFormQuery({
     "deploymentGroupId": payload?.deploymentGroupId,
     "include": payload?.include,
+    "name": payload?.name,
   });
 
   const headers = new Headers(compactMap({

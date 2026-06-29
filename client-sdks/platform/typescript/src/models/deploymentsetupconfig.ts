@@ -9,6 +9,11 @@ import {
   DeploymentSetupPolicy$outboundSchema,
 } from "./deploymentsetuppolicy.js";
 import {
+  EncryptedStackInputValue,
+  EncryptedStackInputValue$Outbound,
+  EncryptedStackInputValue$outboundSchema,
+} from "./encryptedstackinputvalue.js";
+import {
   EnvironmentVariableConfig,
   EnvironmentVariableConfig$Outbound,
   EnvironmentVariableConfig$outboundSchema,
@@ -18,6 +23,7 @@ export type DeploymentSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<EnvironmentVariableConfig>;
+  inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
 };
 
 /** @internal */
@@ -25,6 +31,7 @@ export type DeploymentSetupConfig$Outbound = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy$Outbound;
   environmentVariables: Array<EnvironmentVariableConfig$Outbound>;
+  inputValues?: { [k: string]: EncryptedStackInputValue$Outbound } | undefined;
 };
 
 /** @internal */
@@ -35,6 +42,8 @@ export const DeploymentSetupConfig$outboundSchema: z.ZodType<
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$outboundSchema,
   environmentVariables: z.array(EnvironmentVariableConfig$outboundSchema),
+  inputValues: z.record(z.string(), EncryptedStackInputValue$outboundSchema)
+    .optional(),
 });
 
 export function deploymentSetupConfigToJSON(

@@ -233,6 +233,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let mutation = ResourceLinkPermissionsMutation;

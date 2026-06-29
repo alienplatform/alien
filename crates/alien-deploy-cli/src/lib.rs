@@ -103,6 +103,27 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_up_command_token_file() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "deploy",
+            "--token-file",
+            "/run/alien/token",
+            "--platform",
+            "local",
+        ])
+        .unwrap();
+
+        let Commands::Deploy(args) = cli.command else {
+            panic!("expected deploy variant");
+        };
+        assert_eq!(
+            args.token_file.as_deref(),
+            Some(std::path::Path::new("/run/alien/token"))
+        );
+    }
+
+    #[test]
     fn test_parse_verbose_flag() {
         let cli = Cli::try_parse_from(["alien-deploy", "-v", "list"]).unwrap();
         assert!(cli.verbose);
@@ -119,6 +140,8 @@ mod tests {
             "https://manager.example.com",
             "--sync-token",
             "ax_dg_abc",
+            "--deployment-id",
+            "dep_abc",
             "--platform",
             "local",
         ])

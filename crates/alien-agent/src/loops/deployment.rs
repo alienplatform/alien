@@ -15,8 +15,10 @@ use crate::config::AgentConfig;
 use crate::db::AgentDb;
 use crate::AgentState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, KubernetesClientConfig, Platform,
-    ResourceHeartbeat,
+    ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
+    KubernetesClientConfig, Platform, ResourceHeartbeat, ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+    ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -262,7 +264,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
 
 /// Enrich a deployment config with agent-specific settings.
 ///
-/// Applies public_urls, stack_settings from agent config,
+/// Applies public_endpoints and stack_settings from agent config,
 /// and injects commands polling env vars for K8s/Local platforms.
 /// External bindings are part of stack_settings and flow through naturally.
 async fn enrich_config(
@@ -271,9 +273,9 @@ async fn enrich_config(
     platform: Platform,
     db: &AgentDb,
 ) -> Result<DeploymentConfig> {
-    // Pass through public URLs from agent config
-    if agent_config.public_urls.is_some() {
-        config.public_urls = agent_config.public_urls.clone();
+    // Pass through public endpoints from agent config.
+    if agent_config.public_endpoints.is_some() {
+        config.public_endpoints = agent_config.public_endpoints.clone();
     }
 
     // Pass through stack settings from agent config (includes external_bindings)
@@ -282,6 +284,9 @@ async fn enrich_config(
     }
     if config.base_platform.is_none() {
         config.base_platform = agent_config.base_platform;
+    }
+    if config.deployment_name.is_none() {
+        config.deployment_name = agent_config.agent_name.clone();
     }
 
     // Inject commands polling env vars only for K8s/Local containers.
@@ -292,8 +297,6 @@ async fn enrich_config(
 
     if needs_polling {
         if let Some(ref sync_config) = agent_config.sync {
-            use alien_core::{EnvironmentVariable, EnvironmentVariableType};
-
             let commands_url = match db.get_commands_url().await {
                 Ok(Some(url)) => url,
                 _ => format!("{}/v1", sync_config.url),
@@ -303,13 +306,13 @@ async fn enrich_config(
 
             vars.extend([
                 EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                    name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
                     value: "true".to_string(),
                     var_type: EnvironmentVariableType::Plain,
                     target_resources: None,
                 },
                 EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                    name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
                     value: commands_url,
                     var_type: EnvironmentVariableType::Plain,
                     target_resources: None,
@@ -320,7 +323,7 @@ async fn enrich_config(
                 // to limit the blast radius if the application is compromised.
                 // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
                 EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
                     value: sync_config.token.clone(),
                     var_type: EnvironmentVariableType::Secret,
                     target_resources: None,
@@ -329,11 +332,22 @@ async fn enrich_config(
 
             // Ensure ALIEN_DEPLOYMENT_ID is present (should come from manager config,
             // but add defensively in case it's missing)
-            if !vars.iter().any(|v| v.name == "ALIEN_DEPLOYMENT_ID") {
+            if !vars.iter().any(|v| v.name == ENV_ALIEN_DEPLOYMENT_ID) {
                 if let Ok(Some(dep_id)) = db.get_deployment_id().await {
                     vars.push(EnvironmentVariable {
-                        name: "ALIEN_DEPLOYMENT_ID".to_string(),
+                        name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
                         value: dep_id,
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: None,
+                    });
+                }
+            }
+
+            if !vars.iter().any(|v| v.name == ENV_ALIEN_DEPLOYMENT_NAME) {
+                if let Some(name) = config.deployment_name.as_ref() {
+                    vars.push(EnvironmentVariable {
+                        name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
+                        value: name.clone(),
                         var_type: EnvironmentVariableType::Plain,
                         target_resources: None,
                     });
@@ -403,5 +417,105 @@ async fn resolve_client_config(
                     ),
                 })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AgentConfig, SyncConfig};
+    use alien_core::{
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, StackSettings,
+    };
+    use std::collections::HashMap;
+
+    fn test_deployment_config() -> DeploymentConfig {
+        DeploymentConfig {
+            deployment_name: None,
+            stack_settings: StackSettings::default(),
+            management_config: None,
+            environment_variables: EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            },
+            allow_frozen_changes: false,
+            compute_backend: None,
+            external_bindings: ExternalBindings::default(),
+            base_platform: None,
+            public_endpoints: None,
+            domain_metadata: None,
+            monitoring: None,
+            manager_url: None,
+            deployment_token: None,
+            native_image_host: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_config_uses_agent_name_for_runtime_deployment_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_local").await.unwrap();
+
+        let config = test_deployment_config();
+        let agent_config = AgentConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_dep_test".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+
+        let enriched = enrich_config(config, &agent_config, Platform::Local, &db)
+            .await
+            .unwrap();
+
+        assert_eq!(enriched.deployment_name.as_deref(), Some("local-runner"));
+        assert!(enriched
+            .environment_variables
+            .variables
+            .iter()
+            .any(|var| { var.name == ENV_ALIEN_DEPLOYMENT_NAME && var.value == "local-runner" }));
+        assert!(enriched
+            .environment_variables
+            .variables
+            .iter()
+            .any(|var| var.name == ENV_ALIEN_DEPLOYMENT_ID && var.value == "dep_local"));
+    }
+
+    #[tokio::test]
+    async fn enrich_config_applies_agent_public_endpoints() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+
+        let config = test_deployment_config();
+        let public_endpoints = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://api.gateway.example.test".to_string(),
+            )]),
+        )]);
+        let agent_config = AgentConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_public_endpoints(Some(public_endpoints.clone()))
+            .encryption_key(encryption_key)
+            .build();
+
+        let enriched = enrich_config(config, &agent_config, Platform::Local, &db)
+            .await
+            .unwrap();
+
+        assert_eq!(enriched.public_endpoints, Some(public_endpoints));
     }
 }

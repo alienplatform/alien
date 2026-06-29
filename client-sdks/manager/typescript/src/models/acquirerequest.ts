@@ -6,19 +6,23 @@ import * as z from "zod/v4";
 import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
 
 export type AcquireRequest = {
+  acquireMode?: string | null | undefined;
   deploymentIds?: Array<string> | null | undefined;
   limit?: number | undefined;
   platforms?: Array<PlatformEnum> | null | undefined;
   session: string;
+  setupMethod?: string | null | undefined;
   statuses?: Array<string> | null | undefined;
 };
 
 /** @internal */
 export type AcquireRequest$Outbound = {
+  acquireMode?: string | null | undefined;
   deploymentIds?: Array<string> | null | undefined;
   limit?: number | undefined;
   platforms?: Array<string> | null | undefined;
   session: string;
+  setupMethod?: string | null | undefined;
   statuses?: Array<string> | null | undefined;
 };
 
@@ -27,10 +31,12 @@ export const AcquireRequest$outboundSchema: z.ZodType<
   AcquireRequest$Outbound,
   AcquireRequest
 > = z.object({
+  acquireMode: z.nullable(z.string()).optional(),
   deploymentIds: z.nullable(z.array(z.string())).optional(),
   limit: z.int().optional(),
   platforms: z.nullable(z.array(PlatformEnum$outboundSchema)).optional(),
   session: z.string(),
+  setupMethod: z.nullable(z.string()).optional(),
   statuses: z.nullable(z.array(z.string())).optional(),
 });
 

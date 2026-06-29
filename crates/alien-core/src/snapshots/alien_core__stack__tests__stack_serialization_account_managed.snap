@@ -27,7 +27,6 @@ expression: stack
         "concurrencyLimit": null,
         "environment": {},
         "id": "my-worker",
-        "ingress": "private",
         "links": [
           {
             "id": "my-bucket",
@@ -36,6 +35,7 @@ expression: stack
         ],
         "memoryMb": 256,
         "permissions": "execution",
+        "publicEndpoints": [],
         "readinessProbe": null,
         "timeoutSeconds": 180,
         "triggers": [],

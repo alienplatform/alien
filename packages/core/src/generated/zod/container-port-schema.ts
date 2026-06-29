@@ -4,16 +4,12 @@
 */
 
 import * as z from "zod";
-import { ExposeProtocolSchema } from "./expose-protocol-schema.js";
 
 /**
  * @description Container port configuration.
  */
 export const ContainerPortSchema = z.object({
-    get "expose"(){
-                return z.union([ExposeProtocolSchema, z.null()]).optional()
-              },
-"port": z.int().min(0).describe("Port number")
+    "port": z.int().min(0).describe("Port number")
     }).describe("Container port configuration.")
 
 export type ContainerPort = z.infer<typeof ContainerPortSchema>

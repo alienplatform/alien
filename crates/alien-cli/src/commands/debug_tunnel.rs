@@ -154,7 +154,9 @@ pub async fn spawn_push_tunnel(
                 Message::Close(_) => break,
                 _ => continue,
             };
-            let Ok(frame) = serde_json::from_str::<TunnelResponseFrame>(&text) else { continue };
+            let Ok(frame) = serde_json::from_str::<TunnelResponseFrame>(&text) else {
+                continue;
+            };
             let mut guard = pending_for_reader.lock().await;
             if let Some(tx) = guard.remove(&frame.request_id) {
                 let _ = tx.send(frame);
@@ -256,9 +258,7 @@ impl PushTunnelGuard {
             let _abort_clone1 = abort_clone1;
             std::future::pending::<()>().await
         });
-        let reader = tokio::spawn(async move {
-            std::future::pending::<()>().await
-        });
+        let reader = tokio::spawn(async move { std::future::pending::<()>().await });
         let server = tokio::spawn(async move {
             let _abort_handles = abort_handles;
             std::future::pending::<()>().await
@@ -323,10 +323,7 @@ pub async fn spawn_pull_aws_loopback(
             })
             .unwrap_or_else(|| "sts.us-east-1.amazonaws.com".to_string());
 
-        let path_and_query = uri
-            .path_and_query()
-            .map(|p| p.as_str())
-            .unwrap_or("/");
+        let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
         let target_url = format!("https://{intended_host}{path_and_query}");
 
         // Forward to the manager. The manager's cloud-aws handler reads
@@ -348,9 +345,12 @@ pub async fn spawn_pull_aws_loopback(
 
         let resp = match req_builder.send().await {
             Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("manager proxy: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("manager proxy: {e}")).into_response()
+            }
         };
-        let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let status =
+            StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
         let resp_headers = resp.headers().clone();
         let body = match resp.bytes().await {
             Ok(b) => b,
@@ -366,8 +366,9 @@ pub async fn spawn_pull_aws_loopback(
                 h.insert(n.clone(), v.clone());
             }
         }
-        out.body(axum::body::Body::from(body))
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "build response").into_response())
+        out.body(axum::body::Body::from(body)).unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "build response").into_response()
+        })
     }
 
     let state = PullAwsState {
@@ -387,13 +388,14 @@ pub async fn spawn_pull_aws_loopback(
             message: "Failed to bind AWS loopback".to_string(),
             url: None,
         })?;
-    let local_addr = listener
-        .local_addr()
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to read AWS loopback address".to_string(),
-            url: None,
-        })?;
+    let local_addr =
+        listener
+            .local_addr()
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to read AWS loopback address".to_string(),
+                url: None,
+            })?;
     let endpoint_url = format!("http://{}", local_addr);
 
     let server_handle = tokio::spawn(async move {
@@ -505,9 +507,8 @@ pub fn build_gcp_isolation_env(
     // request so this value is never used to mint a token. Use the IETF
     // reserved `example.invalid` TLD (RFC 2606) so it can never collide with
     // a real address.
-    let mut config_default = String::from(
-        "[core]\naccount = unused@example.invalid\ndisable_usage_reporting = true\n",
-    );
+    let mut config_default =
+        String::from("[core]\naccount = unused@example.invalid\ndisable_usage_reporting = true\n");
     if let Some(project) = project_id {
         config_default.push_str(&format!("project = {project}\n"));
     }
@@ -566,7 +567,10 @@ pub fn build_gcp_isolation_env(
 /// bound to `googleapis.com` and gcloud refuses cross-universe mismatches.
 fn build_gcp_loopback_env(endpoint_url: &str) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    env.insert("GOOGLE_CLOUD_API_ENDPOINT".to_string(), endpoint_url.to_string());
+    env.insert(
+        "GOOGLE_CLOUD_API_ENDPOINT".to_string(),
+        endpoint_url.to_string(),
+    );
     let trimmed = endpoint_url.trim_end_matches('/');
     for svc in GCP_GCLOUD_SERVICES {
         env.insert(
@@ -588,7 +592,8 @@ pub async fn spawn_pull_azure_loopback(
     client_token: &str,
 ) -> Result<(BTreeMap<String, String>, PushTunnelGuard)> {
     let (endpoint_url, guard) =
-        spawn_generic_cloud_loopback(azure_proxy_base, client_token, "management.azure.com").await?;
+        spawn_generic_cloud_loopback(azure_proxy_base, client_token, "management.azure.com")
+            .await?;
     let mut env = BTreeMap::new();
     env.insert("AZURE_RESOURCE_MANAGER_ENDPOINT".to_string(), endpoint_url);
     Ok((env, guard))
@@ -646,7 +651,10 @@ async fn spawn_generic_cloud_loopback(
                 },
             )
         } else {
-            (state.default_host.to_string(), raw_path_and_query.to_string())
+            (
+                state.default_host.to_string(),
+                raw_path_and_query.to_string(),
+            )
         };
         let target_url = format!("https://{host}{path_and_query}");
 
@@ -670,7 +678,8 @@ async fn spawn_generic_cloud_loopback(
                 return (StatusCode::BAD_GATEWAY, format!("manager proxy: {e}")).into_response()
             }
         };
-        let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let status =
+            StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
         let resp_headers = resp.headers().clone();
         let body = match resp.bytes().await {
             Ok(b) => b,
@@ -708,13 +717,14 @@ async fn spawn_generic_cloud_loopback(
             message: "Failed to bind cloud loopback".to_string(),
             url: None,
         })?;
-    let local_addr = listener
-        .local_addr()
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to read cloud loopback address".to_string(),
-            url: None,
-        })?;
+    let local_addr =
+        listener
+            .local_addr()
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to read cloud loopback address".to_string(),
+                url: None,
+            })?;
     let endpoint_url = format!("http://{}", local_addr);
 
     let server_handle = tokio::spawn(async move {
@@ -818,10 +828,8 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
             // gcloud is configured via CLOUDSDK_API_ENDPOINT_OVERRIDES_* to
             // hit `<loopback>/<service>/...`. Strip the prefix and route to
             // `<service>.googleapis.com`.
-            let (service, rest) = split_service_from_path(&path_and_query).unwrap_or((
-                "compute",
-                path_and_query.clone(),
-            ));
+            let (service, rest) = split_service_from_path(&path_and_query)
+                .unwrap_or(("compute", path_and_query.clone()));
             format!("https://{service}.googleapis.com{rest}")
         }
         "azure" => {
@@ -851,7 +859,11 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
     };
 
     let (tx, rx) = oneshot::channel();
-    state.pending.lock().await.insert(frame.request_id.clone(), tx);
+    state
+        .pending
+        .lock()
+        .await
+        .insert(frame.request_id.clone(), tx);
 
     if state.outbound.send(frame.clone()).await.is_err() {
         state.pending.lock().await.remove(&frame.request_id);
@@ -863,7 +875,11 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
         Ok(Ok(f)) => f,
         _ => {
             state.pending.lock().await.remove(&frame.request_id);
-            return (StatusCode::GATEWAY_TIMEOUT, "push-tunnel response timed out").into_response();
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                "push-tunnel response timed out",
+            )
+                .into_response();
         }
     };
 
@@ -877,8 +893,12 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
     {
         let resp_headers = response.headers_mut().expect("response builder is valid");
         for (name, value) in response_frame.headers {
-            let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else { continue };
-            let Ok(value) = HeaderValue::from_str(&value) else { continue };
+            let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+                continue;
+            };
+            let Ok(value) = HeaderValue::from_str(&value) else {
+                continue;
+            };
             if matches!(name.as_str(), "connection" | "transfer-encoding") {
                 continue;
             }
@@ -888,7 +908,11 @@ async fn handle_loopback_request(State(state): State<ProxyState>, req: Request) 
     response
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to build response").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to build response",
+            )
+                .into_response()
         })
 }
 
@@ -955,7 +979,9 @@ fn http_to_ws_url(url: &str) -> std::result::Result<String, String> {
     } else if url.starts_with("wss://") || url.starts_with("ws://") {
         Ok(url.to_string())
     } else {
-        Err(format!("URL '{url}' must start with http(s):// or ws(s)://"))
+        Err(format!(
+            "URL '{url}' must start with http(s):// or ws(s)://"
+        ))
     }
 }
 

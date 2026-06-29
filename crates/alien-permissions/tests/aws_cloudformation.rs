@@ -198,8 +198,8 @@ fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
         Some(&json!("setup"))
     );
     assert_eq!(
-        string_equals.get("aws:ResourceTag/resource"),
-        Some(&json!("compute"))
+        string_equals.get("aws:ResourceTag/resource-type"),
+        Some(&json!("compute-cluster"))
     );
 }
 
@@ -238,7 +238,8 @@ fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security
                 .and_then(|condition| condition.get("StringEquals"))
                 .is_some_and(|string_equals| {
                     string_equals.get("aws:ResourceTag/managed-by") == Some(&json!("setup"))
-                        && string_equals.get("aws:ResourceTag/resource") == Some(&json!("compute"))
+                        && string_equals.get("aws:ResourceTag/resource-type")
+                            == Some(&json!("compute-cluster"))
                 })
         })
         .expect("container provision should manage ingress on setup compute security groups");
@@ -262,8 +263,8 @@ fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security
         Some(&json!("setup"))
     );
     assert_eq!(
-        string_equals.get("aws:ResourceTag/resource"),
-        Some(&json!("compute"))
+        string_equals.get("aws:ResourceTag/resource-type"),
+        Some(&json!("compute-cluster"))
     );
 }
 

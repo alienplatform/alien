@@ -7,6 +7,127 @@ import * as alien from "../index.js"
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
+  it("builds compute pools from portable requirements only", () => {
+    const compute = new alien.ComputeCluster("runtime")
+      .pool("nested", {
+        requirements: {
+          cpu: 4,
+          memory: "16Gi",
+          architecture: "x86_64",
+          nestedVirtualization: true,
+        },
+        scale: {
+          type: "fixed",
+          machines: { min: 2, max: 4, default: 2 },
+        },
+      })
+      .build()
+
+    expect(compute.config.capacityGroups).toEqual([
+      {
+        groupId: "nested",
+        profile: {
+          cpu: "4",
+          memoryBytes: 17179869184,
+          ephemeralStorageBytes: 21474836480,
+          gpu: undefined,
+        },
+        minSize: 2,
+        maxSize: 2,
+        nestedVirtualization: true,
+      },
+    ])
+  })
+
+  it("builds stack input definitions for deployment forms", () => {
+    const stackInputs = alien.inputs({
+      apiBaseUrl: alien.string({
+        providedBy: ["developer", "deployer"],
+        required: true,
+        label: "API base URL",
+        description: "Public URL used by the runtime service.",
+        placeholder: "https://api.example.com",
+        format: "url",
+        env: "API_BASE_URL",
+      }),
+      accessKey: alien.secret({
+        providedBy: "deployer",
+        required: true,
+        label: "Access key",
+        description: "Secret token used by the runtime service.",
+        minLength: 1,
+        env: {
+          name: "ACCESS_KEY",
+          targetResources: ["my-test-worker"],
+          type: "secret",
+        },
+      }),
+      deploymentTier: alien.enum(["starter", "enterprise"], {
+        providedBy: "developer",
+        required: false,
+        label: "Deployment tier",
+        description: "Controls default service sizing.",
+        default: "starter",
+      }),
+    })
+
+    const worker = new alien.Worker("my-test-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("execution")
+      .build()
+
+    const stack = new alien.Stack("my-test-stack").inputs(stackInputs).add(worker, "live").build()
+
+    expect(stack.inputs).toHaveLength(3)
+    expect(stack.inputs.map(input => input.id)).toEqual([
+      "apiBaseUrl",
+      "accessKey",
+      "deploymentTier",
+    ])
+    expect(stack.inputs.find(input => input.id === "apiBaseUrl")).toMatchObject({
+      kind: "string",
+      providedBy: ["developer", "deployer"],
+      required: true,
+      validation: { format: "url" },
+      env: [{ name: "API_BASE_URL" }],
+    })
+    expect(stack.inputs.find(input => input.id === "accessKey")).toMatchObject({
+      kind: "secret",
+      providedBy: ["deployer"],
+      env: [
+        {
+          name: "ACCESS_KEY",
+          targetResources: ["my-test-worker"],
+          type: "secret",
+        },
+      ],
+    })
+    expect(stack.inputs.find(input => input.id === "deploymentTier")).toMatchObject({
+      kind: "enum",
+      default: {
+        type: "string",
+        value: "starter",
+      },
+      validation: {
+        values: ["starter", "enterprise"],
+      },
+    })
+  })
+
+  it("rejects non-portable stack input regex patterns", () => {
+    expect(() =>
+      alien.inputs({
+        apiBaseUrl: alien.string({
+          providedBy: "deployer",
+          required: true,
+          label: "API base URL",
+          description: "Public URL used by the runtime service.",
+          pattern: "(?=https://).*",
+        }),
+      }),
+    ).toThrow(/not portable/)
+  })
+
   it("builds a stateful container with persistent storage options", () => {
     const postgres = new alien.Container("postgres")
       .code({ type: "image", image: "postgres:16-alpine" })
@@ -26,6 +147,68 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("builds container and daemon wildcard public endpoint options", () => {
+    const container = new alien.Container("router")
+      .code({ type: "image", image: "nginx:latest" })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution")
+      .publicEndpoint("api", 8080, {
+        protocol: "http",
+        hostLabel: "edge",
+        wildcardSubdomains: true,
+      })
+      .build()
+
+    expect(container.config.ports).toEqual([
+      {
+        port: 8080,
+      },
+    ])
+    expect(container.config.publicEndpoints).toEqual([
+      {
+        name: "api",
+        port: 8080,
+        protocol: "http",
+        hostLabel: "edge",
+        wildcardSubdomains: true,
+      },
+    ])
+
+    const daemon = new alien.Daemon("gateway")
+      .code({ type: "image", image: "registry.example.com/gateway:latest" })
+      .cluster("compute")
+      .permissions("execution")
+      .publicEndpoint("api", 8080, {
+        protocol: "http",
+        hostLabel: "public",
+        wildcardSubdomains: true,
+      })
+      .healthCheck({
+        path: "/health",
+        method: "GET",
+        timeoutSeconds: 1,
+        failureThreshold: 3,
+      })
+      .build()
+
+    expect(daemon.config.publicEndpoints).toEqual([
+      {
+        name: "api",
+        port: 8080,
+        protocol: "http",
+        hostLabel: "public",
+        wildcardSubdomains: true,
+      },
+    ])
+    expect(daemon.config.healthCheck).toEqual({
+      path: "/health",
+      method: "GET",
+      timeoutSeconds: 1,
+      failureThreshold: 3,
+    })
+  })
+
   it("builds and validates a complex stack with permissions", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
@@ -36,7 +219,7 @@ describe("Stack builder validation", () => {
       .memoryMb(512)
       .timeoutSeconds(30)
       .permissions("execution")
-      .ingress("public")
+      .publicEndpoint("api")
       .environment({
         RUST_LOG: "info,alien_runtime_test_server=debug,alien_runtime=debug",
       })
@@ -140,7 +323,6 @@ describe("Stack builder validation", () => {
       })
       .memoryMb(256)
       .timeoutSeconds(15)
-      .ingress("private")
       .permissions("execution")
       .build()
 

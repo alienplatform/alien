@@ -55,6 +55,16 @@ async fn collect_aws_env_info(client_config: &ClientConfig) -> Result<Environmen
         })
     })?;
 
+    // `aws_config.account_id` is already resolved at credential-load time
+    // (`infer_account_id`): from AWS_ACCOUNT_ID env, AWS_ROLE_ARN, web identity,
+    // or — only as last resort — STS GetCallerIdentity. Trust it.
+    if !aws_config.account_id.is_empty() {
+        return Ok(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: aws_config.account_id.clone(),
+            region: aws_config.region.clone(),
+        }));
+    }
+
     let sts_client = StsClient::new(reqwest::Client::new(), aws_config.clone());
     let identity = sts_client.get_caller_identity().await.context(
         ErrorData::EnvironmentInfoCollectionFailed {

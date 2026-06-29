@@ -477,6 +477,8 @@ fn wildcard_action_allowed(
     action_is_forced_wildcard_read(action)
         || action_is_documented_cross_account_exception(action)
         || action_is_documented_lambda_vpc_eni_exception(permission_set_id, action)
+        || (action_requires_service_name_condition(action)
+            && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
             && has_condition_key(binding, "aws:RequestTag/${stackTag}"))
 }
@@ -513,6 +515,10 @@ fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action
             | "ec2:AssignPrivateIpAddresses"
             | "ec2:UnassignPrivateIpAddresses"
     )
+}
+
+fn action_requires_service_name_condition(action: &str) -> bool {
+    matches!(action, "iam:CreateServiceLinkedRole")
 }
 
 fn action_requires_tag_condition(action: &str) -> bool {

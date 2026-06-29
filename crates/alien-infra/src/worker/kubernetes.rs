@@ -234,7 +234,7 @@ impl KubernetesWorkerController {
                 deployment_name,
                 namespace,
                 labels,
-                &config.ingress,
+                !config.public_endpoints.is_empty(),
                 config
                     .readiness_probe
                     .as_ref()
@@ -322,7 +322,7 @@ impl KubernetesWorkerController {
                     deployment_name,
                     namespace,
                     labels,
-                    &config.ingress,
+                    !config.public_endpoints.is_empty(),
                     config
                         .readiness_probe
                         .as_ref()
@@ -546,7 +546,7 @@ impl KubernetesWorkerController {
                 deployment_name,
                 namespace,
                 labels,
-                &config.ingress,
+                !config.public_endpoints.is_empty(),
                 config
                     .readiness_probe
                     .as_ref()
@@ -721,9 +721,25 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: deployment_name.clone(),
-                url: self.public_endpoint.effective_public_url(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
-                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
+                public_endpoints: self
+                    .public_endpoint
+                    .effective_public_url()
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            alien_core::PublicEndpointOutput {
+                                host: alien_core::public_url_host(&url).unwrap_or_default(),
+                                url,
+                                wildcard_host: None,
+                                load_balancer_endpoint: self
+                                    .public_endpoint
+                                    .load_balancer_endpoint
+                                    .clone(),
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
                 commands_push_target: None, // Kubernetes uses polling
             }))
         } else {
@@ -792,7 +808,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("https://worker.example.test")
         );
     }
@@ -822,7 +841,10 @@ mod output_tests {
             .expect("worker outputs");
 
         assert_eq!(
-            worker_outputs.url.as_deref(),
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("http://k8s-worker.example.elb.amazonaws.com")
         );
     }

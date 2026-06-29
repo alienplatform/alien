@@ -16,8 +16,8 @@ let value: ProjectListItemResponseCli = {
 
 ## Fields
 
-| Field                                                         | Type                                                          | Required                                                      | Description                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| `displayName`                                                 | *string*                                                      | :heavy_check_mark:                                            | Human-friendly display name for help banners and about text   |
-| `name`                                                        | *string*                                                      | :heavy_check_mark:                                            | Binary name displayed in help and usage (e.g., "acme-deploy") |
-| `enabled`                                                     | *boolean*                                                     | :heavy_check_mark:                                            | Whether CLI package generation is enabled                     |
+| Field                                                       | Type                                                        | Required                                                    | Description                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `displayName`                                               | *string*                                                    | :heavy_check_mark:                                          | Human-friendly display name for help banners and about text |
+| `name`                                                      | *string*                                                    | :heavy_check_mark:                                          | Binary name displayed in help and usage (e.g., "acmectl")   |
+| `enabled`                                                   | *boolean*                                                   | :heavy_check_mark:                                          | Whether CLI package generation is enabled                   |

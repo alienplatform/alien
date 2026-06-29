@@ -46,7 +46,7 @@ export type CreateProjectCliRequest = {
    */
   displayName: string;
   /**
-   * Binary name displayed in help and usage (e.g., "acme-deploy")
+   * Binary name displayed in help and usage (e.g., "acmectl")
    */
   name: string;
   /**
@@ -166,7 +166,7 @@ export type CreateProjectRequestBody = {
 
 export type CreateProjectRequest = {
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   requestBody?: CreateProjectRequestBody | undefined;
@@ -246,7 +246,7 @@ export type CreateProjectCliResponse = {
    */
   displayName: string;
   /**
-   * Binary name displayed in help and usage (e.g., "acme-deploy")
+   * Binary name displayed in help and usage (e.g., "acmectl")
    */
   name: string;
   /**

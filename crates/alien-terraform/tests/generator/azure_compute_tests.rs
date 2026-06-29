@@ -6,8 +6,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Ingress,
-    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, ResourceLifecycle,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -88,7 +88,11 @@ fn azure_function_public_ingress_enables_external_ingress() {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
-                .ingress(Ingress::Public)
+                .public_endpoint(alien_core::WorkerPublicEndpoint {
+                    name: "api".to_string(),
+                    host_label: None,
+                    wildcard_subdomains: false,
+                })
                 .timeout_seconds(60)
                 .memory_mb(512)
                 .build(),

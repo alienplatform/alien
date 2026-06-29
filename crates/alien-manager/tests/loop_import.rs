@@ -140,6 +140,7 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await
@@ -195,6 +196,7 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await
@@ -256,6 +258,7 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
+                input_values: Default::default(),
             },
         )
         .await

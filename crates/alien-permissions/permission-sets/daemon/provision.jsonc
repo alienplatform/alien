@@ -1,5 +1,435 @@
 {
   "id": "daemon/provision",
-  "description": "Allows provisioning Daemon resources on Local and Kubernetes platforms",
-  "platforms": {}
+  "description": "Allows creating daemon infrastructure (cloud load balancers, public endpoint security groups, and certificates). Derived from cloud daemon controller API calls.",
+  "platforms": {
+    "aws": [
+      {
+        "label": "create-public-load-balancer",
+        "description": "Create ALB resources for public daemon endpoints.",
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:CreateLoadBalancer",
+            "elasticloadbalancing:CreateTargetGroup",
+            "elasticloadbalancing:CreateListener"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "tag-public-load-balancer-on-create",
+        "description": "Allow tags supplied during daemon ALB resource creation. AWS authorizes tag-on-create through AddTags plus elasticloadbalancing:CreateAction.",
+        "grant": {
+          "actions": ["elasticloadbalancing:AddTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringLike": {
+                "elasticloadbalancing:CreateAction": "Create*"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-public-load-balancer",
+        "description": "Update and delete ALB resources owned by public daemon endpoints.",
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:ModifyListener",
+            "elasticloadbalancing:DeleteLoadBalancer",
+            "elasticloadbalancing:DeleteTargetGroup",
+            "elasticloadbalancing:DeleteListener"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "inspect-public-load-balancer",
+        "description": "Inspect ALB resources for daemon endpoint status and cleanup.",
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:DescribeLoadBalancers",
+            "elasticloadbalancing:DescribeTargetGroups",
+            "elasticloadbalancing:DescribeTargetHealth",
+            "elasticloadbalancing:DescribeListeners"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "create-public-load-balancer-security-group",
+        "description": "Create the runtime-owned ALB security group for public daemon endpoints.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          }
+        }
+      },
+      {
+        "label": "tag-public-load-balancer-security-group",
+        "description": "Apply runtime boundary tags while creating the daemon ALB security group.",
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-public-load-balancer-security-group",
+        "description": "Open HTTPS ingress on, revoke rules from, and delete the runtime-owned ALB security group.",
+        "grant": {
+          "actions": [
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress",
+            "ec2:DeleteSecurityGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-compute-cluster-ingress",
+        "description": "Add and remove the ALB-to-managed-compute host-port rule on the setup-owned ComputeCluster security group.",
+        "grant": {
+          "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/resource-type": "compute-cluster",
+                "aws:ResourceTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/resource-type": "compute-cluster",
+                "aws:ResourceTag/${managedByTag}": "setup"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "inspect-network-security-groups",
+        "description": "Read VPC and security group metadata needed to attach daemon public endpoints.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "create-elb-service-linked-role",
+        "description": "Allow AWS to create the Elastic Load Balancing service-linked role required the first time an account creates an ELB resource.",
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "import-tls-certificates",
+        "description": "Import TLS certificates for daemon-owned HTTPS endpoints.",
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-tls-certificates",
+        "description": "Inspect and delete TLS certificates owned by daemon public endpoints.",
+        "grant": {
+          "actions": [
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "manage-public-https-load-balancer",
+        "description": "Create, update, inspect, and delete Google Cloud HTTPS load-balancer resources used by daemon public endpoints.",
+        "grant": {
+          "permissions": [
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
+            "compute.healthChecks.create",
+            "compute.healthChecks.delete",
+            "compute.healthChecks.get",
+            "compute.healthChecks.update",
+            "compute.healthChecks.useReadOnly",
+            "compute.networkEndpointGroups.create",
+            "compute.networkEndpointGroups.delete",
+            "compute.networkEndpointGroups.get",
+            "compute.networkEndpointGroups.use",
+            "compute.backendServices.create",
+            "compute.backendServices.delete",
+            "compute.backendServices.get",
+            "compute.backendServices.update",
+            "compute.backendServices.use",
+            "compute.urlMaps.create",
+            "compute.urlMaps.delete",
+            "compute.urlMaps.get",
+            "compute.urlMaps.use",
+            "compute.targetHttpsProxies.create",
+            "compute.targetHttpsProxies.delete",
+            "compute.targetHttpsProxies.get",
+            "compute.targetHttpsProxies.setSslCertificates",
+            "compute.targetHttpsProxies.use",
+            "compute.globalAddresses.create",
+            "compute.globalAddresses.delete",
+            "compute.globalAddresses.get",
+            "compute.globalAddresses.use",
+            "compute.globalForwardingRules.create",
+            "compute.globalForwardingRules.delete",
+            "compute.globalForwardingRules.get",
+            "compute.zones.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "manage-public-application-gateway",
+        "description": "Create, update, inspect, and delete Azure public IPs, identities, role assignments, and Application Gateways for daemon public endpoints.",
+        "grant": {
+          "actions": [
+            "Microsoft.Network/applicationGateways/write",
+            "Microsoft.Network/applicationGateways/read",
+            "Microsoft.Network/applicationGateways/delete",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete",
+            "Microsoft.Network/publicIPAddresses/write",
+            "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/publicIPAddresses/delete"
+          ],
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read",
+            "Microsoft.KeyVault/vaults/certificates/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
 }

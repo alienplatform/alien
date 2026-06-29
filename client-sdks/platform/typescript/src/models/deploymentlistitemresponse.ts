@@ -399,7 +399,7 @@ export type DeploymentListItemResponse = {
   /**
    * ID of the manager
    */
-  managerId?: string | null | undefined;
+  managerId: string;
   /**
    * Unique identifier for the workspace.
    */
@@ -680,7 +680,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   retryRequested: z.boolean(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string(),
   workspaceId: z.string(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),

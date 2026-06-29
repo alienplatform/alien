@@ -138,6 +138,7 @@ mod tests {
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),
             supported_platforms: None,
+            inputs: vec![],
         }
     }
 

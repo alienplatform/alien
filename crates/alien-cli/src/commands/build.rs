@@ -74,10 +74,6 @@ pub struct BuildArgs {
     #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
     pub platforms: Vec<String>,
 
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
-
     /// Target OS/architecture combinations (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub targets: Option<Vec<String>>,
@@ -292,17 +288,6 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         let platform_str = platform_str.to_ascii_lowercase();
 
         if let Ok(platform) = Platform::from_str(&platform_str) {
-            // Check for experimental platforms
-            if platform.is_experimental() && !args.experimental {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "platform".to_string(),
-                    message: format!(
-                        "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                        platform_str
-                    ),
-                }));
-            }
-
             // Validate against stack's supported platforms
             if !stack.supports_platform(&platform) {
                 let supported_list: Vec<&str> = stack

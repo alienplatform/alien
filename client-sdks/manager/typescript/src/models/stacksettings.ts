@@ -6,6 +6,12 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  ComputeSettings,
+  ComputeSettings$inboundSchema,
+  ComputeSettings$Outbound,
+  ComputeSettings$outboundSchema,
+} from "./computesettings.js";
+import {
   DeploymentModel,
   DeploymentModel$inboundSchema,
   DeploymentModel$outboundSchema,
@@ -68,6 +74,7 @@ export type ExternalBindings = {};
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type StackSettings = {
+  compute?: ComputeSettings | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -132,6 +139,7 @@ export function externalBindingsFromJSON(
 /** @internal */
 export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
   .object({
+    compute: z.nullable(ComputeSettings$inboundSchema).optional(),
     deploymentModel: DeploymentModel$inboundSchema.optional(),
     domains: z.nullable(DomainSettings$inboundSchema).optional(),
     externalBindings: z.nullable(z.lazy(() => ExternalBindings$inboundSchema))
@@ -144,6 +152,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
   });
 /** @internal */
 export type StackSettings$Outbound = {
+  compute?: ComputeSettings$Outbound | null | undefined;
   deploymentModel?: string | undefined;
   domains?: DomainSettings$Outbound | null | undefined;
   externalBindings?: ExternalBindings$Outbound | null | undefined;
@@ -159,6 +168,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   StackSettings$Outbound,
   StackSettings
 > = z.object({
+  compute: z.nullable(ComputeSettings$outboundSchema).optional(),
   deploymentModel: DeploymentModel$outboundSchema.optional(),
   domains: z.nullable(DomainSettings$outboundSchema).optional(),
   externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))

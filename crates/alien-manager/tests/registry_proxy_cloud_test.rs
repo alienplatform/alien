@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    DeploymentModel, DeploymentState, DeploymentStatus, Ingress, Platform, ReadinessProbe,
-    ReleaseInfo, Stack, StackSettings, Worker, WorkerCode,
+    DeploymentModel, DeploymentState, DeploymentStatus, Platform, ReadinessProbe, ReleaseInfo,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
@@ -93,7 +93,11 @@ fn test_stack(function_id: &str, image_uri: &str) -> Stack {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())
-        .ingress(Ingress::Public)
+        .public_endpoint(alien_core::WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: None,
+            wildcard_subdomains: false,
+        })
         .memory_mb(256)
         .timeout_seconds(30)
         .commands_enabled(false)
@@ -333,6 +337,7 @@ impl CloudProxyTest {
                     },
                     stack_state: None,
                     environment_variables: None,
+                    input_values: Default::default(),
                     deployment_token: Some(deploy_raw.clone()),
                 },
             )

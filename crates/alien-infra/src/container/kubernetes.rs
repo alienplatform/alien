@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
@@ -17,8 +17,9 @@ use crate::kubernetes_workload_heartbeat::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
-    ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
+    kubernetes_resource_name, kubernetes_service_account_name, public_url_host, Container,
+    ContainerCode, ContainerOutputs, ContainerStatus, PublicEndpointOutput, ResourceOutputs,
+    ResourceStatus, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -64,7 +65,7 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
 }
 
 fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
-    if port.expose == Some(alien_core::ExposeProtocol::Http) {
+    if false {
         "http".to_string()
     } else {
         format!("tcp-{}", port.port)
@@ -411,7 +412,7 @@ impl KubernetesContainerController {
                 workload_name,
                 namespace,
                 labels,
-                &config.ports,
+                &config.public_endpoints,
                 config
                     .health_check
                     .as_ref()
@@ -535,7 +536,7 @@ impl KubernetesContainerController {
                     workload_name,
                     namespace,
                     labels,
-                    &config.ports,
+                    &config.public_endpoints,
                     config
                         .health_check
                         .as_ref()
@@ -829,7 +830,7 @@ impl KubernetesContainerController {
                 workload_name,
                 namespace,
                 labels,
-                &config.ports,
+                &config.public_endpoints,
                 config
                     .health_check
                     .as_ref()
@@ -1033,9 +1034,25 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: self.public_endpoint.effective_public_url(),
                 replicas: Vec::new(), // Replica details tracked separately
-                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
+                public_endpoints: self
+                    .public_endpoint
+                    .effective_public_url()
+                    .map(|url| {
+                        HashMap::from([(
+                            "default".to_string(),
+                            PublicEndpointOutput {
+                                host: public_url_host(&url).unwrap_or_default(),
+                                url,
+                                wildcard_host: None,
+                                load_balancer_endpoint: self
+                                    .public_endpoint
+                                    .load_balancer_endpoint
+                                    .clone(),
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
             }))
         } else {
             None
@@ -1107,7 +1124,10 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
-            container_outputs.url.as_deref(),
+            container_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("https://container.example.test")
         );
     }
@@ -1139,7 +1159,10 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
-            container_outputs.url.as_deref(),
+            container_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
             Some("http://k8s-container.example.elb.amazonaws.com")
         );
     }

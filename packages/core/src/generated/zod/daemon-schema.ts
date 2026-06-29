@@ -5,11 +5,14 @@
 
 import * as z from "zod";
 import { DaemonCodeSchema } from "./daemon-code-schema.js";
+import { DaemonRuntimeSchema } from "./daemon-runtime-schema.js";
+import { HealthCheckSchema } from "./health-check-schema.js";
+import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
 
 export const DaemonSchema = z.object({
-    "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for Horizon-backed\ncloud platforms. Kubernetes and Local runtimes ignore this field.").nullish(),
+    "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
 get "code"(){
                 return DaemonCodeSchema
               },
@@ -21,6 +24,9 @@ get "cpu"(){
 "environment": z.optional(z.object({
     
     }).catchall(z.string())),
+get "healthCheck"(){
+                return z.union([HealthCheckSchema, z.null()]).optional()
+              },
 "id": z.string(),
 get "links"(){
                 return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility."))
@@ -29,7 +35,13 @@ get "memory"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()
               },
 "permissions": z.string(),
-"pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish()
+"pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
+get "publicEndpoints"(){
+                return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.")
+              },
+get "runtime"(){
+                return z.union([DaemonRuntimeSchema, z.null()]).optional()
+              }
     })
 
 export type Daemon = z.infer<typeof DaemonSchema>

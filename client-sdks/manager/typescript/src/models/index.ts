@@ -38,6 +38,8 @@ export * from "./computecapacitygroupstatus.js";
 export * from "./computecapacityrecommendation.js";
 export * from "./computeclusterheartbeatdata.js";
 export * from "./computeclusterheartbeatstatus.js";
+export * from "./computepoolselection.js";
+export * from "./computesettings.js";
 export * from "./containerheartbeatdata.js";
 export * from "./createcommandrequest.js";
 export * from "./createcommandresponse.js";

@@ -122,19 +122,37 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         return Ok(());
     }
 
-    // Request deletion
-    manager_client
-        .delete_deployment()
+    let pre_delete_deployment = manager_client
+        .get_deployment()
         .id(&tracked_deployment.deployment_id)
-        .body(alien_manager_api::types::DeleteDeploymentRequest {
-            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-        })
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Failed to request deployment deletion".to_string(),
-        })?;
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    if matches!(
+        pre_delete_deployment.status.as_str(),
+        "teardown-required" | "teardown-failed"
+    ) {
+        steps.activate(2, Some("Setup teardown required".to_string()));
+    } else {
+        // Request deletion
+        manager_client
+            .delete_deployment()
+            .id(&tracked_deployment.deployment_id)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to request deployment deletion".to_string(),
+            })?;
+    }
 
     // Run the deletion step loop
     let client_config =

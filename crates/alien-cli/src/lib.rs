@@ -29,9 +29,8 @@ use crate::commands::{
     fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
     prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
     vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
-    DebugArgs,
-    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, ReleaseArgs,
-    ReleasesArgs, RenderArgs, WhoamiArgs,
+    DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs,
+    ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -94,11 +93,11 @@ impl Cli {
             Some(Commands::Onboard(args)) => args.json,
             Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
-            Some(Commands::Debug(args)) => args.json,
+            Some(Commands::Debug(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
-                Some(DevSubcommand::Debug(args)) => args.json,
+                Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
                 _ => false,
             },
             #[cfg(feature = "platform")]

@@ -16,41 +16,70 @@ export type PrepareDeploymentStackPlatform = ClosedEnum<
   typeof PrepareDeploymentStackPlatform
 >;
 
+export type PrepareDeploymentStackPoolsAutoscale = {
+  mode: "autoscale";
+  min: number;
+  max: number;
+  machine?: string | undefined;
+};
+
+export type PrepareDeploymentStackPoolsFixed = {
+  mode: "fixed";
+  machines: number;
+  machine?: string | undefined;
+};
+
+export type PrepareDeploymentStackPoolsUnion =
+  | PrepareDeploymentStackPoolsFixed
+  | PrepareDeploymentStackPoolsAutoscale;
+
+export type PrepareDeploymentStackCompute = {
+  pools?: {
+    [k: string]:
+      | PrepareDeploymentStackPoolsFixed
+      | PrepareDeploymentStackPoolsAutoscale;
+  } | undefined;
+};
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
-export const DeploymentModel = {
+export const PrepareDeploymentStackDeploymentModel = {
   Push: "push",
   Pull: "pull",
 } as const;
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
-export type DeploymentModel = ClosedEnum<typeof DeploymentModel>;
+export type PrepareDeploymentStackDeploymentModel = ClosedEnum<
+  typeof PrepareDeploymentStackDeploymentModel
+>;
 
 export type PrepareDeploymentStackAws = {
   certificateArn: string;
 };
 
-export type Aws = PrepareDeploymentStackAws | any;
+export type PrepareDeploymentStackAwsUnion = PrepareDeploymentStackAws | any;
 
 export type PrepareDeploymentStackAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type Azure = PrepareDeploymentStackAzure | any;
+export type PrepareDeploymentStackAzureUnion =
+  | PrepareDeploymentStackAzure
+  | any;
 
 export type PrepareDeploymentStackGcp = {
   certificateName: string;
 };
 
-export type Gcp = PrepareDeploymentStackGcp | any;
+export type PrepareDeploymentStackGcpUnion = PrepareDeploymentStackGcp | any;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
  */
-export type TlsSecretRef = {
+export type PrepareDeploymentStackTlsSecretRef = {
   /**
    * Secret namespace. Defaults to the release namespace when omitted.
    */
@@ -61,33 +90,35 @@ export type TlsSecretRef = {
   secretName: string;
 };
 
-export type DomainsKubernetes = {
+export type PrepareDeploymentStackDomainsKubernetes = {
   /**
    * Namespace-scoped Kubernetes TLS Secret reference.
    */
-  tlsSecretRef: TlsSecretRef;
+  tlsSecretRef: PrepareDeploymentStackTlsSecretRef;
 };
 
-export type DomainsKubernetesUnion = DomainsKubernetes | any;
+export type PrepareDeploymentStackDomainsKubernetesUnion =
+  | PrepareDeploymentStackDomainsKubernetes
+  | any;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
-export type DomainsCertificate = {
+export type PrepareDeploymentStackDomainsCertificate = {
   aws?: PrepareDeploymentStackAws | any | null | undefined;
   azure?: PrepareDeploymentStackAzure | any | null | undefined;
   gcp?: PrepareDeploymentStackGcp | any | null | undefined;
-  kubernetes?: DomainsKubernetes | any | null | undefined;
+  kubernetes?: PrepareDeploymentStackDomainsKubernetes | any | null | undefined;
 };
 
 /**
  * Custom domain configuration for a single resource.
  */
-export type CustomDomains = {
+export type PrepareDeploymentStackCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: DomainsCertificate;
+  certificate: PrepareDeploymentStackDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -102,14 +133,19 @@ export type CustomDomains = {
  * When `custom_domains` is set, the specified resources use customer-provided
  * domains and certificates. Otherwise, Alien auto-generates domains.
  */
-export type Domains = {
+export type PrepareDeploymentStackDomains = {
   /**
    * Custom domain configuration per resource ID.
    */
-  customDomains?: { [k: string]: CustomDomains } | null | undefined;
+  customDomains?:
+    | { [k: string]: PrepareDeploymentStackCustomDomains }
+    | null
+    | undefined;
 };
 
-export type DomainsUnion = Domains | any;
+export type PrepareDeploymentStackDomainsUnion =
+  | PrepareDeploymentStackDomains
+  | any;
 
 /**
  * External bindings for pre-existing infrastructure.
@@ -119,24 +155,26 @@ export type DomainsUnion = Domains | any;
  * Environment, etc.) instead of having Alien provision them.
  * Required for Kubernetes platform, optional for cloud platforms.
  */
-export type ExternalBindings = {};
+export type PrepareDeploymentStackExternalBindings = {};
 
 /**
  * How heartbeat health checks are handled.
  */
-export const Heartbeats = {
+export const PrepareDeploymentStackHeartbeats = {
   Off: "off",
   On: "on",
 } as const;
 /**
  * How heartbeat health checks are handled.
  */
-export type Heartbeats = ClosedEnum<typeof Heartbeats>;
+export type PrepareDeploymentStackHeartbeats = ClosedEnum<
+  typeof PrepareDeploymentStackHeartbeats
+>;
 
 /**
  * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
  */
-export type Cloud = {
+export type PrepareDeploymentStackCloud = {
   accountId?: string | null | undefined;
   clusterId?: string | null | undefined;
   clusterName?: string | null | undefined;
@@ -146,12 +184,14 @@ export type Cloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type CloudUnion = Cloud | any;
+export type PrepareDeploymentStackCloudUnion =
+  | PrepareDeploymentStackCloud
+  | any;
 
 /**
  * Ownership model for the Kubernetes cluster.
  */
-export const Ownership = {
+export const PrepareDeploymentStackOwnership = {
   Managed: "managed",
   Existing: "existing",
   External: "external",
@@ -159,13 +199,15 @@ export const Ownership = {
 /**
  * Ownership model for the Kubernetes cluster.
  */
-export type Ownership = ClosedEnum<typeof Ownership>;
+export type PrepareDeploymentStackOwnership = ClosedEnum<
+  typeof PrepareDeploymentStackOwnership
+>;
 
 /**
  * Kubernetes cluster setup settings.
  */
-export type Cluster = {
-  cloud?: Cloud | any | null | undefined;
+export type PrepareDeploymentStackCluster = {
+  cloud?: PrepareDeploymentStackCloud | any | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -173,16 +215,18 @@ export type Cluster = {
   /**
    * Ownership model for the Kubernetes cluster.
    */
-  ownership: Ownership;
+  ownership: PrepareDeploymentStackOwnership;
 };
 
-export type ClusterUnion = Cluster | any;
+export type PrepareDeploymentStackClusterUnion =
+  | PrepareDeploymentStackCluster
+  | any;
 
-export type CertificateNone2 = {
+export type PrepareDeploymentStackCertificateNone2 = {
   mode: "none";
 };
 
-export type CertificateManagedTLSSecret2 = {
+export type PrepareDeploymentStackCertificateManagedTLSSecret2 = {
   mode: "managedTlsSecret";
   /**
    * Secret name template. Runtime may substitute resource/deployment tokens.
@@ -190,7 +234,7 @@ export type CertificateManagedTLSSecret2 = {
   secretNameTemplate: string;
 };
 
-export type CertificateAwsAcmArn2 = {
+export type PrepareDeploymentStackCertificateAwsAcmArn2 = {
   /**
    * Existing ACM certificate ARN.
    */
@@ -198,7 +242,7 @@ export type CertificateAwsAcmArn2 = {
   mode: "awsAcmArn";
 };
 
-export type CertificateManagedAcmImport2 = {
+export type PrepareDeploymentStackCertificateManagedAcmImport2 = {
   mode: "managedAcmImport";
   /**
    * ACM region. Defaults to the deployment region when omitted.
@@ -213,7 +257,7 @@ export type CertificateManagedAcmImport2 = {
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
  */
-export type CertificateTLSSecretRef2 = {
+export type PrepareDeploymentStackCertificateTLSSecretRef2 = {
   /**
    * Secret namespace. Defaults to the release namespace when omitted.
    */
@@ -228,67 +272,76 @@ export type CertificateTLSSecretRef2 = {
 /**
  * Certificate publication or reference mode for Kubernetes public endpoints.
  */
-export type CertificateUnion2 =
-  | CertificateTLSSecretRef2
-  | CertificateManagedAcmImport2
-  | CertificateAwsAcmArn2
-  | CertificateManagedTLSSecret2
-  | CertificateNone2;
+export type PrepareDeploymentStackCertificateUnion2 =
+  | PrepareDeploymentStackCertificateTLSSecretRef2
+  | PrepareDeploymentStackCertificateManagedAcmImport2
+  | PrepareDeploymentStackCertificateAwsAcmArn2
+  | PrepareDeploymentStackCertificateManagedTLSSecret2
+  | PrepareDeploymentStackCertificateNone2;
 
-export const ModeCustom = {
+export const PrepareDeploymentStackModeCustom = {
   Custom: "custom",
 } as const;
-export type ModeCustom = ClosedEnum<typeof ModeCustom>;
-
-export const ProviderAzureApplicationGatewayForContainersEnum4 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ProviderAzureApplicationGatewayForContainersEnum4 = ClosedEnum<
-  typeof ProviderAzureApplicationGatewayForContainersEnum4
+export type PrepareDeploymentStackModeCustom = ClosedEnum<
+  typeof PrepareDeploymentStackModeCustom
 >;
 
-export type ProviderAzureApplicationGatewayForContainers4 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ProviderAzureApplicationGatewayForContainersEnum4;
-};
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4
+  >;
 
-export const ProviderGkeGatewayEnum4 = {
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4;
+  };
+
+export const PrepareDeploymentStackProviderGkeGatewayEnum4 = {
   GkeGateway: "gkeGateway",
 } as const;
-export type ProviderGkeGatewayEnum4 = ClosedEnum<
-  typeof ProviderGkeGatewayEnum4
+export type PrepareDeploymentStackProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderGkeGatewayEnum4
 >;
 
-export type ProviderGkeGateway4 = {
-  provider: ProviderGkeGatewayEnum4;
+export type PrepareDeploymentStackProviderGkeGateway4 = {
+  provider: PrepareDeploymentStackProviderGkeGatewayEnum4;
   /**
    * Optional static address name for the Gateway frontend.
    */
   staticAddressName?: string | null | undefined;
 };
 
-export const ProviderAwsAlbEnum4 = {
+export const PrepareDeploymentStackProviderAwsAlbEnum4 = {
   AwsAlb: "awsAlb",
 } as const;
-export type ProviderAwsAlbEnum4 = ClosedEnum<typeof ProviderAwsAlbEnum4>;
+export type PrepareDeploymentStackProviderAwsAlbEnum4 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderAwsAlbEnum4
+>;
 
-export type ProviderAwsAlb4 = {
+export type PrepareDeploymentStackProviderAwsAlb4 = {
   /**
    * Optional ALB IP address type, such as `dualstack`.
    */
   ipAddressType?: string | null | undefined;
-  provider: ProviderAwsAlbEnum4;
+  provider: PrepareDeploymentStackProviderAwsAlbEnum4;
   /**
    * Internet-facing or internal ALB scheme.
    */
@@ -303,16 +356,16 @@ export type ProviderAwsAlb4 = {
   targetType: string;
 };
 
-export type ProviderUnion4 =
-  | ProviderAwsAlb4
-  | ProviderAzureApplicationGatewayForContainers4
-  | ProviderGkeGateway4
+export type PrepareDeploymentStackProviderUnion4 =
+  | PrepareDeploymentStackProviderAwsAlb4
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4
+  | PrepareDeploymentStackProviderGkeGateway4
   | any;
 
 /**
  * Shared Gateway API route profile values.
  */
-export type RouteGateway2 = {
+export type PrepareDeploymentStackRouteGateway2 = {
   /**
    * Annotations applied to route objects.
    */
@@ -334,64 +387,71 @@ export type RouteGateway2 = {
    */
   listenerPort: number;
   provider?:
-    | ProviderAwsAlb4
-    | ProviderAzureApplicationGatewayForContainers4
-    | ProviderGkeGateway4
+    | PrepareDeploymentStackProviderAwsAlb4
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4
+    | PrepareDeploymentStackProviderGkeGateway4
     | any
     | null
     | undefined;
   routeApi: "gateway";
 };
 
-export const ProviderAzureApplicationGatewayForContainersEnum3 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ProviderAzureApplicationGatewayForContainersEnum3 = ClosedEnum<
-  typeof ProviderAzureApplicationGatewayForContainersEnum3
->;
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3
+  >;
 
-export type ProviderAzureApplicationGatewayForContainers3 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ProviderAzureApplicationGatewayForContainersEnum3;
-};
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3;
+  };
 
-export const ProviderGkeGatewayEnum3 = {
+export const PrepareDeploymentStackProviderGkeGatewayEnum3 = {
   GkeGateway: "gkeGateway",
 } as const;
-export type ProviderGkeGatewayEnum3 = ClosedEnum<
-  typeof ProviderGkeGatewayEnum3
+export type PrepareDeploymentStackProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderGkeGatewayEnum3
 >;
 
-export type ProviderGkeGateway3 = {
-  provider: ProviderGkeGatewayEnum3;
+export type PrepareDeploymentStackProviderGkeGateway3 = {
+  provider: PrepareDeploymentStackProviderGkeGatewayEnum3;
   /**
    * Optional static address name for the Gateway frontend.
    */
   staticAddressName?: string | null | undefined;
 };
 
-export const ProviderAwsAlbEnum3 = {
+export const PrepareDeploymentStackProviderAwsAlbEnum3 = {
   AwsAlb: "awsAlb",
 } as const;
-export type ProviderAwsAlbEnum3 = ClosedEnum<typeof ProviderAwsAlbEnum3>;
+export type PrepareDeploymentStackProviderAwsAlbEnum3 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderAwsAlbEnum3
+>;
 
-export type ProviderAwsAlb3 = {
+export type PrepareDeploymentStackProviderAwsAlb3 = {
   /**
    * Optional ALB IP address type, such as `dualstack`.
    */
   ipAddressType?: string | null | undefined;
-  provider: ProviderAwsAlbEnum3;
+  provider: PrepareDeploymentStackProviderAwsAlbEnum3;
   /**
    * Internet-facing or internal ALB scheme.
    */
@@ -406,16 +466,16 @@ export type ProviderAwsAlb3 = {
   targetType: string;
 };
 
-export type ProviderUnion3 =
-  | ProviderAwsAlb3
-  | ProviderAzureApplicationGatewayForContainers3
-  | ProviderGkeGateway3
+export type PrepareDeploymentStackProviderUnion3 =
+  | PrepareDeploymentStackProviderAwsAlb3
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3
+  | PrepareDeploymentStackProviderGkeGateway3
   | any;
 
 /**
  * Shared Ingress route profile values.
  */
-export type RouteIngress2 = {
+export type PrepareDeploymentStackRouteIngress2 = {
   /**
    * Annotations applied to route objects.
    */
@@ -433,9 +493,9 @@ export type RouteIngress2 = {
    */
   labels?: { [k: string]: string } | undefined;
   provider?:
-    | ProviderAwsAlb3
-    | ProviderAzureApplicationGatewayForContainers3
-    | ProviderGkeGateway3
+    | PrepareDeploymentStackProviderAwsAlb3
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3
+    | PrepareDeploymentStackProviderGkeGateway3
     | any
     | null
     | undefined;
@@ -445,34 +505,38 @@ export type RouteIngress2 = {
 /**
  * Kubernetes route API selected for public endpoints.
  */
-export type RouteUnion2 = RouteIngress2 | RouteGateway2;
+export type PrepareDeploymentStackRouteUnion2 =
+  | PrepareDeploymentStackRouteIngress2
+  | PrepareDeploymentStackRouteGateway2;
 
-export type ExposureCustom = {
+export type PrepareDeploymentStackExposureCustom = {
   /**
    * Certificate publication or reference mode for Kubernetes public endpoints.
    */
   certificate:
-    | CertificateTLSSecretRef2
-    | CertificateManagedAcmImport2
-    | CertificateAwsAcmArn2
-    | CertificateManagedTLSSecret2
-    | CertificateNone2;
+    | PrepareDeploymentStackCertificateTLSSecretRef2
+    | PrepareDeploymentStackCertificateManagedAcmImport2
+    | PrepareDeploymentStackCertificateAwsAcmArn2
+    | PrepareDeploymentStackCertificateManagedTLSSecret2
+    | PrepareDeploymentStackCertificateNone2;
   /**
    * Hostname routed by the Kubernetes public endpoint.
    */
   domain: string;
-  mode: ModeCustom;
+  mode: PrepareDeploymentStackModeCustom;
   /**
    * Kubernetes route API selected for public endpoints.
    */
-  route: RouteIngress2 | RouteGateway2;
+  route:
+    | PrepareDeploymentStackRouteIngress2
+    | PrepareDeploymentStackRouteGateway2;
 };
 
-export type CertificateNone1 = {
+export type PrepareDeploymentStackCertificateNone1 = {
   mode: "none";
 };
 
-export type CertificateManagedTLSSecret1 = {
+export type PrepareDeploymentStackCertificateManagedTLSSecret1 = {
   mode: "managedTlsSecret";
   /**
    * Secret name template. Runtime may substitute resource/deployment tokens.
@@ -480,7 +544,7 @@ export type CertificateManagedTLSSecret1 = {
   secretNameTemplate: string;
 };
 
-export type CertificateAwsAcmArn1 = {
+export type PrepareDeploymentStackCertificateAwsAcmArn1 = {
   /**
    * Existing ACM certificate ARN.
    */
@@ -488,7 +552,7 @@ export type CertificateAwsAcmArn1 = {
   mode: "awsAcmArn";
 };
 
-export type CertificateManagedAcmImport1 = {
+export type PrepareDeploymentStackCertificateManagedAcmImport1 = {
   mode: "managedAcmImport";
   /**
    * ACM region. Defaults to the deployment region when omitted.
@@ -503,7 +567,7 @@ export type CertificateManagedAcmImport1 = {
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
  */
-export type CertificateTLSSecretRef1 = {
+export type PrepareDeploymentStackCertificateTLSSecretRef1 = {
   /**
    * Secret namespace. Defaults to the release namespace when omitted.
    */
@@ -518,67 +582,76 @@ export type CertificateTLSSecretRef1 = {
 /**
  * Certificate publication or reference mode for Kubernetes public endpoints.
  */
-export type CertificateUnion1 =
-  | CertificateTLSSecretRef1
-  | CertificateManagedAcmImport1
-  | CertificateAwsAcmArn1
-  | CertificateManagedTLSSecret1
-  | CertificateNone1;
+export type PrepareDeploymentStackCertificateUnion1 =
+  | PrepareDeploymentStackCertificateTLSSecretRef1
+  | PrepareDeploymentStackCertificateManagedAcmImport1
+  | PrepareDeploymentStackCertificateAwsAcmArn1
+  | PrepareDeploymentStackCertificateManagedTLSSecret1
+  | PrepareDeploymentStackCertificateNone1;
 
-export const ModeGenerated = {
+export const PrepareDeploymentStackModeGenerated = {
   Generated: "generated",
 } as const;
-export type ModeGenerated = ClosedEnum<typeof ModeGenerated>;
-
-export const ProviderAzureApplicationGatewayForContainersEnum2 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ProviderAzureApplicationGatewayForContainersEnum2 = ClosedEnum<
-  typeof ProviderAzureApplicationGatewayForContainersEnum2
+export type PrepareDeploymentStackModeGenerated = ClosedEnum<
+  typeof PrepareDeploymentStackModeGenerated
 >;
 
-export type ProviderAzureApplicationGatewayForContainers2 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ProviderAzureApplicationGatewayForContainersEnum2;
-};
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2
+  >;
 
-export const ProviderGkeGatewayEnum2 = {
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2;
+  };
+
+export const PrepareDeploymentStackProviderGkeGatewayEnum2 = {
   GkeGateway: "gkeGateway",
 } as const;
-export type ProviderGkeGatewayEnum2 = ClosedEnum<
-  typeof ProviderGkeGatewayEnum2
+export type PrepareDeploymentStackProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderGkeGatewayEnum2
 >;
 
-export type ProviderGkeGateway2 = {
-  provider: ProviderGkeGatewayEnum2;
+export type PrepareDeploymentStackProviderGkeGateway2 = {
+  provider: PrepareDeploymentStackProviderGkeGatewayEnum2;
   /**
    * Optional static address name for the Gateway frontend.
    */
   staticAddressName?: string | null | undefined;
 };
 
-export const ProviderAwsAlbEnum2 = {
+export const PrepareDeploymentStackProviderAwsAlbEnum2 = {
   AwsAlb: "awsAlb",
 } as const;
-export type ProviderAwsAlbEnum2 = ClosedEnum<typeof ProviderAwsAlbEnum2>;
+export type PrepareDeploymentStackProviderAwsAlbEnum2 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderAwsAlbEnum2
+>;
 
-export type ProviderAwsAlb2 = {
+export type PrepareDeploymentStackProviderAwsAlb2 = {
   /**
    * Optional ALB IP address type, such as `dualstack`.
    */
   ipAddressType?: string | null | undefined;
-  provider: ProviderAwsAlbEnum2;
+  provider: PrepareDeploymentStackProviderAwsAlbEnum2;
   /**
    * Internet-facing or internal ALB scheme.
    */
@@ -593,16 +666,16 @@ export type ProviderAwsAlb2 = {
   targetType: string;
 };
 
-export type ProviderUnion2 =
-  | ProviderAwsAlb2
-  | ProviderAzureApplicationGatewayForContainers2
-  | ProviderGkeGateway2
+export type PrepareDeploymentStackProviderUnion2 =
+  | PrepareDeploymentStackProviderAwsAlb2
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2
+  | PrepareDeploymentStackProviderGkeGateway2
   | any;
 
 /**
  * Shared Gateway API route profile values.
  */
-export type RouteGateway1 = {
+export type PrepareDeploymentStackRouteGateway1 = {
   /**
    * Annotations applied to route objects.
    */
@@ -624,64 +697,71 @@ export type RouteGateway1 = {
    */
   listenerPort: number;
   provider?:
-    | ProviderAwsAlb2
-    | ProviderAzureApplicationGatewayForContainers2
-    | ProviderGkeGateway2
+    | PrepareDeploymentStackProviderAwsAlb2
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2
+    | PrepareDeploymentStackProviderGkeGateway2
     | any
     | null
     | undefined;
   routeApi: "gateway";
 };
 
-export const ProviderAzureApplicationGatewayForContainersEnum1 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ProviderAzureApplicationGatewayForContainersEnum1 = ClosedEnum<
-  typeof ProviderAzureApplicationGatewayForContainersEnum1
->;
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1
+  >;
 
-export type ProviderAzureApplicationGatewayForContainers1 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ProviderAzureApplicationGatewayForContainersEnum1;
-};
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1;
+  };
 
-export const ProviderGkeGatewayEnum1 = {
+export const PrepareDeploymentStackProviderGkeGatewayEnum1 = {
   GkeGateway: "gkeGateway",
 } as const;
-export type ProviderGkeGatewayEnum1 = ClosedEnum<
-  typeof ProviderGkeGatewayEnum1
+export type PrepareDeploymentStackProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderGkeGatewayEnum1
 >;
 
-export type ProviderGkeGateway1 = {
-  provider: ProviderGkeGatewayEnum1;
+export type PrepareDeploymentStackProviderGkeGateway1 = {
+  provider: PrepareDeploymentStackProviderGkeGatewayEnum1;
   /**
    * Optional static address name for the Gateway frontend.
    */
   staticAddressName?: string | null | undefined;
 };
 
-export const ProviderAwsAlbEnum1 = {
+export const PrepareDeploymentStackProviderAwsAlbEnum1 = {
   AwsAlb: "awsAlb",
 } as const;
-export type ProviderAwsAlbEnum1 = ClosedEnum<typeof ProviderAwsAlbEnum1>;
+export type PrepareDeploymentStackProviderAwsAlbEnum1 = ClosedEnum<
+  typeof PrepareDeploymentStackProviderAwsAlbEnum1
+>;
 
-export type ProviderAwsAlb1 = {
+export type PrepareDeploymentStackProviderAwsAlb1 = {
   /**
    * Optional ALB IP address type, such as `dualstack`.
    */
   ipAddressType?: string | null | undefined;
-  provider: ProviderAwsAlbEnum1;
+  provider: PrepareDeploymentStackProviderAwsAlbEnum1;
   /**
    * Internet-facing or internal ALB scheme.
    */
@@ -696,16 +776,16 @@ export type ProviderAwsAlb1 = {
   targetType: string;
 };
 
-export type ProviderUnion1 =
-  | ProviderAwsAlb1
-  | ProviderAzureApplicationGatewayForContainers1
-  | ProviderGkeGateway1
+export type PrepareDeploymentStackProviderUnion1 =
+  | PrepareDeploymentStackProviderAwsAlb1
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1
+  | PrepareDeploymentStackProviderGkeGateway1
   | any;
 
 /**
  * Shared Ingress route profile values.
  */
-export type RouteIngress1 = {
+export type PrepareDeploymentStackRouteIngress1 = {
   /**
    * Annotations applied to route objects.
    */
@@ -723,9 +803,9 @@ export type RouteIngress1 = {
    */
   labels?: { [k: string]: string } | undefined;
   provider?:
-    | ProviderAwsAlb1
-    | ProviderAzureApplicationGatewayForContainers1
-    | ProviderGkeGateway1
+    | PrepareDeploymentStackProviderAwsAlb1
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1
+    | PrepareDeploymentStackProviderGkeGateway1
     | any
     | null
     | undefined;
@@ -735,38 +815,44 @@ export type RouteIngress1 = {
 /**
  * Kubernetes route API selected for public endpoints.
  */
-export type RouteUnion1 = RouteIngress1 | RouteGateway1;
+export type PrepareDeploymentStackRouteUnion1 =
+  | PrepareDeploymentStackRouteIngress1
+  | PrepareDeploymentStackRouteGateway1;
 
-export type ExposureGenerated = {
+export type PrepareDeploymentStackExposureGenerated = {
   /**
    * Certificate publication or reference mode for Kubernetes public endpoints.
    */
   certificate:
-    | CertificateTLSSecretRef1
-    | CertificateManagedAcmImport1
-    | CertificateAwsAcmArn1
-    | CertificateManagedTLSSecret1
-    | CertificateNone1;
-  mode: ModeGenerated;
+    | PrepareDeploymentStackCertificateTLSSecretRef1
+    | PrepareDeploymentStackCertificateManagedAcmImport1
+    | PrepareDeploymentStackCertificateAwsAcmArn1
+    | PrepareDeploymentStackCertificateManagedTLSSecret1
+    | PrepareDeploymentStackCertificateNone1;
+  mode: PrepareDeploymentStackModeGenerated;
   /**
    * Kubernetes route API selected for public endpoints.
    */
-  route: RouteIngress1 | RouteGateway1;
+  route:
+    | PrepareDeploymentStackRouteIngress1
+    | PrepareDeploymentStackRouteGateway1;
 };
 
-export const ModeDisabled = {
+export const PrepareDeploymentStackModeDisabled = {
   Disabled: "disabled",
 } as const;
-export type ModeDisabled = ClosedEnum<typeof ModeDisabled>;
+export type PrepareDeploymentStackModeDisabled = ClosedEnum<
+  typeof PrepareDeploymentStackModeDisabled
+>;
 
-export type ExposureDisabled = {
-  mode: ModeDisabled;
+export type PrepareDeploymentStackExposureDisabled = {
+  mode: PrepareDeploymentStackModeDisabled;
 };
 
-export type Exposure =
-  | ExposureCustom
-  | ExposureGenerated
-  | ExposureDisabled
+export type PrepareDeploymentStackExposureUnion =
+  | PrepareDeploymentStackExposureCustom
+  | PrepareDeploymentStackExposureGenerated
+  | PrepareDeploymentStackExposureDisabled
   | any;
 
 /**
@@ -780,24 +866,28 @@ export type Exposure =
  * cluster.
  */
 export type PrepareDeploymentStackKubernetes = {
-  cluster?: Cluster | any | null | undefined;
+  cluster?: PrepareDeploymentStackCluster | any | null | undefined;
   exposure?:
-    | ExposureCustom
-    | ExposureGenerated
-    | ExposureDisabled
+    | PrepareDeploymentStackExposureCustom
+    | PrepareDeploymentStackExposureGenerated
+    | PrepareDeploymentStackExposureDisabled
     | any
     | null
     | undefined;
 };
 
-export type Kubernetes = PrepareDeploymentStackKubernetes | any;
+export type PrepareDeploymentStackKubernetesUnion =
+  | PrepareDeploymentStackKubernetes
+  | any;
 
-export const TypeByoVnetAzure = {
+export const PrepareDeploymentStackTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type TypeByoVnetAzure = ClosedEnum<typeof TypeByoVnetAzure>;
+export type PrepareDeploymentStackTypeByoVnetAzure = ClosedEnum<
+  typeof PrepareDeploymentStackTypeByoVnetAzure
+>;
 
-export type NetworkByoVnetAzure = {
+export type PrepareDeploymentStackNetworkByoVnetAzure = {
   /**
    * Name of the dedicated classic Application Gateway subnet within the VNet.
    */
@@ -810,19 +900,21 @@ export type NetworkByoVnetAzure = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: TypeByoVnetAzure;
+  type: PrepareDeploymentStackTypeByoVnetAzure;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const TypeByoVpcGcp = {
+export const PrepareDeploymentStackTypeByoVpcGcp = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type TypeByoVpcGcp = ClosedEnum<typeof TypeByoVpcGcp>;
+export type PrepareDeploymentStackTypeByoVpcGcp = ClosedEnum<
+  typeof PrepareDeploymentStackTypeByoVpcGcp
+>;
 
-export type NetworkByoVpcGcp = {
+export type PrepareDeploymentStackNetworkByoVpcGcp = {
   /**
    * The name of the existing VPC network
    */
@@ -835,15 +927,17 @@ export type NetworkByoVpcGcp = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: TypeByoVpcGcp;
+  type: PrepareDeploymentStackTypeByoVpcGcp;
 };
 
-export const TypeByoVpcAws = {
+export const PrepareDeploymentStackTypeByoVpcAws = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type TypeByoVpcAws = ClosedEnum<typeof TypeByoVpcAws>;
+export type PrepareDeploymentStackTypeByoVpcAws = ClosedEnum<
+  typeof PrepareDeploymentStackTypeByoVpcAws
+>;
 
-export type NetworkByoVpcAws = {
+export type PrepareDeploymentStackNetworkByoVpcAws = {
   /**
    * IDs of private subnets
    */
@@ -856,19 +950,21 @@ export type NetworkByoVpcAws = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: TypeByoVpcAws;
+  type: PrepareDeploymentStackTypeByoVpcAws;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const TypeCreate = {
+export const PrepareDeploymentStackTypeCreate = {
   Create: "create",
 } as const;
-export type TypeCreate = ClosedEnum<typeof TypeCreate>;
+export type PrepareDeploymentStackTypeCreate = ClosedEnum<
+  typeof PrepareDeploymentStackTypeCreate
+>;
 
-export type NetworkCreate = {
+export type PrepareDeploymentStackNetworkCreate = {
   /**
    * Number of availability zones (default: 2).
    */
@@ -880,30 +976,32 @@ export type NetworkCreate = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: TypeCreate;
+  type: PrepareDeploymentStackTypeCreate;
 };
 
-export const TypeUseDefault = {
+export const PrepareDeploymentStackTypeUseDefault = {
   UseDefault: "use-default",
 } as const;
-export type TypeUseDefault = ClosedEnum<typeof TypeUseDefault>;
+export type PrepareDeploymentStackTypeUseDefault = ClosedEnum<
+  typeof PrepareDeploymentStackTypeUseDefault
+>;
 
-export type NetworkUseDefault = {
-  type: TypeUseDefault;
+export type PrepareDeploymentStackNetworkUseDefault = {
+  type: PrepareDeploymentStackTypeUseDefault;
 };
 
-export type Network =
-  | NetworkByoVpcAws
-  | NetworkByoVpcGcp
-  | NetworkByoVnetAzure
-  | NetworkUseDefault
-  | NetworkCreate
+export type PrepareDeploymentStackNetworkUnion =
+  | PrepareDeploymentStackNetworkByoVpcAws
+  | PrepareDeploymentStackNetworkByoVpcGcp
+  | PrepareDeploymentStackNetworkByoVnetAzure
+  | PrepareDeploymentStackNetworkUseDefault
+  | PrepareDeploymentStackNetworkCreate
   | any;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
  */
-export const Telemetry = {
+export const PrepareDeploymentStackTelemetry = {
   Off: "off",
   Auto: "auto",
   ApprovalRequired: "approval-required",
@@ -911,38 +1009,31 @@ export const Telemetry = {
 /**
  * How telemetry (logs, metrics, traces) is handled.
  */
-export type Telemetry = ClosedEnum<typeof Telemetry>;
+export type PrepareDeploymentStackTelemetry = ClosedEnum<
+  typeof PrepareDeploymentStackTelemetry
+>;
 
 /**
  * How updates are delivered to the deployment.
  */
-export const Updates = {
+export const PrepareDeploymentStackUpdates = {
   Auto: "auto",
   ApprovalRequired: "approval-required",
 } as const;
 /**
  * How updates are delivered to the deployment.
  */
-export type Updates = ClosedEnum<typeof Updates>;
+export type PrepareDeploymentStackUpdates = ClosedEnum<
+  typeof PrepareDeploymentStackUpdates
+>;
 
-/**
- * User-customizable deployment settings specified at deploy time.
- *
- * @remarks
- *
- * These settings are provided by the customer via CloudFormation parameters,
- * Terraform attributes, CLI flags, or Helm values. They customize how the
- * deployment runs and what capabilities are enabled.
- *
- * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
- * is platform-derived (from the Manager's ServiceAccount).
- */
-export type StackSettings = {
+export type PrepareDeploymentStackStackSettings = {
+  compute?: PrepareDeploymentStackCompute | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
-  deploymentModel?: DeploymentModel | undefined;
-  domains?: Domains | any | null | undefined;
+  deploymentModel?: PrepareDeploymentStackDeploymentModel | undefined;
+  domains?: PrepareDeploymentStackDomains | any | null | undefined;
   /**
    * External bindings for pre-existing infrastructure.
    *
@@ -951,53 +1042,41 @@ export type StackSettings = {
    * Environment, etc.) instead of having Alien provision them.
    * Required for Kubernetes platform, optional for cloud platforms.
    */
-  externalBindings?: ExternalBindings | null | undefined;
+  externalBindings?: PrepareDeploymentStackExternalBindings | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
-  heartbeats?: Heartbeats | undefined;
+  heartbeats?: PrepareDeploymentStackHeartbeats | undefined;
   kubernetes?: PrepareDeploymentStackKubernetes | any | null | undefined;
   network?:
-    | NetworkByoVpcAws
-    | NetworkByoVpcGcp
-    | NetworkByoVnetAzure
-    | NetworkUseDefault
-    | NetworkCreate
+    | PrepareDeploymentStackNetworkByoVpcAws
+    | PrepareDeploymentStackNetworkByoVpcGcp
+    | PrepareDeploymentStackNetworkByoVnetAzure
+    | PrepareDeploymentStackNetworkUseDefault
+    | PrepareDeploymentStackNetworkCreate
     | any
     | null
     | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
-  telemetry?: Telemetry | undefined;
+  telemetry?: PrepareDeploymentStackTelemetry | undefined;
   /**
    * How updates are delivered to the deployment.
    */
-  updates?: Updates | undefined;
+  updates?: PrepareDeploymentStackUpdates | undefined;
 };
 
 export type PrepareDeploymentStackRequestBody = {
   platform: PrepareDeploymentStackPlatform;
   setupMethod: models.DeploymentSetupMethod;
   region?: string | undefined;
-  /**
-   * User-customizable deployment settings specified at deploy time.
-   *
-   * @remarks
-   *
-   * These settings are provided by the customer via CloudFormation parameters,
-   * Terraform attributes, CLI flags, or Helm values. They customize how the
-   * deployment runs and what capabilities are enabled.
-   *
-   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
-   * is platform-derived (from the Manager's ServiceAccount).
-   */
-  stackSettings: StackSettings;
+  stackSettings: PrepareDeploymentStackStackSettings;
 };
 
 export type PrepareDeploymentStackRequest = {
   /**
-   * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   requestBody?: PrepareDeploymentStackRequestBody | undefined;
@@ -1009,8 +1088,122 @@ export const PrepareDeploymentStackPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(PrepareDeploymentStackPlatform);
 
 /** @internal */
-export const DeploymentModel$outboundSchema: z.ZodEnum<typeof DeploymentModel> =
-  z.enum(DeploymentModel);
+export type PrepareDeploymentStackPoolsAutoscale$Outbound = {
+  mode: "autoscale";
+  min: number;
+  max: number;
+  machine?: string | undefined;
+};
+
+/** @internal */
+export const PrepareDeploymentStackPoolsAutoscale$outboundSchema: z.ZodType<
+  PrepareDeploymentStackPoolsAutoscale$Outbound,
+  PrepareDeploymentStackPoolsAutoscale
+> = z.object({
+  mode: z.literal("autoscale"),
+  min: z.int(),
+  max: z.int(),
+  machine: z.string().optional(),
+});
+
+export function prepareDeploymentStackPoolsAutoscaleToJSON(
+  prepareDeploymentStackPoolsAutoscale: PrepareDeploymentStackPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPoolsAutoscale$outboundSchema.parse(
+      prepareDeploymentStackPoolsAutoscale,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackPoolsFixed$Outbound = {
+  mode: "fixed";
+  machines: number;
+  machine?: string | undefined;
+};
+
+/** @internal */
+export const PrepareDeploymentStackPoolsFixed$outboundSchema: z.ZodType<
+  PrepareDeploymentStackPoolsFixed$Outbound,
+  PrepareDeploymentStackPoolsFixed
+> = z.object({
+  mode: z.literal("fixed"),
+  machines: z.int(),
+  machine: z.string().optional(),
+});
+
+export function prepareDeploymentStackPoolsFixedToJSON(
+  prepareDeploymentStackPoolsFixed: PrepareDeploymentStackPoolsFixed,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPoolsFixed$outboundSchema.parse(
+      prepareDeploymentStackPoolsFixed,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackPoolsUnion$Outbound =
+  | PrepareDeploymentStackPoolsFixed$Outbound
+  | PrepareDeploymentStackPoolsAutoscale$Outbound;
+
+/** @internal */
+export const PrepareDeploymentStackPoolsUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackPoolsUnion$Outbound,
+  PrepareDeploymentStackPoolsUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackPoolsFixed$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackPoolsAutoscale$outboundSchema),
+]);
+
+export function prepareDeploymentStackPoolsUnionToJSON(
+  prepareDeploymentStackPoolsUnion: PrepareDeploymentStackPoolsUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPoolsUnion$outboundSchema.parse(
+      prepareDeploymentStackPoolsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | PrepareDeploymentStackPoolsFixed$Outbound
+      | PrepareDeploymentStackPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const PrepareDeploymentStackCompute$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCompute$Outbound,
+  PrepareDeploymentStackCompute
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PrepareDeploymentStackPoolsFixed$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackPoolsAutoscale$outboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function prepareDeploymentStackComputeToJSON(
+  prepareDeploymentStackCompute: PrepareDeploymentStackCompute,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCompute$outboundSchema.parse(
+      prepareDeploymentStackCompute,
+    ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackDeploymentModel$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackDeploymentModel
+> = z.enum(PrepareDeploymentStackDeploymentModel);
 
 /** @internal */
 export type PrepareDeploymentStackAws$Outbound = {
@@ -1034,16 +1227,24 @@ export function prepareDeploymentStackAwsToJSON(
 }
 
 /** @internal */
-export type Aws$Outbound = PrepareDeploymentStackAws$Outbound | any;
+export type PrepareDeploymentStackAwsUnion$Outbound =
+  | PrepareDeploymentStackAws$Outbound
+  | any;
 
 /** @internal */
-export const Aws$outboundSchema: z.ZodType<Aws$Outbound, Aws> = z.union([
-  z.lazy(() => PrepareDeploymentStackAws$outboundSchema),
-  z.any(),
-]);
+export const PrepareDeploymentStackAwsUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackAwsUnion$Outbound,
+  PrepareDeploymentStackAwsUnion
+> = z.union([z.lazy(() => PrepareDeploymentStackAws$outboundSchema), z.any()]);
 
-export function awsToJSON(aws: Aws): string {
-  return JSON.stringify(Aws$outboundSchema.parse(aws));
+export function prepareDeploymentStackAwsUnionToJSON(
+  prepareDeploymentStackAwsUnion: PrepareDeploymentStackAwsUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackAwsUnion$outboundSchema.parse(
+      prepareDeploymentStackAwsUnion,
+    ),
+  );
 }
 
 /** @internal */
@@ -1072,16 +1273,27 @@ export function prepareDeploymentStackAzureToJSON(
 }
 
 /** @internal */
-export type Azure$Outbound = PrepareDeploymentStackAzure$Outbound | any;
+export type PrepareDeploymentStackAzureUnion$Outbound =
+  | PrepareDeploymentStackAzure$Outbound
+  | any;
 
 /** @internal */
-export const Azure$outboundSchema: z.ZodType<Azure$Outbound, Azure> = z.union([
+export const PrepareDeploymentStackAzureUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackAzureUnion$Outbound,
+  PrepareDeploymentStackAzureUnion
+> = z.union([
   z.lazy(() => PrepareDeploymentStackAzure$outboundSchema),
   z.any(),
 ]);
 
-export function azureToJSON(azure: Azure): string {
-  return JSON.stringify(Azure$outboundSchema.parse(azure));
+export function prepareDeploymentStackAzureUnionToJSON(
+  prepareDeploymentStackAzureUnion: PrepareDeploymentStackAzureUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackAzureUnion$outboundSchema.parse(
+      prepareDeploymentStackAzureUnion,
+    ),
+  );
 }
 
 /** @internal */
@@ -1106,87 +1318,117 @@ export function prepareDeploymentStackGcpToJSON(
 }
 
 /** @internal */
-export type Gcp$Outbound = PrepareDeploymentStackGcp$Outbound | any;
+export type PrepareDeploymentStackGcpUnion$Outbound =
+  | PrepareDeploymentStackGcp$Outbound
+  | any;
 
 /** @internal */
-export const Gcp$outboundSchema: z.ZodType<Gcp$Outbound, Gcp> = z.union([
-  z.lazy(() => PrepareDeploymentStackGcp$outboundSchema),
-  z.any(),
-]);
+export const PrepareDeploymentStackGcpUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackGcpUnion$Outbound,
+  PrepareDeploymentStackGcpUnion
+> = z.union([z.lazy(() => PrepareDeploymentStackGcp$outboundSchema), z.any()]);
 
-export function gcpToJSON(gcp: Gcp): string {
-  return JSON.stringify(Gcp$outboundSchema.parse(gcp));
+export function prepareDeploymentStackGcpUnionToJSON(
+  prepareDeploymentStackGcpUnion: PrepareDeploymentStackGcpUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackGcpUnion$outboundSchema.parse(
+      prepareDeploymentStackGcpUnion,
+    ),
+  );
 }
 
 /** @internal */
-export type TlsSecretRef$Outbound = {
+export type PrepareDeploymentStackTlsSecretRef$Outbound = {
   namespace?: string | null | undefined;
   secretName: string;
 };
 
 /** @internal */
-export const TlsSecretRef$outboundSchema: z.ZodType<
-  TlsSecretRef$Outbound,
-  TlsSecretRef
+export const PrepareDeploymentStackTlsSecretRef$outboundSchema: z.ZodType<
+  PrepareDeploymentStackTlsSecretRef$Outbound,
+  PrepareDeploymentStackTlsSecretRef
 > = z.object({
   namespace: z.nullable(z.string()).optional(),
   secretName: z.string(),
 });
 
-export function tlsSecretRefToJSON(tlsSecretRef: TlsSecretRef): string {
-  return JSON.stringify(TlsSecretRef$outboundSchema.parse(tlsSecretRef));
+export function prepareDeploymentStackTlsSecretRefToJSON(
+  prepareDeploymentStackTlsSecretRef: PrepareDeploymentStackTlsSecretRef,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackTlsSecretRef$outboundSchema.parse(
+      prepareDeploymentStackTlsSecretRef,
+    ),
+  );
 }
 
 /** @internal */
-export type DomainsKubernetes$Outbound = {
-  tlsSecretRef: TlsSecretRef$Outbound;
+export type PrepareDeploymentStackDomainsKubernetes$Outbound = {
+  tlsSecretRef: PrepareDeploymentStackTlsSecretRef$Outbound;
 };
 
 /** @internal */
-export const DomainsKubernetes$outboundSchema: z.ZodType<
-  DomainsKubernetes$Outbound,
-  DomainsKubernetes
+export const PrepareDeploymentStackDomainsKubernetes$outboundSchema: z.ZodType<
+  PrepareDeploymentStackDomainsKubernetes$Outbound,
+  PrepareDeploymentStackDomainsKubernetes
 > = z.object({
-  tlsSecretRef: z.lazy(() => TlsSecretRef$outboundSchema),
+  tlsSecretRef: z.lazy(() => PrepareDeploymentStackTlsSecretRef$outboundSchema),
 });
 
-export function domainsKubernetesToJSON(
-  domainsKubernetes: DomainsKubernetes,
+export function prepareDeploymentStackDomainsKubernetesToJSON(
+  prepareDeploymentStackDomainsKubernetes:
+    PrepareDeploymentStackDomainsKubernetes,
 ): string {
   return JSON.stringify(
-    DomainsKubernetes$outboundSchema.parse(domainsKubernetes),
+    PrepareDeploymentStackDomainsKubernetes$outboundSchema.parse(
+      prepareDeploymentStackDomainsKubernetes,
+    ),
   );
 }
 
 /** @internal */
-export type DomainsKubernetesUnion$Outbound = DomainsKubernetes$Outbound | any;
+export type PrepareDeploymentStackDomainsKubernetesUnion$Outbound =
+  | PrepareDeploymentStackDomainsKubernetes$Outbound
+  | any;
 
 /** @internal */
-export const DomainsKubernetesUnion$outboundSchema: z.ZodType<
-  DomainsKubernetesUnion$Outbound,
-  DomainsKubernetesUnion
-> = z.union([z.lazy(() => DomainsKubernetes$outboundSchema), z.any()]);
+export const PrepareDeploymentStackDomainsKubernetesUnion$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackDomainsKubernetesUnion$Outbound,
+    PrepareDeploymentStackDomainsKubernetesUnion
+  > = z.union([
+    z.lazy(() => PrepareDeploymentStackDomainsKubernetes$outboundSchema),
+    z.any(),
+  ]);
 
-export function domainsKubernetesUnionToJSON(
-  domainsKubernetesUnion: DomainsKubernetesUnion,
+export function prepareDeploymentStackDomainsKubernetesUnionToJSON(
+  prepareDeploymentStackDomainsKubernetesUnion:
+    PrepareDeploymentStackDomainsKubernetesUnion,
 ): string {
   return JSON.stringify(
-    DomainsKubernetesUnion$outboundSchema.parse(domainsKubernetesUnion),
+    PrepareDeploymentStackDomainsKubernetesUnion$outboundSchema.parse(
+      prepareDeploymentStackDomainsKubernetesUnion,
+    ),
   );
 }
 
 /** @internal */
-export type DomainsCertificate$Outbound = {
+export type PrepareDeploymentStackDomainsCertificate$Outbound = {
   aws?: PrepareDeploymentStackAws$Outbound | any | null | undefined;
   azure?: PrepareDeploymentStackAzure$Outbound | any | null | undefined;
   gcp?: PrepareDeploymentStackGcp$Outbound | any | null | undefined;
-  kubernetes?: DomainsKubernetes$Outbound | any | null | undefined;
+  kubernetes?:
+    | PrepareDeploymentStackDomainsKubernetes$Outbound
+    | any
+    | null
+    | undefined;
 };
 
 /** @internal */
-export const DomainsCertificate$outboundSchema: z.ZodType<
-  DomainsCertificate$Outbound,
-  DomainsCertificate
+export const PrepareDeploymentStackDomainsCertificate$outboundSchema: z.ZodType<
+  PrepareDeploymentStackDomainsCertificate$Outbound,
+  PrepareDeploymentStackDomainsCertificate
 > = z.object({
   aws: z.nullable(
     z.union([z.lazy(() => PrepareDeploymentStackAws$outboundSchema), z.any()]),
@@ -1201,91 +1443,133 @@ export const DomainsCertificate$outboundSchema: z.ZodType<
     z.union([z.lazy(() => PrepareDeploymentStackGcp$outboundSchema), z.any()]),
   ).optional(),
   kubernetes: z.nullable(
-    z.union([z.lazy(() => DomainsKubernetes$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PrepareDeploymentStackDomainsKubernetes$outboundSchema),
+      z.any(),
+    ]),
   ).optional(),
 });
 
-export function domainsCertificateToJSON(
-  domainsCertificate: DomainsCertificate,
+export function prepareDeploymentStackDomainsCertificateToJSON(
+  prepareDeploymentStackDomainsCertificate:
+    PrepareDeploymentStackDomainsCertificate,
 ): string {
   return JSON.stringify(
-    DomainsCertificate$outboundSchema.parse(domainsCertificate),
+    PrepareDeploymentStackDomainsCertificate$outboundSchema.parse(
+      prepareDeploymentStackDomainsCertificate,
+    ),
   );
 }
 
 /** @internal */
-export type CustomDomains$Outbound = {
-  certificate: DomainsCertificate$Outbound;
+export type PrepareDeploymentStackCustomDomains$Outbound = {
+  certificate: PrepareDeploymentStackDomainsCertificate$Outbound;
   domain: string;
 };
 
 /** @internal */
-export const CustomDomains$outboundSchema: z.ZodType<
-  CustomDomains$Outbound,
-  CustomDomains
+export const PrepareDeploymentStackCustomDomains$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCustomDomains$Outbound,
+  PrepareDeploymentStackCustomDomains
 > = z.object({
-  certificate: z.lazy(() => DomainsCertificate$outboundSchema),
+  certificate: z.lazy(() =>
+    PrepareDeploymentStackDomainsCertificate$outboundSchema
+  ),
   domain: z.string(),
 });
 
-export function customDomainsToJSON(customDomains: CustomDomains): string {
-  return JSON.stringify(CustomDomains$outboundSchema.parse(customDomains));
-}
-
-/** @internal */
-export type Domains$Outbound = {
-  customDomains?: { [k: string]: CustomDomains$Outbound } | null | undefined;
-};
-
-/** @internal */
-export const Domains$outboundSchema: z.ZodType<Domains$Outbound, Domains> = z
-  .object({
-    customDomains: z.nullable(
-      z.record(z.string(), z.lazy(() => CustomDomains$outboundSchema)),
-    ).optional(),
-  });
-
-export function domainsToJSON(domains: Domains): string {
-  return JSON.stringify(Domains$outboundSchema.parse(domains));
-}
-
-/** @internal */
-export type DomainsUnion$Outbound = Domains$Outbound | any;
-
-/** @internal */
-export const DomainsUnion$outboundSchema: z.ZodType<
-  DomainsUnion$Outbound,
-  DomainsUnion
-> = z.union([z.lazy(() => Domains$outboundSchema), z.any()]);
-
-export function domainsUnionToJSON(domainsUnion: DomainsUnion): string {
-  return JSON.stringify(DomainsUnion$outboundSchema.parse(domainsUnion));
-}
-
-/** @internal */
-export type ExternalBindings$Outbound = {};
-
-/** @internal */
-export const ExternalBindings$outboundSchema: z.ZodType<
-  ExternalBindings$Outbound,
-  ExternalBindings
-> = z.object({});
-
-export function externalBindingsToJSON(
-  externalBindings: ExternalBindings,
+export function prepareDeploymentStackCustomDomainsToJSON(
+  prepareDeploymentStackCustomDomains: PrepareDeploymentStackCustomDomains,
 ): string {
   return JSON.stringify(
-    ExternalBindings$outboundSchema.parse(externalBindings),
+    PrepareDeploymentStackCustomDomains$outboundSchema.parse(
+      prepareDeploymentStackCustomDomains,
+    ),
   );
 }
 
 /** @internal */
-export const Heartbeats$outboundSchema: z.ZodEnum<typeof Heartbeats> = z.enum(
-  Heartbeats,
-);
+export type PrepareDeploymentStackDomains$Outbound = {
+  customDomains?:
+    | { [k: string]: PrepareDeploymentStackCustomDomains$Outbound }
+    | null
+    | undefined;
+};
 
 /** @internal */
-export type Cloud$Outbound = {
+export const PrepareDeploymentStackDomains$outboundSchema: z.ZodType<
+  PrepareDeploymentStackDomains$Outbound,
+  PrepareDeploymentStackDomains
+> = z.object({
+  customDomains: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => PrepareDeploymentStackCustomDomains$outboundSchema),
+    ),
+  ).optional(),
+});
+
+export function prepareDeploymentStackDomainsToJSON(
+  prepareDeploymentStackDomains: PrepareDeploymentStackDomains,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackDomains$outboundSchema.parse(
+      prepareDeploymentStackDomains,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackDomainsUnion$Outbound =
+  | PrepareDeploymentStackDomains$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackDomainsUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackDomainsUnion$Outbound,
+  PrepareDeploymentStackDomainsUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackDomains$outboundSchema),
+  z.any(),
+]);
+
+export function prepareDeploymentStackDomainsUnionToJSON(
+  prepareDeploymentStackDomainsUnion: PrepareDeploymentStackDomainsUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackDomainsUnion$outboundSchema.parse(
+      prepareDeploymentStackDomainsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackExternalBindings$Outbound = {};
+
+/** @internal */
+export const PrepareDeploymentStackExternalBindings$outboundSchema: z.ZodType<
+  PrepareDeploymentStackExternalBindings$Outbound,
+  PrepareDeploymentStackExternalBindings
+> = z.object({});
+
+export function prepareDeploymentStackExternalBindingsToJSON(
+  prepareDeploymentStackExternalBindings:
+    PrepareDeploymentStackExternalBindings,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackExternalBindings$outboundSchema.parse(
+      prepareDeploymentStackExternalBindings,
+    ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackHeartbeats$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackHeartbeats
+> = z.enum(PrepareDeploymentStackHeartbeats);
+
+/** @internal */
+export type PrepareDeploymentStackCloud$Outbound = {
   accountId?: string | null | undefined;
   clusterId?: string | null | undefined;
   clusterName?: string | null | undefined;
@@ -1296,7 +1580,10 @@ export type Cloud$Outbound = {
 };
 
 /** @internal */
-export const Cloud$outboundSchema: z.ZodType<Cloud$Outbound, Cloud> = z.object({
+export const PrepareDeploymentStackCloud$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCloud$Outbound,
+  PrepareDeploymentStackCloud
+> = z.object({
   accountId: z.nullable(z.string()).optional(),
   clusterId: z.nullable(z.string()).optional(),
   clusterName: z.nullable(z.string()).optional(),
@@ -1306,287 +1593,360 @@ export const Cloud$outboundSchema: z.ZodType<Cloud$Outbound, Cloud> = z.object({
   subscriptionId: z.nullable(z.string()).optional(),
 });
 
-export function cloudToJSON(cloud: Cloud): string {
-  return JSON.stringify(Cloud$outboundSchema.parse(cloud));
+export function prepareDeploymentStackCloudToJSON(
+  prepareDeploymentStackCloud: PrepareDeploymentStackCloud,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCloud$outboundSchema.parse(
+      prepareDeploymentStackCloud,
+    ),
+  );
 }
 
 /** @internal */
-export type CloudUnion$Outbound = Cloud$Outbound | any;
+export type PrepareDeploymentStackCloudUnion$Outbound =
+  | PrepareDeploymentStackCloud$Outbound
+  | any;
 
 /** @internal */
-export const CloudUnion$outboundSchema: z.ZodType<
-  CloudUnion$Outbound,
-  CloudUnion
-> = z.union([z.lazy(() => Cloud$outboundSchema), z.any()]);
+export const PrepareDeploymentStackCloudUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCloudUnion$Outbound,
+  PrepareDeploymentStackCloudUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackCloud$outboundSchema),
+  z.any(),
+]);
 
-export function cloudUnionToJSON(cloudUnion: CloudUnion): string {
-  return JSON.stringify(CloudUnion$outboundSchema.parse(cloudUnion));
+export function prepareDeploymentStackCloudUnionToJSON(
+  prepareDeploymentStackCloudUnion: PrepareDeploymentStackCloudUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCloudUnion$outboundSchema.parse(
+      prepareDeploymentStackCloudUnion,
+    ),
+  );
 }
 
 /** @internal */
-export const Ownership$outboundSchema: z.ZodEnum<typeof Ownership> = z.enum(
-  Ownership,
-);
+export const PrepareDeploymentStackOwnership$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackOwnership
+> = z.enum(PrepareDeploymentStackOwnership);
 
 /** @internal */
-export type Cluster$Outbound = {
-  cloud?: Cloud$Outbound | any | null | undefined;
+export type PrepareDeploymentStackCluster$Outbound = {
+  cloud?: PrepareDeploymentStackCloud$Outbound | any | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
 
 /** @internal */
-export const Cluster$outboundSchema: z.ZodType<Cluster$Outbound, Cluster> = z
-  .object({
-    cloud: z.nullable(z.union([z.lazy(() => Cloud$outboundSchema), z.any()]))
-      .optional(),
-    namespace: z.nullable(z.string()).optional(),
-    ownership: Ownership$outboundSchema,
-  });
-
-export function clusterToJSON(cluster: Cluster): string {
-  return JSON.stringify(Cluster$outboundSchema.parse(cluster));
-}
-
-/** @internal */
-export type ClusterUnion$Outbound = Cluster$Outbound | any;
-
-/** @internal */
-export const ClusterUnion$outboundSchema: z.ZodType<
-  ClusterUnion$Outbound,
-  ClusterUnion
-> = z.union([z.lazy(() => Cluster$outboundSchema), z.any()]);
-
-export function clusterUnionToJSON(clusterUnion: ClusterUnion): string {
-  return JSON.stringify(ClusterUnion$outboundSchema.parse(clusterUnion));
-}
-
-/** @internal */
-export type CertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const CertificateNone2$outboundSchema: z.ZodType<
-  CertificateNone2$Outbound,
-  CertificateNone2
+export const PrepareDeploymentStackCluster$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCluster$Outbound,
+  PrepareDeploymentStackCluster
 > = z.object({
-  mode: z.literal("none"),
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackCloud$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: PrepareDeploymentStackOwnership$outboundSchema,
 });
 
-export function certificateNone2ToJSON(
-  certificateNone2: CertificateNone2,
+export function prepareDeploymentStackClusterToJSON(
+  prepareDeploymentStackCluster: PrepareDeploymentStackCluster,
 ): string {
   return JSON.stringify(
-    CertificateNone2$outboundSchema.parse(certificateNone2),
-  );
-}
-
-/** @internal */
-export type CertificateManagedTLSSecret2$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const CertificateManagedTLSSecret2$outboundSchema: z.ZodType<
-  CertificateManagedTLSSecret2$Outbound,
-  CertificateManagedTLSSecret2
-> = z.object({
-  mode: z.literal("managedTlsSecret"),
-  secretNameTemplate: z.string(),
-});
-
-export function certificateManagedTLSSecret2ToJSON(
-  certificateManagedTLSSecret2: CertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    CertificateManagedTLSSecret2$outboundSchema.parse(
-      certificateManagedTLSSecret2,
+    PrepareDeploymentStackCluster$outboundSchema.parse(
+      prepareDeploymentStackCluster,
     ),
   );
 }
 
 /** @internal */
-export type CertificateAwsAcmArn2$Outbound = {
+export type PrepareDeploymentStackClusterUnion$Outbound =
+  | PrepareDeploymentStackCluster$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackClusterUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackClusterUnion$Outbound,
+  PrepareDeploymentStackClusterUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackCluster$outboundSchema),
+  z.any(),
+]);
+
+export function prepareDeploymentStackClusterUnionToJSON(
+  prepareDeploymentStackClusterUnion: PrepareDeploymentStackClusterUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackClusterUnion$outboundSchema.parse(
+      prepareDeploymentStackClusterUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCertificateNone2$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const PrepareDeploymentStackCertificateNone2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCertificateNone2$Outbound,
+  PrepareDeploymentStackCertificateNone2
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function prepareDeploymentStackCertificateNone2ToJSON(
+  prepareDeploymentStackCertificateNone2:
+    PrepareDeploymentStackCertificateNone2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateNone2$outboundSchema.parse(
+      prepareDeploymentStackCertificateNone2,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCertificateManagedTLSSecret2$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const PrepareDeploymentStackCertificateManagedTLSSecret2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateManagedTLSSecret2$Outbound,
+    PrepareDeploymentStackCertificateManagedTLSSecret2
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function prepareDeploymentStackCertificateManagedTLSSecret2ToJSON(
+  prepareDeploymentStackCertificateManagedTLSSecret2:
+    PrepareDeploymentStackCertificateManagedTLSSecret2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateManagedTLSSecret2$outboundSchema.parse(
+      prepareDeploymentStackCertificateManagedTLSSecret2,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCertificateAwsAcmArn2$Outbound = {
   certificateArn: string;
   mode: "awsAcmArn";
 };
 
 /** @internal */
-export const CertificateAwsAcmArn2$outboundSchema: z.ZodType<
-  CertificateAwsAcmArn2$Outbound,
-  CertificateAwsAcmArn2
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
+export const PrepareDeploymentStackCertificateAwsAcmArn2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateAwsAcmArn2$Outbound,
+    PrepareDeploymentStackCertificateAwsAcmArn2
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
 
-export function certificateAwsAcmArn2ToJSON(
-  certificateAwsAcmArn2: CertificateAwsAcmArn2,
+export function prepareDeploymentStackCertificateAwsAcmArn2ToJSON(
+  prepareDeploymentStackCertificateAwsAcmArn2:
+    PrepareDeploymentStackCertificateAwsAcmArn2,
 ): string {
   return JSON.stringify(
-    CertificateAwsAcmArn2$outboundSchema.parse(certificateAwsAcmArn2),
+    PrepareDeploymentStackCertificateAwsAcmArn2$outboundSchema.parse(
+      prepareDeploymentStackCertificateAwsAcmArn2,
+    ),
   );
 }
 
 /** @internal */
-export type CertificateManagedAcmImport2$Outbound = {
+export type PrepareDeploymentStackCertificateManagedAcmImport2$Outbound = {
   mode: "managedAcmImport";
   region?: string | null | undefined;
   tags?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
-export const CertificateManagedAcmImport2$outboundSchema: z.ZodType<
-  CertificateManagedAcmImport2$Outbound,
-  CertificateManagedAcmImport2
-> = z.object({
-  mode: z.literal("managedAcmImport"),
-  region: z.nullable(z.string()).optional(),
-  tags: z.record(z.string(), z.string()).optional(),
-});
+export const PrepareDeploymentStackCertificateManagedAcmImport2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateManagedAcmImport2$Outbound,
+    PrepareDeploymentStackCertificateManagedAcmImport2
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
 
-export function certificateManagedAcmImport2ToJSON(
-  certificateManagedAcmImport2: CertificateManagedAcmImport2,
+export function prepareDeploymentStackCertificateManagedAcmImport2ToJSON(
+  prepareDeploymentStackCertificateManagedAcmImport2:
+    PrepareDeploymentStackCertificateManagedAcmImport2,
 ): string {
   return JSON.stringify(
-    CertificateManagedAcmImport2$outboundSchema.parse(
-      certificateManagedAcmImport2,
+    PrepareDeploymentStackCertificateManagedAcmImport2$outboundSchema.parse(
+      prepareDeploymentStackCertificateManagedAcmImport2,
     ),
   );
 }
 
 /** @internal */
-export type CertificateTLSSecretRef2$Outbound = {
+export type PrepareDeploymentStackCertificateTLSSecretRef2$Outbound = {
   namespace?: string | null | undefined;
   secretName: string;
   mode: "tlsSecretRef";
 };
 
 /** @internal */
-export const CertificateTLSSecretRef2$outboundSchema: z.ZodType<
-  CertificateTLSSecretRef2$Outbound,
-  CertificateTLSSecretRef2
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function certificateTLSSecretRef2ToJSON(
-  certificateTLSSecretRef2: CertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    CertificateTLSSecretRef2$outboundSchema.parse(certificateTLSSecretRef2),
-  );
-}
-
-/** @internal */
-export type CertificateUnion2$Outbound =
-  | CertificateTLSSecretRef2$Outbound
-  | CertificateManagedAcmImport2$Outbound
-  | CertificateAwsAcmArn2$Outbound
-  | CertificateManagedTLSSecret2$Outbound
-  | CertificateNone2$Outbound;
-
-/** @internal */
-export const CertificateUnion2$outboundSchema: z.ZodType<
-  CertificateUnion2$Outbound,
-  CertificateUnion2
-> = z.union([
-  z.lazy(() => CertificateTLSSecretRef2$outboundSchema),
-  z.lazy(() => CertificateManagedAcmImport2$outboundSchema),
-  z.lazy(() => CertificateAwsAcmArn2$outboundSchema),
-  z.lazy(() => CertificateManagedTLSSecret2$outboundSchema),
-  z.lazy(() => CertificateNone2$outboundSchema),
-]);
-
-export function certificateUnion2ToJSON(
-  certificateUnion2: CertificateUnion2,
-): string {
-  return JSON.stringify(
-    CertificateUnion2$outboundSchema.parse(certificateUnion2),
-  );
-}
-
-/** @internal */
-export const ModeCustom$outboundSchema: z.ZodEnum<typeof ModeCustom> = z.enum(
-  ModeCustom,
-);
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum4> = z.enum(
-    ProviderAzureApplicationGatewayForContainersEnum4,
-  );
-
-/** @internal */
-export type ProviderAzureApplicationGatewayForContainers4$Outbound = {
-  albName?: string | null | undefined;
-  albNamespace?: string | null | undefined;
-  frontend: string;
-  provider: string;
-};
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainers4$outboundSchema:
+export const PrepareDeploymentStackCertificateTLSSecretRef2$outboundSchema:
   z.ZodType<
-    ProviderAzureApplicationGatewayForContainers4$Outbound,
-    ProviderAzureApplicationGatewayForContainers4
+    PrepareDeploymentStackCertificateTLSSecretRef2$Outbound,
+    PrepareDeploymentStackCertificateTLSSecretRef2
   > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider: ProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
   });
 
-export function providerAzureApplicationGatewayForContainers4ToJSON(
-  providerAzureApplicationGatewayForContainers4:
-    ProviderAzureApplicationGatewayForContainers4,
+export function prepareDeploymentStackCertificateTLSSecretRef2ToJSON(
+  prepareDeploymentStackCertificateTLSSecretRef2:
+    PrepareDeploymentStackCertificateTLSSecretRef2,
 ): string {
   return JSON.stringify(
-    ProviderAzureApplicationGatewayForContainers4$outboundSchema.parse(
-      providerAzureApplicationGatewayForContainers4,
+    PrepareDeploymentStackCertificateTLSSecretRef2$outboundSchema.parse(
+      prepareDeploymentStackCertificateTLSSecretRef2,
     ),
   );
 }
 
 /** @internal */
-export const ProviderGkeGatewayEnum4$outboundSchema: z.ZodEnum<
-  typeof ProviderGkeGatewayEnum4
-> = z.enum(ProviderGkeGatewayEnum4);
+export type PrepareDeploymentStackCertificateUnion2$Outbound =
+  | PrepareDeploymentStackCertificateTLSSecretRef2$Outbound
+  | PrepareDeploymentStackCertificateManagedAcmImport2$Outbound
+  | PrepareDeploymentStackCertificateAwsAcmArn2$Outbound
+  | PrepareDeploymentStackCertificateManagedTLSSecret2$Outbound
+  | PrepareDeploymentStackCertificateNone2$Outbound;
 
 /** @internal */
-export type ProviderGkeGateway4$Outbound = {
+export const PrepareDeploymentStackCertificateUnion2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCertificateUnion2$Outbound,
+  PrepareDeploymentStackCertificateUnion2
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackCertificateTLSSecretRef2$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackCertificateManagedAcmImport2$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackCertificateAwsAcmArn2$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackCertificateManagedTLSSecret2$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackCertificateNone2$outboundSchema),
+]);
+
+export function prepareDeploymentStackCertificateUnion2ToJSON(
+  prepareDeploymentStackCertificateUnion2:
+    PrepareDeploymentStackCertificateUnion2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateUnion2$outboundSchema.parse(
+      prepareDeploymentStackCertificateUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackModeCustom$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackModeCustom
+> = z.enum(PrepareDeploymentStackModeCustom);
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
+  z.ZodEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound,
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+  });
+
+export function prepareDeploymentStackProviderAzureApplicationGatewayForContainers4ToJSON(
+  prepareDeploymentStackProviderAzureApplicationGatewayForContainers4:
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema
+      .parse(
+        prepareDeploymentStackProviderAzureApplicationGatewayForContainers4,
+      ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackProviderGkeGatewayEnum4$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderGkeGatewayEnum4> = z.enum(
+    PrepareDeploymentStackProviderGkeGatewayEnum4,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderGkeGateway4$Outbound = {
   provider: string;
   staticAddressName?: string | null | undefined;
 };
 
 /** @internal */
-export const ProviderGkeGateway4$outboundSchema: z.ZodType<
-  ProviderGkeGateway4$Outbound,
-  ProviderGkeGateway4
-> = z.object({
-  provider: ProviderGkeGatewayEnum4$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
+export const PrepareDeploymentStackProviderGkeGateway4$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderGkeGateway4$Outbound,
+    PrepareDeploymentStackProviderGkeGateway4
+  > = z.object({
+    provider: PrepareDeploymentStackProviderGkeGatewayEnum4$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
 
-export function providerGkeGateway4ToJSON(
-  providerGkeGateway4: ProviderGkeGateway4,
+export function prepareDeploymentStackProviderGkeGateway4ToJSON(
+  prepareDeploymentStackProviderGkeGateway4:
+    PrepareDeploymentStackProviderGkeGateway4,
 ): string {
   return JSON.stringify(
-    ProviderGkeGateway4$outboundSchema.parse(providerGkeGateway4),
+    PrepareDeploymentStackProviderGkeGateway4$outboundSchema.parse(
+      prepareDeploymentStackProviderGkeGateway4,
+    ),
   );
 }
 
 /** @internal */
-export const ProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
-  typeof ProviderAwsAlbEnum4
-> = z.enum(ProviderAwsAlbEnum4);
+export const PrepareDeploymentStackProviderAwsAlbEnum4$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderAwsAlbEnum4> = z.enum(
+    PrepareDeploymentStackProviderAwsAlbEnum4,
+  );
 
 /** @internal */
-export type ProviderAwsAlb4$Outbound = {
+export type PrepareDeploymentStackProviderAwsAlb4$Outbound = {
   ipAddressType?: string | null | undefined;
   provider: string;
   scheme: string;
@@ -1595,56 +1955,68 @@ export type ProviderAwsAlb4$Outbound = {
 };
 
 /** @internal */
-export const ProviderAwsAlb4$outboundSchema: z.ZodType<
-  ProviderAwsAlb4$Outbound,
-  ProviderAwsAlb4
+export const PrepareDeploymentStackProviderAwsAlb4$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderAwsAlb4$Outbound,
+  PrepareDeploymentStackProviderAwsAlb4
 > = z.object({
   ipAddressType: z.nullable(z.string()).optional(),
-  provider: ProviderAwsAlbEnum4$outboundSchema,
+  provider: PrepareDeploymentStackProviderAwsAlbEnum4$outboundSchema,
   scheme: z.string(),
   subnetIds: z.array(z.string()).optional(),
   targetType: z.string(),
 });
 
-export function providerAwsAlb4ToJSON(
-  providerAwsAlb4: ProviderAwsAlb4,
+export function prepareDeploymentStackProviderAwsAlb4ToJSON(
+  prepareDeploymentStackProviderAwsAlb4: PrepareDeploymentStackProviderAwsAlb4,
 ): string {
-  return JSON.stringify(ProviderAwsAlb4$outboundSchema.parse(providerAwsAlb4));
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAwsAlb4$outboundSchema.parse(
+      prepareDeploymentStackProviderAwsAlb4,
+    ),
+  );
 }
 
 /** @internal */
-export type ProviderUnion4$Outbound =
-  | ProviderAwsAlb4$Outbound
-  | ProviderAzureApplicationGatewayForContainers4$Outbound
-  | ProviderGkeGateway4$Outbound
+export type PrepareDeploymentStackProviderUnion4$Outbound =
+  | PrepareDeploymentStackProviderAwsAlb4$Outbound
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound
+  | PrepareDeploymentStackProviderGkeGateway4$Outbound
   | any;
 
 /** @internal */
-export const ProviderUnion4$outboundSchema: z.ZodType<
-  ProviderUnion4$Outbound,
-  ProviderUnion4
+export const PrepareDeploymentStackProviderUnion4$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderUnion4$Outbound,
+  PrepareDeploymentStackProviderUnion4
 > = z.union([
-  z.lazy(() => ProviderAwsAlb4$outboundSchema),
-  z.lazy(() => ProviderAzureApplicationGatewayForContainers4$outboundSchema),
-  z.lazy(() => ProviderGkeGateway4$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackProviderAwsAlb4$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackProviderGkeGateway4$outboundSchema),
   z.any(),
 ]);
 
-export function providerUnion4ToJSON(providerUnion4: ProviderUnion4): string {
-  return JSON.stringify(ProviderUnion4$outboundSchema.parse(providerUnion4));
+export function prepareDeploymentStackProviderUnion4ToJSON(
+  prepareDeploymentStackProviderUnion4: PrepareDeploymentStackProviderUnion4,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderUnion4$outboundSchema.parse(
+      prepareDeploymentStackProviderUnion4,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteGateway2$Outbound = {
+export type PrepareDeploymentStackRouteGateway2$Outbound = {
   annotations?: { [k: string]: string } | undefined;
   controller?: string | null | undefined;
   gatewayClassName: string;
   labels?: { [k: string]: string } | undefined;
   listenerPort: number;
   provider?:
-    | ProviderAwsAlb4$Outbound
-    | ProviderAzureApplicationGatewayForContainers4$Outbound
-    | ProviderGkeGateway4$Outbound
+    | PrepareDeploymentStackProviderAwsAlb4$Outbound
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound
+    | PrepareDeploymentStackProviderGkeGateway4$Outbound
     | any
     | null
     | undefined;
@@ -1652,9 +2024,9 @@ export type RouteGateway2$Outbound = {
 };
 
 /** @internal */
-export const RouteGateway2$outboundSchema: z.ZodType<
-  RouteGateway2$Outbound,
-  RouteGateway2
+export const PrepareDeploymentStackRouteGateway2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteGateway2$Outbound,
+  PrepareDeploymentStackRouteGateway2
 > = z.object({
   annotations: z.record(z.string(), z.string()).optional(),
   controller: z.nullable(z.string()).optional(),
@@ -1663,93 +2035,110 @@ export const RouteGateway2$outboundSchema: z.ZodType<
   listenerPort: z.int(),
   provider: z.nullable(
     z.union([
-      z.lazy(() => ProviderAwsAlb4$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderAwsAlb4$outboundSchema),
       z.lazy(() =>
-        ProviderAzureApplicationGatewayForContainers4$outboundSchema
+        PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
-      z.lazy(() => ProviderGkeGateway4$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderGkeGateway4$outboundSchema),
       z.any(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
 });
 
-export function routeGateway2ToJSON(routeGateway2: RouteGateway2): string {
-  return JSON.stringify(RouteGateway2$outboundSchema.parse(routeGateway2));
-}
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum3> = z.enum(
-    ProviderAzureApplicationGatewayForContainersEnum3,
-  );
-
-/** @internal */
-export type ProviderAzureApplicationGatewayForContainers3$Outbound = {
-  albName?: string | null | undefined;
-  albNamespace?: string | null | undefined;
-  frontend: string;
-  provider: string;
-};
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    ProviderAzureApplicationGatewayForContainers3$Outbound,
-    ProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider: ProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function providerAzureApplicationGatewayForContainers3ToJSON(
-  providerAzureApplicationGatewayForContainers3:
-    ProviderAzureApplicationGatewayForContainers3,
+export function prepareDeploymentStackRouteGateway2ToJSON(
+  prepareDeploymentStackRouteGateway2: PrepareDeploymentStackRouteGateway2,
 ): string {
   return JSON.stringify(
-    ProviderAzureApplicationGatewayForContainers3$outboundSchema.parse(
-      providerAzureApplicationGatewayForContainers3,
+    PrepareDeploymentStackRouteGateway2$outboundSchema.parse(
+      prepareDeploymentStackRouteGateway2,
     ),
   );
 }
 
 /** @internal */
-export const ProviderGkeGatewayEnum3$outboundSchema: z.ZodEnum<
-  typeof ProviderGkeGatewayEnum3
-> = z.enum(ProviderGkeGatewayEnum3);
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
+  z.ZodEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3,
+  );
 
 /** @internal */
-export type ProviderGkeGateway3$Outbound = {
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound,
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
+  });
+
+export function prepareDeploymentStackProviderAzureApplicationGatewayForContainers3ToJSON(
+  prepareDeploymentStackProviderAzureApplicationGatewayForContainers3:
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema
+      .parse(
+        prepareDeploymentStackProviderAzureApplicationGatewayForContainers3,
+      ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackProviderGkeGatewayEnum3$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderGkeGatewayEnum3> = z.enum(
+    PrepareDeploymentStackProviderGkeGatewayEnum3,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderGkeGateway3$Outbound = {
   provider: string;
   staticAddressName?: string | null | undefined;
 };
 
 /** @internal */
-export const ProviderGkeGateway3$outboundSchema: z.ZodType<
-  ProviderGkeGateway3$Outbound,
-  ProviderGkeGateway3
-> = z.object({
-  provider: ProviderGkeGatewayEnum3$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
+export const PrepareDeploymentStackProviderGkeGateway3$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderGkeGateway3$Outbound,
+    PrepareDeploymentStackProviderGkeGateway3
+  > = z.object({
+    provider: PrepareDeploymentStackProviderGkeGatewayEnum3$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
 
-export function providerGkeGateway3ToJSON(
-  providerGkeGateway3: ProviderGkeGateway3,
+export function prepareDeploymentStackProviderGkeGateway3ToJSON(
+  prepareDeploymentStackProviderGkeGateway3:
+    PrepareDeploymentStackProviderGkeGateway3,
 ): string {
   return JSON.stringify(
-    ProviderGkeGateway3$outboundSchema.parse(providerGkeGateway3),
+    PrepareDeploymentStackProviderGkeGateway3$outboundSchema.parse(
+      prepareDeploymentStackProviderGkeGateway3,
+    ),
   );
 }
 
 /** @internal */
-export const ProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
-  typeof ProviderAwsAlbEnum3
-> = z.enum(ProviderAwsAlbEnum3);
+export const PrepareDeploymentStackProviderAwsAlbEnum3$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderAwsAlbEnum3> = z.enum(
+    PrepareDeploymentStackProviderAwsAlbEnum3,
+  );
 
 /** @internal */
-export type ProviderAwsAlb3$Outbound = {
+export type PrepareDeploymentStackProviderAwsAlb3$Outbound = {
   ipAddressType?: string | null | undefined;
   provider: string;
   scheme: string;
@@ -1758,55 +2147,67 @@ export type ProviderAwsAlb3$Outbound = {
 };
 
 /** @internal */
-export const ProviderAwsAlb3$outboundSchema: z.ZodType<
-  ProviderAwsAlb3$Outbound,
-  ProviderAwsAlb3
+export const PrepareDeploymentStackProviderAwsAlb3$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderAwsAlb3$Outbound,
+  PrepareDeploymentStackProviderAwsAlb3
 > = z.object({
   ipAddressType: z.nullable(z.string()).optional(),
-  provider: ProviderAwsAlbEnum3$outboundSchema,
+  provider: PrepareDeploymentStackProviderAwsAlbEnum3$outboundSchema,
   scheme: z.string(),
   subnetIds: z.array(z.string()).optional(),
   targetType: z.string(),
 });
 
-export function providerAwsAlb3ToJSON(
-  providerAwsAlb3: ProviderAwsAlb3,
+export function prepareDeploymentStackProviderAwsAlb3ToJSON(
+  prepareDeploymentStackProviderAwsAlb3: PrepareDeploymentStackProviderAwsAlb3,
 ): string {
-  return JSON.stringify(ProviderAwsAlb3$outboundSchema.parse(providerAwsAlb3));
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAwsAlb3$outboundSchema.parse(
+      prepareDeploymentStackProviderAwsAlb3,
+    ),
+  );
 }
 
 /** @internal */
-export type ProviderUnion3$Outbound =
-  | ProviderAwsAlb3$Outbound
-  | ProviderAzureApplicationGatewayForContainers3$Outbound
-  | ProviderGkeGateway3$Outbound
+export type PrepareDeploymentStackProviderUnion3$Outbound =
+  | PrepareDeploymentStackProviderAwsAlb3$Outbound
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound
+  | PrepareDeploymentStackProviderGkeGateway3$Outbound
   | any;
 
 /** @internal */
-export const ProviderUnion3$outboundSchema: z.ZodType<
-  ProviderUnion3$Outbound,
-  ProviderUnion3
+export const PrepareDeploymentStackProviderUnion3$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderUnion3$Outbound,
+  PrepareDeploymentStackProviderUnion3
 > = z.union([
-  z.lazy(() => ProviderAwsAlb3$outboundSchema),
-  z.lazy(() => ProviderAzureApplicationGatewayForContainers3$outboundSchema),
-  z.lazy(() => ProviderGkeGateway3$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackProviderAwsAlb3$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackProviderGkeGateway3$outboundSchema),
   z.any(),
 ]);
 
-export function providerUnion3ToJSON(providerUnion3: ProviderUnion3): string {
-  return JSON.stringify(ProviderUnion3$outboundSchema.parse(providerUnion3));
+export function prepareDeploymentStackProviderUnion3ToJSON(
+  prepareDeploymentStackProviderUnion3: PrepareDeploymentStackProviderUnion3,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderUnion3$outboundSchema.parse(
+      prepareDeploymentStackProviderUnion3,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteIngress2$Outbound = {
+export type PrepareDeploymentStackRouteIngress2$Outbound = {
   annotations?: { [k: string]: string } | undefined;
   controller?: string | null | undefined;
   ingressClassName: string;
   labels?: { [k: string]: string } | undefined;
   provider?:
-    | ProviderAwsAlb3$Outbound
-    | ProviderAzureApplicationGatewayForContainers3$Outbound
-    | ProviderGkeGateway3$Outbound
+    | PrepareDeploymentStackProviderAwsAlb3$Outbound
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound
+    | PrepareDeploymentStackProviderGkeGateway3$Outbound
     | any
     | null
     | undefined;
@@ -1814,9 +2215,9 @@ export type RouteIngress2$Outbound = {
 };
 
 /** @internal */
-export const RouteIngress2$outboundSchema: z.ZodType<
-  RouteIngress2$Outbound,
-  RouteIngress2
+export const PrepareDeploymentStackRouteIngress2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteIngress2$Outbound,
+  PrepareDeploymentStackRouteIngress2
 > = z.object({
   annotations: z.record(z.string(), z.string()).optional(),
   controller: z.nullable(z.string()).optional(),
@@ -1824,301 +2225,359 @@ export const RouteIngress2$outboundSchema: z.ZodType<
   labels: z.record(z.string(), z.string()).optional(),
   provider: z.nullable(
     z.union([
-      z.lazy(() => ProviderAwsAlb3$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderAwsAlb3$outboundSchema),
       z.lazy(() =>
-        ProviderAzureApplicationGatewayForContainers3$outboundSchema
+        PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
-      z.lazy(() => ProviderGkeGateway3$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderGkeGateway3$outboundSchema),
       z.any(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
 });
 
-export function routeIngress2ToJSON(routeIngress2: RouteIngress2): string {
-  return JSON.stringify(RouteIngress2$outboundSchema.parse(routeIngress2));
+export function prepareDeploymentStackRouteIngress2ToJSON(
+  prepareDeploymentStackRouteIngress2: PrepareDeploymentStackRouteIngress2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackRouteIngress2$outboundSchema.parse(
+      prepareDeploymentStackRouteIngress2,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteUnion2$Outbound =
-  | RouteIngress2$Outbound
-  | RouteGateway2$Outbound;
+export type PrepareDeploymentStackRouteUnion2$Outbound =
+  | PrepareDeploymentStackRouteIngress2$Outbound
+  | PrepareDeploymentStackRouteGateway2$Outbound;
 
 /** @internal */
-export const RouteUnion2$outboundSchema: z.ZodType<
-  RouteUnion2$Outbound,
-  RouteUnion2
+export const PrepareDeploymentStackRouteUnion2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteUnion2$Outbound,
+  PrepareDeploymentStackRouteUnion2
 > = z.union([
-  z.lazy(() => RouteIngress2$outboundSchema),
-  z.lazy(() => RouteGateway2$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackRouteIngress2$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackRouteGateway2$outboundSchema),
 ]);
 
-export function routeUnion2ToJSON(routeUnion2: RouteUnion2): string {
-  return JSON.stringify(RouteUnion2$outboundSchema.parse(routeUnion2));
+export function prepareDeploymentStackRouteUnion2ToJSON(
+  prepareDeploymentStackRouteUnion2: PrepareDeploymentStackRouteUnion2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackRouteUnion2$outboundSchema.parse(
+      prepareDeploymentStackRouteUnion2,
+    ),
+  );
 }
 
 /** @internal */
-export type ExposureCustom$Outbound = {
+export type PrepareDeploymentStackExposureCustom$Outbound = {
   certificate:
-    | CertificateTLSSecretRef2$Outbound
-    | CertificateManagedAcmImport2$Outbound
-    | CertificateAwsAcmArn2$Outbound
-    | CertificateManagedTLSSecret2$Outbound
-    | CertificateNone2$Outbound;
+    | PrepareDeploymentStackCertificateTLSSecretRef2$Outbound
+    | PrepareDeploymentStackCertificateManagedAcmImport2$Outbound
+    | PrepareDeploymentStackCertificateAwsAcmArn2$Outbound
+    | PrepareDeploymentStackCertificateManagedTLSSecret2$Outbound
+    | PrepareDeploymentStackCertificateNone2$Outbound;
   domain: string;
   mode: string;
-  route: RouteIngress2$Outbound | RouteGateway2$Outbound;
+  route:
+    | PrepareDeploymentStackRouteIngress2$Outbound
+    | PrepareDeploymentStackRouteGateway2$Outbound;
 };
 
 /** @internal */
-export const ExposureCustom$outboundSchema: z.ZodType<
-  ExposureCustom$Outbound,
-  ExposureCustom
+export const PrepareDeploymentStackExposureCustom$outboundSchema: z.ZodType<
+  PrepareDeploymentStackExposureCustom$Outbound,
+  PrepareDeploymentStackExposureCustom
 > = z.object({
   certificate: z.union([
-    z.lazy(() => CertificateTLSSecretRef2$outboundSchema),
-    z.lazy(() => CertificateManagedAcmImport2$outboundSchema),
-    z.lazy(() => CertificateAwsAcmArn2$outboundSchema),
-    z.lazy(() => CertificateManagedTLSSecret2$outboundSchema),
-    z.lazy(() => CertificateNone2$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackCertificateTLSSecretRef2$outboundSchema),
+    z.lazy(() =>
+      PrepareDeploymentStackCertificateManagedAcmImport2$outboundSchema
+    ),
+    z.lazy(() => PrepareDeploymentStackCertificateAwsAcmArn2$outboundSchema),
+    z.lazy(() =>
+      PrepareDeploymentStackCertificateManagedTLSSecret2$outboundSchema
+    ),
+    z.lazy(() => PrepareDeploymentStackCertificateNone2$outboundSchema),
   ]),
   domain: z.string(),
-  mode: ModeCustom$outboundSchema,
+  mode: PrepareDeploymentStackModeCustom$outboundSchema,
   route: z.union([
-    z.lazy(() => RouteIngress2$outboundSchema),
-    z.lazy(() => RouteGateway2$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackRouteIngress2$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackRouteGateway2$outboundSchema),
   ]),
 });
 
-export function exposureCustomToJSON(exposureCustom: ExposureCustom): string {
-  return JSON.stringify(ExposureCustom$outboundSchema.parse(exposureCustom));
-}
-
-/** @internal */
-export type CertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const CertificateNone1$outboundSchema: z.ZodType<
-  CertificateNone1$Outbound,
-  CertificateNone1
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function certificateNone1ToJSON(
-  certificateNone1: CertificateNone1,
+export function prepareDeploymentStackExposureCustomToJSON(
+  prepareDeploymentStackExposureCustom: PrepareDeploymentStackExposureCustom,
 ): string {
   return JSON.stringify(
-    CertificateNone1$outboundSchema.parse(certificateNone1),
-  );
-}
-
-/** @internal */
-export type CertificateManagedTLSSecret1$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const CertificateManagedTLSSecret1$outboundSchema: z.ZodType<
-  CertificateManagedTLSSecret1$Outbound,
-  CertificateManagedTLSSecret1
-> = z.object({
-  mode: z.literal("managedTlsSecret"),
-  secretNameTemplate: z.string(),
-});
-
-export function certificateManagedTLSSecret1ToJSON(
-  certificateManagedTLSSecret1: CertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    CertificateManagedTLSSecret1$outboundSchema.parse(
-      certificateManagedTLSSecret1,
+    PrepareDeploymentStackExposureCustom$outboundSchema.parse(
+      prepareDeploymentStackExposureCustom,
     ),
   );
 }
 
 /** @internal */
-export type CertificateAwsAcmArn1$Outbound = {
+export type PrepareDeploymentStackCertificateNone1$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const PrepareDeploymentStackCertificateNone1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCertificateNone1$Outbound,
+  PrepareDeploymentStackCertificateNone1
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function prepareDeploymentStackCertificateNone1ToJSON(
+  prepareDeploymentStackCertificateNone1:
+    PrepareDeploymentStackCertificateNone1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateNone1$outboundSchema.parse(
+      prepareDeploymentStackCertificateNone1,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCertificateManagedTLSSecret1$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const PrepareDeploymentStackCertificateManagedTLSSecret1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateManagedTLSSecret1$Outbound,
+    PrepareDeploymentStackCertificateManagedTLSSecret1
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function prepareDeploymentStackCertificateManagedTLSSecret1ToJSON(
+  prepareDeploymentStackCertificateManagedTLSSecret1:
+    PrepareDeploymentStackCertificateManagedTLSSecret1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateManagedTLSSecret1$outboundSchema.parse(
+      prepareDeploymentStackCertificateManagedTLSSecret1,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackCertificateAwsAcmArn1$Outbound = {
   certificateArn: string;
   mode: "awsAcmArn";
 };
 
 /** @internal */
-export const CertificateAwsAcmArn1$outboundSchema: z.ZodType<
-  CertificateAwsAcmArn1$Outbound,
-  CertificateAwsAcmArn1
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
+export const PrepareDeploymentStackCertificateAwsAcmArn1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateAwsAcmArn1$Outbound,
+    PrepareDeploymentStackCertificateAwsAcmArn1
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
 
-export function certificateAwsAcmArn1ToJSON(
-  certificateAwsAcmArn1: CertificateAwsAcmArn1,
+export function prepareDeploymentStackCertificateAwsAcmArn1ToJSON(
+  prepareDeploymentStackCertificateAwsAcmArn1:
+    PrepareDeploymentStackCertificateAwsAcmArn1,
 ): string {
   return JSON.stringify(
-    CertificateAwsAcmArn1$outboundSchema.parse(certificateAwsAcmArn1),
+    PrepareDeploymentStackCertificateAwsAcmArn1$outboundSchema.parse(
+      prepareDeploymentStackCertificateAwsAcmArn1,
+    ),
   );
 }
 
 /** @internal */
-export type CertificateManagedAcmImport1$Outbound = {
+export type PrepareDeploymentStackCertificateManagedAcmImport1$Outbound = {
   mode: "managedAcmImport";
   region?: string | null | undefined;
   tags?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
-export const CertificateManagedAcmImport1$outboundSchema: z.ZodType<
-  CertificateManagedAcmImport1$Outbound,
-  CertificateManagedAcmImport1
-> = z.object({
-  mode: z.literal("managedAcmImport"),
-  region: z.nullable(z.string()).optional(),
-  tags: z.record(z.string(), z.string()).optional(),
-});
+export const PrepareDeploymentStackCertificateManagedAcmImport1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackCertificateManagedAcmImport1$Outbound,
+    PrepareDeploymentStackCertificateManagedAcmImport1
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
 
-export function certificateManagedAcmImport1ToJSON(
-  certificateManagedAcmImport1: CertificateManagedAcmImport1,
+export function prepareDeploymentStackCertificateManagedAcmImport1ToJSON(
+  prepareDeploymentStackCertificateManagedAcmImport1:
+    PrepareDeploymentStackCertificateManagedAcmImport1,
 ): string {
   return JSON.stringify(
-    CertificateManagedAcmImport1$outboundSchema.parse(
-      certificateManagedAcmImport1,
+    PrepareDeploymentStackCertificateManagedAcmImport1$outboundSchema.parse(
+      prepareDeploymentStackCertificateManagedAcmImport1,
     ),
   );
 }
 
 /** @internal */
-export type CertificateTLSSecretRef1$Outbound = {
+export type PrepareDeploymentStackCertificateTLSSecretRef1$Outbound = {
   namespace?: string | null | undefined;
   secretName: string;
   mode: "tlsSecretRef";
 };
 
 /** @internal */
-export const CertificateTLSSecretRef1$outboundSchema: z.ZodType<
-  CertificateTLSSecretRef1$Outbound,
-  CertificateTLSSecretRef1
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function certificateTLSSecretRef1ToJSON(
-  certificateTLSSecretRef1: CertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    CertificateTLSSecretRef1$outboundSchema.parse(certificateTLSSecretRef1),
-  );
-}
-
-/** @internal */
-export type CertificateUnion1$Outbound =
-  | CertificateTLSSecretRef1$Outbound
-  | CertificateManagedAcmImport1$Outbound
-  | CertificateAwsAcmArn1$Outbound
-  | CertificateManagedTLSSecret1$Outbound
-  | CertificateNone1$Outbound;
-
-/** @internal */
-export const CertificateUnion1$outboundSchema: z.ZodType<
-  CertificateUnion1$Outbound,
-  CertificateUnion1
-> = z.union([
-  z.lazy(() => CertificateTLSSecretRef1$outboundSchema),
-  z.lazy(() => CertificateManagedAcmImport1$outboundSchema),
-  z.lazy(() => CertificateAwsAcmArn1$outboundSchema),
-  z.lazy(() => CertificateManagedTLSSecret1$outboundSchema),
-  z.lazy(() => CertificateNone1$outboundSchema),
-]);
-
-export function certificateUnion1ToJSON(
-  certificateUnion1: CertificateUnion1,
-): string {
-  return JSON.stringify(
-    CertificateUnion1$outboundSchema.parse(certificateUnion1),
-  );
-}
-
-/** @internal */
-export const ModeGenerated$outboundSchema: z.ZodEnum<typeof ModeGenerated> = z
-  .enum(ModeGenerated);
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum2> = z.enum(
-    ProviderAzureApplicationGatewayForContainersEnum2,
-  );
-
-/** @internal */
-export type ProviderAzureApplicationGatewayForContainers2$Outbound = {
-  albName?: string | null | undefined;
-  albNamespace?: string | null | undefined;
-  frontend: string;
-  provider: string;
-};
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainers2$outboundSchema:
+export const PrepareDeploymentStackCertificateTLSSecretRef1$outboundSchema:
   z.ZodType<
-    ProviderAzureApplicationGatewayForContainers2$Outbound,
-    ProviderAzureApplicationGatewayForContainers2
+    PrepareDeploymentStackCertificateTLSSecretRef1$Outbound,
+    PrepareDeploymentStackCertificateTLSSecretRef1
   > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider: ProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
   });
 
-export function providerAzureApplicationGatewayForContainers2ToJSON(
-  providerAzureApplicationGatewayForContainers2:
-    ProviderAzureApplicationGatewayForContainers2,
+export function prepareDeploymentStackCertificateTLSSecretRef1ToJSON(
+  prepareDeploymentStackCertificateTLSSecretRef1:
+    PrepareDeploymentStackCertificateTLSSecretRef1,
 ): string {
   return JSON.stringify(
-    ProviderAzureApplicationGatewayForContainers2$outboundSchema.parse(
-      providerAzureApplicationGatewayForContainers2,
+    PrepareDeploymentStackCertificateTLSSecretRef1$outboundSchema.parse(
+      prepareDeploymentStackCertificateTLSSecretRef1,
     ),
   );
 }
 
 /** @internal */
-export const ProviderGkeGatewayEnum2$outboundSchema: z.ZodEnum<
-  typeof ProviderGkeGatewayEnum2
-> = z.enum(ProviderGkeGatewayEnum2);
+export type PrepareDeploymentStackCertificateUnion1$Outbound =
+  | PrepareDeploymentStackCertificateTLSSecretRef1$Outbound
+  | PrepareDeploymentStackCertificateManagedAcmImport1$Outbound
+  | PrepareDeploymentStackCertificateAwsAcmArn1$Outbound
+  | PrepareDeploymentStackCertificateManagedTLSSecret1$Outbound
+  | PrepareDeploymentStackCertificateNone1$Outbound;
 
 /** @internal */
-export type ProviderGkeGateway2$Outbound = {
+export const PrepareDeploymentStackCertificateUnion1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackCertificateUnion1$Outbound,
+  PrepareDeploymentStackCertificateUnion1
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackCertificateTLSSecretRef1$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackCertificateManagedAcmImport1$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackCertificateAwsAcmArn1$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackCertificateManagedTLSSecret1$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackCertificateNone1$outboundSchema),
+]);
+
+export function prepareDeploymentStackCertificateUnion1ToJSON(
+  prepareDeploymentStackCertificateUnion1:
+    PrepareDeploymentStackCertificateUnion1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackCertificateUnion1$outboundSchema.parse(
+      prepareDeploymentStackCertificateUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackModeGenerated$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackModeGenerated
+> = z.enum(PrepareDeploymentStackModeGenerated);
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
+  z.ZodEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound,
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+  });
+
+export function prepareDeploymentStackProviderAzureApplicationGatewayForContainers2ToJSON(
+  prepareDeploymentStackProviderAzureApplicationGatewayForContainers2:
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema
+      .parse(
+        prepareDeploymentStackProviderAzureApplicationGatewayForContainers2,
+      ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackProviderGkeGatewayEnum2$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderGkeGatewayEnum2> = z.enum(
+    PrepareDeploymentStackProviderGkeGatewayEnum2,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderGkeGateway2$Outbound = {
   provider: string;
   staticAddressName?: string | null | undefined;
 };
 
 /** @internal */
-export const ProviderGkeGateway2$outboundSchema: z.ZodType<
-  ProviderGkeGateway2$Outbound,
-  ProviderGkeGateway2
-> = z.object({
-  provider: ProviderGkeGatewayEnum2$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
+export const PrepareDeploymentStackProviderGkeGateway2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderGkeGateway2$Outbound,
+    PrepareDeploymentStackProviderGkeGateway2
+  > = z.object({
+    provider: PrepareDeploymentStackProviderGkeGatewayEnum2$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
 
-export function providerGkeGateway2ToJSON(
-  providerGkeGateway2: ProviderGkeGateway2,
+export function prepareDeploymentStackProviderGkeGateway2ToJSON(
+  prepareDeploymentStackProviderGkeGateway2:
+    PrepareDeploymentStackProviderGkeGateway2,
 ): string {
   return JSON.stringify(
-    ProviderGkeGateway2$outboundSchema.parse(providerGkeGateway2),
+    PrepareDeploymentStackProviderGkeGateway2$outboundSchema.parse(
+      prepareDeploymentStackProviderGkeGateway2,
+    ),
   );
 }
 
 /** @internal */
-export const ProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
-  typeof ProviderAwsAlbEnum2
-> = z.enum(ProviderAwsAlbEnum2);
+export const PrepareDeploymentStackProviderAwsAlbEnum2$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderAwsAlbEnum2> = z.enum(
+    PrepareDeploymentStackProviderAwsAlbEnum2,
+  );
 
 /** @internal */
-export type ProviderAwsAlb2$Outbound = {
+export type PrepareDeploymentStackProviderAwsAlb2$Outbound = {
   ipAddressType?: string | null | undefined;
   provider: string;
   scheme: string;
@@ -2127,56 +2586,68 @@ export type ProviderAwsAlb2$Outbound = {
 };
 
 /** @internal */
-export const ProviderAwsAlb2$outboundSchema: z.ZodType<
-  ProviderAwsAlb2$Outbound,
-  ProviderAwsAlb2
+export const PrepareDeploymentStackProviderAwsAlb2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderAwsAlb2$Outbound,
+  PrepareDeploymentStackProviderAwsAlb2
 > = z.object({
   ipAddressType: z.nullable(z.string()).optional(),
-  provider: ProviderAwsAlbEnum2$outboundSchema,
+  provider: PrepareDeploymentStackProviderAwsAlbEnum2$outboundSchema,
   scheme: z.string(),
   subnetIds: z.array(z.string()).optional(),
   targetType: z.string(),
 });
 
-export function providerAwsAlb2ToJSON(
-  providerAwsAlb2: ProviderAwsAlb2,
+export function prepareDeploymentStackProviderAwsAlb2ToJSON(
+  prepareDeploymentStackProviderAwsAlb2: PrepareDeploymentStackProviderAwsAlb2,
 ): string {
-  return JSON.stringify(ProviderAwsAlb2$outboundSchema.parse(providerAwsAlb2));
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAwsAlb2$outboundSchema.parse(
+      prepareDeploymentStackProviderAwsAlb2,
+    ),
+  );
 }
 
 /** @internal */
-export type ProviderUnion2$Outbound =
-  | ProviderAwsAlb2$Outbound
-  | ProviderAzureApplicationGatewayForContainers2$Outbound
-  | ProviderGkeGateway2$Outbound
+export type PrepareDeploymentStackProviderUnion2$Outbound =
+  | PrepareDeploymentStackProviderAwsAlb2$Outbound
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound
+  | PrepareDeploymentStackProviderGkeGateway2$Outbound
   | any;
 
 /** @internal */
-export const ProviderUnion2$outboundSchema: z.ZodType<
-  ProviderUnion2$Outbound,
-  ProviderUnion2
+export const PrepareDeploymentStackProviderUnion2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderUnion2$Outbound,
+  PrepareDeploymentStackProviderUnion2
 > = z.union([
-  z.lazy(() => ProviderAwsAlb2$outboundSchema),
-  z.lazy(() => ProviderAzureApplicationGatewayForContainers2$outboundSchema),
-  z.lazy(() => ProviderGkeGateway2$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackProviderAwsAlb2$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackProviderGkeGateway2$outboundSchema),
   z.any(),
 ]);
 
-export function providerUnion2ToJSON(providerUnion2: ProviderUnion2): string {
-  return JSON.stringify(ProviderUnion2$outboundSchema.parse(providerUnion2));
+export function prepareDeploymentStackProviderUnion2ToJSON(
+  prepareDeploymentStackProviderUnion2: PrepareDeploymentStackProviderUnion2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderUnion2$outboundSchema.parse(
+      prepareDeploymentStackProviderUnion2,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteGateway1$Outbound = {
+export type PrepareDeploymentStackRouteGateway1$Outbound = {
   annotations?: { [k: string]: string } | undefined;
   controller?: string | null | undefined;
   gatewayClassName: string;
   labels?: { [k: string]: string } | undefined;
   listenerPort: number;
   provider?:
-    | ProviderAwsAlb2$Outbound
-    | ProviderAzureApplicationGatewayForContainers2$Outbound
-    | ProviderGkeGateway2$Outbound
+    | PrepareDeploymentStackProviderAwsAlb2$Outbound
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound
+    | PrepareDeploymentStackProviderGkeGateway2$Outbound
     | any
     | null
     | undefined;
@@ -2184,9 +2655,9 @@ export type RouteGateway1$Outbound = {
 };
 
 /** @internal */
-export const RouteGateway1$outboundSchema: z.ZodType<
-  RouteGateway1$Outbound,
-  RouteGateway1
+export const PrepareDeploymentStackRouteGateway1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteGateway1$Outbound,
+  PrepareDeploymentStackRouteGateway1
 > = z.object({
   annotations: z.record(z.string(), z.string()).optional(),
   controller: z.nullable(z.string()).optional(),
@@ -2195,93 +2666,110 @@ export const RouteGateway1$outboundSchema: z.ZodType<
   listenerPort: z.int(),
   provider: z.nullable(
     z.union([
-      z.lazy(() => ProviderAwsAlb2$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderAwsAlb2$outboundSchema),
       z.lazy(() =>
-        ProviderAzureApplicationGatewayForContainers2$outboundSchema
+        PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
-      z.lazy(() => ProviderGkeGateway2$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderGkeGateway2$outboundSchema),
       z.any(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
 });
 
-export function routeGateway1ToJSON(routeGateway1: RouteGateway1): string {
-  return JSON.stringify(RouteGateway1$outboundSchema.parse(routeGateway1));
-}
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum1> = z.enum(
-    ProviderAzureApplicationGatewayForContainersEnum1,
-  );
-
-/** @internal */
-export type ProviderAzureApplicationGatewayForContainers1$Outbound = {
-  albName?: string | null | undefined;
-  albNamespace?: string | null | undefined;
-  frontend: string;
-  provider: string;
-};
-
-/** @internal */
-export const ProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    ProviderAzureApplicationGatewayForContainers1$Outbound,
-    ProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider: ProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function providerAzureApplicationGatewayForContainers1ToJSON(
-  providerAzureApplicationGatewayForContainers1:
-    ProviderAzureApplicationGatewayForContainers1,
+export function prepareDeploymentStackRouteGateway1ToJSON(
+  prepareDeploymentStackRouteGateway1: PrepareDeploymentStackRouteGateway1,
 ): string {
   return JSON.stringify(
-    ProviderAzureApplicationGatewayForContainers1$outboundSchema.parse(
-      providerAzureApplicationGatewayForContainers1,
+    PrepareDeploymentStackRouteGateway1$outboundSchema.parse(
+      prepareDeploymentStackRouteGateway1,
     ),
   );
 }
 
 /** @internal */
-export const ProviderGkeGatewayEnum1$outboundSchema: z.ZodEnum<
-  typeof ProviderGkeGatewayEnum1
-> = z.enum(ProviderGkeGatewayEnum1);
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
+  z.ZodEnum<
+    typeof PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1,
+  );
 
 /** @internal */
-export type ProviderGkeGateway1$Outbound = {
+export type PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound,
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PrepareDeploymentStackProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
+  });
+
+export function prepareDeploymentStackProviderAzureApplicationGatewayForContainers1ToJSON(
+  prepareDeploymentStackProviderAzureApplicationGatewayForContainers1:
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema
+      .parse(
+        prepareDeploymentStackProviderAzureApplicationGatewayForContainers1,
+      ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackProviderGkeGatewayEnum1$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderGkeGatewayEnum1> = z.enum(
+    PrepareDeploymentStackProviderGkeGatewayEnum1,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackProviderGkeGateway1$Outbound = {
   provider: string;
   staticAddressName?: string | null | undefined;
 };
 
 /** @internal */
-export const ProviderGkeGateway1$outboundSchema: z.ZodType<
-  ProviderGkeGateway1$Outbound,
-  ProviderGkeGateway1
-> = z.object({
-  provider: ProviderGkeGatewayEnum1$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
+export const PrepareDeploymentStackProviderGkeGateway1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackProviderGkeGateway1$Outbound,
+    PrepareDeploymentStackProviderGkeGateway1
+  > = z.object({
+    provider: PrepareDeploymentStackProviderGkeGatewayEnum1$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
 
-export function providerGkeGateway1ToJSON(
-  providerGkeGateway1: ProviderGkeGateway1,
+export function prepareDeploymentStackProviderGkeGateway1ToJSON(
+  prepareDeploymentStackProviderGkeGateway1:
+    PrepareDeploymentStackProviderGkeGateway1,
 ): string {
   return JSON.stringify(
-    ProviderGkeGateway1$outboundSchema.parse(providerGkeGateway1),
+    PrepareDeploymentStackProviderGkeGateway1$outboundSchema.parse(
+      prepareDeploymentStackProviderGkeGateway1,
+    ),
   );
 }
 
 /** @internal */
-export const ProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
-  typeof ProviderAwsAlbEnum1
-> = z.enum(ProviderAwsAlbEnum1);
+export const PrepareDeploymentStackProviderAwsAlbEnum1$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackProviderAwsAlbEnum1> = z.enum(
+    PrepareDeploymentStackProviderAwsAlbEnum1,
+  );
 
 /** @internal */
-export type ProviderAwsAlb1$Outbound = {
+export type PrepareDeploymentStackProviderAwsAlb1$Outbound = {
   ipAddressType?: string | null | undefined;
   provider: string;
   scheme: string;
@@ -2290,55 +2778,67 @@ export type ProviderAwsAlb1$Outbound = {
 };
 
 /** @internal */
-export const ProviderAwsAlb1$outboundSchema: z.ZodType<
-  ProviderAwsAlb1$Outbound,
-  ProviderAwsAlb1
+export const PrepareDeploymentStackProviderAwsAlb1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderAwsAlb1$Outbound,
+  PrepareDeploymentStackProviderAwsAlb1
 > = z.object({
   ipAddressType: z.nullable(z.string()).optional(),
-  provider: ProviderAwsAlbEnum1$outboundSchema,
+  provider: PrepareDeploymentStackProviderAwsAlbEnum1$outboundSchema,
   scheme: z.string(),
   subnetIds: z.array(z.string()).optional(),
   targetType: z.string(),
 });
 
-export function providerAwsAlb1ToJSON(
-  providerAwsAlb1: ProviderAwsAlb1,
+export function prepareDeploymentStackProviderAwsAlb1ToJSON(
+  prepareDeploymentStackProviderAwsAlb1: PrepareDeploymentStackProviderAwsAlb1,
 ): string {
-  return JSON.stringify(ProviderAwsAlb1$outboundSchema.parse(providerAwsAlb1));
+  return JSON.stringify(
+    PrepareDeploymentStackProviderAwsAlb1$outboundSchema.parse(
+      prepareDeploymentStackProviderAwsAlb1,
+    ),
+  );
 }
 
 /** @internal */
-export type ProviderUnion1$Outbound =
-  | ProviderAwsAlb1$Outbound
-  | ProviderAzureApplicationGatewayForContainers1$Outbound
-  | ProviderGkeGateway1$Outbound
+export type PrepareDeploymentStackProviderUnion1$Outbound =
+  | PrepareDeploymentStackProviderAwsAlb1$Outbound
+  | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound
+  | PrepareDeploymentStackProviderGkeGateway1$Outbound
   | any;
 
 /** @internal */
-export const ProviderUnion1$outboundSchema: z.ZodType<
-  ProviderUnion1$Outbound,
-  ProviderUnion1
+export const PrepareDeploymentStackProviderUnion1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackProviderUnion1$Outbound,
+  PrepareDeploymentStackProviderUnion1
 > = z.union([
-  z.lazy(() => ProviderAwsAlb1$outboundSchema),
-  z.lazy(() => ProviderAzureApplicationGatewayForContainers1$outboundSchema),
-  z.lazy(() => ProviderGkeGateway1$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackProviderAwsAlb1$outboundSchema),
+  z.lazy(() =>
+    PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema
+  ),
+  z.lazy(() => PrepareDeploymentStackProviderGkeGateway1$outboundSchema),
   z.any(),
 ]);
 
-export function providerUnion1ToJSON(providerUnion1: ProviderUnion1): string {
-  return JSON.stringify(ProviderUnion1$outboundSchema.parse(providerUnion1));
+export function prepareDeploymentStackProviderUnion1ToJSON(
+  prepareDeploymentStackProviderUnion1: PrepareDeploymentStackProviderUnion1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackProviderUnion1$outboundSchema.parse(
+      prepareDeploymentStackProviderUnion1,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteIngress1$Outbound = {
+export type PrepareDeploymentStackRouteIngress1$Outbound = {
   annotations?: { [k: string]: string } | undefined;
   controller?: string | null | undefined;
   ingressClassName: string;
   labels?: { [k: string]: string } | undefined;
   provider?:
-    | ProviderAwsAlb1$Outbound
-    | ProviderAzureApplicationGatewayForContainers1$Outbound
-    | ProviderGkeGateway1$Outbound
+    | PrepareDeploymentStackProviderAwsAlb1$Outbound
+    | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound
+    | PrepareDeploymentStackProviderGkeGateway1$Outbound
     | any
     | null
     | undefined;
@@ -2346,9 +2846,9 @@ export type RouteIngress1$Outbound = {
 };
 
 /** @internal */
-export const RouteIngress1$outboundSchema: z.ZodType<
-  RouteIngress1$Outbound,
-  RouteIngress1
+export const PrepareDeploymentStackRouteIngress1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteIngress1$Outbound,
+  PrepareDeploymentStackRouteIngress1
 > = z.object({
   annotations: z.record(z.string(), z.string()).optional(),
   controller: z.nullable(z.string()).optional(),
@@ -2356,130 +2856,163 @@ export const RouteIngress1$outboundSchema: z.ZodType<
   labels: z.record(z.string(), z.string()).optional(),
   provider: z.nullable(
     z.union([
-      z.lazy(() => ProviderAwsAlb1$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderAwsAlb1$outboundSchema),
       z.lazy(() =>
-        ProviderAzureApplicationGatewayForContainers1$outboundSchema
+        PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
-      z.lazy(() => ProviderGkeGateway1$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackProviderGkeGateway1$outboundSchema),
       z.any(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
 });
 
-export function routeIngress1ToJSON(routeIngress1: RouteIngress1): string {
-  return JSON.stringify(RouteIngress1$outboundSchema.parse(routeIngress1));
+export function prepareDeploymentStackRouteIngress1ToJSON(
+  prepareDeploymentStackRouteIngress1: PrepareDeploymentStackRouteIngress1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackRouteIngress1$outboundSchema.parse(
+      prepareDeploymentStackRouteIngress1,
+    ),
+  );
 }
 
 /** @internal */
-export type RouteUnion1$Outbound =
-  | RouteIngress1$Outbound
-  | RouteGateway1$Outbound;
+export type PrepareDeploymentStackRouteUnion1$Outbound =
+  | PrepareDeploymentStackRouteIngress1$Outbound
+  | PrepareDeploymentStackRouteGateway1$Outbound;
 
 /** @internal */
-export const RouteUnion1$outboundSchema: z.ZodType<
-  RouteUnion1$Outbound,
-  RouteUnion1
+export const PrepareDeploymentStackRouteUnion1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRouteUnion1$Outbound,
+  PrepareDeploymentStackRouteUnion1
 > = z.union([
-  z.lazy(() => RouteIngress1$outboundSchema),
-  z.lazy(() => RouteGateway1$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackRouteIngress1$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackRouteGateway1$outboundSchema),
 ]);
 
-export function routeUnion1ToJSON(routeUnion1: RouteUnion1): string {
-  return JSON.stringify(RouteUnion1$outboundSchema.parse(routeUnion1));
+export function prepareDeploymentStackRouteUnion1ToJSON(
+  prepareDeploymentStackRouteUnion1: PrepareDeploymentStackRouteUnion1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackRouteUnion1$outboundSchema.parse(
+      prepareDeploymentStackRouteUnion1,
+    ),
+  );
 }
 
 /** @internal */
-export type ExposureGenerated$Outbound = {
+export type PrepareDeploymentStackExposureGenerated$Outbound = {
   certificate:
-    | CertificateTLSSecretRef1$Outbound
-    | CertificateManagedAcmImport1$Outbound
-    | CertificateAwsAcmArn1$Outbound
-    | CertificateManagedTLSSecret1$Outbound
-    | CertificateNone1$Outbound;
+    | PrepareDeploymentStackCertificateTLSSecretRef1$Outbound
+    | PrepareDeploymentStackCertificateManagedAcmImport1$Outbound
+    | PrepareDeploymentStackCertificateAwsAcmArn1$Outbound
+    | PrepareDeploymentStackCertificateManagedTLSSecret1$Outbound
+    | PrepareDeploymentStackCertificateNone1$Outbound;
   mode: string;
-  route: RouteIngress1$Outbound | RouteGateway1$Outbound;
+  route:
+    | PrepareDeploymentStackRouteIngress1$Outbound
+    | PrepareDeploymentStackRouteGateway1$Outbound;
 };
 
 /** @internal */
-export const ExposureGenerated$outboundSchema: z.ZodType<
-  ExposureGenerated$Outbound,
-  ExposureGenerated
+export const PrepareDeploymentStackExposureGenerated$outboundSchema: z.ZodType<
+  PrepareDeploymentStackExposureGenerated$Outbound,
+  PrepareDeploymentStackExposureGenerated
 > = z.object({
   certificate: z.union([
-    z.lazy(() => CertificateTLSSecretRef1$outboundSchema),
-    z.lazy(() => CertificateManagedAcmImport1$outboundSchema),
-    z.lazy(() => CertificateAwsAcmArn1$outboundSchema),
-    z.lazy(() => CertificateManagedTLSSecret1$outboundSchema),
-    z.lazy(() => CertificateNone1$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackCertificateTLSSecretRef1$outboundSchema),
+    z.lazy(() =>
+      PrepareDeploymentStackCertificateManagedAcmImport1$outboundSchema
+    ),
+    z.lazy(() => PrepareDeploymentStackCertificateAwsAcmArn1$outboundSchema),
+    z.lazy(() =>
+      PrepareDeploymentStackCertificateManagedTLSSecret1$outboundSchema
+    ),
+    z.lazy(() => PrepareDeploymentStackCertificateNone1$outboundSchema),
   ]),
-  mode: ModeGenerated$outboundSchema,
+  mode: PrepareDeploymentStackModeGenerated$outboundSchema,
   route: z.union([
-    z.lazy(() => RouteIngress1$outboundSchema),
-    z.lazy(() => RouteGateway1$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackRouteIngress1$outboundSchema),
+    z.lazy(() => PrepareDeploymentStackRouteGateway1$outboundSchema),
   ]),
 });
 
-export function exposureGeneratedToJSON(
-  exposureGenerated: ExposureGenerated,
+export function prepareDeploymentStackExposureGeneratedToJSON(
+  prepareDeploymentStackExposureGenerated:
+    PrepareDeploymentStackExposureGenerated,
 ): string {
   return JSON.stringify(
-    ExposureGenerated$outboundSchema.parse(exposureGenerated),
+    PrepareDeploymentStackExposureGenerated$outboundSchema.parse(
+      prepareDeploymentStackExposureGenerated,
+    ),
   );
 }
 
 /** @internal */
-export const ModeDisabled$outboundSchema: z.ZodEnum<typeof ModeDisabled> = z
-  .enum(ModeDisabled);
+export const PrepareDeploymentStackModeDisabled$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackModeDisabled
+> = z.enum(PrepareDeploymentStackModeDisabled);
 
 /** @internal */
-export type ExposureDisabled$Outbound = {
+export type PrepareDeploymentStackExposureDisabled$Outbound = {
   mode: string;
 };
 
 /** @internal */
-export const ExposureDisabled$outboundSchema: z.ZodType<
-  ExposureDisabled$Outbound,
-  ExposureDisabled
+export const PrepareDeploymentStackExposureDisabled$outboundSchema: z.ZodType<
+  PrepareDeploymentStackExposureDisabled$Outbound,
+  PrepareDeploymentStackExposureDisabled
 > = z.object({
-  mode: ModeDisabled$outboundSchema,
+  mode: PrepareDeploymentStackModeDisabled$outboundSchema,
 });
 
-export function exposureDisabledToJSON(
-  exposureDisabled: ExposureDisabled,
+export function prepareDeploymentStackExposureDisabledToJSON(
+  prepareDeploymentStackExposureDisabled:
+    PrepareDeploymentStackExposureDisabled,
 ): string {
   return JSON.stringify(
-    ExposureDisabled$outboundSchema.parse(exposureDisabled),
+    PrepareDeploymentStackExposureDisabled$outboundSchema.parse(
+      prepareDeploymentStackExposureDisabled,
+    ),
   );
 }
 
 /** @internal */
-export type Exposure$Outbound =
-  | ExposureCustom$Outbound
-  | ExposureGenerated$Outbound
-  | ExposureDisabled$Outbound
+export type PrepareDeploymentStackExposureUnion$Outbound =
+  | PrepareDeploymentStackExposureCustom$Outbound
+  | PrepareDeploymentStackExposureGenerated$Outbound
+  | PrepareDeploymentStackExposureDisabled$Outbound
   | any;
 
 /** @internal */
-export const Exposure$outboundSchema: z.ZodType<Exposure$Outbound, Exposure> = z
-  .union([
-    z.lazy(() => ExposureCustom$outboundSchema),
-    z.lazy(() => ExposureGenerated$outboundSchema),
-    z.lazy(() => ExposureDisabled$outboundSchema),
-    z.any(),
-  ]);
+export const PrepareDeploymentStackExposureUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackExposureUnion$Outbound,
+  PrepareDeploymentStackExposureUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackExposureCustom$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackExposureGenerated$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackExposureDisabled$outboundSchema),
+  z.any(),
+]);
 
-export function exposureToJSON(exposure: Exposure): string {
-  return JSON.stringify(Exposure$outboundSchema.parse(exposure));
+export function prepareDeploymentStackExposureUnionToJSON(
+  prepareDeploymentStackExposureUnion: PrepareDeploymentStackExposureUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackExposureUnion$outboundSchema.parse(
+      prepareDeploymentStackExposureUnion,
+    ),
+  );
 }
 
 /** @internal */
 export type PrepareDeploymentStackKubernetes$Outbound = {
-  cluster?: Cluster$Outbound | any | null | undefined;
+  cluster?: PrepareDeploymentStackCluster$Outbound | any | null | undefined;
   exposure?:
-    | ExposureCustom$Outbound
-    | ExposureGenerated$Outbound
-    | ExposureDisabled$Outbound
+    | PrepareDeploymentStackExposureCustom$Outbound
+    | PrepareDeploymentStackExposureGenerated$Outbound
+    | PrepareDeploymentStackExposureDisabled$Outbound
     | any
     | null
     | undefined;
@@ -2490,13 +3023,17 @@ export const PrepareDeploymentStackKubernetes$outboundSchema: z.ZodType<
   PrepareDeploymentStackKubernetes$Outbound,
   PrepareDeploymentStackKubernetes
 > = z.object({
-  cluster: z.nullable(z.union([z.lazy(() => Cluster$outboundSchema), z.any()]))
-    .optional(),
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackCluster$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   exposure: z.nullable(
     z.union([
-      z.lazy(() => ExposureCustom$outboundSchema),
-      z.lazy(() => ExposureGenerated$outboundSchema),
-      z.lazy(() => ExposureDisabled$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackExposureCustom$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackExposureGenerated$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackExposureDisabled$outboundSchema),
       z.any(),
     ]),
   ).optional(),
@@ -2513,30 +3050,36 @@ export function prepareDeploymentStackKubernetesToJSON(
 }
 
 /** @internal */
-export type Kubernetes$Outbound =
+export type PrepareDeploymentStackKubernetesUnion$Outbound =
   | PrepareDeploymentStackKubernetes$Outbound
   | any;
 
 /** @internal */
-export const Kubernetes$outboundSchema: z.ZodType<
-  Kubernetes$Outbound,
-  Kubernetes
+export const PrepareDeploymentStackKubernetesUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackKubernetesUnion$Outbound,
+  PrepareDeploymentStackKubernetesUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
   z.any(),
 ]);
 
-export function kubernetesToJSON(kubernetes: Kubernetes): string {
-  return JSON.stringify(Kubernetes$outboundSchema.parse(kubernetes));
+export function prepareDeploymentStackKubernetesUnionToJSON(
+  prepareDeploymentStackKubernetesUnion: PrepareDeploymentStackKubernetesUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackKubernetesUnion$outboundSchema.parse(
+      prepareDeploymentStackKubernetesUnion,
+    ),
+  );
 }
 
 /** @internal */
-export const TypeByoVnetAzure$outboundSchema: z.ZodEnum<
-  typeof TypeByoVnetAzure
-> = z.enum(TypeByoVnetAzure);
+export const PrepareDeploymentStackTypeByoVnetAzure$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTypeByoVnetAzure
+> = z.enum(PrepareDeploymentStackTypeByoVnetAzure);
 
 /** @internal */
-export type NetworkByoVnetAzure$Outbound = {
+export type PrepareDeploymentStackNetworkByoVnetAzure$Outbound = {
   application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
@@ -2545,38 +3088,43 @@ export type NetworkByoVnetAzure$Outbound = {
 };
 
 /** @internal */
-export const NetworkByoVnetAzure$outboundSchema: z.ZodType<
-  NetworkByoVnetAzure$Outbound,
-  NetworkByoVnetAzure
-> = z.object({
-  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
-  privateSubnetName: z.string(),
-  publicSubnetName: z.string(),
-  type: TypeByoVnetAzure$outboundSchema,
-  vnetResourceId: z.string(),
-}).transform((v) => {
-  return remap$(v, {
-    applicationGatewaySubnetName: "application_gateway_subnet_name",
-    privateSubnetName: "private_subnet_name",
-    publicSubnetName: "public_subnet_name",
-    vnetResourceId: "vnet_resource_id",
+export const PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackNetworkByoVnetAzure$Outbound,
+    PrepareDeploymentStackNetworkByoVnetAzure
+  > = z.object({
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+    privateSubnetName: z.string(),
+    publicSubnetName: z.string(),
+    type: PrepareDeploymentStackTypeByoVnetAzure$outboundSchema,
+    vnetResourceId: z.string(),
+  }).transform((v) => {
+    return remap$(v, {
+      applicationGatewaySubnetName: "application_gateway_subnet_name",
+      privateSubnetName: "private_subnet_name",
+      publicSubnetName: "public_subnet_name",
+      vnetResourceId: "vnet_resource_id",
+    });
   });
-});
 
-export function networkByoVnetAzureToJSON(
-  networkByoVnetAzure: NetworkByoVnetAzure,
+export function prepareDeploymentStackNetworkByoVnetAzureToJSON(
+  prepareDeploymentStackNetworkByoVnetAzure:
+    PrepareDeploymentStackNetworkByoVnetAzure,
 ): string {
   return JSON.stringify(
-    NetworkByoVnetAzure$outboundSchema.parse(networkByoVnetAzure),
+    PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema.parse(
+      prepareDeploymentStackNetworkByoVnetAzure,
+    ),
   );
 }
 
 /** @internal */
-export const TypeByoVpcGcp$outboundSchema: z.ZodEnum<typeof TypeByoVpcGcp> = z
-  .enum(TypeByoVpcGcp);
+export const PrepareDeploymentStackTypeByoVpcGcp$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTypeByoVpcGcp
+> = z.enum(PrepareDeploymentStackTypeByoVpcGcp);
 
 /** @internal */
-export type NetworkByoVpcGcp$Outbound = {
+export type PrepareDeploymentStackNetworkByoVpcGcp$Outbound = {
   network_name: string;
   region: string;
   subnet_name: string;
@@ -2584,14 +3132,14 @@ export type NetworkByoVpcGcp$Outbound = {
 };
 
 /** @internal */
-export const NetworkByoVpcGcp$outboundSchema: z.ZodType<
-  NetworkByoVpcGcp$Outbound,
-  NetworkByoVpcGcp
+export const PrepareDeploymentStackNetworkByoVpcGcp$outboundSchema: z.ZodType<
+  PrepareDeploymentStackNetworkByoVpcGcp$Outbound,
+  PrepareDeploymentStackNetworkByoVpcGcp
 > = z.object({
   networkName: z.string(),
   region: z.string(),
   subnetName: z.string(),
-  type: TypeByoVpcGcp$outboundSchema,
+  type: PrepareDeploymentStackTypeByoVpcGcp$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     networkName: "network_name",
@@ -2599,20 +3147,24 @@ export const NetworkByoVpcGcp$outboundSchema: z.ZodType<
   });
 });
 
-export function networkByoVpcGcpToJSON(
-  networkByoVpcGcp: NetworkByoVpcGcp,
+export function prepareDeploymentStackNetworkByoVpcGcpToJSON(
+  prepareDeploymentStackNetworkByoVpcGcp:
+    PrepareDeploymentStackNetworkByoVpcGcp,
 ): string {
   return JSON.stringify(
-    NetworkByoVpcGcp$outboundSchema.parse(networkByoVpcGcp),
+    PrepareDeploymentStackNetworkByoVpcGcp$outboundSchema.parse(
+      prepareDeploymentStackNetworkByoVpcGcp,
+    ),
   );
 }
 
 /** @internal */
-export const TypeByoVpcAws$outboundSchema: z.ZodEnum<typeof TypeByoVpcAws> = z
-  .enum(TypeByoVpcAws);
+export const PrepareDeploymentStackTypeByoVpcAws$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTypeByoVpcAws
+> = z.enum(PrepareDeploymentStackTypeByoVpcAws);
 
 /** @internal */
-export type NetworkByoVpcAws$Outbound = {
+export type PrepareDeploymentStackNetworkByoVpcAws$Outbound = {
   private_subnet_ids: Array<string>;
   public_subnet_ids: Array<string>;
   security_group_ids?: Array<string> | undefined;
@@ -2621,14 +3173,14 @@ export type NetworkByoVpcAws$Outbound = {
 };
 
 /** @internal */
-export const NetworkByoVpcAws$outboundSchema: z.ZodType<
-  NetworkByoVpcAws$Outbound,
-  NetworkByoVpcAws
+export const PrepareDeploymentStackNetworkByoVpcAws$outboundSchema: z.ZodType<
+  PrepareDeploymentStackNetworkByoVpcAws$Outbound,
+  PrepareDeploymentStackNetworkByoVpcAws
 > = z.object({
   privateSubnetIds: z.array(z.string()),
   publicSubnetIds: z.array(z.string()),
   securityGroupIds: z.array(z.string()).optional(),
-  type: TypeByoVpcAws$outboundSchema,
+  type: PrepareDeploymentStackTypeByoVpcAws$outboundSchema,
   vpcId: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -2639,108 +3191,133 @@ export const NetworkByoVpcAws$outboundSchema: z.ZodType<
   });
 });
 
-export function networkByoVpcAwsToJSON(
-  networkByoVpcAws: NetworkByoVpcAws,
+export function prepareDeploymentStackNetworkByoVpcAwsToJSON(
+  prepareDeploymentStackNetworkByoVpcAws:
+    PrepareDeploymentStackNetworkByoVpcAws,
 ): string {
   return JSON.stringify(
-    NetworkByoVpcAws$outboundSchema.parse(networkByoVpcAws),
+    PrepareDeploymentStackNetworkByoVpcAws$outboundSchema.parse(
+      prepareDeploymentStackNetworkByoVpcAws,
+    ),
   );
 }
 
 /** @internal */
-export const TypeCreate$outboundSchema: z.ZodEnum<typeof TypeCreate> = z.enum(
-  TypeCreate,
-);
+export const PrepareDeploymentStackTypeCreate$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTypeCreate
+> = z.enum(PrepareDeploymentStackTypeCreate);
 
 /** @internal */
-export type NetworkCreate$Outbound = {
+export type PrepareDeploymentStackNetworkCreate$Outbound = {
   availability_zones?: number | undefined;
   cidr?: string | null | undefined;
   type: string;
 };
 
 /** @internal */
-export const NetworkCreate$outboundSchema: z.ZodType<
-  NetworkCreate$Outbound,
-  NetworkCreate
+export const PrepareDeploymentStackNetworkCreate$outboundSchema: z.ZodType<
+  PrepareDeploymentStackNetworkCreate$Outbound,
+  PrepareDeploymentStackNetworkCreate
 > = z.object({
   availabilityZones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: TypeCreate$outboundSchema,
+  type: PrepareDeploymentStackTypeCreate$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     availabilityZones: "availability_zones",
   });
 });
 
-export function networkCreateToJSON(networkCreate: NetworkCreate): string {
-  return JSON.stringify(NetworkCreate$outboundSchema.parse(networkCreate));
-}
-
-/** @internal */
-export const TypeUseDefault$outboundSchema: z.ZodEnum<typeof TypeUseDefault> = z
-  .enum(TypeUseDefault);
-
-/** @internal */
-export type NetworkUseDefault$Outbound = {
-  type: string;
-};
-
-/** @internal */
-export const NetworkUseDefault$outboundSchema: z.ZodType<
-  NetworkUseDefault$Outbound,
-  NetworkUseDefault
-> = z.object({
-  type: TypeUseDefault$outboundSchema,
-});
-
-export function networkUseDefaultToJSON(
-  networkUseDefault: NetworkUseDefault,
+export function prepareDeploymentStackNetworkCreateToJSON(
+  prepareDeploymentStackNetworkCreate: PrepareDeploymentStackNetworkCreate,
 ): string {
   return JSON.stringify(
-    NetworkUseDefault$outboundSchema.parse(networkUseDefault),
+    PrepareDeploymentStackNetworkCreate$outboundSchema.parse(
+      prepareDeploymentStackNetworkCreate,
+    ),
   );
 }
 
 /** @internal */
-export type Network$Outbound =
-  | NetworkByoVpcAws$Outbound
-  | NetworkByoVpcGcp$Outbound
-  | NetworkByoVnetAzure$Outbound
-  | NetworkUseDefault$Outbound
-  | NetworkCreate$Outbound
-  | any;
+export const PrepareDeploymentStackTypeUseDefault$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTypeUseDefault
+> = z.enum(PrepareDeploymentStackTypeUseDefault);
 
 /** @internal */
-export const Network$outboundSchema: z.ZodType<Network$Outbound, Network> = z
-  .union([
-    z.lazy(() => NetworkByoVpcAws$outboundSchema),
-    z.lazy(() => NetworkByoVpcGcp$outboundSchema),
-    z.lazy(() => NetworkByoVnetAzure$outboundSchema),
-    z.lazy(() => NetworkUseDefault$outboundSchema),
-    z.lazy(() => NetworkCreate$outboundSchema),
-    z.any(),
-  ]);
+export type PrepareDeploymentStackNetworkUseDefault$Outbound = {
+  type: string;
+};
 
-export function networkToJSON(network: Network): string {
-  return JSON.stringify(Network$outboundSchema.parse(network));
+/** @internal */
+export const PrepareDeploymentStackNetworkUseDefault$outboundSchema: z.ZodType<
+  PrepareDeploymentStackNetworkUseDefault$Outbound,
+  PrepareDeploymentStackNetworkUseDefault
+> = z.object({
+  type: PrepareDeploymentStackTypeUseDefault$outboundSchema,
+});
+
+export function prepareDeploymentStackNetworkUseDefaultToJSON(
+  prepareDeploymentStackNetworkUseDefault:
+    PrepareDeploymentStackNetworkUseDefault,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackNetworkUseDefault$outboundSchema.parse(
+      prepareDeploymentStackNetworkUseDefault,
+    ),
+  );
 }
 
 /** @internal */
-export const Telemetry$outboundSchema: z.ZodEnum<typeof Telemetry> = z.enum(
-  Telemetry,
-);
+export type PrepareDeploymentStackNetworkUnion$Outbound =
+  | PrepareDeploymentStackNetworkByoVpcAws$Outbound
+  | PrepareDeploymentStackNetworkByoVpcGcp$Outbound
+  | PrepareDeploymentStackNetworkByoVnetAzure$Outbound
+  | PrepareDeploymentStackNetworkUseDefault$Outbound
+  | PrepareDeploymentStackNetworkCreate$Outbound
+  | any;
 
 /** @internal */
-export const Updates$outboundSchema: z.ZodEnum<typeof Updates> = z.enum(
-  Updates,
-);
+export const PrepareDeploymentStackNetworkUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackNetworkUnion$Outbound,
+  PrepareDeploymentStackNetworkUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackNetworkByoVpcAws$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackNetworkByoVpcGcp$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackNetworkUseDefault$outboundSchema),
+  z.lazy(() => PrepareDeploymentStackNetworkCreate$outboundSchema),
+  z.any(),
+]);
+
+export function prepareDeploymentStackNetworkUnionToJSON(
+  prepareDeploymentStackNetworkUnion: PrepareDeploymentStackNetworkUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackNetworkUnion$outboundSchema.parse(
+      prepareDeploymentStackNetworkUnion,
+    ),
+  );
+}
 
 /** @internal */
-export type StackSettings$Outbound = {
+export const PrepareDeploymentStackTelemetry$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackTelemetry
+> = z.enum(PrepareDeploymentStackTelemetry);
+
+/** @internal */
+export const PrepareDeploymentStackUpdates$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackUpdates
+> = z.enum(PrepareDeploymentStackUpdates);
+
+/** @internal */
+export type PrepareDeploymentStackStackSettings$Outbound = {
+  compute?: PrepareDeploymentStackCompute$Outbound | undefined;
   deploymentModel?: string | undefined;
-  domains?: Domains$Outbound | any | null | undefined;
-  externalBindings?: ExternalBindings$Outbound | null | undefined;
+  domains?: PrepareDeploymentStackDomains$Outbound | any | null | undefined;
+  externalBindings?:
+    | PrepareDeploymentStackExternalBindings$Outbound
+    | null
+    | undefined;
   heartbeats?: string | undefined;
   kubernetes?:
     | PrepareDeploymentStackKubernetes$Outbound
@@ -2748,11 +3325,11 @@ export type StackSettings$Outbound = {
     | null
     | undefined;
   network?:
-    | NetworkByoVpcAws$Outbound
-    | NetworkByoVpcGcp$Outbound
-    | NetworkByoVnetAzure$Outbound
-    | NetworkUseDefault$Outbound
-    | NetworkCreate$Outbound
+    | PrepareDeploymentStackNetworkByoVpcAws$Outbound
+    | PrepareDeploymentStackNetworkByoVpcGcp$Outbound
+    | PrepareDeploymentStackNetworkByoVnetAzure$Outbound
+    | PrepareDeploymentStackNetworkUseDefault$Outbound
+    | PrepareDeploymentStackNetworkCreate$Outbound
     | any
     | null
     | undefined;
@@ -2761,16 +3338,24 @@ export type StackSettings$Outbound = {
 };
 
 /** @internal */
-export const StackSettings$outboundSchema: z.ZodType<
-  StackSettings$Outbound,
-  StackSettings
+export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
+  PrepareDeploymentStackStackSettings$Outbound,
+  PrepareDeploymentStackStackSettings
 > = z.object({
-  deploymentModel: DeploymentModel$outboundSchema.optional(),
-  domains: z.nullable(z.union([z.lazy(() => Domains$outboundSchema), z.any()]))
+  compute: z.lazy(() => PrepareDeploymentStackCompute$outboundSchema)
     .optional(),
-  externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))
+  deploymentModel: PrepareDeploymentStackDeploymentModel$outboundSchema
     .optional(),
-  heartbeats: Heartbeats$outboundSchema.optional(),
+  domains: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackDomains$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  externalBindings: z.nullable(
+    z.lazy(() => PrepareDeploymentStackExternalBindings$outboundSchema),
+  ).optional(),
+  heartbeats: PrepareDeploymentStackHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
@@ -2779,20 +3364,26 @@ export const StackSettings$outboundSchema: z.ZodType<
   ).optional(),
   network: z.nullable(
     z.union([
-      z.lazy(() => NetworkByoVpcAws$outboundSchema),
-      z.lazy(() => NetworkByoVpcGcp$outboundSchema),
-      z.lazy(() => NetworkByoVnetAzure$outboundSchema),
-      z.lazy(() => NetworkUseDefault$outboundSchema),
-      z.lazy(() => NetworkCreate$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackNetworkByoVpcAws$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackNetworkByoVpcGcp$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackNetworkUseDefault$outboundSchema),
+      z.lazy(() => PrepareDeploymentStackNetworkCreate$outboundSchema),
       z.any(),
     ]),
   ).optional(),
-  telemetry: Telemetry$outboundSchema.optional(),
-  updates: Updates$outboundSchema.optional(),
+  telemetry: PrepareDeploymentStackTelemetry$outboundSchema.optional(),
+  updates: PrepareDeploymentStackUpdates$outboundSchema.optional(),
 });
 
-export function stackSettingsToJSON(stackSettings: StackSettings): string {
-  return JSON.stringify(StackSettings$outboundSchema.parse(stackSettings));
+export function prepareDeploymentStackStackSettingsToJSON(
+  prepareDeploymentStackStackSettings: PrepareDeploymentStackStackSettings,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackStackSettings$outboundSchema.parse(
+      prepareDeploymentStackStackSettings,
+    ),
+  );
 }
 
 /** @internal */
@@ -2800,7 +3391,7 @@ export type PrepareDeploymentStackRequestBody$Outbound = {
   platform: string;
   setupMethod: string;
   region?: string | undefined;
-  stackSettings: StackSettings$Outbound;
+  stackSettings: PrepareDeploymentStackStackSettings$Outbound;
 };
 
 /** @internal */
@@ -2811,7 +3402,9 @@ export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
   platform: PrepareDeploymentStackPlatform$outboundSchema,
   setupMethod: models.DeploymentSetupMethod$outboundSchema,
   region: z.string().optional(),
-  stackSettings: z.lazy(() => StackSettings$outboundSchema),
+  stackSettings: z.lazy(() =>
+    PrepareDeploymentStackStackSettings$outboundSchema
+  ),
 });
 
 export function prepareDeploymentStackRequestBodyToJSON(

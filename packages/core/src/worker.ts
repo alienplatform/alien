@@ -1,30 +1,35 @@
 import {
-  type Ingress,
   type ReadinessProbe,
   type ResourceType,
   type WorkerCode,
   type Worker as WorkerConfig,
+  type WorkerPublicEndpoint,
   WorkerSchema,
   type WorkerTrigger,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
 export type {
-  Ingress,
   Worker as WorkerConfig,
   WorkerOutputs,
+  WorkerPublicEndpoint,
   WorkerTrigger,
   ReadinessProbe,
   HttpMethod,
 } from "./generated/index.js"
 export {
-  IngressSchema,
   WorkerSchema as WorkerConfigSchema,
   WorkerOutputsSchema,
+  WorkerPublicEndpointSchema,
   WorkerTriggerSchema,
   ReadinessProbeSchema,
   HttpMethodSchema,
 } from "./generated/index.js"
+
+export interface WorkerPublicEndpointOptions {
+  hostLabel?: string
+  wildcardSubdomains?: boolean
+}
 
 /**
  * Represents a serverless worker that executes code in response to triggers or direct invocations.
@@ -34,6 +39,7 @@ export class Worker {
   private _config: Partial<WorkerConfig> = {
     links: [],
     triggers: [],
+    publicEndpoints: [],
     environment: {},
   }
 
@@ -100,16 +106,20 @@ export class Worker {
   }
 
   /**
-   * Controls network accessibility of the worker.
-   * - `public`: Worker accessible from the internet.
-   * - `private`: Worker accessible only via cloud API calls / triggers.
-   * - `vpc`: Worker deployed within a VPC with specific network controls.
-   * Default: `private`.
-   * @param value The ingress type.
-   * @returns The Worker builder instance.
+   * Exposes a named public HTTP endpoint for the worker.
+   *
+   * If no public endpoint is declared, the worker is private and only reachable
+   * through triggers, commands, or provider invocation APIs.
    */
-  public ingress(value: Ingress): this {
-    this._config.ingress = value
+  public publicEndpoint(name: string, options: WorkerPublicEndpointOptions = {}): this {
+    if (!this._config.publicEndpoints) {
+      this._config.publicEndpoints = []
+    }
+    this._config.publicEndpoints.push({
+      name,
+      hostLabel: options.hostLabel,
+      wildcardSubdomains: options.wildcardSubdomains ?? false,
+    } satisfies WorkerPublicEndpoint)
     return this
   }
 
@@ -153,7 +163,7 @@ export class Worker {
   /**
    * Configures a readiness probe for the worker.
    * The probe will be executed after provisioning/update to verify the worker is ready.
-   * Only works with workers that have Public ingress.
+   * Only works with workers that declare a public endpoint.
    *
    * @example
    * ```typescript
@@ -164,7 +174,7 @@ export class Worker {
    *
    * const func = new Worker("my-api")
    *   .code({ type: "image", image: "my-api:latest" })
-   *   .ingress("public")
+   *   .publicEndpoint("api")
    *   .readinessProbe(probe)
    *   .build();
    * ```

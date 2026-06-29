@@ -6,8 +6,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack, Worker,
-    WorkerCode,
+    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack,
+    StackInputDefinition, StackInputKind, StackInputProvider, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -69,10 +69,6 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Allow experimental platforms (kubernetes, local)
-    #[arg(long)]
-    pub experimental: bool,
-
     /// Base cloud platform for Kubernetes auto-builds. This keeps the release
     /// stack under Kubernetes while using the managed cluster's default
     /// architecture when auto-building missing artifacts.
@@ -83,6 +79,16 @@ pub struct ReleaseArgs {
     /// artifacts it contains, and reuses images that are already remote URIs.
     #[arg(long)]
     pub prebuilt: bool,
+
+    /// Target OS/architecture combinations to build for (comma-separated).
+    /// Same format as `alien build --targets` — e.g. `linux-x64`,
+    /// `linux-arm64`. When omitted, the default is picked from the
+    /// platform AND the stack: AWS deploys with a daemon that declares
+    /// `nestedVirtualization(true)` automatically build for `linux-x64`
+    /// (nested virt isn't available on Graviton); all other AWS deploys
+    /// keep AWS's `linux-arm64` default.
+    #[arg(long, value_delimiter = ',')]
+    pub targets: Option<Vec<String>>,
 
     /// Override the runtime base image used for source-built cloud containers.
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
@@ -164,6 +170,7 @@ struct ReleaseConfig {
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
+    stack: Stack,
 }
 
 #[derive(Clone)]
@@ -193,7 +200,6 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
 
-    // In dev mode, default platforms to ["local"] and skip experimental gating
     let is_dev = ctx.is_dev();
 
     // Load stack config (needed for supported_platforms validation and auto-build)
@@ -209,22 +215,6 @@ async fn load_release_config(
     // 3. stack.supported_platforms if declared
     // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
-        // Validate explicit platforms against experimental gating (skip in dev mode)
-        if !args.experimental && !is_dev {
-            for p in platforms {
-                if let Ok(platform) = Platform::from_str(p) {
-                    if platform.is_experimental() {
-                        return Err(AlienError::new(ErrorData::ValidationError {
-                            field: "platforms".to_string(),
-                            message: format!(
-                                "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
-                                p
-                            ),
-                        }));
-                    }
-                }
-            }
-        }
         // Validate against stack's supported platforms
         validate_platforms_against_stack(platforms, &stack)?;
         platforms.clone()
@@ -235,7 +225,7 @@ async fn load_release_config(
         // Use declared supported platforms from alien.ts
         supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if !discovered.is_empty() {
             discovered
         } else {
@@ -262,6 +252,7 @@ async fn load_release_config(
             show_human_output,
             args.override_base_image.clone(),
             kubernetes_base_platform,
+            args.targets.as_deref(),
         )
         .await?;
     }
@@ -275,7 +266,7 @@ async fn load_release_config(
         // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
-        let discovered = discover_built_platforms(&output_dir, args.experimental)?;
+        let discovered = discover_built_platforms(&output_dir)?;
         if discovered.is_empty() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "build output".to_string(),
@@ -322,6 +313,7 @@ async fn load_release_config(
         project_link,
         git_metadata,
         platforms,
+        stack,
     })
 }
 
@@ -333,6 +325,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         .await?;
 
     let platforms_label = format_platform_summary(&config.platforms);
+    let onboard_hint = onboard_command_hint(&config);
     println!(
         "{}",
         contextual_heading(
@@ -346,12 +339,9 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
     println!("{}", success_line("Release created."));
     println!("{} {}", dim_label("Release"), release_id);
     if !is_dev {
-        println!(
-            "{} run {} for a new customer, or {} to check existing deployments.",
-            dim_label("Next"),
-            command("alien onboard <customer-name>"),
-            command("alien deployments ls")
-        );
+        println!("{}", dim_label("Next create a deployment link:"));
+        println!("  {}", command(&onboard_hint));
+        println!("{} {}", dim_label("Then"), command("alien deployments ls"));
     }
     Ok(release_id)
 }
@@ -372,6 +362,7 @@ async fn release_task_core(
         project_link,
         git_metadata,
         platforms: platforms_to_release,
+        stack: _stack,
         ..
     } = config;
     // Process each platform: load stack, push images, collect pushed stacks
@@ -648,23 +639,14 @@ async fn create_platform_release(
 }
 
 /// Discover which platforms have been built
-fn discover_built_platforms(
-    output_dir: &PathBuf,
-    include_experimental: bool,
-) -> Result<Vec<String>> {
+fn discover_built_platforms(output_dir: &PathBuf) -> Result<Vec<String>> {
     let build_dir = output_dir.join("build");
     if !build_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let search_platforms = if include_experimental {
-        Platform::DEPLOYABLE
-    } else {
-        Platform::STABLE
-    };
-
     let mut platforms = Vec::new();
-    for platform in search_platforms {
+    for platform in Platform::DEPLOYABLE {
         let stack_file = build_dir.join(platform.as_str()).join("stack.json");
         if stack_file.exists() {
             platforms.push(platform.as_str().to_string());
@@ -674,6 +656,26 @@ fn discover_built_platforms(
     Ok(platforms)
 }
 
+/// True if any ComputeCluster in this stack has a capacity group with
+/// `nestedVirtualization: true`. On AWS this implies x86_64 — nested
+/// virtualization is not available on Graviton, so a build targeting
+/// `linux-arm64` (the AWS default) for such a stack would produce an image
+/// the deploy can't actually run.
+fn stack_requires_x86_64_on_aws(stack: &Stack) -> bool {
+    use alien_core::ComputeCluster;
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .is_some_and(|cluster| {
+                cluster
+                    .capacity_groups
+                    .iter()
+                    .any(|g| g.nested_virtualization == Some(true))
+            })
+    })
+}
+
 async fn auto_build_for_platforms(
     platform_strs: &[String],
     stack: &Stack,
@@ -681,9 +683,29 @@ async fn auto_build_for_platforms(
     _show_human_output: bool,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
+    user_targets: Option<&[String]>,
 ) -> Result<()> {
+    let stack_needs_x86_64_on_aws = stack_requires_x86_64_on_aws(stack);
+
     let mut plans = Vec::new();
     for platform_str in platform_strs {
+        // Resolve targets in priority order:
+        //   1. Explicit --targets always wins
+        //   2. AWS + nested-virt in the stack → linux-x64 (the only AWS
+        //      target that supports nested virt today)
+        //   3. None → let alien-build pick the platform default
+        let effective_targets = if let Some(targets) = user_targets {
+            Some(targets.to_vec())
+        } else if platform_str.eq_ignore_ascii_case("aws") && stack_needs_x86_64_on_aws {
+            tracing::info!(
+                "AWS daemon requires nested virtualization; defaulting target to linux-x64 \
+                 (override with `alien release --targets <...>`)."
+            );
+            Some(vec!["linux-x64".to_string()])
+        } else {
+            None
+        };
+
         plans.push(AutoBuildPlan {
             platform: platform_str.clone(),
             settings: auto_build_settings_for_platform(
@@ -691,6 +713,7 @@ async fn auto_build_for_platforms(
                 output_dir,
                 override_base_image.clone(),
                 kubernetes_base_platform,
+                effective_targets,
             )?,
         });
     }
@@ -730,6 +753,7 @@ fn auto_build_settings_for_platform(
     output_dir: &PathBuf,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
+    effective_targets: Option<Vec<String>>,
 ) -> Result<alien_build::settings::BuildSettings> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -751,9 +775,23 @@ fn auto_build_settings_for_platform(
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
 
-    let targets = match platform {
-        Platform::Local => Some(vec![alien_core::BinaryTarget::current_os()]),
-        _ => None,
+    // Resolve targets in priority order:
+    //   1. The caller (release_task) passed an effective_targets list (either
+    //      --targets verbatim or a stack-aware default like x86_64-for-nested-virt).
+    //   2. Local releases target Linux install hosts. Same-host development
+    //      builds can still use `alien build --platform local` defaults.
+    //   3. Otherwise pass None and let alien-build apply its platform default.
+    let targets = if let Some(targets) = effective_targets {
+        Some(
+            targets
+                .iter()
+                .map(|t| parse_target(t))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    } else if matches!(platform, Platform::Local) {
+        Some(alien_core::BinaryTarget::LINUX.to_vec())
+    } else {
+        None
     };
 
     Ok(alien_build::settings::BuildSettings {
@@ -764,6 +802,23 @@ fn auto_build_settings_for_platform(
         override_base_image,
         debug_mode: false,
     })
+}
+
+fn parse_target(target_str: &str) -> Result<alien_core::BinaryTarget> {
+    use alien_core::BinaryTarget;
+    match target_str.to_ascii_lowercase().as_str() {
+        "windows-x64" => Ok(BinaryTarget::WindowsX64),
+        "linux-x64" => Ok(BinaryTarget::LinuxX64),
+        "linux-arm64" => Ok(BinaryTarget::LinuxArm64),
+        "darwin-arm64" => Ok(BinaryTarget::DarwinArm64),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "targets".to_string(),
+            message: format!(
+                "Unknown target '{target_str}'. Supported targets: \
+                 windows-x64, linux-x64, linux-arm64, darwin-arm64"
+            ),
+        })),
+    }
 }
 
 fn group_auto_builds(plans: Vec<AutoBuildPlan>) -> Vec<Vec<AutoBuildPlan>> {
@@ -1070,6 +1125,64 @@ fn display_platform_name(platform: &str) -> &str {
         "kubernetes" => "Kubernetes",
         "local" => "Local",
         other => other,
+    }
+}
+
+fn onboard_command_hint(config: &ReleaseConfig) -> String {
+    let selected_platforms = config
+        .platforms
+        .iter()
+        .filter_map(|platform| Platform::from_str(platform).ok())
+        .collect::<Vec<_>>();
+    let mut command_parts = vec!["alien onboard <customer-name>".to_string()];
+
+    if !config.platforms.is_empty() {
+        command_parts.push(format!("--platforms {}", config.platforms.join(",")));
+    }
+
+    let required_inputs = config
+        .stack
+        .inputs
+        .iter()
+        .filter(|input| input.required)
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
+        .collect::<Vec<_>>();
+
+    for input in required_inputs.iter().take(3) {
+        command_parts.push(format!(
+            "{} {}={}",
+            if matches!(input.kind, StackInputKind::Secret) {
+                "--secret-input"
+            } else {
+                "--input"
+            },
+            input.id,
+            stack_input_placeholder(input),
+        ));
+    }
+
+    if required_inputs.len() > 3 {
+        command_parts.push("...".to_string());
+    }
+
+    command_parts.join(" ")
+}
+
+fn input_applies_to_any_platform(input: &StackInputDefinition, platforms: &[Platform]) -> bool {
+    let Some(input_platforms) = &input.platforms else {
+        return true;
+    };
+    platforms
+        .iter()
+        .any(|platform| input_platforms.contains(platform))
+}
+
+fn stack_input_placeholder(input: &StackInputDefinition) -> &'static str {
+    if matches!(input.kind, StackInputKind::Boolean) {
+        "true"
+    } else {
+        "..."
     }
 }
 
@@ -1531,6 +1644,60 @@ mod tests {
     }
 
     #[test]
+    fn stack_with_no_daemons_does_not_require_x86_64() {
+        let stack = Stack::new("nothing".to_string()).build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_cluster_no_nested_virt_does_not_require_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        let stack = Stack::new("no-nested".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(!stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
+    fn stack_with_cluster_capacity_group_nested_virt_requires_x86_64() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let stack = Stack::new("nested".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(
+                daemon_with_image("ghcr.io/test/agent:1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(stack_requires_x86_64_on_aws(&stack));
+    }
+
+    #[test]
     fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_releases() {
         assert_eq!(
             parse_kubernetes_base_platform(true, Some("aws")).unwrap(),
@@ -1583,6 +1750,24 @@ mod tests {
                 .map(|plan| plan.platform.as_str())
                 .collect::<Vec<_>>(),
             vec!["gcp", "azure"]
+        );
+    }
+
+    #[test]
+    fn local_release_auto_build_defaults_to_linux_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = auto_build_settings_for_platform(
+            "local",
+            &temp.path().join(".alien"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.targets,
+            Some(alien_core::BinaryTarget::LINUX.to_vec())
         );
     }
 

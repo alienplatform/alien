@@ -23,14 +23,6 @@ impl Platform {
         Platform::Local,
     ];
 
-    /// Stable, production-ready platforms.
-    pub const STABLE: &[Platform] = &[Platform::Aws, Platform::Gcp, Platform::Azure];
-
-    /// Returns true if this platform is experimental and not yet production-ready.
-    pub fn is_experimental(&self) -> bool {
-        matches!(self, Platform::Kubernetes | Platform::Local)
-    }
-
     /// Returns the string representation of the platform.
     pub fn as_str(&self) -> &'static str {
         match self {

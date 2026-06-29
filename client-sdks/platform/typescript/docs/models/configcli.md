@@ -16,8 +16,8 @@ let value: ConfigCli = {
 
 ## Fields
 
-| Field                                                         | Type                                                          | Required                                                      | Description                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| `displayName`                                                 | *string*                                                      | :heavy_check_mark:                                            | Human-friendly display name for help banners and about text   |
-| `name`                                                        | *string*                                                      | :heavy_check_mark:                                            | Binary name displayed in help and usage (e.g., "acme-deploy") |
-| `type`                                                        | *"cli"*                                                       | :heavy_check_mark:                                            | N/A                                                           |
+| Field                                                       | Type                                                        | Required                                                    | Description                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `displayName`                                               | *string*                                                    | :heavy_check_mark:                                          | Human-friendly display name for help banners and about text |
+| `name`                                                      | *string*                                                    | :heavy_check_mark:                                          | Binary name displayed in help and usage (e.g., "acmectl")   |
+| `type`                                                      | *"cli"*                                                     | :heavy_check_mark:                                          | N/A                                                         |

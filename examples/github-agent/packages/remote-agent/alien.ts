@@ -13,7 +13,7 @@ const agent = new alien.Worker("agent")
   .link(integrations)
   .memoryMb(512)
   .commandsEnabled(true)
-  .ingress("public")
+  .publicEndpoint("api")
   .permissions("execution")
   .build()
 

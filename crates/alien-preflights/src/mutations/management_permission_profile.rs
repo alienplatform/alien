@@ -2,11 +2,10 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, Container, DeploymentConfig, ExposeProtocol, Ingress,
-    KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
-    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesRouteProviderOptions, Platform, ResourceLifecycle, Stack, StackState, Storage,
-    Worker, WorkerTrigger,
+    ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
+    KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
+    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+    Platform, ResourceLifecycle, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -303,16 +302,11 @@ fn resource_needs_kubernetes_public_endpoint(resource_entry: &alien_core::Resour
     resource_entry
         .config
         .downcast_ref::<Worker>()
-        .is_some_and(|worker| worker.ingress == Ingress::Public)
+        .is_some_and(|worker| !worker.public_endpoints.is_empty())
         || resource_entry
             .config
             .downcast_ref::<Container>()
-            .is_some_and(|container| {
-                container
-                    .ports
-                    .iter()
-                    .any(|port| port.expose == Some(ExposeProtocol::Http))
-            })
+            .is_some_and(|container| !container.public_endpoints.is_empty())
 }
 
 fn resource_needs_cloud_heartbeat_permission(
@@ -373,12 +367,12 @@ mod tests {
         ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
         AzureServiceBusNamespace, AzureStorageAccount, CapacityGroup, ComputeCluster, Container,
         ContainerCode, DeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
-        HeartbeatsMode, Ingress, KubernetesCertificateMode, KubernetesCluster,
-        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
-        KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-        KubernetesRouteProviderOptions, KubernetesSettings, ResourceEntry, ResourceLifecycle,
-        ResourceSpec, ServiceActivation, StackSettings, StackState, Storage, TelemetryMode, Worker,
-        WorkerCode,
+        HeartbeatsMode, KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
+        KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
+        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, ServiceActivation,
+        StackSettings, StackState, Storage, TelemetryMode, Worker, WorkerCode,
+        WorkerPublicEndpoint,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -473,6 +467,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -752,7 +747,11 @@ mod tests {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .build();
 
         let stack = Stack::new("test-stack".to_string())
@@ -793,7 +792,11 @@ mod tests {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .ingress(Ingress::Public)
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .build();
 
         let stack = Stack::new("test-stack".to_string())
@@ -853,6 +856,7 @@ mod tests {
                 management: ManagementPermissions::Extend(extend_profile),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -915,6 +919,7 @@ mod tests {
                 management: ManagementPermissions::Override(override_profile.clone()),
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -985,6 +990,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Create stack state with Pull model. Permission derivation is model
@@ -1053,6 +1059,7 @@ mod tests {
                 profile: None,
                 min_size: 1,
                 max_size: 3,
+                nested_virtualization: None,
             })
             .build();
 
@@ -1084,6 +1091,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1139,6 +1147,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1197,6 +1206,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Create stack state with Push model (Manager deploys remotely)
@@ -1263,6 +1273,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -1334,6 +1345,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         let result_stack_gcp = mutation
@@ -1393,6 +1405,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Disable heartbeat
@@ -1457,6 +1470,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Disable telemetry
@@ -1522,6 +1536,7 @@ mod tests {
                 management: ManagementPermissions::Auto,
             },
             supported_platforms: None,
+            inputs: vec![],
         };
 
         // Require approval for telemetry - permissions should still be created

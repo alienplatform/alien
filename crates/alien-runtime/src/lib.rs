@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod events;
+mod log_text;
 pub mod otlp;
 pub mod runtime;
 pub mod secrets;

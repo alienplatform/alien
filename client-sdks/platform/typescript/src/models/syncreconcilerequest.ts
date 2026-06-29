@@ -6,6 +6,261 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
 
+export const SyncReconcileRequestCurrentReleaseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileRequestCurrentReleaseTypeStringList = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseTypeStringList
+>;
+
+export type SyncReconcileRequestCurrentReleaseDefaultStringList = {
+  type: SyncReconcileRequestCurrentReleaseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileRequestCurrentReleaseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileRequestCurrentReleaseTypeBoolean = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseTypeBoolean
+>;
+
+export type SyncReconcileRequestCurrentReleaseDefaultBoolean = {
+  type: SyncReconcileRequestCurrentReleaseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileRequestCurrentReleaseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileRequestCurrentReleaseTypeNumber = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseTypeNumber
+>;
+
+export type SyncReconcileRequestCurrentReleaseDefaultNumber = {
+  type: SyncReconcileRequestCurrentReleaseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileRequestCurrentReleaseTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileRequestCurrentReleaseTypeString = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseTypeString
+>;
+
+export type SyncReconcileRequestCurrentReleaseDefaultString = {
+  type: SyncReconcileRequestCurrentReleaseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileRequestCurrentReleaseDefaultUnion =
+  | SyncReconcileRequestCurrentReleaseDefaultString
+  | SyncReconcileRequestCurrentReleaseDefaultNumber
+  | SyncReconcileRequestCurrentReleaseDefaultBoolean
+  | SyncReconcileRequestCurrentReleaseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileRequestCurrentReleaseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileRequestCurrentReleaseTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseTypeEnvEnum
+>;
+
+export type SyncReconcileRequestCurrentReleaseTypeUnion =
+  | SyncReconcileRequestCurrentReleaseTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileRequestCurrentReleaseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncReconcileRequestCurrentReleaseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const CurrentReleaseStateKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type CurrentReleaseStateKind = ClosedEnum<
+  typeof CurrentReleaseStateKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestCurrentReleasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestCurrentReleasePlatform = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleasePlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileRequestCurrentReleaseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileRequestCurrentReleaseProvidedBy = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileRequestCurrentReleaseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileRequestCurrentReleaseValidationUnion =
+  | SyncReconcileRequestCurrentReleaseValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileRequestCurrentReleaseInput = {
+  default?:
+    | SyncReconcileRequestCurrentReleaseDefaultString
+    | SyncReconcileRequestCurrentReleaseDefaultNumber
+    | SyncReconcileRequestCurrentReleaseDefaultBoolean
+    | SyncReconcileRequestCurrentReleaseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileRequestCurrentReleaseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: CurrentReleaseStateKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileRequestCurrentReleasePlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileRequestCurrentReleaseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestCurrentReleaseValidation
+    | any
+    | null
+    | undefined;
+};
+
 export const SyncReconcileRequestCurrentReleaseManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1212,6 +1467,10 @@ export type SyncReconcileRequestCurrentReleaseStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileRequestCurrentReleaseInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncReconcileRequestCurrentReleasePermissions | undefined;
@@ -1491,6 +1750,259 @@ export const SyncReconcileRequestPlatform = {
 export type SyncReconcileRequestPlatform = ClosedEnum<
   typeof SyncReconcileRequestPlatform
 >;
+
+export const SyncReconcileRequestPreparedStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileRequestPreparedStackTypeStringList = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackTypeStringList
+>;
+
+export type SyncReconcileRequestPreparedStackDefaultStringList = {
+  type: SyncReconcileRequestPreparedStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileRequestPreparedStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileRequestPreparedStackTypeBoolean = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackTypeBoolean
+>;
+
+export type SyncReconcileRequestPreparedStackDefaultBoolean = {
+  type: SyncReconcileRequestPreparedStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileRequestPreparedStackTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileRequestPreparedStackTypeNumber = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackTypeNumber
+>;
+
+export type SyncReconcileRequestPreparedStackDefaultNumber = {
+  type: SyncReconcileRequestPreparedStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileRequestPreparedStackTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileRequestPreparedStackTypeString = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackTypeString
+>;
+
+export type SyncReconcileRequestPreparedStackDefaultString = {
+  type: SyncReconcileRequestPreparedStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileRequestPreparedStackDefaultUnion =
+  | SyncReconcileRequestPreparedStackDefaultString
+  | SyncReconcileRequestPreparedStackDefaultNumber
+  | SyncReconcileRequestPreparedStackDefaultBoolean
+  | SyncReconcileRequestPreparedStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileRequestPreparedStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileRequestPreparedStackTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackTypeEnvEnum
+>;
+
+export type SyncReconcileRequestPreparedStackTypeUnion =
+  | SyncReconcileRequestPreparedStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileRequestPreparedStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncReconcileRequestPreparedStackTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const PreparedStackStateKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type PreparedStackStateKind = ClosedEnum<typeof PreparedStackStateKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestPreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestPreparedStackPlatform = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileRequestPreparedStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileRequestPreparedStackProvidedBy = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileRequestPreparedStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileRequestPreparedStackValidationUnion =
+  | SyncReconcileRequestPreparedStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileRequestPreparedStackInput = {
+  default?:
+    | SyncReconcileRequestPreparedStackDefaultString
+    | SyncReconcileRequestPreparedStackDefaultNumber
+    | SyncReconcileRequestPreparedStackDefaultBoolean
+    | SyncReconcileRequestPreparedStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileRequestPreparedStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: PreparedStackStateKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileRequestPreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileRequestPreparedStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestPreparedStackValidation
+    | any
+    | null
+    | undefined;
+};
 
 export const SyncReconcileRequestPreparedStackManagementEnum = {
   Auto: "auto",
@@ -2696,6 +3208,10 @@ export type SyncReconcileRequestPreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileRequestPreparedStackInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncReconcileRequestPreparedStackPermissions | undefined;
@@ -3083,6 +3599,259 @@ export const StateStatus = {
  * Deployment status in the deployment lifecycle
  */
 export type StateStatus = ClosedEnum<typeof StateStatus>;
+
+export const SyncReconcileRequestTargetReleaseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileRequestTargetReleaseTypeStringList = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseTypeStringList
+>;
+
+export type SyncReconcileRequestTargetReleaseDefaultStringList = {
+  type: SyncReconcileRequestTargetReleaseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileRequestTargetReleaseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileRequestTargetReleaseTypeBoolean = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseTypeBoolean
+>;
+
+export type SyncReconcileRequestTargetReleaseDefaultBoolean = {
+  type: SyncReconcileRequestTargetReleaseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileRequestTargetReleaseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileRequestTargetReleaseTypeNumber = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseTypeNumber
+>;
+
+export type SyncReconcileRequestTargetReleaseDefaultNumber = {
+  type: SyncReconcileRequestTargetReleaseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileRequestTargetReleaseTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileRequestTargetReleaseTypeString = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseTypeString
+>;
+
+export type SyncReconcileRequestTargetReleaseDefaultString = {
+  type: SyncReconcileRequestTargetReleaseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileRequestTargetReleaseDefaultUnion =
+  | SyncReconcileRequestTargetReleaseDefaultString
+  | SyncReconcileRequestTargetReleaseDefaultNumber
+  | SyncReconcileRequestTargetReleaseDefaultBoolean
+  | SyncReconcileRequestTargetReleaseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileRequestTargetReleaseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileRequestTargetReleaseTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseTypeEnvEnum
+>;
+
+export type SyncReconcileRequestTargetReleaseTypeUnion =
+  | SyncReconcileRequestTargetReleaseTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileRequestTargetReleaseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncReconcileRequestTargetReleaseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const TargetReleaseStateKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type TargetReleaseStateKind = ClosedEnum<typeof TargetReleaseStateKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestTargetReleasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestTargetReleasePlatform = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleasePlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileRequestTargetReleaseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileRequestTargetReleaseProvidedBy = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileRequestTargetReleaseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileRequestTargetReleaseValidationUnion =
+  | SyncReconcileRequestTargetReleaseValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileRequestTargetReleaseInput = {
+  default?:
+    | SyncReconcileRequestTargetReleaseDefaultString
+    | SyncReconcileRequestTargetReleaseDefaultNumber
+    | SyncReconcileRequestTargetReleaseDefaultBoolean
+    | SyncReconcileRequestTargetReleaseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileRequestTargetReleaseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: TargetReleaseStateKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileRequestTargetReleasePlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileRequestTargetReleaseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestTargetReleaseValidation
+    | any
+    | null
+    | undefined;
+};
 
 export const SyncReconcileRequestTargetReleaseManagementEnum = {
   Auto: "auto",
@@ -4287,6 +5056,10 @@ export type SyncReconcileRequestTargetReleaseStack = {
    * Unique identifier for the stack
    */
   id: string;
+  /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileRequestTargetReleaseInput> | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -10836,6 +11609,406 @@ export type SyncReconcileRequest = {
 };
 
 /** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeStringList$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseTypeStringList> = z.enum(
+    SyncReconcileRequestCurrentReleaseTypeStringList,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseDefaultStringList$Outbound = {
+  type: string;
+  value: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseDefaultStringList$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseDefaultStringList$Outbound,
+    SyncReconcileRequestCurrentReleaseDefaultStringList
+  > = z.object({
+    type: SyncReconcileRequestCurrentReleaseTypeStringList$outboundSchema,
+    value: z.array(z.string()),
+  });
+
+export function syncReconcileRequestCurrentReleaseDefaultStringListToJSON(
+  syncReconcileRequestCurrentReleaseDefaultStringList:
+    SyncReconcileRequestCurrentReleaseDefaultStringList,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseDefaultStringList$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseDefaultStringList,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseTypeBoolean> = z.enum(
+    SyncReconcileRequestCurrentReleaseTypeBoolean,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseDefaultBoolean$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseDefaultBoolean$Outbound,
+    SyncReconcileRequestCurrentReleaseDefaultBoolean
+  > = z.object({
+    type: SyncReconcileRequestCurrentReleaseTypeBoolean$outboundSchema,
+    value: z.boolean(),
+  });
+
+export function syncReconcileRequestCurrentReleaseDefaultBooleanToJSON(
+  syncReconcileRequestCurrentReleaseDefaultBoolean:
+    SyncReconcileRequestCurrentReleaseDefaultBoolean,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseDefaultBoolean$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseDefaultBoolean,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeNumber$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseTypeNumber> = z.enum(
+    SyncReconcileRequestCurrentReleaseTypeNumber,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseDefaultNumber$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseDefaultNumber$Outbound,
+    SyncReconcileRequestCurrentReleaseDefaultNumber
+  > = z.object({
+    type: SyncReconcileRequestCurrentReleaseTypeNumber$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestCurrentReleaseDefaultNumberToJSON(
+  syncReconcileRequestCurrentReleaseDefaultNumber:
+    SyncReconcileRequestCurrentReleaseDefaultNumber,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseDefaultNumber$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseDefaultNumber,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeString$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseTypeString> = z.enum(
+    SyncReconcileRequestCurrentReleaseTypeString,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseDefaultString$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseDefaultString$Outbound,
+    SyncReconcileRequestCurrentReleaseDefaultString
+  > = z.object({
+    type: SyncReconcileRequestCurrentReleaseTypeString$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestCurrentReleaseDefaultStringToJSON(
+  syncReconcileRequestCurrentReleaseDefaultString:
+    SyncReconcileRequestCurrentReleaseDefaultString,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseDefaultString$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseDefaultString,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseDefaultUnion$Outbound =
+  | SyncReconcileRequestCurrentReleaseDefaultString$Outbound
+  | SyncReconcileRequestCurrentReleaseDefaultNumber$Outbound
+  | SyncReconcileRequestCurrentReleaseDefaultBoolean$Outbound
+  | SyncReconcileRequestCurrentReleaseDefaultStringList$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseDefaultUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseDefaultUnion$Outbound,
+    SyncReconcileRequestCurrentReleaseDefaultUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestCurrentReleaseDefaultString$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestCurrentReleaseDefaultNumber$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestCurrentReleaseDefaultBoolean$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestCurrentReleaseDefaultStringList$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestCurrentReleaseDefaultUnionToJSON(
+  syncReconcileRequestCurrentReleaseDefaultUnion:
+    SyncReconcileRequestCurrentReleaseDefaultUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseDefaultUnion$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseDefaultUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseTypeEnvEnum> = z.enum(
+    SyncReconcileRequestCurrentReleaseTypeEnvEnum,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseTypeUnion$Outbound = string | any;
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseTypeUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseTypeUnion$Outbound,
+    SyncReconcileRequestCurrentReleaseTypeUnion
+  > = z.union([
+    SyncReconcileRequestCurrentReleaseTypeEnvEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileRequestCurrentReleaseTypeUnionToJSON(
+  syncReconcileRequestCurrentReleaseTypeUnion:
+    SyncReconcileRequestCurrentReleaseTypeUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseTypeUnion$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseTypeUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseEnv$Outbound = {
+  name: string;
+  targetResources?: Array<string> | null | undefined;
+  type?: string | any | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseEnv$outboundSchema: z.ZodType<
+  SyncReconcileRequestCurrentReleaseEnv$Outbound,
+  SyncReconcileRequestCurrentReleaseEnv
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileRequestCurrentReleaseTypeEnvEnum$outboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestCurrentReleaseEnvToJSON(
+  syncReconcileRequestCurrentReleaseEnv: SyncReconcileRequestCurrentReleaseEnv,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseEnv$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseEnv,
+    ),
+  );
+}
+
+/** @internal */
+export const CurrentReleaseStateKind$outboundSchema: z.ZodEnum<
+  typeof CurrentReleaseStateKind
+> = z.enum(CurrentReleaseStateKind);
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleasePlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleasePlatform> = z.enum(
+    SyncReconcileRequestCurrentReleasePlatform,
+  );
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseProvidedBy$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseProvidedBy> = z.enum(
+    SyncReconcileRequestCurrentReleaseProvidedBy,
+  );
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseValidation$Outbound = {
+  format?: string | null | undefined;
+  max?: string | null | undefined;
+  maxItems?: number | null | undefined;
+  maxLength?: number | null | undefined;
+  min?: string | null | undefined;
+  minItems?: number | null | undefined;
+  minLength?: number | null | undefined;
+  pattern?: string | null | undefined;
+  values?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseValidation$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseValidation$Outbound,
+    SyncReconcileRequestCurrentReleaseValidation
+  > = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestCurrentReleaseValidationToJSON(
+  syncReconcileRequestCurrentReleaseValidation:
+    SyncReconcileRequestCurrentReleaseValidation,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseValidation$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseValidation,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseValidationUnion$Outbound =
+  | SyncReconcileRequestCurrentReleaseValidation$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseValidationUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestCurrentReleaseValidationUnion$Outbound,
+    SyncReconcileRequestCurrentReleaseValidationUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestCurrentReleaseValidation$outboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestCurrentReleaseValidationUnionToJSON(
+  syncReconcileRequestCurrentReleaseValidationUnion:
+    SyncReconcileRequestCurrentReleaseValidationUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseValidationUnion$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseValidationUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCurrentReleaseInput$Outbound = {
+  default?:
+    | SyncReconcileRequestCurrentReleaseDefaultString$Outbound
+    | SyncReconcileRequestCurrentReleaseDefaultNumber$Outbound
+    | SyncReconcileRequestCurrentReleaseDefaultBoolean$Outbound
+    | SyncReconcileRequestCurrentReleaseDefaultStringList$Outbound
+    | any
+    | null
+    | undefined;
+  description: string;
+  env?: Array<SyncReconcileRequestCurrentReleaseEnv$Outbound> | undefined;
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string | null | undefined;
+  platforms?: Array<string> | null | undefined;
+  providedBy: Array<string>;
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestCurrentReleaseValidation$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestCurrentReleaseInput$outboundSchema: z.ZodType<
+  SyncReconcileRequestCurrentReleaseInput$Outbound,
+  SyncReconcileRequestCurrentReleaseInput
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileRequestCurrentReleaseDefaultString$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestCurrentReleaseDefaultNumber$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestCurrentReleaseDefaultBoolean$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestCurrentReleaseDefaultStringList$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileRequestCurrentReleaseEnv$outboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: CurrentReleaseStateKind$outboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileRequestCurrentReleasePlatform$outboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileRequestCurrentReleaseProvidedBy$outboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestCurrentReleaseValidation$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestCurrentReleaseInputToJSON(
+  syncReconcileRequestCurrentReleaseInput:
+    SyncReconcileRequestCurrentReleaseInput,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCurrentReleaseInput$outboundSchema.parse(
+      syncReconcileRequestCurrentReleaseInput,
+    ),
+  );
+}
+
+/** @internal */
 export const SyncReconcileRequestCurrentReleaseManagementEnum$outboundSchema:
   z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseManagementEnum> = z.enum(
     SyncReconcileRequestCurrentReleaseManagementEnum,
@@ -13228,6 +14401,7 @@ export const SyncReconcileRequestCurrentReleaseSupportedPlatform$outboundSchema:
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseStack$Outbound = {
   id: string;
+  inputs?: Array<SyncReconcileRequestCurrentReleaseInput$Outbound> | undefined;
   permissions?:
     | SyncReconcileRequestCurrentReleasePermissions$Outbound
     | undefined;
@@ -13243,6 +14417,9 @@ export const SyncReconcileRequestCurrentReleaseStack$outboundSchema: z.ZodType<
   SyncReconcileRequestCurrentReleaseStack
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileRequestCurrentReleaseInput$outboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileRequestCurrentReleasePermissions$outboundSchema
   ).optional(),
@@ -13582,6 +14759,402 @@ export function syncReconcileRequestErrorUnionToJSON(
 export const SyncReconcileRequestPlatform$outboundSchema: z.ZodEnum<
   typeof SyncReconcileRequestPlatform
 > = z.enum(SyncReconcileRequestPlatform);
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeStringList$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackTypeStringList> = z.enum(
+    SyncReconcileRequestPreparedStackTypeStringList,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackDefaultStringList$Outbound = {
+  type: string;
+  value: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackDefaultStringList$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackDefaultStringList$Outbound,
+    SyncReconcileRequestPreparedStackDefaultStringList
+  > = z.object({
+    type: SyncReconcileRequestPreparedStackTypeStringList$outboundSchema,
+    value: z.array(z.string()),
+  });
+
+export function syncReconcileRequestPreparedStackDefaultStringListToJSON(
+  syncReconcileRequestPreparedStackDefaultStringList:
+    SyncReconcileRequestPreparedStackDefaultStringList,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackDefaultStringList$outboundSchema.parse(
+      syncReconcileRequestPreparedStackDefaultStringList,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackTypeBoolean> = z.enum(
+    SyncReconcileRequestPreparedStackTypeBoolean,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackDefaultBoolean$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackDefaultBoolean$Outbound,
+    SyncReconcileRequestPreparedStackDefaultBoolean
+  > = z.object({
+    type: SyncReconcileRequestPreparedStackTypeBoolean$outboundSchema,
+    value: z.boolean(),
+  });
+
+export function syncReconcileRequestPreparedStackDefaultBooleanToJSON(
+  syncReconcileRequestPreparedStackDefaultBoolean:
+    SyncReconcileRequestPreparedStackDefaultBoolean,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackDefaultBoolean$outboundSchema.parse(
+      syncReconcileRequestPreparedStackDefaultBoolean,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeNumber$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackTypeNumber> = z.enum(
+    SyncReconcileRequestPreparedStackTypeNumber,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackDefaultNumber$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackDefaultNumber$Outbound,
+    SyncReconcileRequestPreparedStackDefaultNumber
+  > = z.object({
+    type: SyncReconcileRequestPreparedStackTypeNumber$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestPreparedStackDefaultNumberToJSON(
+  syncReconcileRequestPreparedStackDefaultNumber:
+    SyncReconcileRequestPreparedStackDefaultNumber,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackDefaultNumber$outboundSchema.parse(
+      syncReconcileRequestPreparedStackDefaultNumber,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeString$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackTypeString> = z.enum(
+    SyncReconcileRequestPreparedStackTypeString,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackDefaultString$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackDefaultString$Outbound,
+    SyncReconcileRequestPreparedStackDefaultString
+  > = z.object({
+    type: SyncReconcileRequestPreparedStackTypeString$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestPreparedStackDefaultStringToJSON(
+  syncReconcileRequestPreparedStackDefaultString:
+    SyncReconcileRequestPreparedStackDefaultString,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackDefaultString$outboundSchema.parse(
+      syncReconcileRequestPreparedStackDefaultString,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackDefaultUnion$Outbound =
+  | SyncReconcileRequestPreparedStackDefaultString$Outbound
+  | SyncReconcileRequestPreparedStackDefaultNumber$Outbound
+  | SyncReconcileRequestPreparedStackDefaultBoolean$Outbound
+  | SyncReconcileRequestPreparedStackDefaultStringList$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackDefaultUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackDefaultUnion$Outbound,
+    SyncReconcileRequestPreparedStackDefaultUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestPreparedStackDefaultString$outboundSchema),
+    z.lazy(() => SyncReconcileRequestPreparedStackDefaultNumber$outboundSchema),
+    z.lazy(() =>
+      SyncReconcileRequestPreparedStackDefaultBoolean$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestPreparedStackDefaultStringList$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPreparedStackDefaultUnionToJSON(
+  syncReconcileRequestPreparedStackDefaultUnion:
+    SyncReconcileRequestPreparedStackDefaultUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackDefaultUnion$outboundSchema.parse(
+      syncReconcileRequestPreparedStackDefaultUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackTypeEnvEnum> = z.enum(
+    SyncReconcileRequestPreparedStackTypeEnvEnum,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackTypeUnion$Outbound = string | any;
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackTypeUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackTypeUnion$Outbound,
+    SyncReconcileRequestPreparedStackTypeUnion
+  > = z.union([
+    SyncReconcileRequestPreparedStackTypeEnvEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPreparedStackTypeUnionToJSON(
+  syncReconcileRequestPreparedStackTypeUnion:
+    SyncReconcileRequestPreparedStackTypeUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackTypeUnion$outboundSchema.parse(
+      syncReconcileRequestPreparedStackTypeUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackEnv$Outbound = {
+  name: string;
+  targetResources?: Array<string> | null | undefined;
+  type?: string | any | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackEnv$outboundSchema: z.ZodType<
+  SyncReconcileRequestPreparedStackEnv$Outbound,
+  SyncReconcileRequestPreparedStackEnv
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileRequestPreparedStackTypeEnvEnum$outboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestPreparedStackEnvToJSON(
+  syncReconcileRequestPreparedStackEnv: SyncReconcileRequestPreparedStackEnv,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackEnv$outboundSchema.parse(
+      syncReconcileRequestPreparedStackEnv,
+    ),
+  );
+}
+
+/** @internal */
+export const PreparedStackStateKind$outboundSchema: z.ZodEnum<
+  typeof PreparedStackStateKind
+> = z.enum(PreparedStackStateKind);
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackPlatform> = z.enum(
+    SyncReconcileRequestPreparedStackPlatform,
+  );
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackProvidedBy$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackProvidedBy> = z.enum(
+    SyncReconcileRequestPreparedStackProvidedBy,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackValidation$Outbound = {
+  format?: string | null | undefined;
+  max?: string | null | undefined;
+  maxItems?: number | null | undefined;
+  maxLength?: number | null | undefined;
+  min?: string | null | undefined;
+  minItems?: number | null | undefined;
+  minLength?: number | null | undefined;
+  pattern?: string | null | undefined;
+  values?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackValidation$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackValidation$Outbound,
+    SyncReconcileRequestPreparedStackValidation
+  > = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPreparedStackValidationToJSON(
+  syncReconcileRequestPreparedStackValidation:
+    SyncReconcileRequestPreparedStackValidation,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackValidation$outboundSchema.parse(
+      syncReconcileRequestPreparedStackValidation,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackValidationUnion$Outbound =
+  | SyncReconcileRequestPreparedStackValidation$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackValidationUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPreparedStackValidationUnion$Outbound,
+    SyncReconcileRequestPreparedStackValidationUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestPreparedStackValidation$outboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPreparedStackValidationUnionToJSON(
+  syncReconcileRequestPreparedStackValidationUnion:
+    SyncReconcileRequestPreparedStackValidationUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackValidationUnion$outboundSchema.parse(
+      syncReconcileRequestPreparedStackValidationUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPreparedStackInput$Outbound = {
+  default?:
+    | SyncReconcileRequestPreparedStackDefaultString$Outbound
+    | SyncReconcileRequestPreparedStackDefaultNumber$Outbound
+    | SyncReconcileRequestPreparedStackDefaultBoolean$Outbound
+    | SyncReconcileRequestPreparedStackDefaultStringList$Outbound
+    | any
+    | null
+    | undefined;
+  description: string;
+  env?: Array<SyncReconcileRequestPreparedStackEnv$Outbound> | undefined;
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string | null | undefined;
+  platforms?: Array<string> | null | undefined;
+  providedBy: Array<string>;
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestPreparedStackValidation$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPreparedStackInput$outboundSchema: z.ZodType<
+  SyncReconcileRequestPreparedStackInput$Outbound,
+  SyncReconcileRequestPreparedStackInput
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileRequestPreparedStackDefaultString$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestPreparedStackDefaultNumber$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestPreparedStackDefaultBoolean$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestPreparedStackDefaultStringList$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileRequestPreparedStackEnv$outboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: PreparedStackStateKind$outboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileRequestPreparedStackPlatform$outboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileRequestPreparedStackProvidedBy$outboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestPreparedStackValidation$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestPreparedStackInputToJSON(
+  syncReconcileRequestPreparedStackInput:
+    SyncReconcileRequestPreparedStackInput,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPreparedStackInput$outboundSchema.parse(
+      syncReconcileRequestPreparedStackInput,
+    ),
+  );
+}
 
 /** @internal */
 export const SyncReconcileRequestPreparedStackManagementEnum$outboundSchema:
@@ -15972,6 +17545,7 @@ export const SyncReconcileRequestPreparedStackSupportedPlatform$outboundSchema:
 /** @internal */
 export type SyncReconcileRequestPreparedStack$Outbound = {
   id: string;
+  inputs?: Array<SyncReconcileRequestPreparedStackInput$Outbound> | undefined;
   permissions?:
     | SyncReconcileRequestPreparedStackPermissions$Outbound
     | undefined;
@@ -15987,6 +17561,9 @@ export const SyncReconcileRequestPreparedStack$outboundSchema: z.ZodType<
   SyncReconcileRequestPreparedStack
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileRequestPreparedStackInput$outboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileRequestPreparedStackPermissions$outboundSchema
   ).optional(),
@@ -16525,6 +18102,402 @@ export function syncReconcileRequestStackStateUnionToJSON(
 export const StateStatus$outboundSchema: z.ZodEnum<typeof StateStatus> = z.enum(
   StateStatus,
 );
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeStringList$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseTypeStringList> = z.enum(
+    SyncReconcileRequestTargetReleaseTypeStringList,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseDefaultStringList$Outbound = {
+  type: string;
+  value: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseDefaultStringList$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseDefaultStringList$Outbound,
+    SyncReconcileRequestTargetReleaseDefaultStringList
+  > = z.object({
+    type: SyncReconcileRequestTargetReleaseTypeStringList$outboundSchema,
+    value: z.array(z.string()),
+  });
+
+export function syncReconcileRequestTargetReleaseDefaultStringListToJSON(
+  syncReconcileRequestTargetReleaseDefaultStringList:
+    SyncReconcileRequestTargetReleaseDefaultStringList,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseDefaultStringList$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseDefaultStringList,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseTypeBoolean> = z.enum(
+    SyncReconcileRequestTargetReleaseTypeBoolean,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseDefaultBoolean$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseDefaultBoolean$Outbound,
+    SyncReconcileRequestTargetReleaseDefaultBoolean
+  > = z.object({
+    type: SyncReconcileRequestTargetReleaseTypeBoolean$outboundSchema,
+    value: z.boolean(),
+  });
+
+export function syncReconcileRequestTargetReleaseDefaultBooleanToJSON(
+  syncReconcileRequestTargetReleaseDefaultBoolean:
+    SyncReconcileRequestTargetReleaseDefaultBoolean,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseDefaultBoolean$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseDefaultBoolean,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeNumber$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseTypeNumber> = z.enum(
+    SyncReconcileRequestTargetReleaseTypeNumber,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseDefaultNumber$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseDefaultNumber$Outbound,
+    SyncReconcileRequestTargetReleaseDefaultNumber
+  > = z.object({
+    type: SyncReconcileRequestTargetReleaseTypeNumber$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestTargetReleaseDefaultNumberToJSON(
+  syncReconcileRequestTargetReleaseDefaultNumber:
+    SyncReconcileRequestTargetReleaseDefaultNumber,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseDefaultNumber$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseDefaultNumber,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeString$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseTypeString> = z.enum(
+    SyncReconcileRequestTargetReleaseTypeString,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseDefaultString$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseDefaultString$Outbound,
+    SyncReconcileRequestTargetReleaseDefaultString
+  > = z.object({
+    type: SyncReconcileRequestTargetReleaseTypeString$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestTargetReleaseDefaultStringToJSON(
+  syncReconcileRequestTargetReleaseDefaultString:
+    SyncReconcileRequestTargetReleaseDefaultString,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseDefaultString$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseDefaultString,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseDefaultUnion$Outbound =
+  | SyncReconcileRequestTargetReleaseDefaultString$Outbound
+  | SyncReconcileRequestTargetReleaseDefaultNumber$Outbound
+  | SyncReconcileRequestTargetReleaseDefaultBoolean$Outbound
+  | SyncReconcileRequestTargetReleaseDefaultStringList$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseDefaultUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseDefaultUnion$Outbound,
+    SyncReconcileRequestTargetReleaseDefaultUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestTargetReleaseDefaultString$outboundSchema),
+    z.lazy(() => SyncReconcileRequestTargetReleaseDefaultNumber$outboundSchema),
+    z.lazy(() =>
+      SyncReconcileRequestTargetReleaseDefaultBoolean$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestTargetReleaseDefaultStringList$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestTargetReleaseDefaultUnionToJSON(
+  syncReconcileRequestTargetReleaseDefaultUnion:
+    SyncReconcileRequestTargetReleaseDefaultUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseDefaultUnion$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseDefaultUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseTypeEnvEnum> = z.enum(
+    SyncReconcileRequestTargetReleaseTypeEnvEnum,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseTypeUnion$Outbound = string | any;
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseTypeUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseTypeUnion$Outbound,
+    SyncReconcileRequestTargetReleaseTypeUnion
+  > = z.union([
+    SyncReconcileRequestTargetReleaseTypeEnvEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileRequestTargetReleaseTypeUnionToJSON(
+  syncReconcileRequestTargetReleaseTypeUnion:
+    SyncReconcileRequestTargetReleaseTypeUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseTypeUnion$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseTypeUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseEnv$Outbound = {
+  name: string;
+  targetResources?: Array<string> | null | undefined;
+  type?: string | any | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseEnv$outboundSchema: z.ZodType<
+  SyncReconcileRequestTargetReleaseEnv$Outbound,
+  SyncReconcileRequestTargetReleaseEnv
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileRequestTargetReleaseTypeEnvEnum$outboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestTargetReleaseEnvToJSON(
+  syncReconcileRequestTargetReleaseEnv: SyncReconcileRequestTargetReleaseEnv,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseEnv$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseEnv,
+    ),
+  );
+}
+
+/** @internal */
+export const TargetReleaseStateKind$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseStateKind
+> = z.enum(TargetReleaseStateKind);
+
+/** @internal */
+export const SyncReconcileRequestTargetReleasePlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleasePlatform> = z.enum(
+    SyncReconcileRequestTargetReleasePlatform,
+  );
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseProvidedBy$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseProvidedBy> = z.enum(
+    SyncReconcileRequestTargetReleaseProvidedBy,
+  );
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseValidation$Outbound = {
+  format?: string | null | undefined;
+  max?: string | null | undefined;
+  maxItems?: number | null | undefined;
+  maxLength?: number | null | undefined;
+  min?: string | null | undefined;
+  minItems?: number | null | undefined;
+  minLength?: number | null | undefined;
+  pattern?: string | null | undefined;
+  values?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseValidation$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseValidation$Outbound,
+    SyncReconcileRequestTargetReleaseValidation
+  > = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestTargetReleaseValidationToJSON(
+  syncReconcileRequestTargetReleaseValidation:
+    SyncReconcileRequestTargetReleaseValidation,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseValidation$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseValidation,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseValidationUnion$Outbound =
+  | SyncReconcileRequestTargetReleaseValidation$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseValidationUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestTargetReleaseValidationUnion$Outbound,
+    SyncReconcileRequestTargetReleaseValidationUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestTargetReleaseValidation$outboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestTargetReleaseValidationUnionToJSON(
+  syncReconcileRequestTargetReleaseValidationUnion:
+    SyncReconcileRequestTargetReleaseValidationUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseValidationUnion$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseValidationUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestTargetReleaseInput$Outbound = {
+  default?:
+    | SyncReconcileRequestTargetReleaseDefaultString$Outbound
+    | SyncReconcileRequestTargetReleaseDefaultNumber$Outbound
+    | SyncReconcileRequestTargetReleaseDefaultBoolean$Outbound
+    | SyncReconcileRequestTargetReleaseDefaultStringList$Outbound
+    | any
+    | null
+    | undefined;
+  description: string;
+  env?: Array<SyncReconcileRequestTargetReleaseEnv$Outbound> | undefined;
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string | null | undefined;
+  platforms?: Array<string> | null | undefined;
+  providedBy: Array<string>;
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestTargetReleaseValidation$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestTargetReleaseInput$outboundSchema: z.ZodType<
+  SyncReconcileRequestTargetReleaseInput$Outbound,
+  SyncReconcileRequestTargetReleaseInput
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileRequestTargetReleaseDefaultString$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestTargetReleaseDefaultNumber$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestTargetReleaseDefaultBoolean$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestTargetReleaseDefaultStringList$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileRequestTargetReleaseEnv$outboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: TargetReleaseStateKind$outboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileRequestTargetReleasePlatform$outboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileRequestTargetReleaseProvidedBy$outboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestTargetReleaseValidation$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestTargetReleaseInputToJSON(
+  syncReconcileRequestTargetReleaseInput:
+    SyncReconcileRequestTargetReleaseInput,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestTargetReleaseInput$outboundSchema.parse(
+      syncReconcileRequestTargetReleaseInput,
+    ),
+  );
+}
 
 /** @internal */
 export const SyncReconcileRequestTargetReleaseManagementEnum$outboundSchema:
@@ -18909,6 +20882,7 @@ export const SyncReconcileRequestTargetReleaseSupportedPlatform$outboundSchema:
 /** @internal */
 export type SyncReconcileRequestTargetReleaseStack$Outbound = {
   id: string;
+  inputs?: Array<SyncReconcileRequestTargetReleaseInput$Outbound> | undefined;
   permissions?:
     | SyncReconcileRequestTargetReleasePermissions$Outbound
     | undefined;
@@ -18924,6 +20898,9 @@ export const SyncReconcileRequestTargetReleaseStack$outboundSchema: z.ZodType<
   SyncReconcileRequestTargetReleaseStack
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileRequestTargetReleaseInput$outboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileRequestTargetReleasePermissions$outboundSchema
   ).optional(),

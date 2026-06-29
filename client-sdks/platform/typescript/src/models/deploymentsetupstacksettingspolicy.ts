@@ -9,6 +9,65 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export type DeploymentSetupStackSettingsPolicyPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentSetupStackSettingsPolicyPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentSetupStackSettingsPolicyPoolsUnion =
+  | DeploymentSetupStackSettingsPolicyPoolsFixed
+  | DeploymentSetupStackSettingsPolicyPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentSetupStackSettingsPolicyCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | DeploymentSetupStackSettingsPolicyPoolsFixed
+      | DeploymentSetupStackSettingsPolicyPoolsAutoscale;
+  } | undefined;
+};
+
+export type DeploymentSetupStackSettingsPolicyComputeUnion =
+  | DeploymentSetupStackSettingsPolicyCompute
+  | any;
+
 /**
  * Deployment model: how updates are delivered to the remote environment.
  */
@@ -1012,6 +1071,7 @@ export type DeploymentSetupStackSettingsPolicyUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type Defaults = {
+  compute?: DeploymentSetupStackSettingsPolicyCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1115,6 +1175,279 @@ export type DeploymentSetupStackSettingsPolicy = {
   allowExternalBindings?: boolean | undefined;
   allowCustomRegistry?: boolean | undefined;
 };
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyPoolsAutoscale, unknown> = z
+    .object({
+      machine: z.nullable(z.string()).optional(),
+      max: z.int(),
+      min: z.int(),
+      mode: z.literal("autoscale"),
+    });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound,
+    DeploymentSetupStackSettingsPolicyPoolsAutoscale
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    max: z.int(),
+    min: z.int(),
+    mode: z.literal("autoscale"),
+  });
+
+export function deploymentSetupStackSettingsPolicyPoolsAutoscaleToJSON(
+  deploymentSetupStackSettingsPolicyPoolsAutoscale:
+    DeploymentSetupStackSettingsPolicyPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyPoolsAutoscale,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPoolsAutoscale,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyPoolsFixed, unknown> = z.object({
+    machine: z.nullable(z.string()).optional(),
+    machines: z.int(),
+    mode: z.literal("fixed"),
+  });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound,
+    DeploymentSetupStackSettingsPolicyPoolsFixed
+  > = z.object({
+    machine: z.nullable(z.string()).optional(),
+    machines: z.int(),
+    mode: z.literal("fixed"),
+  });
+
+export function deploymentSetupStackSettingsPolicyPoolsFixedToJSON(
+  deploymentSetupStackSettingsPolicyPoolsFixed:
+    DeploymentSetupStackSettingsPolicyPoolsFixed,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyPoolsFixed,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPoolsFixed,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsUnion$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyPoolsUnion, unknown> = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema),
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema
+    ),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPoolsUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound
+  | DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPoolsUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPoolsUnion$Outbound,
+    DeploymentSetupStackSettingsPolicyPoolsUnion
+  > = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema),
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema
+    ),
+  ]);
+
+export function deploymentSetupStackSettingsPolicyPoolsUnionToJSON(
+  deploymentSetupStackSettingsPolicyPoolsUnion:
+    DeploymentSetupStackSettingsPolicyPoolsUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPoolsUnion$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyPoolsUnion,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPoolsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPoolsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyCompute$inboundSchema: z.ZodType<
+  DeploymentSetupStackSettingsPolicyCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema),
+      z.lazy(() =>
+        DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema
+      ),
+    ]),
+  ).optional(),
+});
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound
+      | DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyCompute$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyCompute$Outbound,
+    DeploymentSetupStackSettingsPolicyCompute
+  > = z.object({
+    pools: z.record(
+      z.string(),
+      z.union([
+        z.lazy(() =>
+          DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema
+        ),
+      ]),
+    ).optional(),
+  });
+
+export function deploymentSetupStackSettingsPolicyComputeToJSON(
+  deploymentSetupStackSettingsPolicyCompute:
+    DeploymentSetupStackSettingsPolicyCompute,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyCompute$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyCompute,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyCompute,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyCompute$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyComputeUnion$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyComputeUnion, unknown> = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$inboundSchema),
+    z.any(),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyComputeUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicyCompute$Outbound
+  | any;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyComputeUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyComputeUnion$Outbound,
+    DeploymentSetupStackSettingsPolicyComputeUnion
+  > = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$outboundSchema),
+    z.any(),
+  ]);
+
+export function deploymentSetupStackSettingsPolicyComputeUnionToJSON(
+  deploymentSetupStackSettingsPolicyComputeUnion:
+    DeploymentSetupStackSettingsPolicyComputeUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyComputeUnion$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyComputeUnion,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyComputeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyComputeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyComputeUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyDeploymentModel$inboundSchema:
@@ -5271,6 +5604,12 @@ export const DeploymentSetupStackSettingsPolicyUpdates$outboundSchema:
 
 /** @internal */
 export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel:
     DeploymentSetupStackSettingsPolicyDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
@@ -5318,6 +5657,11 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
 });
 /** @internal */
 export type Defaults$Outbound = {
+  compute?:
+    | DeploymentSetupStackSettingsPolicyCompute$Outbound
+    | any
+    | null
+    | undefined;
   deploymentModel?: string | undefined;
   domains?:
     | DeploymentSetupStackSettingsPolicyDomains$Outbound
@@ -5350,6 +5694,12 @@ export type Defaults$Outbound = {
 /** @internal */
 export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
   .object({
+    compute: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     deploymentModel:
       DeploymentSetupStackSettingsPolicyDeploymentModel$outboundSchema
         .optional(),

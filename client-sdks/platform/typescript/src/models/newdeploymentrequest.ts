@@ -14,6 +14,11 @@ import {
   EnvironmentVariableConfig$Outbound,
   EnvironmentVariableConfig$outboundSchema,
 } from "./environmentvariableconfig.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 /**
  * Target platform for the deployment
@@ -160,6 +165,65 @@ export type NewDeploymentRequestEnvironmentInfoUnion =
   | NewDeploymentRequestEnvironmentInfoLocal
   | NewDeploymentRequestEnvironmentInfoAws
   | NewDeploymentRequestEnvironmentInfoTest
+  | any;
+
+export type NewDeploymentRequestPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type NewDeploymentRequestPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type NewDeploymentRequestPoolsUnion =
+  | NewDeploymentRequestPoolsFixed
+  | NewDeploymentRequestPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type NewDeploymentRequestCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | NewDeploymentRequestPoolsFixed
+      | NewDeploymentRequestPoolsAutoscale;
+  } | undefined;
+};
+
+export type NewDeploymentRequestComputeUnion =
+  | NewDeploymentRequestCompute
   | any;
 
 /**
@@ -1144,6 +1208,7 @@ export type NewDeploymentRequestUpdates = ClosedEnum<
  * Stack settings for deployment customization
  */
 export type NewDeploymentRequestStackSettings = {
+  compute?: NewDeploymentRequestCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1198,10 +1263,7 @@ export type NewDeploymentRequest = {
    * Required for workspace/project tokens. Deployment group tokens use their own group automatically.
    */
   deploymentGroupId?: string | undefined;
-  /**
-   * ID of the manager responsible for this deployment
-   */
-  managerId?: string | null | undefined;
+  managerId?: string | undefined;
   /**
    * ID of the pinned release
    */
@@ -1236,6 +1298,10 @@ export type NewDeploymentRequest = {
   resourcePrefix?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  /**
+   * Stack input values provided by the deployment creator.
+   */
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
 /** @internal */
@@ -1441,6 +1507,143 @@ export function newDeploymentRequestEnvironmentInfoUnionToJSON(
   return JSON.stringify(
     NewDeploymentRequestEnvironmentInfoUnion$outboundSchema.parse(
       newDeploymentRequestEnvironmentInfoUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestPoolsAutoscale$Outbound = {
+  machine?: string | null | undefined;
+  max: number;
+  min: number;
+  mode: "autoscale";
+};
+
+/** @internal */
+export const NewDeploymentRequestPoolsAutoscale$outboundSchema: z.ZodType<
+  NewDeploymentRequestPoolsAutoscale$Outbound,
+  NewDeploymentRequestPoolsAutoscale
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function newDeploymentRequestPoolsAutoscaleToJSON(
+  newDeploymentRequestPoolsAutoscale: NewDeploymentRequestPoolsAutoscale,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPoolsAutoscale$outboundSchema.parse(
+      newDeploymentRequestPoolsAutoscale,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestPoolsFixed$Outbound = {
+  machine?: string | null | undefined;
+  machines: number;
+  mode: "fixed";
+};
+
+/** @internal */
+export const NewDeploymentRequestPoolsFixed$outboundSchema: z.ZodType<
+  NewDeploymentRequestPoolsFixed$Outbound,
+  NewDeploymentRequestPoolsFixed
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function newDeploymentRequestPoolsFixedToJSON(
+  newDeploymentRequestPoolsFixed: NewDeploymentRequestPoolsFixed,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPoolsFixed$outboundSchema.parse(
+      newDeploymentRequestPoolsFixed,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestPoolsUnion$Outbound =
+  | NewDeploymentRequestPoolsFixed$Outbound
+  | NewDeploymentRequestPoolsAutoscale$Outbound;
+
+/** @internal */
+export const NewDeploymentRequestPoolsUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestPoolsUnion$Outbound,
+  NewDeploymentRequestPoolsUnion
+> = z.union([
+  z.lazy(() => NewDeploymentRequestPoolsFixed$outboundSchema),
+  z.lazy(() => NewDeploymentRequestPoolsAutoscale$outboundSchema),
+]);
+
+export function newDeploymentRequestPoolsUnionToJSON(
+  newDeploymentRequestPoolsUnion: NewDeploymentRequestPoolsUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPoolsUnion$outboundSchema.parse(
+      newDeploymentRequestPoolsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCompute$Outbound = {
+  pools?: {
+    [k: string]:
+      | NewDeploymentRequestPoolsFixed$Outbound
+      | NewDeploymentRequestPoolsAutoscale$Outbound;
+  } | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestCompute$outboundSchema: z.ZodType<
+  NewDeploymentRequestCompute$Outbound,
+  NewDeploymentRequestCompute
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => NewDeploymentRequestPoolsFixed$outboundSchema),
+      z.lazy(() => NewDeploymentRequestPoolsAutoscale$outboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function newDeploymentRequestComputeToJSON(
+  newDeploymentRequestCompute: NewDeploymentRequestCompute,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCompute$outboundSchema.parse(
+      newDeploymentRequestCompute,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestComputeUnion$Outbound =
+  | NewDeploymentRequestCompute$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestComputeUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestComputeUnion$Outbound,
+  NewDeploymentRequestComputeUnion
+> = z.union([
+  z.lazy(() => NewDeploymentRequestCompute$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestComputeUnionToJSON(
+  newDeploymentRequestComputeUnion: NewDeploymentRequestComputeUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestComputeUnion$outboundSchema.parse(
+      newDeploymentRequestComputeUnion,
     ),
   );
 }
@@ -3504,6 +3707,7 @@ export const NewDeploymentRequestUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type NewDeploymentRequestStackSettings$Outbound = {
+  compute?: NewDeploymentRequestCompute$Outbound | any | null | undefined;
   deploymentModel?: string | undefined;
   domains?: NewDeploymentRequestDomains$Outbound | any | null | undefined;
   externalBindings?:
@@ -3530,6 +3734,12 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
   NewDeploymentRequestStackSettings$Outbound,
   NewDeploymentRequestStackSettings
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestCompute$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: NewDeploymentRequestDeploymentModel$outboundSchema
     .optional(),
   domains: z.nullable(
@@ -3577,7 +3787,7 @@ export type NewDeploymentRequest$Outbound = {
   name: string;
   platform: string;
   deploymentGroupId?: string | undefined;
-  managerId?: string | null | undefined;
+  managerId?: string | undefined;
   pinnedReleaseId?: string | null | undefined;
   environmentVariables?:
     | Array<EnvironmentVariableConfig$Outbound>
@@ -3597,6 +3807,7 @@ export type NewDeploymentRequest$Outbound = {
   resourcePrefix?: string | undefined;
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
 /** @internal */
@@ -3607,7 +3818,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   name: z.string(),
   platform: NewDeploymentRequestPlatform$outboundSchema,
   deploymentGroupId: z.string().optional(),
-  managerId: z.nullable(z.string()).optional(),
+  managerId: z.string().optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   environmentVariables: z.nullable(
     z.array(EnvironmentVariableConfig$outboundSchema),
@@ -3628,6 +3839,8 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   resourcePrefix: z.string().optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
 });
 
 export function newDeploymentRequestToJSON(

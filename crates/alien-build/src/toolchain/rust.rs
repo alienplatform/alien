@@ -1,8 +1,8 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
 use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
-use alien_core::AlienEvent;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_core::{AlienEvent, CargoBuildStrategy};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -232,6 +232,44 @@ impl Toolchain for RustToolchain {
             }
         }
 
+        if matches!(strategy, CargoBuildStrategy::Zigbuild) {
+            match Command::new("zig")
+                .arg("version")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    info!("Using zig {}", version.trim());
+                }
+                Ok(output) => {
+                    return Err(image_build_error_with_output(
+                        self.binary_name.clone(),
+                        "zig is required for cargo zigbuild but `zig version` failed",
+                        &output,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                        resource_name: self.binary_name.clone(),
+                        reason: "zig is required to build Linux musl Rust resources. Install zig and rerun `alien release`.".to_string(),
+                        build_output: None,
+                    }));
+                }
+                Err(error) => {
+                    return Err(error
+                        .into_alien_error()
+                        .context(ErrorData::ImageBuildFailed {
+                            resource_name: self.binary_name.clone(),
+                            reason: "Failed to execute `zig version`".to_string(),
+                            build_output: None,
+                        }));
+                }
+            }
+        }
+
         // Check if target is installed, install if not present (still needed for std library)
         let list_targets_output = Command::new("rustup")
             .args(&["target", "list", "--installed"])
@@ -449,15 +487,45 @@ impl Toolchain for RustToolchain {
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
-        // Workers on local platform use embedded runtime in agent (no runtime in image)
+        // Local native resources use embedded runtime in the agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
         let needs_runtime_in_image =
             context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Worker on local platform - runtime is embedded in operator
-            // Just package the application binary
+            // Local native resource - runtime is embedded in the agent
+            // Package the application binary, and any extra assets the project
+            // wants shipped alongside it. Convention: anything in a top-level
+            // `vendor/` directory next to Cargo.toml gets copied into the
+            // image under `/app/vendor/`. This is how a daemon can ship
+            // helper binaries or data files it needs at runtime without
+            // baking them into the Rust binary itself.
             let runtime_command = vec![format!("./{}", binary_filename)];
+
+            let mut layers = vec![super::LayerSpec {
+                files: vec![super::FileSpec {
+                    host_path: binary_path.clone(),
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755), // Executable
+                }],
+                description: "Application binary".to_string(),
+            }];
+
+            let vendor_dir = context.src_dir.join("vendor");
+            if vendor_dir.is_dir() {
+                info!(
+                    "Including vendor directory in image: {}",
+                    vendor_dir.display()
+                );
+                layers.push(super::LayerSpec {
+                    files: vec![super::FileSpec {
+                        host_path: vendor_dir,
+                        container_path: "./vendor".to_string(),
+                        mode: None,
+                    }],
+                    description: "Vendor assets".to_string(),
+                });
+            }
 
             info!(
                 "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
@@ -467,16 +535,7 @@ impl Toolchain for RustToolchain {
             );
 
             return Ok(ToolchainOutput {
-                build_strategy: super::ImageBuildStrategy::FromScratch {
-                    layers: vec![super::LayerSpec {
-                        files: vec![super::FileSpec {
-                            host_path: binary_path.clone(),
-                            container_path: format!("./{}", binary_filename),
-                            mode: Some(0o755), // Executable
-                        }],
-                        description: "Application binary".to_string(),
-                    }],
-                },
+                build_strategy: super::ImageBuildStrategy::FromScratch { layers },
                 runtime_command,
             });
         }
@@ -489,14 +548,36 @@ impl Toolchain for RustToolchain {
         // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
         let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
 
+        let mut files_to_package = vec![super::FileSpec {
+            host_path: binary_path,
+            container_path: format!("./{}", binary_filename),
+            mode: Some(0o755),
+        }];
+
+        // Convention (mirrors the local-platform/from-scratch path): include
+        // a top-level `vendor/` directory next to Cargo.toml under `/app/vendor/`
+        // in the image. This is how a daemon ships helper binaries or data
+        // files it needs at runtime, for example a host loader bundling the
+        // binary it later installs onto the host. Without this,
+        // source-built cloud daemons can't ship vendored assets at all
+        // (the local path bundles them; this path silently dropped them).
+        let vendor_dir = context.src_dir.join("vendor");
+        if vendor_dir.is_dir() {
+            info!(
+                "Including vendor directory in image: {}",
+                vendor_dir.display()
+            );
+            files_to_package.push(super::FileSpec {
+                host_path: vendor_dir,
+                container_path: "./vendor".to_string(),
+                mode: None,
+            });
+        }
+
         let output = ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![super::FileSpec {
-                    host_path: binary_path,
-                    container_path: format!("./{}", binary_filename),
-                    mode: Some(0o755),
-                }],
+                files_to_package,
             },
             runtime_command,
         };

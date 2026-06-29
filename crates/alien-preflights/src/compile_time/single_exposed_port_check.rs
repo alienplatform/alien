@@ -1,25 +1,26 @@
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Container, Platform, Stack};
+use alien_core::{Container, Daemon, ExposeProtocol, Platform, Stack, Worker};
 use async_trait::async_trait;
 
-/// Validates that containers have at most one exposed port.
+/// Validates public endpoint and daemon runtime configuration.
 ///
-/// Containers can have multiple ports, but currently only one can be exposed publicly.
-/// This limitation exists because controllers create a single load balancer per container.
-/// This check ensures the configuration is valid before deployment.
+/// Endpoint naming, backend port, and trusted runtime constraints must fail
+/// before controllers try to materialize cloud resources.
 pub struct SingleExposedPortCheck;
 
 #[async_trait]
 impl CompileTimeCheck for SingleExposedPortCheck {
     fn description(&self) -> &'static str {
-        "Validate containers have at most one exposed port"
+        "Validate workload public endpoints and daemon runtime options"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
         // Run for all platforms - this is a universal constraint for now
-        stack
-            .resources()
-            .any(|(_, entry)| entry.config.downcast_ref::<Container>().is_some())
+        stack.resources().any(|(_, entry)| {
+            entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<Daemon>().is_some()
+                || entry.config.downcast_ref::<Worker>().is_some()
+        })
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> crate::error::Result<CheckResult> {
@@ -27,21 +28,14 @@ impl CompileTimeCheck for SingleExposedPortCheck {
 
         for (_id, resource_entry) in stack.resources() {
             if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-                let exposed_ports: Vec<_> = container
-                    .ports
-                    .iter()
-                    .filter(|p| p.expose.is_some())
-                    .collect();
-
-                if exposed_ports.len() > 1 {
-                    let ports_list: Vec<u16> = exposed_ports.iter().map(|p| p.port).collect();
-                    failures.push(format!(
-                        "Container '{}' has {} exposed ports ({:?}), but only one exposed port is currently supported. Remove expose configuration from all but one port.",
-                        container.id,
-                        exposed_ports.len(),
-                        ports_list
-                    ));
-                }
+                validate_container_public_endpoints(container, &mut failures);
+            }
+            if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
+                validate_daemon_public_endpoints(daemon, &mut failures);
+                validate_daemon_runtime(daemon, &mut failures);
+            }
+            if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
+                validate_worker_public_endpoints(worker, &mut failures);
             }
         }
 
@@ -53,10 +47,151 @@ impl CompileTimeCheck for SingleExposedPortCheck {
     }
 }
 
+fn validate_container_public_endpoints(container: &Container, failures: &mut Vec<String>) {
+    let mut endpoint_names = std::collections::BTreeSet::new();
+    let mut public_backend_ports = std::collections::BTreeSet::new();
+
+    for endpoint in &container.public_endpoints {
+        if let Err(error) = endpoint.validate_for_resource(&container.id) {
+            failures.push(format!("Container '{}': {}", container.id, error));
+        }
+        if !endpoint_names.insert(endpoint.name.as_str()) {
+            failures.push(format!(
+                "Container '{}': duplicate public endpoint name '{}'",
+                container.id, endpoint.name
+            ));
+        }
+        if !container
+            .ports
+            .iter()
+            .any(|port| port.port == endpoint.port)
+        {
+            failures.push(format!(
+                "Container '{}': public endpoint '{}' references undeclared port {}",
+                container.id, endpoint.name, endpoint.port
+            ));
+        }
+        public_backend_ports.insert(endpoint.port);
+    }
+
+    if public_backend_ports.len() > 1 {
+        failures.push(format!(
+            "Container '{}' has public endpoints on multiple backend ports ({:?}), but one backend port is currently supported. Split the endpoints across separate resources or route them through one port.",
+            container.id, public_backend_ports
+        ));
+    }
+}
+
+fn validate_daemon_public_endpoints(daemon: &Daemon, failures: &mut Vec<String>) {
+    let mut endpoint_names = std::collections::BTreeSet::new();
+    let mut public_backend_ports = std::collections::BTreeSet::new();
+
+    for endpoint in &daemon.public_endpoints {
+        if let Err(error) = endpoint.validate_for_resource(&daemon.id) {
+            failures.push(format!("Daemon '{}': {}", daemon.id, error));
+        }
+        if !endpoint_names.insert(endpoint.name.as_str()) {
+            failures.push(format!(
+                "Daemon '{}': duplicate public endpoint name '{}'",
+                daemon.id, endpoint.name
+            ));
+        }
+        if endpoint.protocol != ExposeProtocol::Http {
+            failures.push(format!(
+                "Daemon '{}': public endpoints currently support only HTTP",
+                daemon.id
+            ));
+        }
+        public_backend_ports.insert(endpoint.port);
+    }
+
+    if public_backend_ports.len() > 1 {
+        failures.push(format!(
+            "Daemon '{}' has public endpoints on multiple backend ports ({:?}), but one backend port is currently supported. Split the endpoints across separate resources or route them through one port.",
+            daemon.id, public_backend_ports
+        ));
+    }
+}
+
+fn validate_worker_public_endpoints(worker: &Worker, failures: &mut Vec<String>) {
+    let mut endpoint_names = std::collections::BTreeSet::new();
+
+    for endpoint in &worker.public_endpoints {
+        if let Err(error) = endpoint.validate_for_resource(&worker.id) {
+            failures.push(format!("Worker '{}': {}", worker.id, error));
+        }
+        if !endpoint_names.insert(endpoint.name.as_str()) {
+            failures.push(format!(
+                "Worker '{}': duplicate public endpoint name '{}'",
+                worker.id, endpoint.name
+            ));
+        }
+    }
+}
+
+fn validate_daemon_runtime(daemon: &Daemon, failures: &mut Vec<String>) {
+    let Some(runtime) = &daemon.runtime else {
+        return;
+    };
+
+    if let Some(pid_namespace) = &runtime.pid_namespace {
+        if pid_namespace != "host" && pid_namespace != "private" {
+            failures.push(format!(
+                "Daemon '{}': runtime.pidNamespace must be 'host' or 'private'",
+                daemon.id
+            ));
+        }
+    }
+
+    if let Some(network_mode) = &runtime.network_mode {
+        if network_mode != "host" && network_mode != "appnet" {
+            failures.push(format!(
+                "Daemon '{}': runtime.networkMode must be 'host' or 'appnet'",
+                daemon.id
+            ));
+        }
+    }
+
+    if let Some(user) = &runtime.user {
+        let valid = match user.split_once(':') {
+            Some((uid, gid)) => {
+                !uid.is_empty()
+                    && !gid.is_empty()
+                    && uid.chars().all(|c| c.is_ascii_digit())
+                    && gid.chars().all(|c| c.is_ascii_digit())
+            }
+            None => !user.is_empty() && user.chars().all(|c| c.is_ascii_digit()),
+        };
+        if !valid {
+            failures.push(format!(
+                "Daemon '{}': runtime.user must be a numeric uid or uid:gid",
+                daemon.id
+            ));
+        }
+    }
+
+    for mount in &runtime.mounts {
+        if mount.source.is_empty() || mount.target.is_empty() {
+            failures.push(format!(
+                "Daemon '{}': runtime.mounts source and target must be non-empty",
+                daemon.id
+            ));
+        } else if !mount.source.starts_with('/') || !mount.target.starts_with('/') {
+            failures.push(format!(
+                "Daemon '{}': runtime.mounts source and target must be absolute paths",
+                daemon.id
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ContainerCode, ExposeProtocol, ResourceSpec, Stack};
+    use alien_core::{
+        ContainerCode, DaemonCode, DaemonRuntime, DaemonRuntimeMount, PublicEndpoint, ResourceSpec,
+        Stack,
+    };
 
     #[tokio::test]
     async fn test_single_exposed_port_passes() {
@@ -73,7 +208,20 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .port(8080)
-            .expose_port(8080, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "wildcard".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: true,
+            })
             .port(9090)
             .replicas(1)
             .permissions("test".to_string())
@@ -86,11 +234,11 @@ mod tests {
         let check = SingleExposedPortCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
 
-        assert!(result.success, "Should pass with one exposed port");
+        assert!(result.success, "Should pass with one backend port");
     }
 
     #[tokio::test]
-    async fn test_multiple_exposed_ports_fails() {
+    async fn test_multiple_backend_ports_fails() {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {
                 image: "test:latest".to_string(),
@@ -104,9 +252,21 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .port(8080)
-            .expose_port(8080, ExposeProtocol::Http)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .port(9090)
-            .expose_port(9090, ExposeProtocol::Tcp)
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 9090,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
             .replicas(1)
             .permissions("test".to_string())
             .build();
@@ -118,8 +278,11 @@ mod tests {
         let check = SingleExposedPortCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
 
-        assert!(!result.success, "Should fail with multiple exposed ports");
-        assert!(result.errors.iter().any(|e| e.contains("2 exposed ports")));
+        assert!(!result.success, "Should fail with multiple backend ports");
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("multiple backend ports")));
     }
 
     #[tokio::test]
@@ -149,5 +312,63 @@ mod tests {
         let result = check.check(&stack, Platform::Aws).await.unwrap();
 
         assert!(result.success, "Should pass with no exposed ports");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_endpoint_and_runtime_validation_fails() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 9090,
+                protocol: ExposeProtocol::Tcp,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .runtime(DaemonRuntime {
+                privileged: Some(true),
+                pid_namespace: Some("host".to_string()),
+                network_mode: Some("bridge".to_string()),
+                mounts: vec![DaemonRuntimeMount {
+                    source: "relative".to_string(),
+                    target: "/host".to_string(),
+                    options: None,
+                }],
+                user: Some("root".to_string()),
+            })
+            .permissions("test".to_string())
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let check = SingleExposedPortCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("multiple backend ports")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("support only HTTP")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("runtime.networkMode")));
+        assert!(result.errors.iter().any(|e| e.contains("runtime.user")));
+        assert!(result.errors.iter().any(|e| e.contains("absolute paths")));
     }
 }

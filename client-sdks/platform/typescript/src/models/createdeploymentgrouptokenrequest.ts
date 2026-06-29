@@ -8,6 +8,11 @@ import {
   DeploymentSetupConfig$Outbound,
   DeploymentSetupConfig$outboundSchema,
 } from "./deploymentsetupconfig.js";
+import {
+  StackInputValueRequest,
+  StackInputValueRequest$Outbound,
+  StackInputValueRequest$outboundSchema,
+} from "./stackinputvaluerequest.js";
 
 export type CreateDeploymentGroupTokenRequest = {
   /**
@@ -19,6 +24,7 @@ export type CreateDeploymentGroupTokenRequest = {
    */
   expiresAt?: Date | null | undefined;
   deploymentSetupConfig: DeploymentSetupConfig;
+  inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
 /** @internal */
@@ -26,6 +32,7 @@ export type CreateDeploymentGroupTokenRequest$Outbound = {
   description?: string | undefined;
   expiresAt?: string | null | undefined;
   deploymentSetupConfig: DeploymentSetupConfig$Outbound;
+  inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
 /** @internal */
@@ -36,6 +43,8 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentSetupConfig: DeploymentSetupConfig$outboundSchema,
+  inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
+    .optional(),
 });
 
 export function createDeploymentGroupTokenRequestToJSON(

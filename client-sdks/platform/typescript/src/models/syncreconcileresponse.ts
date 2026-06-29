@@ -12,6 +12,265 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export const SyncReconcileResponseCurrentReleaseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileResponseCurrentReleaseTypeStringList = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseTypeStringList
+>;
+
+export type SyncReconcileResponseCurrentReleaseDefaultStringList = {
+  type: SyncReconcileResponseCurrentReleaseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileResponseCurrentReleaseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileResponseCurrentReleaseTypeBoolean = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseTypeBoolean
+>;
+
+export type SyncReconcileResponseCurrentReleaseDefaultBoolean = {
+  type: SyncReconcileResponseCurrentReleaseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileResponseCurrentReleaseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileResponseCurrentReleaseTypeNumber = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseTypeNumber
+>;
+
+export type SyncReconcileResponseCurrentReleaseDefaultNumber = {
+  type: SyncReconcileResponseCurrentReleaseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileResponseCurrentReleaseTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileResponseCurrentReleaseTypeString = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseTypeString
+>;
+
+export type SyncReconcileResponseCurrentReleaseDefaultString = {
+  type: SyncReconcileResponseCurrentReleaseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileResponseCurrentReleaseDefaultUnion =
+  | SyncReconcileResponseCurrentReleaseDefaultString
+  | SyncReconcileResponseCurrentReleaseDefaultNumber
+  | SyncReconcileResponseCurrentReleaseDefaultBoolean
+  | SyncReconcileResponseCurrentReleaseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileResponseCurrentReleaseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileResponseCurrentReleaseTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseTypeEnvEnum
+>;
+
+export type SyncReconcileResponseCurrentReleaseTypeUnion =
+  | SyncReconcileResponseCurrentReleaseTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileResponseCurrentReleaseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?:
+    | SyncReconcileResponseCurrentReleaseTypeEnvEnum
+    | any
+    | null
+    | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncReconcileResponseCurrentReleaseKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncReconcileResponseCurrentReleaseKind = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseCurrentReleasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseCurrentReleasePlatform = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleasePlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileResponseCurrentReleaseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileResponseCurrentReleaseProvidedBy = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileResponseCurrentReleaseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileResponseCurrentReleaseValidationUnion =
+  | SyncReconcileResponseCurrentReleaseValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileResponseCurrentReleaseInput = {
+  default?:
+    | SyncReconcileResponseCurrentReleaseDefaultString
+    | SyncReconcileResponseCurrentReleaseDefaultNumber
+    | SyncReconcileResponseCurrentReleaseDefaultBoolean
+    | SyncReconcileResponseCurrentReleaseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileResponseCurrentReleaseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncReconcileResponseCurrentReleaseKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileResponseCurrentReleasePlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileResponseCurrentReleaseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileResponseCurrentReleaseValidation
+    | any
+    | null
+    | undefined;
+};
+
 export const SyncReconcileResponseCurrentReleaseManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1235,6 +1494,10 @@ export type SyncReconcileResponseCurrentReleaseStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileResponseCurrentReleaseInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncReconcileResponseCurrentReleasePermissions | undefined;
@@ -1514,6 +1777,261 @@ export const SyncReconcileResponseCurrentPlatform = {
 export type SyncReconcileResponseCurrentPlatform = ClosedEnum<
   typeof SyncReconcileResponseCurrentPlatform
 >;
+
+export const SyncReconcileResponsePreparedStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileResponsePreparedStackTypeStringList = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackTypeStringList
+>;
+
+export type SyncReconcileResponsePreparedStackDefaultStringList = {
+  type: SyncReconcileResponsePreparedStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileResponsePreparedStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileResponsePreparedStackTypeBoolean = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackTypeBoolean
+>;
+
+export type SyncReconcileResponsePreparedStackDefaultBoolean = {
+  type: SyncReconcileResponsePreparedStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileResponsePreparedStackTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileResponsePreparedStackTypeNumber = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackTypeNumber
+>;
+
+export type SyncReconcileResponsePreparedStackDefaultNumber = {
+  type: SyncReconcileResponsePreparedStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileResponsePreparedStackTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileResponsePreparedStackTypeString = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackTypeString
+>;
+
+export type SyncReconcileResponsePreparedStackDefaultString = {
+  type: SyncReconcileResponsePreparedStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileResponsePreparedStackDefaultUnion =
+  | SyncReconcileResponsePreparedStackDefaultString
+  | SyncReconcileResponsePreparedStackDefaultNumber
+  | SyncReconcileResponsePreparedStackDefaultBoolean
+  | SyncReconcileResponsePreparedStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileResponsePreparedStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileResponsePreparedStackTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackTypeEnvEnum
+>;
+
+export type SyncReconcileResponsePreparedStackTypeUnion =
+  | SyncReconcileResponsePreparedStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileResponsePreparedStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncReconcileResponsePreparedStackTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncReconcileResponsePreparedStackKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncReconcileResponsePreparedStackKind = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponsePreparedStackPlatform = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileResponsePreparedStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileResponsePreparedStackProvidedBy = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileResponsePreparedStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileResponsePreparedStackValidationUnion =
+  | SyncReconcileResponsePreparedStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileResponsePreparedStackInput = {
+  default?:
+    | SyncReconcileResponsePreparedStackDefaultString
+    | SyncReconcileResponsePreparedStackDefaultNumber
+    | SyncReconcileResponsePreparedStackDefaultBoolean
+    | SyncReconcileResponsePreparedStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileResponsePreparedStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncReconcileResponsePreparedStackKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileResponsePreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileResponsePreparedStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileResponsePreparedStackValidation
+    | any
+    | null
+    | undefined;
+};
 
 export const SyncReconcileResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -2733,6 +3251,10 @@ export type SyncReconcileResponsePreparedStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileResponsePreparedStackInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncReconcileResponsePreparedStackPermissions | undefined;
@@ -3136,6 +3658,261 @@ export const SyncReconcileResponseStatus = {
 export type SyncReconcileResponseStatus = ClosedEnum<
   typeof SyncReconcileResponseStatus
 >;
+
+export const SyncReconcileResponseTargetReleaseTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileResponseTargetReleaseTypeStringList = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseTypeStringList
+>;
+
+export type SyncReconcileResponseTargetReleaseDefaultStringList = {
+  type: SyncReconcileResponseTargetReleaseTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileResponseTargetReleaseTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileResponseTargetReleaseTypeBoolean = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseTypeBoolean
+>;
+
+export type SyncReconcileResponseTargetReleaseDefaultBoolean = {
+  type: SyncReconcileResponseTargetReleaseTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileResponseTargetReleaseTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileResponseTargetReleaseTypeNumber = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseTypeNumber
+>;
+
+export type SyncReconcileResponseTargetReleaseDefaultNumber = {
+  type: SyncReconcileResponseTargetReleaseTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileResponseTargetReleaseTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileResponseTargetReleaseTypeString = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseTypeString
+>;
+
+export type SyncReconcileResponseTargetReleaseDefaultString = {
+  type: SyncReconcileResponseTargetReleaseTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileResponseTargetReleaseDefaultUnion =
+  | SyncReconcileResponseTargetReleaseDefaultString
+  | SyncReconcileResponseTargetReleaseDefaultNumber
+  | SyncReconcileResponseTargetReleaseDefaultBoolean
+  | SyncReconcileResponseTargetReleaseDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileResponseTargetReleaseTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileResponseTargetReleaseTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseTypeEnvEnum
+>;
+
+export type SyncReconcileResponseTargetReleaseTypeUnion =
+  | SyncReconcileResponseTargetReleaseTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileResponseTargetReleaseEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncReconcileResponseTargetReleaseTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncReconcileResponseTargetReleaseKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncReconcileResponseTargetReleaseKind = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseTargetReleasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseTargetReleasePlatform = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleasePlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileResponseTargetReleaseProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileResponseTargetReleaseProvidedBy = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileResponseTargetReleaseValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileResponseTargetReleaseValidationUnion =
+  | SyncReconcileResponseTargetReleaseValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileResponseTargetReleaseInput = {
+  default?:
+    | SyncReconcileResponseTargetReleaseDefaultString
+    | SyncReconcileResponseTargetReleaseDefaultNumber
+    | SyncReconcileResponseTargetReleaseDefaultBoolean
+    | SyncReconcileResponseTargetReleaseDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileResponseTargetReleaseEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncReconcileResponseTargetReleaseKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileResponseTargetReleasePlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileResponseTargetReleaseProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileResponseTargetReleaseValidation
+    | any
+    | null
+    | undefined;
+};
 
 export const SyncReconcileResponseTargetReleaseManagementEnum = {
   Auto: "auto",
@@ -4355,6 +5132,10 @@ export type SyncReconcileResponseTargetReleaseStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileResponseTargetReleaseInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: SyncReconcileResponseTargetReleasePermissions | undefined;
@@ -4612,11 +5393,11 @@ export type SyncReconcileResponseHorizonMachineImageUnion =
   | SyncReconcileResponseHorizonMachineImage
   | any;
 
-export const SyncReconcileResponseComputeBackendType = {
+export const ComputeBackendTargetType = {
   Horizon: "horizon",
 } as const;
-export type SyncReconcileResponseComputeBackendType = ClosedEnum<
-  typeof SyncReconcileResponseComputeBackendType
+export type ComputeBackendTargetType = ClosedEnum<
+  typeof ComputeBackendTargetType
 >;
 
 /**
@@ -4645,7 +5426,7 @@ export type SyncReconcileResponseComputeBackendHorizon = {
    * Horizon control-plane API base URL.
    */
   url: string;
-  type: SyncReconcileResponseComputeBackendType;
+  type: ComputeBackendTargetType;
 };
 
 export type SyncReconcileResponseComputeBackendUnion =
@@ -4770,13 +5551,95 @@ export type SyncReconcileResponseDnsStatus = ClosedEnum<
 >;
 
 /**
+ * Certificate status in the certificate lifecycle
+ */
+export const SyncReconcileResponseEndpointsCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncReconcileResponseEndpointsCertificateStatus = ClosedEnum<
+  typeof SyncReconcileResponseEndpointsCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncReconcileResponseEndpointsDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncReconcileResponseEndpointsDnsStatus = ClosedEnum<
+  typeof SyncReconcileResponseEndpointsDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncReconcileResponseEndpoints = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncReconcileResponseEndpointsCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncReconcileResponseEndpointsDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
  * Certificate and DNS metadata for a public resource.
  *
  * @remarks
  *
- * The direct fields describe the primary generated hostname. `aliases`
- * contains additional managed hostnames that route directly to the same
- * resource.
+ * The direct fields describe the primary endpoint hostname. `endpoints`
+ * contains endpoint-scoped metadata keyed by endpoint name. `aliases` contains
+ * additional managed hostnames that route directly to the primary endpoint.
  */
 export type DomainMetadataTargetResources = {
   /**
@@ -4796,17 +5659,17 @@ export type DomainMetadataTargetResources = {
    */
   certificateStatus: SyncReconcileResponseCertificateStatus;
   /**
-   * Last DNS error message. Present when DNS previously failed, even if status
-   *
-   * @remarks
-   * was reset to pending for retry. Used to surface actionable error context
-   * in WaitingForDns failure messages.
+   * Last DNS error message.
    */
   dnsError?: string | null | undefined;
   /**
    * DNS record status in the DNS lifecycle
    */
   dnsStatus: SyncReconcileResponseDnsStatus;
+  /**
+   * Endpoint-scoped metadata keyed by endpoint name.
+   */
+  endpoints?: { [k: string]: SyncReconcileResponseEndpoints } | undefined;
   /**
    * Fully qualified domain name.
    */
@@ -4850,15 +5713,15 @@ export type SyncReconcileResponseDomainMetadataUnion =
 /**
  * Type of environment variable
  */
-export const SyncReconcileResponseEnvironmentVariablesType = {
+export const TargetEnvironmentVariablesType = {
   Plain: "plain",
   Secret: "secret",
 } as const;
 /**
  * Type of environment variable
  */
-export type SyncReconcileResponseEnvironmentVariablesType = ClosedEnum<
-  typeof SyncReconcileResponseEnvironmentVariablesType
+export type TargetEnvironmentVariablesType = ClosedEnum<
+  typeof TargetEnvironmentVariablesType
 >;
 
 /**
@@ -4876,7 +5739,7 @@ export type SyncReconcileResponseVariable = {
   /**
    * Type of environment variable
    */
-  type: SyncReconcileResponseEnvironmentVariablesType;
+  type: TargetEnvironmentVariablesType;
   /**
    * Variable value (decrypted - deployment has access to decryption keys)
    */
@@ -5020,11 +5883,11 @@ export type SyncReconcileResponseStaticIp = {
   secretRef: SyncReconcileResponseStaticIpSecretRef;
 };
 
-export const SyncReconcileResponseTypeContainerAppsEnvironment = {
+export const TargetTypeContainerAppsEnvironment = {
   ContainerAppsEnvironment: "container_apps_environment",
 } as const;
-export type SyncReconcileResponseTypeContainerAppsEnvironment = ClosedEnum<
-  typeof SyncReconcileResponseTypeContainerAppsEnvironment
+export type TargetTypeContainerAppsEnvironment = ClosedEnum<
+  typeof TargetTypeContainerAppsEnvironment
 >;
 
 /**
@@ -5086,7 +5949,7 @@ export type SyncReconcileResponseExternalBindingsContainerAppsEnvironment = {
     | null
     | undefined;
   staticIp?: any | null | undefined;
-  type: SyncReconcileResponseTypeContainerAppsEnvironment;
+  type: TargetTypeContainerAppsEnvironment;
 };
 
 /**
@@ -5115,12 +5978,10 @@ export type SyncReconcileResponseDataDirUnion2 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeVault5 = {
+export const TargetTypeVault5 = {
   Vault: "vault",
 } as const;
-export type SyncReconcileResponseTypeVault5 = ClosedEnum<
-  typeof SyncReconcileResponseTypeVault5
->;
+export type TargetTypeVault5 = ClosedEnum<typeof TargetTypeVault5>;
 
 /**
  * Local development vault binding (for testing/development)
@@ -5138,7 +5999,7 @@ export type SyncReconcileResponseExternalBindingsLocalVault = {
    */
   vaultName: string;
   service: "local-vault";
-  type: SyncReconcileResponseTypeVault5;
+  type: TargetTypeVault5;
 };
 
 /**
@@ -5193,12 +6054,10 @@ export type SyncReconcileResponseVaultPrefixUnion3 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeVault4 = {
+export const TargetTypeVault4 = {
   Vault: "vault",
 } as const;
-export type SyncReconcileResponseTypeVault4 = ClosedEnum<
-  typeof SyncReconcileResponseTypeVault4
->;
+export type TargetTypeVault4 = ClosedEnum<typeof TargetTypeVault4>;
 
 /**
  * Kubernetes Secrets vault binding configuration
@@ -5224,7 +6083,7 @@ export type SyncReconcileResponseExternalBindingsKubernetesSecret = {
     | null
     | undefined;
   service: "kubernetes-secret";
-  type: SyncReconcileResponseTypeVault4;
+  type: TargetTypeVault4;
 };
 
 /**
@@ -5253,12 +6112,10 @@ export type SyncReconcileResponseVaultNameUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeVault3 = {
+export const TargetTypeVault3 = {
   Vault: "vault",
 } as const;
-export type SyncReconcileResponseTypeVault3 = ClosedEnum<
-  typeof SyncReconcileResponseTypeVault3
->;
+export type TargetTypeVault3 = ClosedEnum<typeof TargetTypeVault3>;
 
 /**
  * Azure Key Vault binding configuration
@@ -5272,7 +6129,7 @@ export type SyncReconcileResponseExternalBindingsKeyVault = {
    */
   vaultName?: SyncReconcileResponseVaultName | any | string | null | undefined;
   service: "key-vault";
-  type: SyncReconcileResponseTypeVault3;
+  type: TargetTypeVault3;
 };
 
 /**
@@ -5301,12 +6158,10 @@ export type SyncReconcileResponseVaultPrefixUnion2 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeVault2 = {
+export const TargetTypeVault2 = {
   Vault: "vault",
 } as const;
-export type SyncReconcileResponseTypeVault2 = ClosedEnum<
-  typeof SyncReconcileResponseTypeVault2
->;
+export type TargetTypeVault2 = ClosedEnum<typeof TargetTypeVault2>;
 
 /**
  * GCP Secret Manager vault binding configuration
@@ -5325,7 +6180,7 @@ export type SyncReconcileResponseExternalBindingsSecretManager = {
     | null
     | undefined;
   service: "secret-manager";
-  type: SyncReconcileResponseTypeVault2;
+  type: TargetTypeVault2;
 };
 
 /**
@@ -5354,12 +6209,10 @@ export type SyncReconcileResponseVaultPrefixUnion1 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeVault1 = {
+export const TargetTypeVault1 = {
   Vault: "vault",
 } as const;
-export type SyncReconcileResponseTypeVault1 = ClosedEnum<
-  typeof SyncReconcileResponseTypeVault1
->;
+export type TargetTypeVault1 = ClosedEnum<typeof TargetTypeVault1>;
 
 /**
  * AWS SSM Parameter Store vault binding configuration
@@ -5378,7 +6231,7 @@ export type SyncReconcileResponseExternalBindingsParameterStore = {
     | null
     | undefined;
   service: "parameter-store";
-  type: SyncReconcileResponseTypeVault1;
+  type: TargetTypeVault1;
 };
 
 /**
@@ -5432,11 +6285,11 @@ export type SyncReconcileResponseRegistryUrlUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeArtifactRegistry4 = {
+export const TargetTypeArtifactRegistry4 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type SyncReconcileResponseTypeArtifactRegistry4 = ClosedEnum<
-  typeof SyncReconcileResponseTypeArtifactRegistry4
+export type TargetTypeArtifactRegistry4 = ClosedEnum<
+  typeof TargetTypeArtifactRegistry4
 >;
 
 /**
@@ -5469,7 +6322,7 @@ export type SyncReconcileResponseExternalBindingsLocal = {
     | null
     | undefined;
   service: "local";
-  type: SyncReconcileResponseTypeArtifactRegistry4;
+  type: TargetTypeArtifactRegistry4;
 };
 
 /**
@@ -5528,11 +6381,11 @@ export type SyncReconcileResponseRepositoryNameUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeArtifactRegistry3 = {
+export const TargetTypeArtifactRegistry3 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type SyncReconcileResponseTypeArtifactRegistry3 = ClosedEnum<
-  typeof SyncReconcileResponseTypeArtifactRegistry3
+export type TargetTypeArtifactRegistry3 = ClosedEnum<
+  typeof TargetTypeArtifactRegistry3
 >;
 
 /**
@@ -5554,7 +6407,7 @@ export type SyncReconcileResponseExternalBindingsGar = {
     | null
     | undefined;
   service: "gar";
-  type: SyncReconcileResponseTypeArtifactRegistry3;
+  type: TargetTypeArtifactRegistry3;
 };
 
 /**
@@ -5624,11 +6477,11 @@ export type SyncReconcileResponseResourceGroupNameUnion2 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeArtifactRegistry2 = {
+export const TargetTypeArtifactRegistry2 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type SyncReconcileResponseTypeArtifactRegistry2 = ClosedEnum<
-  typeof SyncReconcileResponseTypeArtifactRegistry2
+export type TargetTypeArtifactRegistry2 = ClosedEnum<
+  typeof TargetTypeArtifactRegistry2
 >;
 
 /**
@@ -5661,7 +6514,7 @@ export type SyncReconcileResponseExternalBindingsAcr = {
     | null
     | undefined;
   service: "acr";
-  type: SyncReconcileResponseTypeArtifactRegistry2;
+  type: TargetTypeArtifactRegistry2;
 };
 
 /**
@@ -5720,11 +6573,11 @@ export type SyncReconcileResponseRepositoryPrefixUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeArtifactRegistry1 = {
+export const TargetTypeArtifactRegistry1 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type SyncReconcileResponseTypeArtifactRegistry1 = ClosedEnum<
-  typeof SyncReconcileResponseTypeArtifactRegistry1
+export type TargetTypeArtifactRegistry1 = ClosedEnum<
+  typeof TargetTypeArtifactRegistry1
 >;
 
 /**
@@ -5746,7 +6599,7 @@ export type SyncReconcileResponseExternalBindingsEcr = {
     | null
     | undefined;
   service: "ecr";
-  type: SyncReconcileResponseTypeArtifactRegistry1;
+  type: TargetTypeArtifactRegistry1;
 };
 
 /**
@@ -5799,12 +6652,10 @@ export type SyncReconcileResponseKeyPrefix2 = {
   secretRef: SyncReconcileResponseKeyPrefixSecretRef2;
 };
 
-export const SyncReconcileResponseTypeKv5 = {
+export const TargetTypeKv5 = {
   Kv: "kv",
 } as const;
-export type SyncReconcileResponseTypeKv5 = ClosedEnum<
-  typeof SyncReconcileResponseTypeKv5
->;
+export type TargetTypeKv5 = ClosedEnum<typeof TargetTypeKv5>;
 
 /**
  * Local development KV binding configuration
@@ -5819,7 +6670,7 @@ export type SyncReconcileResponseExternalBindingsLocalKv = {
   dataDir?: SyncReconcileResponseDataDir1 | any | string | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "local-kv";
-  type: SyncReconcileResponseTypeKv5;
+  type: TargetTypeKv5;
 };
 
 /**
@@ -5878,12 +6729,10 @@ export type SyncReconcileResponseKeyPrefix1 = {
   secretRef: SyncReconcileResponseKeyPrefixSecretRef1;
 };
 
-export const SyncReconcileResponseTypeKv4 = {
+export const TargetTypeKv4 = {
   Kv: "kv",
 } as const;
-export type SyncReconcileResponseTypeKv4 = ClosedEnum<
-  typeof SyncReconcileResponseTypeKv4
->;
+export type TargetTypeKv4 = ClosedEnum<typeof TargetTypeKv4>;
 
 /**
  * Redis KV binding configuration
@@ -5904,7 +6753,7 @@ export type SyncReconcileResponseExternalBindingsRedis = {
   database?: any | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "redis";
-  type: SyncReconcileResponseTypeKv4;
+  type: TargetTypeKv4;
 };
 
 /**
@@ -5985,12 +6834,10 @@ export type SyncReconcileResponseTableNameUnion2 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeKv3 = {
+export const TargetTypeKv3 = {
   Kv: "kv",
 } as const;
-export type SyncReconcileResponseTypeKv3 = ClosedEnum<
-  typeof SyncReconcileResponseTypeKv3
->;
+export type TargetTypeKv3 = ClosedEnum<typeof TargetTypeKv3>;
 
 /**
  * Azure Table Storage KV binding configuration
@@ -6028,7 +6875,7 @@ export type SyncReconcileResponseExternalBindingsTablestorage = {
    */
   tableName?: SyncReconcileResponseTableName2 | any | string | null | undefined;
   service: "tablestorage";
-  type: SyncReconcileResponseTypeKv3;
+  type: TargetTypeKv3;
 };
 
 /**
@@ -6109,12 +6956,10 @@ export type SyncReconcileResponseProjectIdUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeKv2 = {
+export const TargetTypeKv2 = {
   Kv: "kv",
 } as const;
-export type SyncReconcileResponseTypeKv2 = ClosedEnum<
-  typeof SyncReconcileResponseTypeKv2
->;
+export type TargetTypeKv2 = ClosedEnum<typeof TargetTypeKv2>;
 
 /**
  * GCP Firestore KV binding configuration
@@ -6152,7 +6997,7 @@ export type SyncReconcileResponseExternalBindingsFirestore = {
    */
   projectId?: SyncReconcileResponseProjectId | any | string | null | undefined;
   service: "firestore";
-  type: SyncReconcileResponseTypeKv2;
+  type: TargetTypeKv2;
 };
 
 /**
@@ -6222,12 +7067,10 @@ export type SyncReconcileResponseTableNameUnion1 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeKv1 = {
+export const TargetTypeKv1 = {
   Kv: "kv",
 } as const;
-export type SyncReconcileResponseTypeKv1 = ClosedEnum<
-  typeof SyncReconcileResponseTypeKv1
->;
+export type TargetTypeKv1 = ClosedEnum<typeof TargetTypeKv1>;
 
 /**
  * AWS DynamoDB KV binding configuration
@@ -6249,7 +7092,7 @@ export type SyncReconcileResponseExternalBindingsDynamodb = {
    */
   tableName?: SyncReconcileResponseTableName1 | any | string | null | undefined;
   service: "dynamodb";
-  type: SyncReconcileResponseTypeKv1;
+  type: TargetTypeKv1;
 };
 
 /**
@@ -6288,12 +7131,10 @@ export type SyncReconcileResponseQueuePathUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeQueue4 = {
+export const TargetTypeQueue4 = {
   Queue: "queue",
 } as const;
-export type SyncReconcileResponseTypeQueue4 = ClosedEnum<
-  typeof SyncReconcileResponseTypeQueue4
->;
+export type TargetTypeQueue4 = ClosedEnum<typeof TargetTypeQueue4>;
 
 /**
  * Local queue parameters
@@ -6307,7 +7148,7 @@ export type SyncReconcileResponseExternalBindingsLocalQueue = {
    */
   queuePath?: SyncReconcileResponseQueuePath | any | string | null | undefined;
   service: "local-queue";
-  type: SyncReconcileResponseTypeQueue4;
+  type: TargetTypeQueue4;
 };
 
 /**
@@ -6362,12 +7203,10 @@ export type SyncReconcileResponseQueueNameUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeQueue3 = {
+export const TargetTypeQueue3 = {
   Queue: "queue",
 } as const;
-export type SyncReconcileResponseTypeQueue3 = ClosedEnum<
-  typeof SyncReconcileResponseTypeQueue3
->;
+export type TargetTypeQueue3 = ClosedEnum<typeof TargetTypeQueue3>;
 
 /**
  * Azure Service Bus parameters
@@ -6388,7 +7227,7 @@ export type SyncReconcileResponseExternalBindingsServicebus = {
    */
   queueName?: SyncReconcileResponseQueueName | any | string | null | undefined;
   service: "servicebus";
-  type: SyncReconcileResponseTypeQueue3;
+  type: TargetTypeQueue3;
 };
 
 /**
@@ -6443,12 +7282,10 @@ export type SyncReconcileResponseTopicUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeQueue2 = {
+export const TargetTypeQueue2 = {
   Queue: "queue",
 } as const;
-export type SyncReconcileResponseTypeQueue2 = ClosedEnum<
-  typeof SyncReconcileResponseTypeQueue2
->;
+export type TargetTypeQueue2 = ClosedEnum<typeof TargetTypeQueue2>;
 
 /**
  * GCP Pub/Sub parameters
@@ -6474,7 +7311,7 @@ export type SyncReconcileResponseExternalBindingsPubsub = {
    */
   topic?: SyncReconcileResponseTopic | any | string | null | undefined;
   service: "pubsub";
-  type: SyncReconcileResponseTypeQueue2;
+  type: TargetTypeQueue2;
 };
 
 /**
@@ -6503,12 +7340,10 @@ export type SyncReconcileResponseQueueUrlUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeQueue1 = {
+export const TargetTypeQueue1 = {
   Queue: "queue",
 } as const;
-export type SyncReconcileResponseTypeQueue1 = ClosedEnum<
-  typeof SyncReconcileResponseTypeQueue1
->;
+export type TargetTypeQueue1 = ClosedEnum<typeof TargetTypeQueue1>;
 
 /**
  * AWS SQS queue parameters
@@ -6522,7 +7357,7 @@ export type SyncReconcileResponseExternalBindingsSqs = {
    */
   queueUrl?: SyncReconcileResponseQueueUrl | any | string | null | undefined;
   service: "sqs";
-  type: SyncReconcileResponseTypeQueue1;
+  type: TargetTypeQueue1;
 };
 
 /**
@@ -6560,12 +7395,10 @@ export type SyncReconcileResponseStoragePathUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeStorage4 = {
+export const TargetTypeStorage4 = {
   Storage: "storage",
 } as const;
-export type SyncReconcileResponseTypeStorage4 = ClosedEnum<
-  typeof SyncReconcileResponseTypeStorage4
->;
+export type TargetTypeStorage4 = ClosedEnum<typeof TargetTypeStorage4>;
 
 /**
  * Local filesystem storage binding configuration
@@ -6584,7 +7417,7 @@ export type SyncReconcileResponseExternalBindingsLocalStorage = {
     | null
     | undefined;
   service: "local-storage";
-  type: SyncReconcileResponseTypeStorage4;
+  type: TargetTypeStorage4;
 };
 
 /**
@@ -6613,12 +7446,10 @@ export type SyncReconcileResponseBucketNameUnion2 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeStorage3 = {
+export const TargetTypeStorage3 = {
   Storage: "storage",
 } as const;
-export type SyncReconcileResponseTypeStorage3 = ClosedEnum<
-  typeof SyncReconcileResponseTypeStorage3
->;
+export type TargetTypeStorage3 = ClosedEnum<typeof TargetTypeStorage3>;
 
 /**
  * Google Cloud Storage binding configuration
@@ -6637,7 +7468,7 @@ export type SyncReconcileResponseExternalBindingsGcs = {
     | null
     | undefined;
   service: "gcs";
-  type: SyncReconcileResponseTypeStorage3;
+  type: TargetTypeStorage3;
 };
 
 /**
@@ -6692,12 +7523,10 @@ export type SyncReconcileResponseContainerNameUnion =
   | any
   | string;
 
-export const SyncReconcileResponseTypeStorage2 = {
+export const TargetTypeStorage2 = {
   Storage: "storage",
 } as const;
-export type SyncReconcileResponseTypeStorage2 = ClosedEnum<
-  typeof SyncReconcileResponseTypeStorage2
->;
+export type TargetTypeStorage2 = ClosedEnum<typeof TargetTypeStorage2>;
 
 /**
  * Azure Blob Storage binding configuration
@@ -6728,7 +7557,7 @@ export type SyncReconcileResponseExternalBindingsBlob = {
     | null
     | undefined;
   service: "blob";
-  type: SyncReconcileResponseTypeStorage2;
+  type: TargetTypeStorage2;
 };
 
 /**
@@ -6757,12 +7586,10 @@ export type SyncReconcileResponseBucketNameUnion1 =
   | any
   | string;
 
-export const SyncReconcileResponseTypeStorage1 = {
+export const TargetTypeStorage1 = {
   Storage: "storage",
 } as const;
-export type SyncReconcileResponseTypeStorage1 = ClosedEnum<
-  typeof SyncReconcileResponseTypeStorage1
->;
+export type TargetTypeStorage1 = ClosedEnum<typeof TargetTypeStorage1>;
 
 /**
  * AWS S3 storage binding configuration
@@ -6781,7 +7608,7 @@ export type SyncReconcileResponseExternalBindingsS3 = {
     | null
     | undefined;
   service: "s3";
-  type: SyncReconcileResponseTypeStorage1;
+  type: TargetTypeStorage1;
 };
 
 /**
@@ -6905,10 +7732,12 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, worker runtimes export captured application logs through the
- * given endpoint via OTLP/HTTP. Auth headers are runtime-owned secret material:
- * deployment code must sync them to a runtime-only secret and avoid putting
- * them into user application environment variables.
+ * When set, injected compute runtimes export captured application logs
+ * through the given endpoint via OTLP/HTTP; which resources are injected
+ * is platform-dependent. Workers and daemons read auth headers from a
+ * runtime-only secret — never from application environment variables.
+ * Containers have no runtime wrapper, so they get the endpoint and auth
+ * header as plain OTEL env vars for the application's own exporter.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
@@ -6960,6 +7789,65 @@ export type SyncReconcileResponseMonitoring = {
 
 export type SyncReconcileResponseMonitoringUnion =
   | SyncReconcileResponseMonitoring
+  | any;
+
+export type SyncReconcileResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncReconcileResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncReconcileResponsePoolsUnion =
+  | SyncReconcileResponsePoolsFixed
+  | SyncReconcileResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncReconcileResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | SyncReconcileResponsePoolsFixed
+      | SyncReconcileResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncReconcileResponseComputeUnion =
+  | SyncReconcileResponseCompute
   | any;
 
 /**
@@ -7799,12 +8687,10 @@ export type SyncReconcileResponseKubernetesUnion =
   | SyncReconcileResponseKubernetes
   | any;
 
-export const SyncReconcileResponseTypeByoVnetAzure = {
+export const TargetTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type SyncReconcileResponseTypeByoVnetAzure = ClosedEnum<
-  typeof SyncReconcileResponseTypeByoVnetAzure
->;
+export type TargetTypeByoVnetAzure = ClosedEnum<typeof TargetTypeByoVnetAzure>;
 
 export type SyncReconcileResponseNetworkByoVnetAzure = {
   /**
@@ -7819,19 +8705,17 @@ export type SyncReconcileResponseNetworkByoVnetAzure = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: SyncReconcileResponseTypeByoVnetAzure;
+  type: TargetTypeByoVnetAzure;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const SyncReconcileResponseTypeByoVpcGcp = {
+export const TargetTypeByoVpcGcp = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type SyncReconcileResponseTypeByoVpcGcp = ClosedEnum<
-  typeof SyncReconcileResponseTypeByoVpcGcp
->;
+export type TargetTypeByoVpcGcp = ClosedEnum<typeof TargetTypeByoVpcGcp>;
 
 export type SyncReconcileResponseNetworkByoVpcGcp = {
   /**
@@ -7846,15 +8730,13 @@ export type SyncReconcileResponseNetworkByoVpcGcp = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: SyncReconcileResponseTypeByoVpcGcp;
+  type: TargetTypeByoVpcGcp;
 };
 
-export const SyncReconcileResponseTypeByoVpcAws = {
+export const TargetTypeByoVpcAws = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type SyncReconcileResponseTypeByoVpcAws = ClosedEnum<
-  typeof SyncReconcileResponseTypeByoVpcAws
->;
+export type TargetTypeByoVpcAws = ClosedEnum<typeof TargetTypeByoVpcAws>;
 
 export type SyncReconcileResponseNetworkByoVpcAws = {
   /**
@@ -7869,19 +8751,17 @@ export type SyncReconcileResponseNetworkByoVpcAws = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: SyncReconcileResponseTypeByoVpcAws;
+  type: TargetTypeByoVpcAws;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const SyncReconcileResponseTypeCreate = {
+export const TargetTypeCreate = {
   Create: "create",
 } as const;
-export type SyncReconcileResponseTypeCreate = ClosedEnum<
-  typeof SyncReconcileResponseTypeCreate
->;
+export type TargetTypeCreate = ClosedEnum<typeof TargetTypeCreate>;
 
 export type SyncReconcileResponseNetworkCreate = {
   /**
@@ -7895,18 +8775,16 @@ export type SyncReconcileResponseNetworkCreate = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: SyncReconcileResponseTypeCreate;
+  type: TargetTypeCreate;
 };
 
-export const SyncReconcileResponseTypeUseDefault = {
+export const TargetTypeUseDefault = {
   UseDefault: "use-default",
 } as const;
-export type SyncReconcileResponseTypeUseDefault = ClosedEnum<
-  typeof SyncReconcileResponseTypeUseDefault
->;
+export type TargetTypeUseDefault = ClosedEnum<typeof TargetTypeUseDefault>;
 
 export type SyncReconcileResponseNetworkUseDefault = {
-  type: SyncReconcileResponseTypeUseDefault;
+  type: TargetTypeUseDefault;
 };
 
 export type SyncReconcileResponseNetworkUnion =
@@ -7959,6 +8837,7 @@ export type SyncReconcileResponseUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type SyncReconcileResponseStackSettings = {
+  compute?: SyncReconcileResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -8116,7 +8995,7 @@ export type TargetConfig = {
    */
   nativeImageHost?: string | null | undefined;
   /**
-   * Public URLs for exposed resources (optional override).
+   * Public endpoint URLs for exposed resources (optional override).
    *
    * @remarks
    *
@@ -8125,14 +9004,14 @@ export type TargetConfig = {
    * load balancer outputs so DNS, certificate renewal, and route readiness
    * stay tied to the resource state.
    *
-   * If not set, platforms determine public URLs from other sources:
+   * If not set, platforms determine public endpoint URLs from other sources:
    * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
    * - Local: `http://localhost:{allocated_port}`
-   * - Custom or disabled exposure: no public URL unless a controller reports one
+   * - Custom or disabled exposure: no public endpoint URL unless a controller reports one
    *
-   * Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
+   * Outer key: resource ID. Inner key: endpoint name. Value: public URL.
    */
-  publicUrls?: { [k: string]: string } | null | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -8146,6 +9025,236 @@ export type TargetConfig = {
    * is platform-derived (from the Manager's ServiceAccount).
    */
   stackSettings?: SyncReconcileResponseStackSettings | undefined;
+};
+
+export const ReleaseInfoTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type ReleaseInfoTypeStringList = ClosedEnum<
+  typeof ReleaseInfoTypeStringList
+>;
+
+export type DefaultReleaseInfoStringList = {
+  type: ReleaseInfoTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const ReleaseInfoTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type ReleaseInfoTypeBoolean = ClosedEnum<typeof ReleaseInfoTypeBoolean>;
+
+export type DefaultReleaseInfoBoolean = {
+  type: ReleaseInfoTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const ReleaseInfoTypeNumber = {
+  Number: "number",
+} as const;
+export type ReleaseInfoTypeNumber = ClosedEnum<typeof ReleaseInfoTypeNumber>;
+
+export type DefaultReleaseInfoNumber = {
+  type: ReleaseInfoTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const ReleaseInfoTypeString = {
+  String: "string",
+} as const;
+export type ReleaseInfoTypeString = ClosedEnum<typeof ReleaseInfoTypeString>;
+
+export type DefaultReleaseInfoString = {
+  type: ReleaseInfoTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type ReleaseInfoDefaultUnion =
+  | DefaultReleaseInfoString
+  | DefaultReleaseInfoNumber
+  | DefaultReleaseInfoBoolean
+  | DefaultReleaseInfoStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const TypeReleaseInfoEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type TypeReleaseInfoEnvEnum = ClosedEnum<typeof TypeReleaseInfoEnvEnum>;
+
+export type ReleaseInfoTypeUnion = TypeReleaseInfoEnvEnum | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type ReleaseInfoEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: TypeReleaseInfoEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const ReleaseInfoKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type ReleaseInfoKind = ClosedEnum<typeof ReleaseInfoKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const ReleaseInfoPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ReleaseInfoPlatform = ClosedEnum<typeof ReleaseInfoPlatform>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const ReleaseInfoProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type ReleaseInfoProvidedBy = ClosedEnum<typeof ReleaseInfoProvidedBy>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type ValidationReleaseInfo = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type ReleaseInfoValidationUnion = ValidationReleaseInfo | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type ReleaseInfoInput = {
+  default?:
+    | DefaultReleaseInfoString
+    | DefaultReleaseInfoNumber
+    | DefaultReleaseInfoBoolean
+    | DefaultReleaseInfoStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<ReleaseInfoEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: ReleaseInfoKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<ReleaseInfoPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<ReleaseInfoProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: ValidationReleaseInfo | any | null | undefined;
 };
 
 export const ManagementReleaseInfoEnum = {
@@ -9315,6 +10424,10 @@ export type ReleaseInfoStack = {
    */
   id: string;
   /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<ReleaseInfoInput> | undefined;
+  /**
    * Combined permissions configuration that contains both profiles and management
    */
   permissions?: ReleaseInfoPermissions | undefined;
@@ -9398,6 +10511,349 @@ export type SyncReconcileResponse = {
    */
   target?: SyncReconcileResponseTarget | undefined;
 };
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeStringList$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseTypeStringList> = z.enum(
+    SyncReconcileResponseCurrentReleaseTypeStringList,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseDefaultStringList$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseDefaultStringList, unknown> = z
+    .object({
+      type: SyncReconcileResponseCurrentReleaseTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    });
+
+export function syncReconcileResponseCurrentReleaseDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseTypeBoolean> = z.enum(
+    SyncReconcileResponseCurrentReleaseTypeBoolean,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseDefaultBoolean$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseDefaultBoolean, unknown> = z
+    .object({
+      type: SyncReconcileResponseCurrentReleaseTypeBoolean$inboundSchema,
+      value: z.boolean(),
+    });
+
+export function syncReconcileResponseCurrentReleaseDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeNumber$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseTypeNumber> = z.enum(
+    SyncReconcileResponseCurrentReleaseTypeNumber,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseDefaultNumber$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseDefaultNumber, unknown> = z
+    .object({
+      type: SyncReconcileResponseCurrentReleaseTypeNumber$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponseCurrentReleaseDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeString$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseTypeString> = z.enum(
+    SyncReconcileResponseCurrentReleaseTypeString,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseDefaultString$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseDefaultString, unknown> = z
+    .object({
+      type: SyncReconcileResponseCurrentReleaseTypeString$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponseCurrentReleaseDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseDefaultUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseDefaultUnion, unknown> = z.union(
+    [
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ],
+  );
+
+export function syncReconcileResponseCurrentReleaseDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseTypeEnvEnum> = z.enum(
+    SyncReconcileResponseCurrentReleaseTypeEnvEnum,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseTypeUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseTypeUnion, unknown> = z.union([
+    SyncReconcileResponseCurrentReleaseTypeEnvEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileResponseCurrentReleaseTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseTypeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseTypeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseEnv$inboundSchema: z.ZodType<
+  SyncReconcileResponseCurrentReleaseEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileResponseCurrentReleaseTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseCurrentReleaseEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseCurrentReleaseEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseKind$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseCurrentReleaseKind
+> = z.enum(SyncReconcileResponseCurrentReleaseKind);
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleasePlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleasePlatform> = z.enum(
+    SyncReconcileResponseCurrentReleasePlatform,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseProvidedBy$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseProvidedBy> = z.enum(
+    SyncReconcileResponseCurrentReleaseProvidedBy,
+  );
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseValidation$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseValidation, unknown> = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileResponseCurrentReleaseValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseValidation,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseValidation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseValidationUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseCurrentReleaseValidationUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncReconcileResponseCurrentReleaseValidation$inboundSchema),
+      z.any(),
+    ]);
+
+export function syncReconcileResponseCurrentReleaseValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseValidationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCurrentReleaseInput$inboundSchema: z.ZodType<
+  SyncReconcileResponseCurrentReleaseInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseCurrentReleaseDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileResponseCurrentReleaseEnv$inboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: SyncReconcileResponseCurrentReleaseKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileResponseCurrentReleasePlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileResponseCurrentReleaseProvidedBy$inboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseCurrentReleaseValidation$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseCurrentReleaseInputFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseCurrentReleaseInput,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseCurrentReleaseInput$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseCurrentReleaseInput' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncReconcileResponseCurrentReleaseManagementEnum$inboundSchema:
@@ -11474,6 +12930,9 @@ export const SyncReconcileResponseCurrentReleaseStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileResponseCurrentReleaseInput$inboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileResponseCurrentReleasePermissions$inboundSchema
   ).optional(),
@@ -11780,6 +13239,343 @@ export function syncReconcileResponseErrorUnionFromJSON(
 export const SyncReconcileResponseCurrentPlatform$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseCurrentPlatform
 > = z.enum(SyncReconcileResponseCurrentPlatform);
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeStringList$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackTypeStringList> = z.enum(
+    SyncReconcileResponsePreparedStackTypeStringList,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackDefaultStringList$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackDefaultStringList, unknown> = z
+    .object({
+      type: SyncReconcileResponsePreparedStackTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    });
+
+export function syncReconcileResponsePreparedStackDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackTypeBoolean> = z.enum(
+    SyncReconcileResponsePreparedStackTypeBoolean,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackDefaultBoolean$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackDefaultBoolean, unknown> = z
+    .object({
+      type: SyncReconcileResponsePreparedStackTypeBoolean$inboundSchema,
+      value: z.boolean(),
+    });
+
+export function syncReconcileResponsePreparedStackDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeNumber$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackTypeNumber> = z.enum(
+    SyncReconcileResponsePreparedStackTypeNumber,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackDefaultNumber$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackDefaultNumber, unknown> = z
+    .object({
+      type: SyncReconcileResponsePreparedStackTypeNumber$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponsePreparedStackDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeString$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackTypeString> = z.enum(
+    SyncReconcileResponsePreparedStackTypeString,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackDefaultString$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackDefaultString, unknown> = z
+    .object({
+      type: SyncReconcileResponsePreparedStackTypeString$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponsePreparedStackDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackDefaultUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackDefaultUnion, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponsePreparedStackDefaultString$inboundSchema),
+    z.lazy(() => SyncReconcileResponsePreparedStackDefaultNumber$inboundSchema),
+    z.lazy(() =>
+      SyncReconcileResponsePreparedStackDefaultBoolean$inboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileResponsePreparedStackDefaultStringList$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileResponsePreparedStackDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackTypeEnvEnum> = z.enum(
+    SyncReconcileResponsePreparedStackTypeEnvEnum,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackTypeUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackTypeUnion, unknown> = z.union([
+    SyncReconcileResponsePreparedStackTypeEnvEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileResponsePreparedStackTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackTypeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackTypeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackEnv$inboundSchema: z.ZodType<
+  SyncReconcileResponsePreparedStackEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileResponsePreparedStackTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponsePreparedStackEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePreparedStackEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePreparedStackEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackKind$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponsePreparedStackKind
+> = z.enum(SyncReconcileResponsePreparedStackKind);
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackPlatform> = z.enum(
+    SyncReconcileResponsePreparedStackPlatform,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackProvidedBy$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackProvidedBy> = z.enum(
+    SyncReconcileResponsePreparedStackProvidedBy,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackValidation$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackValidation, unknown> = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileResponsePreparedStackValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackValidation,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackValidation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackValidationUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponsePreparedStackValidationUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncReconcileResponsePreparedStackValidation$inboundSchema),
+      z.any(),
+    ]);
+
+export function syncReconcileResponsePreparedStackValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackValidationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePreparedStackInput$inboundSchema: z.ZodType<
+  SyncReconcileResponsePreparedStackInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileResponsePreparedStackDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponsePreparedStackDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponsePreparedStackDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponsePreparedStackDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileResponsePreparedStackEnv$inboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: SyncReconcileResponsePreparedStackKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileResponsePreparedStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileResponsePreparedStackProvidedBy$inboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponsePreparedStackValidation$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponsePreparedStackInputFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePreparedStackInput,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePreparedStackInput$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePreparedStackInput' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncReconcileResponsePreparedStackManagementEnum$inboundSchema:
@@ -13836,6 +15632,9 @@ export const SyncReconcileResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileResponsePreparedStackInput$inboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileResponsePreparedStackPermissions$inboundSchema
   ).optional(),
@@ -14304,6 +16103,343 @@ export function syncReconcileResponseStackStateUnionFromJSON(
 export const SyncReconcileResponseStatus$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseStatus
 > = z.enum(SyncReconcileResponseStatus);
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeStringList$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseTypeStringList> = z.enum(
+    SyncReconcileResponseTargetReleaseTypeStringList,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseDefaultStringList$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseDefaultStringList, unknown> = z
+    .object({
+      type: SyncReconcileResponseTargetReleaseTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    });
+
+export function syncReconcileResponseTargetReleaseDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseTypeBoolean> = z.enum(
+    SyncReconcileResponseTargetReleaseTypeBoolean,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseDefaultBoolean$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseDefaultBoolean, unknown> = z
+    .object({
+      type: SyncReconcileResponseTargetReleaseTypeBoolean$inboundSchema,
+      value: z.boolean(),
+    });
+
+export function syncReconcileResponseTargetReleaseDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeNumber$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseTypeNumber> = z.enum(
+    SyncReconcileResponseTargetReleaseTypeNumber,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseDefaultNumber$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseDefaultNumber, unknown> = z
+    .object({
+      type: SyncReconcileResponseTargetReleaseTypeNumber$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponseTargetReleaseDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeString$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseTypeString> = z.enum(
+    SyncReconcileResponseTargetReleaseTypeString,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseDefaultString$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseDefaultString, unknown> = z
+    .object({
+      type: SyncReconcileResponseTargetReleaseTypeString$inboundSchema,
+      value: z.string(),
+    });
+
+export function syncReconcileResponseTargetReleaseDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseDefaultUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseDefaultUnion, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponseTargetReleaseDefaultString$inboundSchema),
+    z.lazy(() => SyncReconcileResponseTargetReleaseDefaultNumber$inboundSchema),
+    z.lazy(() =>
+      SyncReconcileResponseTargetReleaseDefaultBoolean$inboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileResponseTargetReleaseDefaultStringList$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileResponseTargetReleaseDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseTypeEnvEnum> = z.enum(
+    SyncReconcileResponseTargetReleaseTypeEnvEnum,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseTypeUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseTypeUnion, unknown> = z.union([
+    SyncReconcileResponseTargetReleaseTypeEnvEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileResponseTargetReleaseTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseTypeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseTypeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseEnv$inboundSchema: z.ZodType<
+  SyncReconcileResponseTargetReleaseEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      SyncReconcileResponseTargetReleaseTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseTargetReleaseEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseTargetReleaseEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseKind$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseTargetReleaseKind
+> = z.enum(SyncReconcileResponseTargetReleaseKind);
+
+/** @internal */
+export const SyncReconcileResponseTargetReleasePlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleasePlatform> = z.enum(
+    SyncReconcileResponseTargetReleasePlatform,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseProvidedBy$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseProvidedBy> = z.enum(
+    SyncReconcileResponseTargetReleaseProvidedBy,
+  );
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseValidation$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseValidation, unknown> = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileResponseTargetReleaseValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseValidation,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseValidation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseValidationUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseTargetReleaseValidationUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncReconcileResponseTargetReleaseValidation$inboundSchema),
+      z.any(),
+    ]);
+
+export function syncReconcileResponseTargetReleaseValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseValidationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTargetReleaseInput$inboundSchema: z.ZodType<
+  SyncReconcileResponseTargetReleaseInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileResponseTargetReleaseDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseTargetReleaseDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseTargetReleaseDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseTargetReleaseDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncReconcileResponseTargetReleaseEnv$inboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: SyncReconcileResponseTargetReleaseKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncReconcileResponseTargetReleasePlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncReconcileResponseTargetReleaseProvidedBy$inboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseTargetReleaseValidation$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseTargetReleaseInputFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseTargetReleaseInput,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseTargetReleaseInput$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseTargetReleaseInput' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncReconcileResponseTargetReleaseManagementEnum$inboundSchema:
@@ -16357,6 +18493,9 @@ export const SyncReconcileResponseTargetReleaseStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileResponseTargetReleaseInput$inboundSchema),
+  ).optional(),
   permissions: z.lazy(() =>
     SyncReconcileResponseTargetReleasePermissions$inboundSchema
   ).optional(),
@@ -16784,9 +18923,9 @@ export function syncReconcileResponseHorizonMachineImageUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseComputeBackendType$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseComputeBackendType
-> = z.enum(SyncReconcileResponseComputeBackendType);
+export const ComputeBackendTargetType$inboundSchema: z.ZodEnum<
+  typeof ComputeBackendTargetType
+> = z.enum(ComputeBackendTargetType);
 
 /** @internal */
 export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
@@ -16802,7 +18941,7 @@ export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
       ]),
     ).optional(),
     url: z.string(),
-    type: SyncReconcileResponseComputeBackendType$inboundSchema,
+    type: ComputeBackendTargetType$inboundSchema,
   });
 
 export function syncReconcileResponseComputeBackendHorizonFromJSON(
@@ -16893,6 +19032,43 @@ export const SyncReconcileResponseDnsStatus$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseDnsStatus);
 
 /** @internal */
+export const SyncReconcileResponseEndpointsCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseEndpointsCertificateStatus> = z.enum(
+    SyncReconcileResponseEndpointsCertificateStatus,
+  );
+
+/** @internal */
+export const SyncReconcileResponseEndpointsDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseEndpointsDnsStatus
+> = z.enum(SyncReconcileResponseEndpointsDnsStatus);
+
+/** @internal */
+export const SyncReconcileResponseEndpoints$inboundSchema: z.ZodType<
+  SyncReconcileResponseEndpoints,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus:
+    SyncReconcileResponseEndpointsCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncReconcileResponseEndpointsDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileResponseEndpointsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseEndpoints, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseEndpoints$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseEndpoints' from JSON`,
+  );
+}
+
+/** @internal */
 export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   DomainMetadataTargetResources,
   unknown
@@ -16904,6 +19080,10 @@ export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   certificateStatus: SyncReconcileResponseCertificateStatus$inboundSchema,
   dnsError: z.nullable(z.string()).optional(),
   dnsStatus: SyncReconcileResponseDnsStatus$inboundSchema,
+  endpoints: z.record(
+    z.string(),
+    z.lazy(() => SyncReconcileResponseEndpoints$inboundSchema),
+  ).optional(),
   fqdn: z.string(),
   issuedAt: z.nullable(z.string()).optional(),
   privateKey: z.nullable(z.string()).optional(),
@@ -16970,10 +19150,9 @@ export function syncReconcileResponseDomainMetadataUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseEnvironmentVariablesType$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseEnvironmentVariablesType> = z.enum(
-    SyncReconcileResponseEnvironmentVariablesType,
-  );
+export const TargetEnvironmentVariablesType$inboundSchema: z.ZodEnum<
+  typeof TargetEnvironmentVariablesType
+> = z.enum(TargetEnvironmentVariablesType);
 
 /** @internal */
 export const SyncReconcileResponseVariable$inboundSchema: z.ZodType<
@@ -16982,7 +19161,7 @@ export const SyncReconcileResponseVariable$inboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
-  type: SyncReconcileResponseEnvironmentVariablesType$inboundSchema,
+  type: TargetEnvironmentVariablesType$inboundSchema,
   value: z.string(),
 });
 
@@ -17341,10 +19520,9 @@ export function syncReconcileResponseStaticIpFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeContainerAppsEnvironment$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTypeContainerAppsEnvironment> = z.enum(
-    SyncReconcileResponseTypeContainerAppsEnvironment,
-  );
+export const TargetTypeContainerAppsEnvironment$inboundSchema: z.ZodEnum<
+  typeof TargetTypeContainerAppsEnvironment
+> = z.enum(TargetTypeContainerAppsEnvironment);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inboundSchema:
@@ -17381,7 +19559,7 @@ export const SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inbou
       ]),
     ).optional(),
     staticIp: z.nullable(z.any()).optional(),
-    type: SyncReconcileResponseTypeContainerAppsEnvironment$inboundSchema,
+    type: TargetTypeContainerAppsEnvironment$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsContainerAppsEnvironmentFromJSON(
@@ -17459,9 +19637,9 @@ export function syncReconcileResponseDataDirUnion2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeVault5$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeVault5
-> = z.enum(SyncReconcileResponseTypeVault5);
+export const TargetTypeVault5$inboundSchema: z.ZodEnum<
+  typeof TargetTypeVault5
+> = z.enum(TargetTypeVault5);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsLocalVault$inboundSchema:
@@ -17476,7 +19654,7 @@ export const SyncReconcileResponseExternalBindingsLocalVault$inboundSchema:
       ).optional(),
       vaultName: z.string(),
       service: z.literal("local-vault"),
-      type: SyncReconcileResponseTypeVault5$inboundSchema,
+      type: TargetTypeVault5$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsLocalVaultFromJSON(
@@ -17626,9 +19804,9 @@ export function syncReconcileResponseVaultPrefixUnion3FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeVault4$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeVault4
-> = z.enum(SyncReconcileResponseTypeVault4);
+export const TargetTypeVault4$inboundSchema: z.ZodEnum<
+  typeof TargetTypeVault4
+> = z.enum(TargetTypeVault4);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsKubernetesSecret$inboundSchema:
@@ -17649,7 +19827,7 @@ export const SyncReconcileResponseExternalBindingsKubernetesSecret$inboundSchema
         ]),
       ).optional(),
       service: z.literal("kubernetes-secret"),
-      type: SyncReconcileResponseTypeVault4$inboundSchema,
+      type: TargetTypeVault4$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsKubernetesSecretFromJSON(
@@ -17735,9 +19913,9 @@ export function syncReconcileResponseVaultNameUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeVault3$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeVault3
-> = z.enum(SyncReconcileResponseTypeVault3);
+export const TargetTypeVault3$inboundSchema: z.ZodEnum<
+  typeof TargetTypeVault3
+> = z.enum(TargetTypeVault3);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsKeyVault$inboundSchema:
@@ -17750,7 +19928,7 @@ export const SyncReconcileResponseExternalBindingsKeyVault$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("key-vault"),
-    type: SyncReconcileResponseTypeVault3$inboundSchema,
+    type: TargetTypeVault3$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsKeyVaultFromJSON(
@@ -17834,9 +20012,9 @@ export function syncReconcileResponseVaultPrefixUnion2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeVault2$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeVault2
-> = z.enum(SyncReconcileResponseTypeVault2);
+export const TargetTypeVault2$inboundSchema: z.ZodEnum<
+  typeof TargetTypeVault2
+> = z.enum(TargetTypeVault2);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsSecretManager$inboundSchema:
@@ -17850,7 +20028,7 @@ export const SyncReconcileResponseExternalBindingsSecretManager$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("secret-manager"),
-      type: SyncReconcileResponseTypeVault2$inboundSchema,
+      type: TargetTypeVault2$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsSecretManagerFromJSON(
@@ -17934,9 +20112,9 @@ export function syncReconcileResponseVaultPrefixUnion1FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeVault1$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeVault1
-> = z.enum(SyncReconcileResponseTypeVault1);
+export const TargetTypeVault1$inboundSchema: z.ZodEnum<
+  typeof TargetTypeVault1
+> = z.enum(TargetTypeVault1);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsParameterStore$inboundSchema:
@@ -17950,7 +20128,7 @@ export const SyncReconcileResponseExternalBindingsParameterStore$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("parameter-store"),
-      type: SyncReconcileResponseTypeVault1$inboundSchema,
+      type: TargetTypeVault1$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsParameterStoreFromJSON(
@@ -18106,10 +20284,9 @@ export function syncReconcileResponseRegistryUrlUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeArtifactRegistry4$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTypeArtifactRegistry4> = z.enum(
-    SyncReconcileResponseTypeArtifactRegistry4,
-  );
+export const TargetTypeArtifactRegistry4$inboundSchema: z.ZodEnum<
+  typeof TargetTypeArtifactRegistry4
+> = z.enum(TargetTypeArtifactRegistry4);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsLocal$inboundSchema:
@@ -18123,7 +20300,7 @@ export const SyncReconcileResponseExternalBindingsLocal$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("local"),
-    type: SyncReconcileResponseTypeArtifactRegistry4$inboundSchema,
+    type: TargetTypeArtifactRegistry4$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsLocalFromJSON(
@@ -18309,10 +20486,9 @@ export function syncReconcileResponseRepositoryNameUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeArtifactRegistry3$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTypeArtifactRegistry3> = z.enum(
-    SyncReconcileResponseTypeArtifactRegistry3,
-  );
+export const TargetTypeArtifactRegistry3$inboundSchema: z.ZodEnum<
+  typeof TargetTypeArtifactRegistry3
+> = z.enum(TargetTypeArtifactRegistry3);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsGar$inboundSchema: z.ZodType<
@@ -18329,7 +20505,7 @@ export const SyncReconcileResponseExternalBindingsGar$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("gar"),
-  type: SyncReconcileResponseTypeArtifactRegistry3$inboundSchema,
+  type: TargetTypeArtifactRegistry3$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsGarFromJSON(
@@ -18532,10 +20708,9 @@ export function syncReconcileResponseResourceGroupNameUnion2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeArtifactRegistry2$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTypeArtifactRegistry2> = z.enum(
-    SyncReconcileResponseTypeArtifactRegistry2,
-  );
+export const TargetTypeArtifactRegistry2$inboundSchema: z.ZodEnum<
+  typeof TargetTypeArtifactRegistry2
+> = z.enum(TargetTypeArtifactRegistry2);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsAcr$inboundSchema: z.ZodType<
@@ -18558,7 +20733,7 @@ export const SyncReconcileResponseExternalBindingsAcr$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("acr"),
-  type: SyncReconcileResponseTypeArtifactRegistry2$inboundSchema,
+  type: TargetTypeArtifactRegistry2$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsAcrFromJSON(
@@ -18737,10 +20912,9 @@ export function syncReconcileResponseRepositoryPrefixUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeArtifactRegistry1$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponseTypeArtifactRegistry1> = z.enum(
-    SyncReconcileResponseTypeArtifactRegistry1,
-  );
+export const TargetTypeArtifactRegistry1$inboundSchema: z.ZodEnum<
+  typeof TargetTypeArtifactRegistry1
+> = z.enum(TargetTypeArtifactRegistry1);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsEcr$inboundSchema: z.ZodType<
@@ -18757,7 +20931,7 @@ export const SyncReconcileResponseExternalBindingsEcr$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("ecr"),
-  type: SyncReconcileResponseTypeArtifactRegistry1$inboundSchema,
+  type: TargetTypeArtifactRegistry1$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsEcrFromJSON(
@@ -18906,9 +21080,8 @@ export function syncReconcileResponseKeyPrefix2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeKv5$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeKv5
-> = z.enum(SyncReconcileResponseTypeKv5);
+export const TargetTypeKv5$inboundSchema: z.ZodEnum<typeof TargetTypeKv5> = z
+  .enum(TargetTypeKv5);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsLocalKv$inboundSchema:
@@ -18922,7 +21095,7 @@ export const SyncReconcileResponseExternalBindingsLocalKv$inboundSchema:
     ).optional(),
     keyPrefix: z.nullable(z.any()).optional(),
     service: z.literal("local-kv"),
-    type: SyncReconcileResponseTypeKv5$inboundSchema,
+    type: TargetTypeKv5$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsLocalKvFromJSON(
@@ -19095,9 +21268,8 @@ export function syncReconcileResponseKeyPrefix1FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeKv4$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeKv4
-> = z.enum(SyncReconcileResponseTypeKv4);
+export const TargetTypeKv4$inboundSchema: z.ZodEnum<typeof TargetTypeKv4> = z
+  .enum(TargetTypeKv4);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsRedis$inboundSchema:
@@ -19112,7 +21284,7 @@ export const SyncReconcileResponseExternalBindingsRedis$inboundSchema:
     database: z.nullable(z.any()).optional(),
     keyPrefix: z.nullable(z.any()).optional(),
     service: z.literal("redis"),
-    type: SyncReconcileResponseTypeKv4$inboundSchema,
+    type: TargetTypeKv4$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsRedisFromJSON(
@@ -19336,9 +21508,8 @@ export function syncReconcileResponseTableNameUnion2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeKv3$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeKv3
-> = z.enum(SyncReconcileResponseTypeKv3);
+export const TargetTypeKv3$inboundSchema: z.ZodEnum<typeof TargetTypeKv3> = z
+  .enum(TargetTypeKv3);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsTablestorage$inboundSchema:
@@ -19366,7 +21537,7 @@ export const SyncReconcileResponseExternalBindingsTablestorage$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("tablestorage"),
-      type: SyncReconcileResponseTypeKv3$inboundSchema,
+      type: TargetTypeKv3$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsTablestorageFromJSON(
@@ -19588,9 +21759,8 @@ export function syncReconcileResponseProjectIdUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeKv2$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeKv2
-> = z.enum(SyncReconcileResponseTypeKv2);
+export const TargetTypeKv2$inboundSchema: z.ZodEnum<typeof TargetTypeKv2> = z
+  .enum(TargetTypeKv2);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsFirestore$inboundSchema:
@@ -19612,7 +21782,7 @@ export const SyncReconcileResponseExternalBindingsFirestore$inboundSchema:
         z.string(),
       ])).optional(),
       service: z.literal("firestore"),
-      type: SyncReconcileResponseTypeKv2$inboundSchema,
+      type: TargetTypeKv2$inboundSchema,
     },
   );
 
@@ -19802,9 +21972,8 @@ export function syncReconcileResponseTableNameUnion1FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeKv1$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeKv1
-> = z.enum(SyncReconcileResponseTypeKv1);
+export const TargetTypeKv1$inboundSchema: z.ZodEnum<typeof TargetTypeKv1> = z
+  .enum(TargetTypeKv1);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsDynamodb$inboundSchema:
@@ -19825,7 +21994,7 @@ export const SyncReconcileResponseExternalBindingsDynamodb$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("dynamodb"),
-    type: SyncReconcileResponseTypeKv1$inboundSchema,
+    type: TargetTypeKv1$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsDynamodbFromJSON(
@@ -19939,9 +22108,9 @@ export function syncReconcileResponseQueuePathUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeQueue4$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeQueue4
-> = z.enum(SyncReconcileResponseTypeQueue4);
+export const TargetTypeQueue4$inboundSchema: z.ZodEnum<
+  typeof TargetTypeQueue4
+> = z.enum(TargetTypeQueue4);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema:
@@ -19955,7 +22124,7 @@ export const SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("local-queue"),
-      type: SyncReconcileResponseTypeQueue4$inboundSchema,
+      type: TargetTypeQueue4$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsLocalQueueFromJSON(
@@ -20107,9 +22276,9 @@ export function syncReconcileResponseQueueNameUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeQueue3$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeQueue3
-> = z.enum(SyncReconcileResponseTypeQueue3);
+export const TargetTypeQueue3$inboundSchema: z.ZodEnum<
+  typeof TargetTypeQueue3
+> = z.enum(TargetTypeQueue3);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsServicebus$inboundSchema:
@@ -20130,7 +22299,7 @@ export const SyncReconcileResponseExternalBindingsServicebus$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("servicebus"),
-      type: SyncReconcileResponseTypeQueue3$inboundSchema,
+      type: TargetTypeQueue3$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsServicebusFromJSON(
@@ -20272,9 +22441,9 @@ export function syncReconcileResponseTopicUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeQueue2$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeQueue2
-> = z.enum(SyncReconcileResponseTypeQueue2);
+export const TargetTypeQueue2$inboundSchema: z.ZodEnum<
+  typeof TargetTypeQueue2
+> = z.enum(TargetTypeQueue2);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsPubsub$inboundSchema:
@@ -20294,7 +22463,7 @@ export const SyncReconcileResponseExternalBindingsPubsub$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("pubsub"),
-    type: SyncReconcileResponseTypeQueue2$inboundSchema,
+    type: TargetTypeQueue2$inboundSchema,
   });
 
 export function syncReconcileResponseExternalBindingsPubsubFromJSON(
@@ -20373,9 +22542,9 @@ export function syncReconcileResponseQueueUrlUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeQueue1$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeQueue1
-> = z.enum(SyncReconcileResponseTypeQueue1);
+export const TargetTypeQueue1$inboundSchema: z.ZodEnum<
+  typeof TargetTypeQueue1
+> = z.enum(TargetTypeQueue1);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsSqs$inboundSchema: z.ZodType<
@@ -20390,7 +22559,7 @@ export const SyncReconcileResponseExternalBindingsSqs$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("sqs"),
-  type: SyncReconcileResponseTypeQueue1$inboundSchema,
+  type: TargetTypeQueue1$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsSqsFromJSON(
@@ -20501,9 +22670,9 @@ export function syncReconcileResponseStoragePathUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeStorage4$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeStorage4
-> = z.enum(SyncReconcileResponseTypeStorage4);
+export const TargetTypeStorage4$inboundSchema: z.ZodEnum<
+  typeof TargetTypeStorage4
+> = z.enum(TargetTypeStorage4);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsLocalStorage$inboundSchema:
@@ -20517,7 +22686,7 @@ export const SyncReconcileResponseExternalBindingsLocalStorage$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("local-storage"),
-      type: SyncReconcileResponseTypeStorage4$inboundSchema,
+      type: TargetTypeStorage4$inboundSchema,
     });
 
 export function syncReconcileResponseExternalBindingsLocalStorageFromJSON(
@@ -20603,9 +22772,9 @@ export function syncReconcileResponseBucketNameUnion2FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeStorage3$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeStorage3
-> = z.enum(SyncReconcileResponseTypeStorage3);
+export const TargetTypeStorage3$inboundSchema: z.ZodEnum<
+  typeof TargetTypeStorage3
+> = z.enum(TargetTypeStorage3);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsGcs$inboundSchema: z.ZodType<
@@ -20620,7 +22789,7 @@ export const SyncReconcileResponseExternalBindingsGcs$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("gcs"),
-  type: SyncReconcileResponseTypeStorage3$inboundSchema,
+  type: TargetTypeStorage3$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsGcsFromJSON(
@@ -20774,9 +22943,9 @@ export function syncReconcileResponseContainerNameUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeStorage2$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeStorage2
-> = z.enum(SyncReconcileResponseTypeStorage2);
+export const TargetTypeStorage2$inboundSchema: z.ZodEnum<
+  typeof TargetTypeStorage2
+> = z.enum(TargetTypeStorage2);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsBlob$inboundSchema: z.ZodType<
@@ -20798,7 +22967,7 @@ export const SyncReconcileResponseExternalBindingsBlob$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("blob"),
-  type: SyncReconcileResponseTypeStorage2$inboundSchema,
+  type: TargetTypeStorage2$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsBlobFromJSON(
@@ -20884,9 +23053,9 @@ export function syncReconcileResponseBucketNameUnion1FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeStorage1$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeStorage1
-> = z.enum(SyncReconcileResponseTypeStorage1);
+export const TargetTypeStorage1$inboundSchema: z.ZodEnum<
+  typeof TargetTypeStorage1
+> = z.enum(TargetTypeStorage1);
 
 /** @internal */
 export const SyncReconcileResponseExternalBindingsS3$inboundSchema: z.ZodType<
@@ -20901,7 +23070,7 @@ export const SyncReconcileResponseExternalBindingsS3$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("s3"),
-  type: SyncReconcileResponseTypeStorage1$inboundSchema,
+  type: TargetTypeStorage1$inboundSchema,
 });
 
 export function syncReconcileResponseExternalBindingsS3FromJSON(
@@ -21204,6 +23373,110 @@ export function syncReconcileResponseMonitoringUnionFromJSON(
     (x) =>
       SyncReconcileResponseMonitoringUnion$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncReconcileResponseMonitoringUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncReconcileResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncReconcileResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncReconcileResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncReconcileResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseCompute$inboundSchema: z.ZodType<
+  SyncReconcileResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncReconcileResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseComputeUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseCompute$inboundSchema),
+  z.any(),
+]);
+
+export function syncReconcileResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseComputeUnion' from JSON`,
   );
 }
 
@@ -22702,9 +24975,9 @@ export function syncReconcileResponseKubernetesUnionFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeByoVnetAzure$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeByoVnetAzure
-> = z.enum(SyncReconcileResponseTypeByoVnetAzure);
+export const TargetTypeByoVnetAzure$inboundSchema: z.ZodEnum<
+  typeof TargetTypeByoVnetAzure
+> = z.enum(TargetTypeByoVnetAzure);
 
 /** @internal */
 export const SyncReconcileResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
@@ -22714,7 +24987,7 @@ export const SyncReconcileResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
-  type: SyncReconcileResponseTypeByoVnetAzure$inboundSchema,
+  type: TargetTypeByoVnetAzure$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -22742,9 +25015,9 @@ export function syncReconcileResponseNetworkByoVnetAzureFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeByoVpcGcp$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeByoVpcGcp
-> = z.enum(SyncReconcileResponseTypeByoVpcGcp);
+export const TargetTypeByoVpcGcp$inboundSchema: z.ZodEnum<
+  typeof TargetTypeByoVpcGcp
+> = z.enum(TargetTypeByoVpcGcp);
 
 /** @internal */
 export const SyncReconcileResponseNetworkByoVpcGcp$inboundSchema: z.ZodType<
@@ -22754,7 +25027,7 @@ export const SyncReconcileResponseNetworkByoVpcGcp$inboundSchema: z.ZodType<
   network_name: z.string(),
   region: z.string(),
   subnet_name: z.string(),
-  type: SyncReconcileResponseTypeByoVpcGcp$inboundSchema,
+  type: TargetTypeByoVpcGcp$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "network_name": "networkName",
@@ -22774,9 +25047,9 @@ export function syncReconcileResponseNetworkByoVpcGcpFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeByoVpcAws$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeByoVpcAws
-> = z.enum(SyncReconcileResponseTypeByoVpcAws);
+export const TargetTypeByoVpcAws$inboundSchema: z.ZodEnum<
+  typeof TargetTypeByoVpcAws
+> = z.enum(TargetTypeByoVpcAws);
 
 /** @internal */
 export const SyncReconcileResponseNetworkByoVpcAws$inboundSchema: z.ZodType<
@@ -22786,7 +25059,7 @@ export const SyncReconcileResponseNetworkByoVpcAws$inboundSchema: z.ZodType<
   private_subnet_ids: z.array(z.string()),
   public_subnet_ids: z.array(z.string()),
   security_group_ids: z.array(z.string()).optional(),
-  type: SyncReconcileResponseTypeByoVpcAws$inboundSchema,
+  type: TargetTypeByoVpcAws$inboundSchema,
   vpc_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -22809,9 +25082,9 @@ export function syncReconcileResponseNetworkByoVpcAwsFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeCreate$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeCreate
-> = z.enum(SyncReconcileResponseTypeCreate);
+export const TargetTypeCreate$inboundSchema: z.ZodEnum<
+  typeof TargetTypeCreate
+> = z.enum(TargetTypeCreate);
 
 /** @internal */
 export const SyncReconcileResponseNetworkCreate$inboundSchema: z.ZodType<
@@ -22820,7 +25093,7 @@ export const SyncReconcileResponseNetworkCreate$inboundSchema: z.ZodType<
 > = z.object({
   availability_zones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: SyncReconcileResponseTypeCreate$inboundSchema,
+  type: TargetTypeCreate$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "availability_zones": "availabilityZones",
@@ -22839,16 +25112,16 @@ export function syncReconcileResponseNetworkCreateFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseTypeUseDefault$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseTypeUseDefault
-> = z.enum(SyncReconcileResponseTypeUseDefault);
+export const TargetTypeUseDefault$inboundSchema: z.ZodEnum<
+  typeof TargetTypeUseDefault
+> = z.enum(TargetTypeUseDefault);
 
 /** @internal */
 export const SyncReconcileResponseNetworkUseDefault$inboundSchema: z.ZodType<
   SyncReconcileResponseNetworkUseDefault,
   unknown
 > = z.object({
-  type: SyncReconcileResponseTypeUseDefault$inboundSchema,
+  type: TargetTypeUseDefault$inboundSchema,
 });
 
 export function syncReconcileResponseNetworkUseDefaultFromJSON(
@@ -22900,6 +25173,12 @@ export const SyncReconcileResponseStackSettings$inboundSchema: z.ZodType<
   SyncReconcileResponseStackSettings,
   unknown
 > = z.object({
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseCompute$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: SyncReconcileResponseDeploymentModel$inboundSchema
     .optional(),
   domains: z.nullable(
@@ -23058,7 +25337,9 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
       ]),
     ).optional(),
     nativeImageHost: z.nullable(z.string()).optional(),
-    publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
+    publicEndpoints: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
     stackSettings: z.lazy(() =>
       SyncReconcileResponseStackSettings$inboundSchema
     ).optional(),
@@ -23071,6 +25352,258 @@ export function targetConfigFromJSON(
     jsonString,
     (x) => TargetConfig$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'TargetConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeStringList$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeStringList
+> = z.enum(ReleaseInfoTypeStringList);
+
+/** @internal */
+export const DefaultReleaseInfoStringList$inboundSchema: z.ZodType<
+  DefaultReleaseInfoStringList,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function defaultReleaseInfoStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<DefaultReleaseInfoStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DefaultReleaseInfoStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DefaultReleaseInfoStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeBoolean
+> = z.enum(ReleaseInfoTypeBoolean);
+
+/** @internal */
+export const DefaultReleaseInfoBoolean$inboundSchema: z.ZodType<
+  DefaultReleaseInfoBoolean,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function defaultReleaseInfoBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<DefaultReleaseInfoBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DefaultReleaseInfoBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DefaultReleaseInfoBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeNumber$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeNumber
+> = z.enum(ReleaseInfoTypeNumber);
+
+/** @internal */
+export const DefaultReleaseInfoNumber$inboundSchema: z.ZodType<
+  DefaultReleaseInfoNumber,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function defaultReleaseInfoNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<DefaultReleaseInfoNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DefaultReleaseInfoNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DefaultReleaseInfoNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeString$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeString
+> = z.enum(ReleaseInfoTypeString);
+
+/** @internal */
+export const DefaultReleaseInfoString$inboundSchema: z.ZodType<
+  DefaultReleaseInfoString,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function defaultReleaseInfoStringFromJSON(
+  jsonString: string,
+): SafeParseResult<DefaultReleaseInfoString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DefaultReleaseInfoString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DefaultReleaseInfoString' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoDefaultUnion$inboundSchema: z.ZodType<
+  ReleaseInfoDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DefaultReleaseInfoString$inboundSchema),
+  z.lazy(() => DefaultReleaseInfoNumber$inboundSchema),
+  z.lazy(() => DefaultReleaseInfoBoolean$inboundSchema),
+  z.lazy(() => DefaultReleaseInfoStringList$inboundSchema),
+  z.any(),
+]);
+
+export function releaseInfoDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeReleaseInfoEnvEnum$inboundSchema: z.ZodEnum<
+  typeof TypeReleaseInfoEnvEnum
+> = z.enum(TypeReleaseInfoEnvEnum);
+
+/** @internal */
+export const ReleaseInfoTypeUnion$inboundSchema: z.ZodType<
+  ReleaseInfoTypeUnion,
+  unknown
+> = z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.any()]);
+
+export function releaseInfoTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoEnv$inboundSchema: z.ZodType<ReleaseInfoEnv, unknown> =
+  z.object({
+    name: z.string(),
+    targetResources: z.nullable(z.array(z.string())).optional(),
+    type: z.nullable(z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.any()]))
+      .optional(),
+  });
+
+export function releaseInfoEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoKind$inboundSchema: z.ZodEnum<typeof ReleaseInfoKind> =
+  z.enum(ReleaseInfoKind);
+
+/** @internal */
+export const ReleaseInfoPlatform$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoPlatform
+> = z.enum(ReleaseInfoPlatform);
+
+/** @internal */
+export const ReleaseInfoProvidedBy$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoProvidedBy
+> = z.enum(ReleaseInfoProvidedBy);
+
+/** @internal */
+export const ValidationReleaseInfo$inboundSchema: z.ZodType<
+  ValidationReleaseInfo,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function validationReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<ValidationReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ValidationReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ValidationReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoValidationUnion$inboundSchema: z.ZodType<
+  ReleaseInfoValidationUnion,
+  unknown
+> = z.union([z.lazy(() => ValidationReleaseInfo$inboundSchema), z.any()]);
+
+export function releaseInfoValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoInput$inboundSchema: z.ZodType<
+  ReleaseInfoInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => DefaultReleaseInfoString$inboundSchema),
+      z.lazy(() => DefaultReleaseInfoNumber$inboundSchema),
+      z.lazy(() => DefaultReleaseInfoBoolean$inboundSchema),
+      z.lazy(() => DefaultReleaseInfoStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => ReleaseInfoEnv$inboundSchema)).optional(),
+  id: z.string(),
+  kind: ReleaseInfoKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(z.array(ReleaseInfoPlatform$inboundSchema)).optional(),
+  providedBy: z.array(ReleaseInfoProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([z.lazy(() => ValidationReleaseInfo$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function releaseInfoInputFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoInput' from JSON`,
   );
 }
 
@@ -24625,6 +27158,7 @@ export const ReleaseInfoStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  inputs: z.array(z.lazy(() => ReleaseInfoInput$inboundSchema)).optional(),
   permissions: z.lazy(() => ReleaseInfoPermissions$inboundSchema).optional(),
   resources: z.record(
     z.string(),
