@@ -35,7 +35,6 @@ expression: stack
         ],
         "memoryMb": 256,
         "permissions": "execution",
-        "publicEndpoints": [],
         "readinessProbe": null,
         "timeoutSeconds": 180,
         "triggers": [],
