@@ -144,9 +144,7 @@ Parameters:
     Description: Telemetry collection behavior.
     Default: auto
     AllowedValues:
-    - "off"
     - auto
-    - approval-required
   HeartbeatsMode:
     Type: String
     Description: Heartbeat health-check behavior.

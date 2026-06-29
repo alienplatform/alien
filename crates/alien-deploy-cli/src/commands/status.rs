@@ -6,6 +6,9 @@ use crate::output;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use serde_json::Value as JsonValue;
+use std::path::PathBuf;
+
+use super::up::{create_manager_client, read_token_file};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -22,6 +25,10 @@ pub struct StatusArgs {
     /// Authentication token (optional if deployment is tracked)
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: Option<String>,
+
+    /// Read authentication token from a file.
+    #[arg(long, conflicts_with = "token")]
+    pub token_file: Option<PathBuf>,
 
     /// Manager URL (optional if deployment is tracked)
     #[arg(long, env = "ALIEN_MANAGER_URL")]
@@ -41,12 +48,17 @@ pub async fn status_command(args: StatusArgs) -> Result<()> {
         })
     })?;
 
-    let token = args.token.unwrap_or_else(|| tracked.token.clone());
+    let token = args
+        .token
+        .map(Ok)
+        .or_else(|| args.token_file.as_ref().map(|path| read_token_file(path)))
+        .transpose()?
+        .unwrap_or_else(|| tracked.token.clone());
     let manager_url = args
         .manager_url
         .unwrap_or_else(|| tracked.manager_url.clone());
 
-    let client = crate::commands::up::create_manager_client(&token, &manager_url)?;
+    let client = create_manager_client(&token, &manager_url)?;
 
     let deployment = client
         .get_deployment()
@@ -177,6 +189,9 @@ mod tests {
     fn falls_back_to_json_for_unknown_error_shape() {
         let error = serde_json::json!({ "unexpected": true });
 
-        assert_eq!(format_error_chain(&error), vec![format_json_fallback(&error)]);
+        assert_eq!(
+            format_error_chain(&error),
+            vec![format_json_fallback(&error)]
+        );
     }
 }

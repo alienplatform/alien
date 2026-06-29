@@ -2793,6 +2793,7 @@ mod tests {
             TerraformTarget::Aws,
             Some(&registration),
             &[],
+            Expression::Object(Default::default()),
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));

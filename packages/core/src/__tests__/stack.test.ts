@@ -77,21 +77,22 @@ describe("Stack builder validation", () => {
       .build()
 
     const stack = new alien.Stack("my-test-stack").inputs(stackInputs).add(worker, "live").build()
+    const inputs = stack.inputs
+    expect(inputs).toBeDefined()
+    if (!inputs) {
+      throw new Error("expected stack inputs to be defined")
+    }
 
-    expect(stack.inputs).toHaveLength(3)
-    expect(stack.inputs.map(input => input.id)).toEqual([
-      "apiBaseUrl",
-      "accessKey",
-      "deploymentTier",
-    ])
-    expect(stack.inputs.find(input => input.id === "apiBaseUrl")).toMatchObject({
+    expect(inputs).toHaveLength(3)
+    expect(inputs.map(input => input.id)).toEqual(["apiBaseUrl", "accessKey", "deploymentTier"])
+    expect(inputs.find(input => input.id === "apiBaseUrl")).toMatchObject({
       kind: "string",
       providedBy: ["developer", "deployer"],
       required: true,
       validation: { format: "url" },
       env: [{ name: "API_BASE_URL" }],
     })
-    expect(stack.inputs.find(input => input.id === "accessKey")).toMatchObject({
+    expect(inputs.find(input => input.id === "accessKey")).toMatchObject({
       kind: "secret",
       providedBy: ["deployer"],
       env: [
@@ -102,7 +103,7 @@ describe("Stack builder validation", () => {
         },
       ],
     })
-    expect(stack.inputs.find(input => input.id === "deploymentTier")).toMatchObject({
+    expect(inputs.find(input => input.id === "deploymentTier")).toMatchObject({
       kind: "enum",
       default: {
         type: "string",

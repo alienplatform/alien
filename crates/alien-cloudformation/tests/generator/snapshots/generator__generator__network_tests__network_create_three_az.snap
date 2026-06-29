@@ -120,8 +120,6 @@ Parameters:
     Default: "off"
     AllowedValues:
     - "off"
-    - auto
-    - approval-required
   HeartbeatsMode:
     Type: String
     Description: Heartbeat health-check behavior.
