@@ -87,6 +87,22 @@ pub struct InstanceSettings {
     pub edition: Option<String>,
 }
 
+/// Partial body for `instances.patch` — only the fields a day-2 resize changes. Cloud SQL merges
+/// the provided settings, so a tier-only patch preserves networking, backups, the database, and the
+/// master password (the full instance body, with its `root_password`, is never re-sent).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstancePatch {
+    pub settings: InstanceSettingsPatch,
+}
+
+/// The patchable subset of `InstanceSettings`. Only `tier` today (cpu/memory map to it).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceSettingsPatch {
+    pub tier: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct IpConfiguration {
@@ -183,6 +199,9 @@ pub struct Database {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait CloudSqlApi: Send + Sync + Debug {
     async fn create_instance(&self, instance: DatabaseInstance) -> Result<SqlOperation>;
+    /// Patches an instance in place (currently the machine `tier` for a day-2 resize), returning the
+    /// long-running operation to poll.
+    async fn patch_instance(&self, instance: &str, patch: InstancePatch) -> Result<SqlOperation>;
     async fn get_instance(&self, instance: &str) -> Result<DatabaseInstance>;
     async fn delete_instance(&self, instance: &str) -> Result<()>;
     async fn create_database(&self, instance: &str, database: &str) -> Result<SqlOperation>;
@@ -219,6 +238,14 @@ impl CloudSqlApi for CloudSqlClient {
                 .execute_request(Method::POST, &path, None, Some(instance), &name)
                 .await,
         )
+    }
+
+    async fn patch_instance(&self, instance: &str, patch: InstancePatch) -> Result<SqlOperation> {
+        // The patch body carries only the machine tier — no password — so no redaction is needed.
+        let path = format!("projects/{}/instances/{}", self.project_id, instance);
+        self.base
+            .execute_request(Method::PATCH, &path, None, Some(patch), instance)
+            .await
     }
 
     async fn get_instance(&self, instance: &str) -> Result<DatabaseInstance> {
@@ -305,6 +332,21 @@ mod tests {
         // password is request-only; state absent on the way out.
         assert_eq!(json["rootPassword"], "secret");
         assert!(json.get("state").is_none());
+    }
+
+    #[test]
+    fn instance_patch_serializes_tier_only() {
+        // The patch body must carry only the tier — never the password or any other setting.
+        let patch = InstancePatch {
+            settings: InstanceSettingsPatch {
+                tier: "db-custom-2-7680".into(),
+            },
+        };
+        let json = serde_json::to_value(&patch).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "settings": { "tier": "db-custom-2-7680" } })
+        );
     }
 
     #[test]

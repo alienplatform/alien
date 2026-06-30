@@ -19,6 +19,9 @@ pub struct LocalPostgresController {
     pub(crate) database: Option<String>,
     /// Port the local server listens on; tracked for outputs and heartbeats.
     pub(crate) port: Option<u16>,
+    /// The major engine version the embedded server was created with; `update_start` rejects a
+    /// day-2 change against it (the reason lives there).
+    pub(crate) version: Option<String>,
     /// Resolved Local binding, held in memory only (`#[serde(skip)]`) — it inlines the
     /// runtime-generated password, which must stay out of durable, persisted, and control-plane-synced
     /// state. `get_binding_params` strips the password before emitting the connection coordinates;
@@ -82,6 +85,7 @@ impl LocalPostgresController {
         };
         self.database = Some(config.id.clone());
         self.binding = Some(binding);
+        self.version = Some(config.version.clone());
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -127,7 +131,10 @@ impl LocalPostgresController {
             )?);
         }
 
-        emit_local_postgres_heartbeat(ctx, &config.id, &config.version, self.port);
+        // Report the version the server was actually created with, not the desired config — keeps the
+        // heartbeat honest even if a day-2 version change was requested (and rejected by update_start).
+        let reported_version = self.version.as_deref().unwrap_or(&config.version);
+        emit_local_postgres_heartbeat(ctx, &config.id, reported_version, self.port);
         debug!(postgres_id = %config.id, "Postgres health check passed");
 
         Ok(HandlerAction::Continue {
@@ -146,13 +153,34 @@ impl LocalPostgresController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Postgres>()?;
 
-        // Local pins the version at create: the embedded server keeps its data dir, and an in-place
-        // major upgrade would need pg_upgrade; cpu/memory have no meaning for it either. So an update
-        // is a deliberate no-op — to change the version, recreate the resource. (Cloud controllers
-        // honor cpu/memory/version changes; Local does not.)
+        // Local pins the engine version at create: the embedded server keeps its data dir, and an
+        // in-place major upgrade would need `pg_upgrade`, which isn't wired here. So a day-2 version
+        // change must fail loud rather than falsely claim an upgrade that never happened. `cpu`/`memory`
+        // genuinely have no meaning for the embedded server, so a change to those alone is a true no-op.
+        // When the version isn't recorded (state created before this field existed), fall back to the
+        // previously applied config so the rejection still fires.
+        let recorded_version = self.version.clone().or_else(|| {
+            ctx.previous_resource_config::<Postgres>()
+                .ok()
+                .map(|prev| prev.version.clone())
+        });
+        if let Some(current) = recorded_version {
+            if current != config.version {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "local Postgres '{}' cannot change engine version in place ({} -> {}): the \
+                         embedded server has no upgrade path. Recreate the resource to move to a new \
+                         version (its data is not preserved).",
+                        config.id, current, config.version
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+
         info!(
             postgres_id = %config.id,
-            "Updating local Postgres (no-op; version/cpu/memory are pinned at create)"
+            "Updating local Postgres (no-op; cpu/memory have no effect on the embedded server)"
         );
 
         Ok(HandlerAction::Continue {
@@ -296,8 +324,74 @@ impl LocalPostgresController {
             state: LocalPostgresState::Ready,
             database: Some(database.to_string()),
             port: Some(port),
+            version: Some("17".to_string()),
             binding: None,
             _internal_stay_count: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Local Postgres day-2 update behavior. `update_start` is the only handler that doesn't bind
+    //! the concrete `LocalPostgresManager`, so it is the unit-testable surface here; create /
+    //! readiness / delete drive a real embedded server and are covered by the end-to-end tests.
+
+    use std::sync::Arc;
+
+    use alien_core::{Platform, Postgres};
+
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+
+    use super::{LocalPostgresController, LocalPostgresState};
+
+    fn local_postgres(version: &str) -> Postgres {
+        Postgres::new("db".to_string()).version(version.to_string()).build()
+    }
+
+    /// A Ready Local Postgres recorded at version 17 — the starting point for the day-2 update
+    /// tests. `update_start` never touches the local manager, so an empty provider suffices.
+    async fn ready_executor() -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(local_postgres("17"))
+            .controller(LocalPostgresController::mock_ready("db", 5432))
+            .platform(Platform::Local)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    #[tokio::test]
+    async fn update_rejects_version_change() {
+        let mut executor = ready_executor().await;
+        executor
+            .update(local_postgres("16"))
+            .expect("transition to update");
+        let error = executor.step().await.expect_err(
+            "a Local version change must fail loud (no pg_upgrade), not be reported as applied",
+        );
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+    }
+
+    #[tokio::test]
+    async fn update_is_noop_on_cpu_memory_change() {
+        let mut executor = ready_executor().await;
+        let mut resized = local_postgres("17");
+        resized.cpu = Some("4".to_string());
+        resized.memory = Some("8Gi".to_string());
+        executor.update(resized).expect("transition to update");
+        executor
+            .step()
+            .await
+            .expect("a cpu/memory-only change must be a clean no-op on Local");
+        assert_eq!(
+            executor
+                .internal_state::<LocalPostgresController>()
+                .expect("controller should be LocalPostgresController")
+                .state,
+            LocalPostgresState::Ready,
+        );
     }
 }

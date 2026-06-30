@@ -855,6 +855,9 @@ impl SingleControllerExecutorBuilder {
             Platform::Gcp => ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
             Platform::Azure => ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
             Platform::Test => ClientConfig::Test,
+            // Local controllers (e.g. Local Postgres) carry no cloud client; the no-cloud test
+            // config is enough to exercise their platform-agnostic handlers.
+            Platform::Local => ClientConfig::Test,
             _ => panic!("Unsupported platform for testing: {:?}", platform),
         };
 

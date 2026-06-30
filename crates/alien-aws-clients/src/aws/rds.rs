@@ -65,6 +65,8 @@ pub struct ModifyDbClusterRequest {
     pub identifier: String,
     /// Only set for an in-place major upgrade.
     pub engine_version: Option<String>,
+    /// Only set for an in-place ACU (memory) resize; mirrors the create scaling ceiling.
+    pub max_capacity: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,17 @@ pub struct DbCluster {
     pub port: Option<u16>,
     #[serde(default)]
     pub engine_version: Option<String>,
+    /// The serverless v2 scaling window the cluster reports — drives in-place ACU resize detection.
+    #[serde(default, rename = "ServerlessV2ScalingConfiguration")]
+    pub serverless_v2_scaling_configuration: Option<ServerlessV2ScalingConfiguration>,
+}
+
+/// The cluster's Serverless v2 ACU scaling window, as reported by DescribeDBClusters.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct ServerlessV2ScalingConfiguration {
+    /// The ACU ceiling (`memory` maps to this; the floor stays 0 for auto-pause).
+    pub max_capacity: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -227,6 +240,25 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
     form.insert("BackupRetentionPeriod".into(), r.backup_retention_days.to_string());
     form.insert("StorageEncrypted".into(), "true".into());
     tag_members(&mut form, &r.tags);
+    form
+}
+
+fn modify_db_cluster_form(r: &ModifyDbClusterRequest) -> HashMap<String, String> {
+    let mut form = base_form("ModifyDBCluster");
+    form.insert("DBClusterIdentifier".into(), r.identifier.clone());
+    form.insert("ApplyImmediately".into(), "true".into());
+    if let Some(version) = &r.engine_version {
+        form.insert("EngineVersion".into(), version.clone());
+        form.insert("AllowMajorVersionUpgrade".into(), "true".into());
+    }
+    if let Some(max_capacity) = r.max_capacity {
+        // Mirror create: the floor stays 0 (auto-pause); only the ACU ceiling moves.
+        form.insert("ServerlessV2ScalingConfiguration.MinCapacity".into(), "0".into());
+        form.insert(
+            "ServerlessV2ScalingConfiguration.MaxCapacity".into(),
+            format!("{max_capacity}"),
+        );
+    }
     form
 }
 
@@ -477,14 +509,12 @@ impl RdsApi for RdsClient {
     }
 
     async fn modify_db_cluster(&self, request: ModifyDbClusterRequest) -> Result<()> {
-        let mut form = base_form("ModifyDBCluster");
-        form.insert("DBClusterIdentifier".into(), request.identifier.clone());
-        form.insert("ApplyImmediately".into(), "true".into());
-        if let Some(version) = &request.engine_version {
-            form.insert("EngineVersion".into(), version.clone());
-            form.insert("AllowMajorVersionUpgrade".into(), "true".into());
-        }
-        self.send_form_no_body(form, "ModifyDBCluster", &request.identifier).await
+        self.send_form_no_body(
+            modify_db_cluster_form(&request),
+            "ModifyDBCluster",
+            &request.identifier,
+        )
+        .await
     }
 
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()> {
@@ -554,6 +584,31 @@ mod tests {
     }
 
     #[test]
+    fn modify_cluster_form_moves_acu_ceiling_and_pins_min_zero() {
+        let form = modify_db_cluster_form(&ModifyDbClusterRequest {
+            identifier: "stack-db".into(),
+            engine_version: None,
+            max_capacity: Some(8.0),
+        });
+        assert_eq!(form["Action"], "ModifyDBCluster");
+        assert_eq!(form["ApplyImmediately"], "true");
+        assert_eq!(form["ServerlessV2ScalingConfiguration.MinCapacity"], "0");
+        assert_eq!(form["ServerlessV2ScalingConfiguration.MaxCapacity"], "8");
+        // A memory-only resize must not touch the engine version.
+        assert!(!form.contains_key("EngineVersion"));
+    }
+
+    #[test]
+    fn modify_cluster_form_omits_scaling_when_no_memory_change() {
+        let form = modify_db_cluster_form(&ModifyDbClusterRequest {
+            identifier: "stack-db".into(),
+            engine_version: None,
+            max_capacity: None,
+        });
+        assert!(!form.contains_key("ServerlessV2ScalingConfiguration.MaxCapacity"));
+    }
+
+    #[test]
     fn delete_cluster_skips_final_snapshot() {
         let form = delete_db_cluster_form(&DeleteDbClusterRequest {
             identifier: "stack-db".into(),
@@ -601,7 +656,8 @@ mod tests {
         let xml = r#"<DescribeDBClustersResponse><DescribeDBClustersResult><DBClusters>
             <DBCluster><DBClusterIdentifier>stack-db</DBClusterIdentifier><Status>available</Status>
             <Endpoint>stack-db.cluster-x.us-east-1.rds.amazonaws.com</Endpoint><Port>5432</Port>
-            <EngineVersion>17.4</EngineVersion></DBCluster>
+            <EngineVersion>17.4</EngineVersion>
+            <ServerlessV2ScalingConfiguration><MinCapacity>0</MinCapacity><MaxCapacity>8</MaxCapacity></ServerlessV2ScalingConfiguration></DBCluster>
         </DBClusters></DescribeDBClustersResult></DescribeDBClustersResponse>"#;
         let env: DescribeDbClustersEnvelope = quick_xml::de::from_str(xml).expect("parses");
         let clusters = env.result.db_clusters.members;
@@ -609,5 +665,14 @@ mod tests {
         assert_eq!(clusters[0].identifier, "stack-db");
         assert_eq!(clusters[0].status, "available");
         assert_eq!(clusters[0].port, Some(5432));
+        // The serverless scaling ceiling must parse: `ready`/refresh read it to detect a day-2 memory
+        // change, and an imported cluster (max_capacity None) relies on this XML to learn its ceiling.
+        assert_eq!(
+            clusters[0]
+                .serverless_v2_scaling_configuration
+                .as_ref()
+                .map(|s| s.max_capacity),
+            Some(8.0)
+        );
     }
 }
