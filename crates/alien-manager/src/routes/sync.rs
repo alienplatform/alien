@@ -616,6 +616,26 @@ mod tests {
     }
 
     #[test]
+    fn ignores_running_agent_state_after_delete_was_requested() {
+        let deployment =
+            deployment_record_with_state("delete-pending", Some(StackState::new(Platform::Local)));
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Running;
+
+        assert!(should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn accepts_agent_delete_progress_after_delete_was_requested() {
+        let deployment =
+            deployment_record_with_state("delete-pending", Some(StackState::new(Platform::Local)));
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Deleting;
+
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
     fn returns_current_state_when_retry_is_pending() {
         let mut deployment = deployment_record_with_state(
             "provisioning-failed",
@@ -636,6 +656,17 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             true,
+            &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_current_state_when_delete_was_requested() {
+        let deployment =
+            deployment_record_with_state("delete-pending", Some(StackState::new(Platform::Local)));
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
             &deployment
         ));
     }
@@ -1153,6 +1184,10 @@ fn should_ignore_agent_state_report(
     deployment: &DeploymentRecord,
     agent_state: &DeploymentState,
 ) -> bool {
+    if deployment_is_deleting(deployment) && !agent_state_is_delete_progress(agent_state) {
+        return true;
+    }
+
     agent_state_is_uninitialized(agent_state) && deployment_has_authoritative_state(deployment)
 }
 
@@ -1177,7 +1212,7 @@ fn should_return_current_state_for_agent_sync(
     ignored_agent_state_report: bool,
     deployment: &DeploymentRecord,
 ) -> bool {
-    ignored_agent_state_report || deployment.retry_requested
+    ignored_agent_state_report || deployment.retry_requested || deployment_is_deleting(deployment)
 }
 
 fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {
@@ -1188,6 +1223,18 @@ fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {
                 | DeploymentStatus::Deleting
                 | DeploymentStatus::DeleteFailed
         )
+    )
+}
+
+fn agent_state_is_delete_progress(state: &DeploymentState) -> bool {
+    matches!(
+        state.status,
+        DeploymentStatus::DeletePending
+            | DeploymentStatus::Deleting
+            | DeploymentStatus::DeleteFailed
+            | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::Deleted
     )
 }
 
