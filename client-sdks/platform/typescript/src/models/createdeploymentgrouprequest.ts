@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 
 export type CreateDeploymentGroupRequest = {
   /**
-   * Name of the deployment group
+   * Deployment group name.
    */
   name: string;
   /**

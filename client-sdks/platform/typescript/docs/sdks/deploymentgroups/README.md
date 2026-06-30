@@ -105,6 +105,10 @@ const alien = new Alien({
 async function run() {
   const result = await alien.deploymentGroups.createDeploymentGroup({
     workspace: "my-workspace",
+    createDeploymentGroupRequest: {
+      name: "prod-us-east-1",
+      project: "<value>",
+    },
   });
 
   console.log(result);
@@ -130,6 +134,10 @@ const alien = new AlienCore({
 async function run() {
   const res = await deploymentGroupsCreateDeploymentGroup(alien, {
     workspace: "my-workspace",
+    createDeploymentGroupRequest: {
+      name: "prod-us-east-1",
+      project: "<value>",
+    },
   });
   if (res.ok) {
     const { value: result } = res;
@@ -335,6 +343,9 @@ async function run() {
   const result = await alien.deploymentGroups.updateDeploymentGroup({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
+    updateDeploymentGroupRequest: {
+      name: "prod-us-east-1",
+    },
   });
 
   console.log(result);
@@ -361,6 +372,9 @@ async function run() {
   const res = await deploymentGroupsUpdateDeploymentGroup(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
+    updateDeploymentGroupRequest: {
+      name: "prod-us-east-1",
+    },
   });
   if (res.ok) {
     const { value: result } = res;
