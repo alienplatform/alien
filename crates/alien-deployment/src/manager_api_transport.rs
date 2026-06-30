@@ -153,8 +153,45 @@ fn to_manager_api_heartbeats(
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).
 const MAX_ACQUIRE_ATTEMPTS: usize = 60;
+/// Maximum number of setup delete handoff attempts (1,350 × 2s = 45 minutes).
+const MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS: usize = 1_350;
 /// Delay between acquire attempts in seconds.
 const ACQUIRE_RETRY_DELAY_SECS: u64 = 2;
+
+/// Result of waiting for setup-owned deletion work.
+pub enum SetupDeleteAcquireOutcome {
+    /// The setup teardown lock was acquired and must be released.
+    Acquired,
+    /// Runtime cleanup already deleted the deployment record.
+    AlreadyDeleted,
+}
+
+/// Acquire a deployment lock for CLI-owned runtime deletion.
+///
+/// Local/pull-model deployments do not have a manager-side runtime that can
+/// delete host-local resources. The deploy CLI must first drive
+/// `delete-pending` / `deleting` to the normal runtime cleanup handoff, and
+/// only then acquire setup teardown if frozen setup resources remain.
+pub async fn acquire_runtime_delete_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<(), AlienError> {
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        Some("runtime".to_string()),
+        Some("cli".to_string()),
+        Some(vec![
+            "delete-pending".to_string(),
+            "deleting".to_string(),
+            "delete-failed".to_string(),
+        ]),
+    )
+    .await
+    .map(|_| ())
+}
 
 /// Acquire a deployment lock from the manager, retrying until the lock is granted
 /// or the timeout is reached.
@@ -216,22 +253,80 @@ pub async fn acquire_setup_delete_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
-) -> Result<(), AlienError> {
-    acquire_deployment_with_statuses(
-        client,
-        deployment_id,
-        session,
-        Some("setup-teardown".to_string()),
-        Some("cli".to_string()),
-        Some(vec![
-            "delete-pending".to_string(),
-            "deleting".to_string(),
-            "teardown-required".to_string(),
-            "teardown-failed".to_string(),
-        ]),
-    )
-    .await
-    .map(|_| ())
+) -> Result<SetupDeleteAcquireOutcome, AlienError> {
+    let statuses = vec![
+        "teardown-required".to_string(),
+        "teardown-failed".to_string(),
+    ];
+
+    for attempt in 1..=MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
+        let resp = client
+            .acquire()
+            .body(alien_manager_api::types::AcquireRequest {
+                acquire_mode: Some("setup-teardown".to_string()),
+                session: session.to_string(),
+                deployment_ids: Some(vec![deployment_id.to_string()]),
+                setup_method: Some("cli".to_string()),
+                statuses: Some(statuses.clone()),
+                platforms: None,
+                limit: None,
+            })
+            .send()
+            .await
+            .into_sdk_error()
+            .context(alien_error::GenericError {
+                message: "Failed to acquire setup teardown sync lock".to_string(),
+            })?;
+
+        if resp.into_inner().deployments.into_iter().next().is_some() {
+            return Ok(SetupDeleteAcquireOutcome::Acquired);
+        }
+
+        let status = match client.get_deployment().id(deployment_id).send().await {
+            Ok(resp) => resp.into_inner().status,
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("404") || message.contains("not found") {
+                    return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
+                }
+                return Err(AlienError::new(alien_error::GenericError {
+                    message: format!(
+                        "Failed to read deployment while waiting for setup teardown: {message}"
+                    ),
+                }));
+            }
+        };
+
+        match status.as_str() {
+            "teardown-required" | "teardown-failed" => {}
+            "deleted" => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
+            "delete-failed" => {
+                return Err(AlienError::new(alien_error::GenericError {
+                    message:
+                        "Runtime deletion failed before setup teardown became available. Retry destroy after resolving the runtime cleanup failure."
+                            .to_string(),
+                }));
+            }
+            _ => {}
+        }
+
+        if attempt == MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
+            return Err(AlienError::new(alien_error::GenericError {
+                message: "Timed out waiting for runtime cleanup to reach setup teardown handoff"
+                    .to_string(),
+            }));
+        }
+
+        info!(
+            attempt = attempt,
+            max = MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS,
+            status = %status,
+            "Waiting for runtime cleanup handoff before setup teardown"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(ACQUIRE_RETRY_DELAY_SECS)).await;
+    }
+
+    unreachable!()
 }
 
 async fn acquire_deployment_with_statuses(

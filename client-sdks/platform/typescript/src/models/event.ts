@@ -173,6 +173,18 @@ export type DataDeploymentRetryRequested = {
   type: "DeploymentRetryRequested";
 };
 
+export type DataDeploymentRejoined = {
+  /**
+   * ID of the deployment group that authorized the rejoin
+   */
+  deploymentGroupId: string;
+  /**
+   * ID of the deployment whose agent rejoined
+   */
+  deploymentId: string;
+  type: "DeploymentRejoined";
+};
+
 export type DataDeploymentDeleted = {
   /**
    * ID of the deployment that was deleted
@@ -1146,6 +1158,7 @@ export type EventDataUnion =
   | DataDeploymentDegraded
   | DataDeploymentRecovered
   | DataDeploymentDeleted
+  | DataDeploymentRejoined
   | DataDeploymentRetryRequested
   | DataDeploymentRedeployRequested
   | DataDeploymentReleasePinned
@@ -1330,6 +1343,7 @@ export type Event = {
     | DataDeploymentDegraded
     | DataDeploymentRecovered
     | DataDeploymentDeleted
+    | DataDeploymentRejoined
     | DataDeploymentRetryRequested
     | DataDeploymentRedeployRequested
     | DataDeploymentReleasePinned
@@ -1510,6 +1524,26 @@ export function dataDeploymentRetryRequestedFromJSON(
     jsonString,
     (x) => DataDeploymentRetryRequested$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataDeploymentRetryRequested' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentRejoined$inboundSchema: z.ZodType<
+  DataDeploymentRejoined,
+  unknown
+> = z.object({
+  deploymentGroupId: z.string(),
+  deploymentId: z.string(),
+  type: z.literal("DeploymentRejoined"),
+});
+
+export function dataDeploymentRejoinedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentRejoined, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentRejoined$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRejoined' from JSON`,
   );
 }
 
@@ -2630,6 +2664,7 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => DataDeploymentDegraded$inboundSchema),
     z.lazy(() => DataDeploymentRecovered$inboundSchema),
     z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRejoined$inboundSchema),
     z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
     z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
     z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
@@ -2794,6 +2829,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataDeploymentDegraded$inboundSchema),
     z.lazy(() => DataDeploymentRecovered$inboundSchema),
     z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRejoined$inboundSchema),
     z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
     z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
     z.lazy(() => DataDeploymentReleasePinned$inboundSchema),

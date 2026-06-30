@@ -4,6 +4,7 @@
 
 import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroupsCreateDeploymentGroup.js";
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
+import { deploymentGroupsCreateFirstPartyDeploymentSession } from "../funcs/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
@@ -95,6 +96,23 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateDeploymentGroupTokenResponse> {
     return unwrapAsync(deploymentGroupsCreateDeploymentGroupToken(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create first-party deployment session
+   *
+   * @remarks
+   * Mints a short-lived deployment-group token with the recommended self-deploy policy for the authenticated developer.
+   */
+  async createFirstPartyDeploymentSession(
+    request: operations.CreateFirstPartyDeploymentSessionRequest,
+    options?: RequestOptions,
+  ): Promise<models.CreateFirstPartyDeploymentSessionResponse> {
+    return unwrapAsync(deploymentGroupsCreateFirstPartyDeploymentSession(
       this,
       request,
       options,

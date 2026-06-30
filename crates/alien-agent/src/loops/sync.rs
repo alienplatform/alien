@@ -229,10 +229,10 @@ async fn sync_with_manager(
             state_hydrated = true;
             info!("Hydrated deployment state from manager");
         } else if let Some(mut local_state) = local_state {
-            if apply_manager_retry_request(&mut local_state, &manager_state) {
+            if apply_manager_control_state(&mut local_state, &manager_state) {
                 state.db.set_deployment_state(&local_state).await?;
                 state_hydrated = true;
-                info!("Applied deployment retry request from manager");
+                info!("Applied deployment control state from manager");
             } else {
                 debug!("Manager returned deployment state, but local state is already initialized");
             }
@@ -338,19 +338,60 @@ fn detect_agent_regime() -> AgentRegime {
     }
 }
 
-fn apply_manager_retry_request(
+fn apply_manager_control_state(
     local_state: &mut alien_core::DeploymentState,
     manager_state: &alien_core::DeploymentState,
 ) -> bool {
-    if !manager_state.retry_requested
-        || local_state.retry_requested
-        || !local_state.status.is_failed()
+    if manager_state_is_delete_command(manager_state)
+        && !local_state_is_delete_or_deleted(local_state)
     {
-        return false;
+        local_state.status = manager_state.status;
+        if local_state.target_release.is_none() {
+            local_state.target_release = manager_state.target_release.clone();
+        }
+        if local_state.stack_state.is_none() {
+            local_state.stack_state = manager_state.stack_state.clone();
+        }
+        if local_state.environment_info.is_none() {
+            local_state.environment_info = manager_state.environment_info.clone();
+        }
+        if local_state.runtime_metadata.is_none() {
+            local_state.runtime_metadata = manager_state.runtime_metadata.clone();
+        }
+        local_state.retry_requested = manager_state.retry_requested;
+        return true;
     }
 
-    local_state.retry_requested = true;
-    true
+    if manager_state.retry_requested
+        && !local_state.retry_requested
+        && local_state.status.is_failed()
+    {
+        local_state.retry_requested = true;
+        return true;
+    }
+
+    false
+}
+
+fn manager_state_is_delete_command(state: &alien_core::DeploymentState) -> bool {
+    matches!(
+        state.status,
+        alien_core::DeploymentStatus::DeletePending
+            | alien_core::DeploymentStatus::Deleting
+            | alien_core::DeploymentStatus::DeleteFailed
+    )
+}
+
+fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool {
+    matches!(
+        state.status,
+        alien_core::DeploymentStatus::DeletePending
+            | alien_core::DeploymentStatus::Deleting
+            | alien_core::DeploymentStatus::DeleteFailed
+            | alien_core::DeploymentStatus::TeardownRequired
+            | alien_core::DeploymentStatus::TeardownFailed
+            | alien_core::DeploymentStatus::Deleted
+    )
 }
 
 #[cfg(test)]
@@ -359,7 +400,7 @@ mod tests {
         DeploymentState, DeploymentStatus, Platform, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
 
-    use super::{apply_manager_retry_request, is_uninitialized_deployment_state};
+    use super::{apply_manager_control_state, is_uninitialized_deployment_state};
 
     #[test]
     fn recognizes_empty_pending_state_as_uninitialized() {
@@ -416,7 +457,7 @@ mod tests {
             ..local_state.clone()
         };
 
-        assert!(apply_manager_retry_request(
+        assert!(apply_manager_control_state(
             &mut local_state,
             &manager_state
         ));
@@ -443,10 +484,63 @@ mod tests {
             ..local_state.clone()
         };
 
-        assert!(!apply_manager_retry_request(
+        assert!(!apply_manager_control_state(
             &mut local_state,
             &manager_state
         ));
         assert!(!local_state.retry_requested);
+    }
+
+    #[test]
+    fn applies_manager_delete_request_to_running_local_state() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            target_release: None,
+            ..local_state.clone()
+        };
+
+        assert!(apply_manager_control_state(
+            &mut local_state,
+            &manager_state
+        ));
+        assert_eq!(local_state.status, DeploymentStatus::DeletePending);
+    }
+
+    #[test]
+    fn does_not_rewind_local_delete_progress_from_manager_state() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Deleting,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            ..local_state.clone()
+        };
+
+        assert!(!apply_manager_control_state(
+            &mut local_state,
+            &manager_state
+        ));
+        assert_eq!(local_state.status, DeploymentStatus::Deleting);
     }
 }
