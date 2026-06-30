@@ -14,6 +14,7 @@ export * from "./createdeploymentgrouptoken.js";
 export * from "./createdeploymenttoken.js";
 export * from "./createdomain.js";
 export * from "./createdomainendpoint.js";
+export * from "./createfirstpartydeploymentsession.js";
 export * from "./createmanager.js";
 export * from "./createproject.js";
 export * from "./createprojectfromtemplate.js";

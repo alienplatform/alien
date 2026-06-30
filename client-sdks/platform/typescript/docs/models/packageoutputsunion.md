@@ -10,6 +10,13 @@ Package outputs (only when status is 'ready')
 ```typescript
 const value: models.OutputsCli = {
   binaries: {},
+  buildInfo: {
+    alienSha: "<value>",
+    horizonSha: "<value>",
+    platformSha: "<value>",
+    sourceAgentBinarySha256: "<value>",
+    sourceCliBinarySha256: "<value>",
+  },
   type: "cli",
 };
 ```

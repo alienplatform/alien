@@ -37,7 +37,7 @@ get "memory"(){
 "permissions": z.string(),
 "pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
 get "publicEndpoints"(){
-                return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.")
+                return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.").optional()
               },
 get "runtime"(){
                 return z.union([DaemonRuntimeSchema, z.null()]).optional()

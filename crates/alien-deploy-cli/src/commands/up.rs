@@ -2818,11 +2818,16 @@ pub async fn push_initial_setup(
     // holds the lock, it checks push-mode + Pending and releases immediately.
     // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    let acquired_deployment = acquire_setup_run_deployment(client, deployment_id, &session)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire sync lock".to_string(),
-        })?;
+    let acquired_deployment = acquire_setup_run_deployment(
+        client,
+        deployment_id,
+        &session,
+        stack_settings.deployment_model,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        operation: "acquire sync lock".to_string(),
+    })?;
 
     if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
         config = serde_json::from_value(acquired_config)
@@ -3065,6 +3070,7 @@ pub async fn push_deletion(
             &mut state,
             &mut config,
             &client_config,
+            stack_settings.deployment_model,
         )
         .await?;
 
@@ -3080,6 +3086,7 @@ pub async fn push_deletion(
         &mut state,
         &mut config,
         &client_config,
+        stack_settings.deployment_model,
     )
     .await
 }
@@ -3090,9 +3097,10 @@ async fn run_runtime_deletion(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
+    deployment_model: alien_core::DeploymentModel,
 ) -> Result<()> {
     let session = format!("push-runtime-deletion-{}", uuid::Uuid::new_v4());
-    acquire_runtime_delete_deployment(client, deployment_id, &session)
+    acquire_runtime_delete_deployment(client, deployment_id, &session, deployment_model)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire runtime deletion lock".to_string(),
@@ -3180,13 +3188,15 @@ async fn run_setup_deletion(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
+    deployment_model: alien_core::DeploymentModel,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
-    let acquire_outcome = acquire_setup_delete_deployment(client, deployment_id, &session)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire setup teardown lock".to_string(),
-        })?;
+    let acquire_outcome =
+        acquire_setup_delete_deployment(client, deployment_id, &session, deployment_model)
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "acquire setup teardown lock".to_string(),
+            })?;
 
     if matches!(acquire_outcome, SetupDeleteAcquireOutcome::AlreadyDeleted) {
         output::success("Deployment deleted successfully.");

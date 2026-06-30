@@ -55,7 +55,7 @@ get "ports"(){
                 return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Internal container ports (at least one required).")
               },
 get "publicEndpoints"(){
-                return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the container.")
+                return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the container.").optional()
               },
 "replicas": z.int().min(0).describe("Fixed replica count (for stateful containers or stateless without autoscaling)").nullish(),
 "stateful": z.optional(z.boolean().describe("Whether container is stateful (gets stable ordinals, optional persistent volumes)"))

@@ -29,7 +29,7 @@ get "links"(){
 "memoryMb": z.optional(z.int().min(0).default(256).describe("Memory allocated to the worker in megabytes (MB).\nDefault: 256\n\nPlatform-specific constraints:\n- **AWS Lambda**: 128–10240 MB in 1 MB increments\n- **GCP Cloud Run**: 128–32768 MB\n- **Azure Container Apps**: fixed CPU/memory pairs — 512, 1024, 1536, 2048, 2560,\n  3072, 3584, 4096 MB. Values below 512 are automatically rounded up at deploy time.")),
 "permissions": z.string().describe("Permission profile name that defines the permissions granted to this worker.\nThis references a profile defined in the stack's permission definitions."),
 get "publicEndpoints"(){
-                return z.array(WorkerPublicEndpointSchema.describe("Public endpoint configuration for Worker resources.")).describe("Public endpoints exposed by this worker.")
+                return z.array(WorkerPublicEndpointSchema.describe("Public endpoint configuration for Worker resources.")).describe("Public endpoints exposed by this worker.").optional()
               },
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()

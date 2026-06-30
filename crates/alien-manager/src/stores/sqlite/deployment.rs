@@ -2,13 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_query::{Cond, Expr, Order, Query, SqliteQueryBuilder};
+use sea_query::{Cond, Expr, IntoCondition, Order, Query, SqliteQueryBuilder};
 use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, EnvironmentInfo, EnvironmentVariable, Platform, RuntimeMetadata,
-    StackState,
+    import::ImportSourceKind, DeploymentModel, EnvironmentInfo, EnvironmentVariable, Platform,
+    RuntimeMetadata, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -109,6 +109,19 @@ impl SqliteDeploymentStore {
             Cond::any()
                 .add(Expr::col(Deployments::Status).is_in(Self::WORK_STATUSES))
                 .add(retryable_failed)
+        }
+    }
+
+    fn deployment_model_condition(model: DeploymentModel) -> sea_query::Condition {
+        match model {
+            DeploymentModel::Push => Expr::cust(
+                "json_extract(stack_settings, '$.deploymentModel') IS NULL OR json_extract(stack_settings, '$.deploymentModel') = 'push'",
+            )
+            .into_condition(),
+            DeploymentModel::Pull => {
+                Expr::cust("json_extract(stack_settings, '$.deploymentModel') = 'pull'")
+                    .into_condition()
+            }
         }
     }
 
@@ -997,6 +1010,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Platform).is_in(platform_strs));
             }
+            if let Some(model) = filter.deployment_model {
+                query.cond_where(Self::deployment_model_condition(model));
+            }
 
             query.limit(limit as u64);
             query.to_string(SqliteQueryBuilder)
@@ -1036,6 +1052,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()));
 
                 query.cond_where(Self::acquire_status_condition(explicit_status_filter));
+                if let Some(model) = filter.deployment_model {
+                    query.cond_where(Self::deployment_model_condition(model));
+                }
 
                 query
                     .cond_where(

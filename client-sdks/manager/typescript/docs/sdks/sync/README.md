@@ -193,6 +193,7 @@ const alienManager = new AlienManager({
 
 async function run() {
   const result = await alienManager.sync.acquire({
+    deploymentModel: "pull",
     session: "<value>",
   });
 
@@ -219,6 +220,7 @@ const alienManager = new AlienManagerCore({
 
 async function run() {
   const res = await syncAcquire(alienManager, {
+    deploymentModel: "pull",
     session: "<value>",
   });
   if (res.ok) {

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{DeploymentState, DeploymentStatus, Platform, StackSettings};
+use alien_core::{DeploymentModel, DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -62,6 +62,17 @@ async fn create_test_deployment(
     name: &str,
     platform: Platform,
 ) -> DeploymentRecord {
+    create_test_deployment_with_settings(store, group_id, name, platform, StackSettings::default())
+        .await
+}
+
+async fn create_test_deployment_with_settings(
+    store: &SqliteDeploymentStore,
+    group_id: &str,
+    name: &str,
+    platform: Platform,
+    stack_settings: StackSettings,
+) -> DeploymentRecord {
     store
         .create_deployment(
             &test_subject(),
@@ -71,7 +82,7 @@ async fn create_test_deployment(
                 deployment_group_id: group_id.to_string(),
                 platform,
                 base_platform: None,
-                stack_settings: StackSettings::default(),
+                stack_settings,
                 stack_state: None,
                 environment_variables: None,
                 input_values: Default::default(),
@@ -370,6 +381,56 @@ async fn set_desired_release() {
         fetched.desired_release_id.as_deref(),
         Some(release.id.as_str())
     );
+}
+
+#[tokio::test]
+async fn acquire_filters_by_deployment_model() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    let push_dep = create_test_deployment(&store, &group_id, "push-dep", Platform::Aws).await;
+    let pull_dep = create_test_deployment_with_settings(
+        &store,
+        &group_id,
+        "pull-dep",
+        Platform::Aws,
+        StackSettings {
+            deployment_model: DeploymentModel::Pull,
+            ..StackSettings::default()
+        },
+    )
+    .await;
+
+    let pull_acquired = store
+        .acquire(
+            &test_subject(),
+            "pull-session",
+            &DeploymentFilter {
+                deployment_model: Some(DeploymentModel::Pull),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(pull_acquired.len(), 1);
+    assert_eq!(pull_acquired[0].deployment.id, pull_dep.id);
+
+    let push_acquired = store
+        .acquire(
+            &test_subject(),
+            "push-session",
+            &DeploymentFilter {
+                deployment_model: Some(DeploymentModel::Push),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(push_acquired.len(), 1);
+    assert_eq!(push_acquired[0].deployment.id, push_dep.id);
 }
 
 #[tokio::test]

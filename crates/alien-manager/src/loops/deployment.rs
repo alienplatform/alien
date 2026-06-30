@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use alien_core::{
-    DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
     ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
     ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
@@ -247,6 +247,7 @@ impl DeploymentLoop {
             } else {
                 Some(self.config.targets.clone())
             },
+            deployment_model: Some(DeploymentModel::Push),
             ..Default::default()
         };
 
