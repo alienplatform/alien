@@ -21,7 +21,7 @@ use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
         acquire_setup_delete_deployment, acquire_setup_run_deployment, final_reconcile,
-        release_deployment, ManagerApiTransport,
+        release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
     },
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
@@ -3054,11 +3054,16 @@ pub async fn push_deletion(
 
     // Acquire sync lock with retry
     let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
-    acquire_setup_delete_deployment(client, deployment_id, &session)
+    let acquire_outcome = acquire_setup_delete_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock for deletion".to_string(),
         })?;
+
+    if matches!(acquire_outcome, SetupDeleteAcquireOutcome::AlreadyDeleted) {
+        output::success("Deployment deleted successfully.");
+        return Ok(());
+    }
 
     // Re-fetch deployment under lock
     let deployment = client
