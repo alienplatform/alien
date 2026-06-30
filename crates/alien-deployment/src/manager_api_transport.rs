@@ -166,6 +166,33 @@ pub enum SetupDeleteAcquireOutcome {
     AlreadyDeleted,
 }
 
+/// Acquire a deployment lock for CLI-owned runtime deletion.
+///
+/// Local/pull-model deployments do not have a manager-side runtime that can
+/// delete host-local resources. The deploy CLI must first drive
+/// `delete-pending` / `deleting` to the normal runtime cleanup handoff, and
+/// only then acquire setup teardown if frozen setup resources remain.
+pub async fn acquire_runtime_delete_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<(), AlienError> {
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        Some("runtime".to_string()),
+        Some("cli".to_string()),
+        Some(vec![
+            "delete-pending".to_string(),
+            "deleting".to_string(),
+            "delete-failed".to_string(),
+        ]),
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Acquire a deployment lock from the manager, retrying until the lock is granted
 /// or the timeout is reached.
 ///

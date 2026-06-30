@@ -20,8 +20,9 @@ use alien_core::{
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
-        acquire_setup_delete_deployment, acquire_setup_run_deployment, final_reconcile,
-        release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
+        acquire_runtime_delete_deployment, acquire_setup_delete_deployment,
+        acquire_setup_run_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+        SetupDeleteAcquireOutcome,
     },
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
@@ -3052,12 +3053,139 @@ pub async fn push_deletion(
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
-    // Acquire sync lock with retry
-    let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
+    if platform == Platform::Local
+        && !matches!(
+            state.status,
+            DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
+        )
+    {
+        run_runtime_deletion(
+            client,
+            deployment_id,
+            &mut state,
+            &mut config,
+            &client_config,
+        )
+        .await?;
+
+        if state.status == DeploymentStatus::Deleted {
+            output::success("Deployment deleted successfully.");
+            return Ok(());
+        }
+    }
+
+    run_setup_deletion(
+        client,
+        deployment_id,
+        &mut state,
+        &mut config,
+        &client_config,
+    )
+    .await
+}
+
+async fn run_runtime_deletion(
+    client: &ServerClient,
+    deployment_id: &str,
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    let session = format!("push-runtime-deletion-{}", uuid::Uuid::new_v4());
+    acquire_runtime_delete_deployment(client, deployment_id, &session)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "acquire runtime deletion lock".to_string(),
+        })?;
+
+    // Re-fetch deployment under lock
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status = parse_deployment_status(&deployment.status)?;
+    state.status = status;
+    state.stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    state.runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    let transport = ManagerApiTransport::new(client.clone(), session.clone());
+    let policy = RunnerPolicy {
+        max_steps: 400,
+        operation: LoopOperation::Delete,
+        delay_threshold: None,
+    };
+
+    let runner_result = shared_run_step_loop(
+        state,
+        config,
+        client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+        None,
+    )
+    .await;
+
+    // Always reconcile + release, even on error
+    final_reconcile(client, deployment_id, &session, state).await;
+    release_deployment(client, deployment_id, &session).await;
+
+    // Handle runner result after lock release
+    let result = runner_result.context(ErrorData::DeploymentFailed {
+        operation: "deletion".to_string(),
+    })?;
+
+    match result.loop_result.outcome {
+        LoopOutcome::Success => Ok(()),
+        LoopOutcome::Failure => {
+            let operation = format!(
+                "deletion failed at status {}",
+                deployment_status_str(result.loop_result.final_status)
+            );
+            if let Some(error) = state.error.clone() {
+                Err(error.context(ErrorData::DeploymentFailed { operation }))
+            } else {
+                Err(AlienError::new(ErrorData::DeploymentFailed { operation }))
+            }
+        }
+        LoopOutcome::Neutral => Ok(()),
+    }
+}
+
+async fn run_setup_deletion(
+    client: &ServerClient,
+    deployment_id: &str,
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
     let acquire_outcome = acquire_setup_delete_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
-            operation: "acquire sync lock for deletion".to_string(),
+            operation: "acquire setup teardown lock".to_string(),
         })?;
 
     if matches!(acquire_outcome, SetupDeleteAcquireOutcome::AlreadyDeleted) {
@@ -3078,7 +3206,6 @@ pub async fn push_deletion(
         .into_inner();
 
     let status = parse_deployment_status(&deployment.status)?;
-
     state.status = status;
     state.stack_state = deployment
         .stack_state
@@ -3097,7 +3224,6 @@ pub async fn push_deletion(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    // Run the shared step loop with per-step reconciliation via the manager API
     let transport = ManagerApiTransport::new(client.clone(), session.clone());
     let policy = RunnerPolicy {
         max_steps: 400,
@@ -3105,70 +3231,33 @@ pub async fn push_deletion(
         delay_threshold: None,
     };
 
-    let runner_result = if matches!(
-        state.status,
-        DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
-    ) {
-        alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-            &mut state,
-            &mut config,
-            &client_config,
-            deployment_id,
-            &policy,
-            &transport,
-            None,
-        )
-        .await
-        .map(|setup_result| {
-            setup_result.unwrap_or_else(|| RunnerResult {
-                loop_result: LoopResult {
-                    stop_reason: LoopStopReason::Synced,
-                    outcome: LoopOutcome::Neutral,
-                    final_status: state.status,
-                },
-                steps_executed: 0,
-            })
+    let runner_result = alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+        state,
+        config,
+        client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+    )
+    .await
+    .map(|setup_result| {
+        setup_result.unwrap_or_else(|| RunnerResult {
+            loop_result: LoopResult {
+                stop_reason: LoopStopReason::Synced,
+                outcome: LoopOutcome::Neutral,
+                final_status: state.status,
+            },
+            steps_executed: 0,
         })
-    } else {
-        match shared_run_step_loop(
-            &mut state,
-            &mut config,
-            &client_config,
-            deployment_id,
-            &policy,
-            &transport,
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(result)
-                if result.loop_result.outcome == LoopOutcome::Success
-                    && state.status == DeploymentStatus::TeardownRequired =>
-            {
-                alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-                    &mut state,
-                    &mut config,
-                    &client_config,
-                    deployment_id,
-                    &policy,
-                    &transport,
-                    None,
-                )
-                .await
-                .map(|setup_result| setup_result.unwrap_or(result))
-            }
-            other => other,
-        }
-    };
+    });
 
     // Always reconcile + release, even on error
-    final_reconcile(client, deployment_id, &session, &state).await;
+    final_reconcile(client, deployment_id, &session, state).await;
     release_deployment(client, deployment_id, &session).await;
 
-    // Handle runner result after lock release
     let result = runner_result.context(ErrorData::DeploymentFailed {
-        operation: "deletion".to_string(),
+        operation: "setup teardown".to_string(),
     })?;
 
     match result.loop_result.outcome {
@@ -3178,7 +3267,7 @@ pub async fn push_deletion(
         }
         LoopOutcome::Failure => {
             let operation = format!(
-                "deletion failed at status {}",
+                "setup teardown failed at status {}",
                 deployment_status_str(result.loop_result.final_status)
             );
             if let Some(error) = state.error.clone() {
