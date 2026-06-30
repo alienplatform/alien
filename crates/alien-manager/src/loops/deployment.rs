@@ -445,6 +445,13 @@ impl DeploymentLoop {
                                 update_heartbeat: false,
                                 suggested_delay_ms: None,
                                 heartbeats: Vec::new(),
+                                // Background driver loop — no agent sync here,
+                                // so leave the agent-inventory columns untouched.
+                                agent_version: None,
+                                agent_os: None,
+                                agent_arch: None,
+                                regime: None,
+                                agent_image_repository: None,
                             },
                         )
                         .await?;
@@ -958,6 +965,12 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
+            agent_image_repository: None,
+            target_agent_version: None,
         }
     }
 

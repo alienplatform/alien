@@ -113,6 +113,26 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
+    /// Agent binary version (from `env!("CARGO_PKG_VERSION")` at build time).
+    /// Lets the manager build fleet inventory and decide whether to send an
+    /// `agent_target` in the response.
+    #[serde(default)]
+    pub agent_version: Option<String>,
+    /// Agent host OS — `linux` / `macos` / `windows`.
+    #[serde(default)]
+    pub agent_os: Option<String>,
+    /// Agent host arch — `x86_64` / `aarch64`.
+    #[serde(default)]
+    pub agent_arch: Option<String>,
+    /// Supervisor regime — `os-service` / `kubernetes`.
+    #[serde(default)]
+    pub regime: Option<String>,
+    /// Image repository the agent was pulled from (no tag), injected by
+    /// the chart at install time. Surfaced in the dashboard so admins see
+    /// the registry a pinned tag will be pulled from. Optional and
+    /// Kubernetes-only.
+    #[serde(default)]
+    pub agent_image_repository: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +151,11 @@ pub struct AgentSyncResponse {
     /// to poll for pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+    /// Desired agent self-update target. The payload carries either `binary`
+    /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
+    /// one matching its regime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_target: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +185,31 @@ pub struct InitializeResponse {
     pub token: Option<String>,
 }
 
+/// `POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an
+/// agent whose persistent state was wiped (e.g. emptyDir on pod restart).
+///
+/// The agent calls this when `/v1/initialize` returns a name-conflict
+/// error: the deployment row already exists, so creating it would 409,
+/// but the agent legitimately needs a new sync token to keep operating
+/// against it. Auth is the same dg bearer the chart originally mounted.
+///
+/// `name` is required — without it the server can't disambiguate which
+/// row to reattach to.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RejoinRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RejoinResponse {
+    pub deployment_id: String,
+    pub token: String,
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -176,6 +226,16 @@ pub fn router() -> Router<AppState> {
 /// (for example, one that proxies token creation to an upstream API).
 pub fn initialize_router() -> Router<AppState> {
     Router::new().route("/v1/initialize", post(initialize))
+}
+
+/// Router for the `/v1/rejoin` endpoint only.
+///
+/// Same separation rationale as `initialize_router` — multi-tenant
+/// embedders override this with one that forwards to their upstream API
+/// so token issuance lives on the SaaS side, not in the local manager
+/// store.
+pub fn rejoin_router() -> Router<AppState> {
+    Router::new().route("/v1/rejoin", post(rejoin))
 }
 
 // --- Handlers ---
@@ -377,6 +437,14 @@ async fn reconcile(
                 update_heartbeat: req.update_heartbeat,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
+                // Non-agent reconcile path (push/platform-api) doesn't carry
+                // the agent self-update inventory; leave it out of the
+                // forwarded request.
+                agent_version: None,
+                agent_os: None,
+                agent_arch: None,
+                regime: None,
+                agent_image_repository: None,
             },
         )
         .await
@@ -551,7 +619,6 @@ mod tests {
                         "memory": null,
                         "workload": null,
                         "pods": [],
-                        "instances": [],
                         "events": []
                     }
                 },
@@ -844,6 +911,12 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
+            agent_image_repository: None,
+            target_agent_version: None,
         }
     }
 }
@@ -888,6 +961,31 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    // Persist the agent self-update inventory the agent reported on this sync
+    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). Runs on every
+    // sync regardless of whether the agent reported a state change, so the
+    // manager has a fleet-wide view of which version each host is on. Old
+    // agents that don't send these fields are no-ops.
+    if let Err(e) = state
+        .deployment_store
+        .update_agent_metadata(
+            &subject,
+            &req.deployment_id,
+            req.agent_version.as_deref(),
+            req.agent_os.as_deref(),
+            req.agent_arch.as_deref(),
+            req.regime.as_deref(),
+            req.agent_image_repository.as_deref(),
+        )
+        .await
+    {
+        tracing::warn!(
+            deployment_id = %req.deployment_id,
+            error = %e,
+            "Failed to persist agent self-update inventory; continuing sync"
+        );
+    }
+
     // If the agent reported its current state, persist it to the deployment record.
     // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
     // back to the manager so that API consumers can observe deployment progress.
@@ -923,6 +1021,15 @@ async fn agent_sync(
                                 update_heartbeat: true,
                                 heartbeats: vec![],
                                 suggested_delay_ms: None,
+                                // Forward the agent self-update inventory the
+                                // agent reported on this sync so multi-tenant
+                                // embedders can persist it in their own
+                                // deployment row.
+                                agent_version: req.agent_version.clone(),
+                                agent_os: req.agent_os.clone(),
+                                agent_arch: req.agent_arch.clone(),
+                                regime: req.regime.clone(),
+                                agent_image_repository: req.agent_image_repository.clone(),
                             },
                         )
                         .await
@@ -1100,6 +1207,13 @@ async fn agent_sync(
         None
     };
 
+    // Agent upgrade decision: if the deployment has a pinned target version
+    // that differs from what the agent just reported, drive an upgrade via
+    // `agent_target` in the response.
+    let agent_target =
+        build_agent_target(&deployment, req.agent_version.as_deref(), req.regime.as_deref())
+            .and_then(|t| serde_json::to_value(t).ok());
+
     Json(AgentSyncResponse {
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
@@ -1111,8 +1225,53 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
+        agent_target,
     })
     .into_response()
+}
+
+/// Build `AgentTarget` when `deployment.target_agent_version` is set AND
+/// differs from what the agent just reported. The regime field controls
+/// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
+/// populated.
+///
+/// k8s-only MVP: only the helm path is wired. chart_repo / chart_version are
+/// emitted as empty strings — the agent re-uses its current chart_ref (from
+/// the existing helm release metadata) and only the values overlay flips the
+/// `runtime.image.tag`. This avoids per-version chart re-publication.
+fn build_agent_target(
+    deployment: &crate::traits::DeploymentRecord,
+    reported_version: Option<&str>,
+    regime: Option<&str>,
+) -> Option<alien_core::sync::AgentTarget> {
+    let target_version = deployment.target_agent_version.as_deref()?;
+    if reported_version == Some(target_version) {
+        return None;
+    }
+    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::AgentHelmTarget {
+        // Agent reads chart_repo/chart_version directly; when empty it falls
+        // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
+        // env vars (injected by the chart at install time). Leaving blank
+        // here keeps the manager out of the per-project chart catalog —
+        // upgrade follow-on can plumb explicit refs when chart shape changes
+        // between agent versions, which it doesn't today.
+        chart_repo: String::new(),
+        chart_version: String::new(),
+        values: serde_json::json!({
+            "runtime": { "image": { "tag": target_version } }
+        }),
+        sensitive_values: Default::default(),
+    });
+    if helm.is_none() {
+        // os-service path not in this MVP — skip without emitting.
+        return None;
+    }
+    Some(alien_core::sync::AgentTarget {
+        version: target_version.to_string(),
+        min_supported_version: target_version.to_string(),
+        binary: None,
+        helm,
+    })
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {
@@ -1308,6 +1467,82 @@ fn release_info_from_record(
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
     })
+}
+
+/// `POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an
+/// existing deployment by name. The OSS handler is intentionally lean:
+/// the dg-token caller specifies the name, the store looks up the row,
+/// and a fresh `Deployment` token is minted and returned. Returns
+/// `404 Deployment not found` when no row matches — agents should fall
+/// back to `/v1/initialize` in that case.
+///
+/// Distinct from `/v1/initialize`'s idempotency branch because the agent
+/// wants an explicit, distinguishable code path for "I lost local state,
+/// please re-attach me" vs "I'm a brand-new pod claiming a name". The
+/// platform-mode override forwards this to the SaaS rejoin endpoint
+/// where audit / event semantics differ.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/rejoin",
+    tag = "sync",
+    request_body = RejoinRequest,
+    responses(
+        (status = 200, description = "Existing deployment rejoined; fresh token returned", body = RejoinResponse),
+        (status = 404, description = "No deployment with that name in caller's deployment group"),
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
+async fn rejoin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RejoinRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let dg_id = match subject.scope.clone() {
+        crate::auth::Scope::DeploymentGroup {
+            deployment_group_id,
+            ..
+        } => deployment_group_id,
+        _ => {
+            return ErrorData::forbidden("Rejoin requires a deployment-group token").into_response();
+        }
+    };
+
+    let existing = match state
+        .deployment_store
+        .get_deployment_by_name(&subject, &dg_id, &req.name)
+        .await
+    {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&req.name).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
+    match state
+        .token_store
+        .create_token(CreateTokenParams {
+            token_type: TokenType::Deployment,
+            key_prefix,
+            key_hash,
+            deployment_group_id: Some(dg_id),
+            deployment_id: Some(existing.id.clone()),
+        })
+        .await
+    {
+        Ok(_) => Json(RejoinResponse {
+            deployment_id: existing.id,
+            token: raw_token,
+        })
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),

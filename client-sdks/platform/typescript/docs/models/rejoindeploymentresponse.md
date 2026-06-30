@@ -1,0 +1,19 @@
+# RejoinDeploymentResponse
+
+## Example Usage
+
+```typescript
+import { RejoinDeploymentResponse } from "@alienplatform/platform-api/models";
+
+let value: RejoinDeploymentResponse = {
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  token: "<value>",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                                 | Type                                                                                                                                                                                  | Required                                                                                                                                                                              | Description                                                                                                                                                                           | Example                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploymentId`                                                                                                                                                                        | *string*                                                                                                                                                                              | :heavy_check_mark:                                                                                                                                                                    | Unique identifier for the deployment.                                                                                                                                                 | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                          |
+| `token`                                                                                                                                                                               | *string*                                                                                                                                                                              | :heavy_check_mark:                                                                                                                                                                    | Fresh deployment-scoped sync token. The previously-issued token is NOT revoked — callers that want strict single-token semantics should rotate explicitly via the api-keys endpoints. |                                                                                                                                                                                       |

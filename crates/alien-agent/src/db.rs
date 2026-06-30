@@ -824,6 +824,61 @@ impl AgentDb {
         Ok(())
     }
 
+    /// Get the deployment-scoped sync token returned by `initialize`. The
+    /// agent persists this so a pod restart doesn't fall back to the
+    /// chart-mounted deployment-group token (which can create new
+    /// deployments but is not accepted by `/v1/sync/acquire` —
+    /// platform-side rejects with 403).
+    pub async fn get_sync_token(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'sync_token'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query sync_token".to_string(),
+            })?;
+
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch sync_token row".to_string(),
+            })? {
+            Some(row) => {
+                let sync_token: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read sync_token value".to_string(),
+                        })?;
+                Ok(Some(sync_token))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the deployment-scoped sync token. Idempotent — overwrites
+    /// any prior value (e.g. when the manager rotates the token).
+    pub async fn set_sync_token(&self, sync_token: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('sync_token', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (sync_token.to_string(),),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set sync_token".to_string(),
+        })?;
+
+        Ok(())
+    }
+
     /// Get the commands URL (public URL for cloud functions to poll commands).
     pub async fn get_commands_url(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;

@@ -96,23 +96,34 @@ pub async fn run_agent_with_cancel_and_debug_loop(
     // Initialize encrypted database
     let db = Arc::new(db::AgentDb::new(&config.data_dir, &config.encryption_key).await?);
 
+    let first_sync_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Create shared state
     let state = Arc::new(AgentState {
         config: config.clone(),
         db: db.clone(),
         service_provider,
         cancel: cancel.clone(),
+        first_sync_completed: first_sync_completed.clone(),
     });
 
     // Start OTLP server (for local functions to send telemetry).
-    // This is best-effort — a port conflict should not take down the agent.
+    // Also serves /livez and /readyz on the same port for Kubernetes probes.
+    // Best-effort — a port conflict should not take down the agent.
     let otlp_host = config.otlp_server_host;
     let otlp_port = config.otlp_server_port;
     let otlp_db = db.clone();
     let otlp_cancel = cancel.clone();
+    let probe_readiness = first_sync_completed.clone();
     tokio::spawn(async move {
-        if let Err(e) =
-            otlp_server::start_otlp_server(otlp_host, otlp_port, otlp_db, otlp_cancel).await
+        if let Err(e) = otlp_server::start_otlp_server(
+            otlp_host,
+            otlp_port,
+            otlp_db,
+            probe_readiness,
+            otlp_cancel,
+        )
+        .await
         {
             warn!(error = %e, "OTLP server failed (telemetry collection disabled)");
         }
@@ -255,4 +266,11 @@ pub struct AgentState {
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
+    /// Readiness signal consumed by the `/readyz` probe handler. Flipped to
+    /// `true` by the sync loop on the first successful `/v1/sync` round-trip.
+    /// /readyz returns 503 until then so a freshly-rolled agent isn't marked
+    /// ready before it has actually reached the manager. The other readiness
+    /// conditions (process alive, DB opened, InstanceLock held) are implicit
+    /// — the agent's HTTP server only comes up after those succeed.
+    pub first_sync_completed: Arc<std::sync::atomic::AtomicBool>,
 }

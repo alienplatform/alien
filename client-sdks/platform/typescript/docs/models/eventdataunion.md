@@ -375,6 +375,16 @@ const value: models.DataDeploymentDeleted = {
 };
 ```
 
+### `models.DataDeploymentRejoined`
+
+```typescript
+const value: models.DataDeploymentRejoined = {
+  deploymentGroupId: "<id>",
+  deploymentId: "<id>",
+  type: "DeploymentRejoined",
+};
+```
+
 ### `models.DataDeploymentRetryRequested`
 
 ```typescript

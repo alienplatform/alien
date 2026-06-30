@@ -81,6 +81,13 @@ impl DeploymentLoopTransport for ManagerTransport {
                     update_heartbeat,
                     suggested_delay_ms,
                     heartbeats,
+                    // Background reconciliation from inside the manager — no
+                    // agent self-update inventory in this code path.
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await?;

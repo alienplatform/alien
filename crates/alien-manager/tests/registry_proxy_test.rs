@@ -343,6 +343,11 @@ async fn setup() -> TestSetup {
                     update_heartbeat: false,
                     heartbeats: vec![],
                     suggested_delay_ms: None,
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await
@@ -816,6 +821,11 @@ async fn test_proxy_push_then_pull() {
                     update_heartbeat: false,
                     heartbeats: vec![],
                     suggested_delay_ms: None,
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await

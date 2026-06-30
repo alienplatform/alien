@@ -22,11 +22,20 @@ pub async fn handle_pending(
     info!("Handling Pending status");
 
     // Step 1: Initialize stack state. Direct platform deployments may carry a
-    // user-selected resource prefix in their initial stack state.
-    let stack_state = current
-        .stack_state
-        .clone()
-        .unwrap_or_else(|| StackState::new(current.platform));
+    // user-selected resource prefix in their initial stack state. For pull-model
+    // agents with ephemeral storage (e.g. Kubernetes via Helm), the random prefix
+    // from `StackState::new` is regenerated on every restart, which breaks the
+    // alignment with Helm-created ServiceAccount names and vault-secret names.
+    // `ALIEN_RESOURCE_PREFIX` lets the chart pin a stable prefix that matches
+    // `serviceAccountPrefix` so SA + secret names stay valid across restarts.
+    let stack_state = current.stack_state.clone().unwrap_or_else(|| {
+        match std::env::var("ALIEN_RESOURCE_PREFIX") {
+            Ok(prefix) if !prefix.trim().is_empty() => {
+                StackState::with_resource_prefix(current.platform, prefix.trim().to_string())
+            }
+            _ => StackState::new(current.platform),
+        }
+    });
     info!(
         "Initialized stack state for platform {:?}",
         current.platform

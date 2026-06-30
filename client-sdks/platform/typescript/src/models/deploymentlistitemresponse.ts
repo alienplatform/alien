@@ -308,6 +308,49 @@ export type DeploymentListItemResponseError = {
   source?: any | null | undefined;
 };
 
+/**
+ * Agent host OS
+ */
+export const DeploymentListItemResponseAgentOs = {
+  Linux: "linux",
+  Macos: "macos",
+  Windows: "windows",
+} as const;
+/**
+ * Agent host OS
+ */
+export type DeploymentListItemResponseAgentOs = ClosedEnum<
+  typeof DeploymentListItemResponseAgentOs
+>;
+
+/**
+ * Agent host architecture
+ */
+export const DeploymentListItemResponseAgentArch = {
+  X8664: "x86_64",
+  Aarch64: "aarch64",
+} as const;
+/**
+ * Agent host architecture
+ */
+export type DeploymentListItemResponseAgentArch = ClosedEnum<
+  typeof DeploymentListItemResponseAgentArch
+>;
+
+/**
+ * Supervisor regime: os-service or kubernetes
+ */
+export const DeploymentListItemResponseRegime = {
+  OsService: "os-service",
+  Kubernetes: "kubernetes",
+} as const;
+/**
+ * Supervisor regime: os-service or kubernetes
+ */
+export type DeploymentListItemResponseRegime = ClosedEnum<
+  typeof DeploymentListItemResponseRegime
+>;
+
 export type DeploymentListItemResponse = {
   /**
    * Unique identifier for the deployment.
@@ -404,6 +447,30 @@ export type DeploymentListItemResponse = {
    * Unique identifier for the workspace.
    */
   workspaceId: string;
+  /**
+   * Agent binary version reported on the last sync
+   */
+  agentVersion?: string | null | undefined;
+  /**
+   * Agent host OS
+   */
+  agentOs?: DeploymentListItemResponseAgentOs | null | undefined;
+  /**
+   * Agent host architecture
+   */
+  agentArch?: DeploymentListItemResponseAgentArch | null | undefined;
+  /**
+   * Supervisor regime: os-service or kubernetes
+   */
+  regime?: DeploymentListItemResponseRegime | null | undefined;
+  /**
+   * Container image repository the agent was pulled from (no tag)
+   */
+  agentImageRepository?: string | null | undefined;
+  /**
+   * Pinned target agent version (semver) for upgrade-driven sync
+   */
+  targetAgentVersion?: string | null | undefined;
   release?: DeploymentReleaseInfo | null | undefined;
   deploymentGroup?: DeploymentGroupInfo | undefined;
   project?: DeploymentProjectInfo | undefined;
@@ -633,6 +700,21 @@ export function deploymentListItemResponseErrorFromJSON(
 }
 
 /** @internal */
+export const DeploymentListItemResponseAgentOs$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseAgentOs
+> = z.enum(DeploymentListItemResponseAgentOs);
+
+/** @internal */
+export const DeploymentListItemResponseAgentArch$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseAgentArch
+> = z.enum(DeploymentListItemResponseAgentArch);
+
+/** @internal */
+export const DeploymentListItemResponseRegime$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseRegime
+> = z.enum(DeploymentListItemResponseRegime);
+
+/** @internal */
 export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   DeploymentListItemResponse,
   unknown
@@ -682,6 +764,14 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   managerId: z.string(),
   workspaceId: z.string(),
+  agentVersion: z.nullable(z.string()).optional(),
+  agentOs: z.nullable(DeploymentListItemResponseAgentOs$inboundSchema)
+    .optional(),
+  agentArch: z.nullable(DeploymentListItemResponseAgentArch$inboundSchema)
+    .optional(),
+  regime: z.nullable(DeploymentListItemResponseRegime$inboundSchema).optional(),
+  agentImageRepository: z.nullable(z.string()).optional(),
+  targetAgentVersion: z.nullable(z.string()).optional(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),
   project: DeploymentProjectInfo$inboundSchema.optional(),

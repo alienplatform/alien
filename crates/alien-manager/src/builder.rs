@@ -30,6 +30,9 @@ pub struct AlienManagerBuilder {
     skip_initialize: bool,
     /// When `true`, the install script (`/v1/install`) is omitted from the router.
     skip_install: bool,
+    /// When `true`, the default `/v1/rejoin` route is omitted. Multi-tenant
+    /// embedders override this to forward to the SaaS rejoin endpoint.
+    skip_rejoin: bool,
     /// Override the bindings provider for cross-account registry access.
     /// When set in `with_standalone_defaults()`, this is stored in `ServerBindings`
     /// so `reconcile_registry_access()` can load the artifact registry and grant
@@ -70,6 +73,7 @@ impl AlienManagerBuilder {
             log_buffer: None,
             skip_initialize: false,
             skip_install: false,
+            skip_rejoin: false,
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
@@ -159,6 +163,14 @@ impl AlienManagerBuilder {
     /// Use this when binaries are distributed through a separate packages service.
     pub fn skip_install(mut self) -> Self {
         self.skip_install = true;
+        self
+    }
+
+    /// Skip the default `/v1/rejoin` route.
+    /// Use this when embedding in a process that overrides rejoin via `extra_routes`
+    /// (e.g. multi-tenant managerx that forwards to the platform API).
+    pub fn skip_rejoin(mut self) -> Self {
+        self.skip_rejoin = true;
         self
     }
 
@@ -632,6 +644,7 @@ impl AlienManagerBuilder {
             crate::routes::RouterOptions {
                 include_initialize: !self.skip_initialize,
                 include_install: !self.skip_install,
+                include_rejoin: !self.skip_rejoin,
             },
             self.extra_routes,
             self.platform_routes,
