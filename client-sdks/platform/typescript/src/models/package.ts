@@ -349,6 +349,32 @@ export type PackageBinaries = {
   url: string;
 };
 
+/**
+ * Source provenance for a generated CLI package.
+ */
+export type PackageBuildInfo = {
+  /**
+   * Alien source commit used to build the source CLI and agent binaries.
+   */
+  alienSha: string;
+  /**
+   * Horizon source commit used by platform private extensions, if applicable.
+   */
+  horizonSha: string;
+  /**
+   * Platform source commit used to build packages-builder and private extensions.
+   */
+  platformSha: string;
+  /**
+   * SHA256 checksum of the source companion agent binary shipped with the CLI package.
+   */
+  sourceAgentBinarySha256: string;
+  /**
+   * SHA256 checksum of the source deploy CLI binary before white-label config is appended.
+   */
+  sourceCliBinarySha256: string;
+};
+
 export const OutputsTypeCli = {
   Cli: "cli",
 } as const;
@@ -362,6 +388,10 @@ export type OutputsCli = {
    * Binary information for each target platform
    */
   binaries: { [k: string]: PackageBinaries };
+  /**
+   * Source provenance for a generated CLI package.
+   */
+  buildInfo: PackageBuildInfo;
   type: OutputsTypeCli;
 };
 
@@ -369,10 +399,10 @@ export type OutputsCli = {
  * Package outputs (only when status is 'ready')
  */
 export type PackageOutputsUnion =
+  | OutputsCli
   | OutputsAgentImage
   | OutputsHelm
   | OutputsTerraform
-  | OutputsCli
   | OutputsCloudformation
   | any;
 
@@ -426,10 +456,10 @@ export type Package = {
    * Package outputs (only when status is 'ready')
    */
   outputs?:
+    | OutputsCli
     | OutputsAgentImage
     | OutputsHelm
     | OutputsTerraform
-    | OutputsCli
     | OutputsCloudformation
     | any
     | null
@@ -797,6 +827,28 @@ export function packageBinariesFromJSON(
 }
 
 /** @internal */
+export const PackageBuildInfo$inboundSchema: z.ZodType<
+  PackageBuildInfo,
+  unknown
+> = z.object({
+  alienSha: z.string(),
+  horizonSha: z.string(),
+  platformSha: z.string(),
+  sourceAgentBinarySha256: z.string(),
+  sourceCliBinarySha256: z.string(),
+});
+
+export function packageBuildInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageBuildInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageBuildInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageBuildInfo' from JSON`,
+  );
+}
+
+/** @internal */
 export const OutputsTypeCli$inboundSchema: z.ZodEnum<typeof OutputsTypeCli> = z
   .enum(OutputsTypeCli);
 
@@ -804,6 +856,7 @@ export const OutputsTypeCli$inboundSchema: z.ZodEnum<typeof OutputsTypeCli> = z
 export const OutputsCli$inboundSchema: z.ZodType<OutputsCli, unknown> = z
   .object({
     binaries: z.record(z.string(), z.lazy(() => PackageBinaries$inboundSchema)),
+    buildInfo: z.lazy(() => PackageBuildInfo$inboundSchema),
     type: OutputsTypeCli$inboundSchema,
   });
 
@@ -822,10 +875,10 @@ export const PackageOutputsUnion$inboundSchema: z.ZodType<
   PackageOutputsUnion,
   unknown
 > = z.union([
+  z.lazy(() => OutputsCli$inboundSchema),
   z.lazy(() => OutputsAgentImage$inboundSchema),
   z.lazy(() => OutputsHelm$inboundSchema),
   z.lazy(() => OutputsTerraform$inboundSchema),
-  z.lazy(() => OutputsCli$inboundSchema),
   z.lazy(() => OutputsCloudformation$inboundSchema),
   z.any(),
 ]);
@@ -860,10 +913,10 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   ]),
   outputs: z.nullable(
     z.union([
+      z.lazy(() => OutputsCli$inboundSchema),
       z.lazy(() => OutputsAgentImage$inboundSchema),
       z.lazy(() => OutputsHelm$inboundSchema),
       z.lazy(() => OutputsTerraform$inboundSchema),
-      z.lazy(() => OutputsCli$inboundSchema),
       z.lazy(() => OutputsCloudformation$inboundSchema),
       z.any(),
     ]),

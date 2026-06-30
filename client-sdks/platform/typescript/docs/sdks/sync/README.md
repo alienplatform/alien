@@ -121,6 +121,7 @@ async function run() {
       deploymentIds: [
         "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
+      deploymentModel: "pull",
     },
   });
 
@@ -153,6 +154,7 @@ async function run() {
       deploymentIds: [
         "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
+      deploymentModel: "pull",
     },
   });
   if (res.ok) {

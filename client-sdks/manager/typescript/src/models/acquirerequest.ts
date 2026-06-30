@@ -3,11 +3,19 @@
  */
 
 import * as z from "zod/v4";
+import {
+  DeploymentModel,
+  DeploymentModel$outboundSchema,
+} from "./deploymentmodel.js";
 import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
 
 export type AcquireRequest = {
   acquireMode?: string | null | undefined;
   deploymentIds?: Array<string> | null | undefined;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel: DeploymentModel;
   limit?: number | undefined;
   platforms?: Array<PlatformEnum> | null | undefined;
   session: string;
@@ -19,6 +27,7 @@ export type AcquireRequest = {
 export type AcquireRequest$Outbound = {
   acquireMode?: string | null | undefined;
   deploymentIds?: Array<string> | null | undefined;
+  deploymentModel: string;
   limit?: number | undefined;
   platforms?: Array<string> | null | undefined;
   session: string;
@@ -33,6 +42,7 @@ export const AcquireRequest$outboundSchema: z.ZodType<
 > = z.object({
   acquireMode: z.nullable(z.string()).optional(),
   deploymentIds: z.nullable(z.array(z.string())).optional(),
+  deploymentModel: DeploymentModel$outboundSchema,
   limit: z.int().optional(),
   platforms: z.nullable(z.array(PlatformEnum$outboundSchema)).optional(),
   session: z.string(),

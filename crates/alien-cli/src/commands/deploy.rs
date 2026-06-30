@@ -538,17 +538,27 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
     if setup_owned_status {
-        acquire_setup_run_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to acquire setup deployment lock".to_string(),
-            })?;
+        acquire_setup_run_deployment(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            stack_settings.deployment_model,
+        )
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to acquire setup deployment lock".to_string(),
+        })?;
     } else {
-        acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to acquire deployment lock".to_string(),
-            })?;
+        acquire_deployment(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            stack_settings.deployment_model,
+        )
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to acquire deployment lock".to_string(),
+        })?;
     }
 
     // Re-fetch under lock (manager may have advanced the state)

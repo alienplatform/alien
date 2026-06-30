@@ -9031,6 +9031,10 @@ export type SyncAcquireResponseDeployment = {
    * Project ID the deployment belongs to
    */
   projectId: string;
+  /**
+   * Deployment group ID the deployment belongs to
+   */
+  deploymentGroupId: string;
   setupMethod?: DeploymentSetupMethod | undefined;
   /**
    * Current deployment state (includes releases)
@@ -23593,6 +23597,7 @@ export const SyncAcquireResponseDeployment$inboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   projectId: z.string(),
+  deploymentGroupId: z.string(),
   setupMethod: DeploymentSetupMethod$inboundSchema.optional(),
   current: z.lazy(() => SyncAcquireResponseCurrent$inboundSchema),
   config: z.lazy(() => SyncAcquireResponseConfig$inboundSchema),

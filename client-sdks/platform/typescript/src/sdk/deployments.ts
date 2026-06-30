@@ -17,6 +17,7 @@ import { deploymentsListFilterEnvironments } from "../funcs/deploymentsListFilte
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
+import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -132,6 +133,20 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Deployment> {
     return unwrapAsync(deploymentsImport(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
+   */
+  async setFirstPartyDeploymentInputs(
+    request?: models.SetFirstPartyDeploymentInputsRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SetFirstPartyDeploymentInputsResponse> {
+    return unwrapAsync(deploymentsSetFirstPartyDeploymentInputs(
       this,
       request,
       options,

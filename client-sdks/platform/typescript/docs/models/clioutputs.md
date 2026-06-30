@@ -15,6 +15,13 @@ let value: CliOutputs = {
       url: "https://essential-advancement.org/",
     },
   },
+  buildInfo: {
+    alienSha: "<value>",
+    horizonSha: "<value>",
+    platformSha: "<value>",
+    sourceAgentBinarySha256: "<value>",
+    sourceCliBinarySha256: "<value>",
+  },
 };
 ```
 
@@ -23,3 +30,4 @@ let value: CliOutputs = {
 | Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `binaries`                                                                           | Record<string, [models.DeploymentInfoBinaries](../models/deploymentinfobinaries.md)> | :heavy_check_mark:                                                                   | Binary information for each target platform                                          |
+| `buildInfo`                                                                          | [models.DeploymentInfoBuildInfo](../models/deploymentinfobuildinfo.md)               | :heavy_check_mark:                                                                   | Source provenance for a generated CLI package.                                       |

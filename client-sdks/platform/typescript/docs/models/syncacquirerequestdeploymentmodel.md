@@ -1,6 +1,6 @@
 # SyncAcquireRequestDeploymentModel
 
-Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
+Filter by deployment model from stackSettings.deploymentModel.
 
 ## Example Usage
 

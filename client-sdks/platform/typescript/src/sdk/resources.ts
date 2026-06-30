@@ -21,9 +21,6 @@ export class Resources extends ClientSDK {
     ));
   }
 
-  /**
-   * List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
-   */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,
     options?: RequestOptions,

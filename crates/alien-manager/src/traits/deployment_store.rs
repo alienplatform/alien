@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeploymentConfig, DeploymentState, EnvironmentInfo,
+    import::ImportSourceKind, DeploymentConfig, DeploymentModel, DeploymentState, EnvironmentInfo,
     EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
     StackSettings, StackState,
 };
@@ -202,6 +202,7 @@ pub struct DeploymentFilter {
     pub platforms: Option<Vec<Platform>>,
     pub setup_method: Option<String>,
     pub acquire_mode: Option<DeploymentAcquireMode>,
+    pub deployment_model: Option<DeploymentModel>,
     pub limit: Option<u32>,
 }
 

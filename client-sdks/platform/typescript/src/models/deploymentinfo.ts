@@ -173,6 +173,32 @@ export type DeploymentInfoBinaries = {
 };
 
 /**
+ * Source provenance for a generated CLI package.
+ */
+export type DeploymentInfoBuildInfo = {
+  /**
+   * Alien source commit used to build the source CLI and agent binaries.
+   */
+  alienSha: string;
+  /**
+   * Horizon source commit used by platform private extensions, if applicable.
+   */
+  horizonSha: string;
+  /**
+   * Platform source commit used to build packages-builder and private extensions.
+   */
+  platformSha: string;
+  /**
+   * SHA256 checksum of the source companion agent binary shipped with the CLI package.
+   */
+  sourceAgentBinarySha256: string;
+  /**
+   * SHA256 checksum of the source deploy CLI binary before white-label config is appended.
+   */
+  sourceCliBinarySha256: string;
+};
+
+/**
  * Outputs from a CLI package build
  */
 export type CliOutputs = {
@@ -180,6 +206,10 @@ export type CliOutputs = {
    * Binary information for each target platform
    */
   binaries: { [k: string]: DeploymentInfoBinaries };
+  /**
+   * Source provenance for a generated CLI package.
+   */
+  buildInfo: DeploymentInfoBuildInfo;
 };
 
 /**
@@ -844,12 +874,35 @@ export function deploymentInfoBinariesFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoBuildInfo$inboundSchema: z.ZodType<
+  DeploymentInfoBuildInfo,
+  unknown
+> = z.object({
+  alienSha: z.string(),
+  horizonSha: z.string(),
+  platformSha: z.string(),
+  sourceAgentBinarySha256: z.string(),
+  sourceCliBinarySha256: z.string(),
+});
+
+export function deploymentInfoBuildInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoBuildInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoBuildInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoBuildInfo' from JSON`,
+  );
+}
+
+/** @internal */
 export const CliOutputs$inboundSchema: z.ZodType<CliOutputs, unknown> = z
   .object({
     binaries: z.record(
       z.string(),
       z.lazy(() => DeploymentInfoBinaries$inboundSchema),
     ),
+    buildInfo: z.lazy(() => DeploymentInfoBuildInfo$inboundSchema),
   });
 
 export function cliOutputsFromJSON(

@@ -240,11 +240,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
-    acquire_setup_delete_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire deployment lock for deletion".to_string(),
-        })?;
+    acquire_setup_delete_deployment(
+        &manager_client,
+        &tracked_deployment.deployment_id,
+        &session,
+        stack_settings.deployment_model,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to acquire deployment lock for deletion".to_string(),
+    })?;
 
     // Re-fetch under lock
     let deployment = manager_client

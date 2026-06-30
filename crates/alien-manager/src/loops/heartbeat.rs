@@ -6,6 +6,8 @@ use std::time::Duration;
 use futures::{stream, StreamExt};
 use tracing::{debug, error};
 
+use alien_core::DeploymentModel;
+
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
 use crate::loops::deployment::{DeploymentLoop, MAX_CONCURRENT_DEPLOYMENTS};
@@ -55,6 +57,7 @@ impl HeartbeatLoop {
             } else {
                 Some(self.config.targets.clone())
             },
+            deployment_model: Some(DeploymentModel::Push),
             ..Default::default()
         };
 
