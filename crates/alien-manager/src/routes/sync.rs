@@ -471,9 +471,9 @@ mod tests {
 
     use super::{
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
-        management_platform, release_stack_platform, should_ignore_agent_state_report,
-        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
-        ReconcileRequest,
+        deployment_target_release_id, management_platform, release_stack_platform,
+        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
+        validate_initialize_base_platform, ReconcileRequest,
     };
 
     #[test]
@@ -671,6 +671,34 @@ mod tests {
         deployment.desired_release_id = Some("rel_test".to_string());
 
         assert!(!deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn deleting_deployment_needs_target_even_when_current_matches_desired() {
+        let mut deployment = deployment_record_with_state("delete-pending", None);
+        deployment.current_release_id = Some("rel_test".to_string());
+        deployment.desired_release_id = Some("rel_test".to_string());
+
+        assert!(deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn delete_failed_deployment_needs_target_for_retry() {
+        let mut deployment = deployment_record_with_state("delete-failed", None);
+        deployment.current_release_id = Some("rel_test".to_string());
+        deployment.desired_release_id = Some("rel_test".to_string());
+
+        assert!(deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn deleting_deployment_uses_current_release_when_desired_was_cleared() {
+        let mut deployment = deployment_record_with_state("delete-pending", None);
+        deployment.current_release_id = Some("rel_test".to_string());
+        deployment.desired_release_id = None;
+
+        assert_eq!(deployment_target_release_id(&deployment), Some("rel_test"));
+        assert!(deployment_needs_target(&deployment));
     }
 
     #[test]
@@ -898,7 +926,7 @@ async fn agent_sync(
 
     // Return target state if deployment needs updating
     let target = if deployment_needs_target(&deployment) {
-        let release = if let Some(ref release_id) = deployment.desired_release_id {
+        let release = if let Some(release_id) = deployment_target_release_id(&deployment) {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
                 Ok(Some(r)) => Some(r),
@@ -1152,12 +1180,38 @@ fn should_return_current_state_for_agent_sync(
     ignored_agent_state_report || deployment.retry_requested
 }
 
+fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {
+    matches!(
+        deployment_status_from_record(&deployment.status),
+        Some(
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+        )
+    )
+}
+
+fn deployment_target_release_id(deployment: &DeploymentRecord) -> Option<&str> {
+    if deployment_is_deleting(deployment) {
+        deployment
+            .desired_release_id
+            .as_deref()
+            .or(deployment.current_release_id.as_deref())
+    } else {
+        deployment.desired_release_id.as_deref()
+    }
+}
+
 fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
-    let Some(desired_release_id) = deployment.desired_release_id.as_ref() else {
+    let Some(target_release_id) = deployment_target_release_id(deployment) else {
         return false;
     };
 
-    if deployment.current_release_id.as_ref() != Some(desired_release_id) {
+    if deployment_is_deleting(deployment) {
+        return true;
+    }
+
+    if deployment.current_release_id.as_deref() != Some(target_release_id) {
         return true;
     }
 
