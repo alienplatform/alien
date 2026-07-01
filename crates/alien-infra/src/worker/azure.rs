@@ -4667,14 +4667,18 @@ mod tests {
 
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
 
         // Display URL stays the public FQDN.
         assert_eq!(
-            worker_outputs.url.as_deref(),
-            Some("https://test-worker.abc123.dev.vpc.direct")
+            endpoint.url.as_str(),
+            "https://test-worker.abc123.dev.vpc.direct"
         );
         // The CNAME target is the ingress host — and crucially NOT the record's own public FQDN.
-        let dns_name = worker_outputs
+        let dns_name = endpoint
             .load_balancer_endpoint
             .as_ref()
             .map(|endpoint| endpoint.dns_name.as_str());
@@ -4724,7 +4728,11 @@ mod tests {
         // …so build_outputs targets it, NOT the public display FQDN.
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        let dns_name = worker_outputs
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
+        let dns_name = endpoint
             .load_balancer_endpoint
             .as_ref()
             .map(|endpoint| endpoint.dns_name.as_str());
