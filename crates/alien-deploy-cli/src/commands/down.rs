@@ -1,6 +1,6 @@
 //! Destroy command — tears down a deployment.
 
-use crate::deployment_tracking::DeploymentTracker;
+use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
@@ -22,7 +22,7 @@ use super::up::{create_manager_client, push_deletion, read_token_file};
     # Force-delete an imported deployment record
     alien-deploy destroy --name production --force-delete-record
 
-    # Destroy using explicit token
+    # Destroy a tracked deployment using explicit manager credentials
     alien-deploy destroy --name production --token ax_dg_abc123... --manager-url https://manager.example.com"
 )]
 pub struct DownArgs {
@@ -52,9 +52,10 @@ pub struct DownArgs {
 }
 
 pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
-    let tracker = DeploymentTracker::new()?;
+    let mut tracker = DeploymentTracker::new()?;
+    let tracked = tracker.get(&args.name).cloned();
 
-    let (token, manager_url, platform_str) = match tracker.get(&args.name) {
+    let (token, manager_url, platform_str, deployment_id, tracked_local) = match tracked {
         Some(tracked) => {
             let token = resolve_token(
                 args.token.clone(),
@@ -64,32 +65,25 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             .unwrap_or_else(|| tracked.token.clone());
             let url = args
                 .manager_url
+                .clone()
                 .unwrap_or_else(|| tracked.manager_url.clone());
             let platform = tracked.platform.clone();
-            (token, url, platform)
+            (
+                token,
+                url,
+                platform,
+                tracked.deployment_id.clone(),
+                tracked.local.clone(),
+            )
         }
         None => {
-            let token = resolve_token(
-                args.token.clone(),
-                args.token_file.as_ref(),
-                embedded_config,
-            )?
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "token".to_string(),
-                    message: format!(
-                        "Deployment '{}' is not tracked. Provide --token and --manager-url.",
-                        args.name
-                    ),
-                })
-            })?;
-            let url = args.manager_url.ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "manager_url".to_string(),
-                    message: "--manager-url is required for untracked deployments".to_string(),
-                })
-            })?;
-            (token, url, "aws".to_string())
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!(
+                    "Deployment '{}' is not tracked. Destroy requires a tracked deployment name.",
+                    args.name
+                ),
+            }));
         }
     };
 
@@ -98,15 +92,6 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     output::status("Manager:", &manager_url);
 
     let client = create_manager_client(&token, &manager_url)?;
-
-    let tracked = tracker.get(&args.name).ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "name".to_string(),
-            message: format!("Deployment '{}' not found in tracker", args.name),
-        })
-    })?;
-
-    let deployment_id = tracked.deployment_id.clone();
 
     let deployment = client
         .get_deployment()
@@ -160,6 +145,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })?;
 
         output::step(2, 2, "Done!");
+        tracker.remove(&args.name)?;
         if import_source.is_some() {
             output::success(
                 "Imported deployment record removed. No resource teardown was performed.",
@@ -207,21 +193,59 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         })
     })?;
 
-    let client_config = ClientConfig::from_std_env(platform)
+    let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
+
+    if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
+        output::info("Stopping local agent service before cleanup...");
+        super::agent::stop_service_if_running().context(ErrorData::AgentServiceError {
+            message: format!(
+                "Failed to stop local agent service before cleanup for data directory '{}'",
+                local.data_dir
+            ),
+        })?;
+    }
+
+    push_deletion(&client, &deployment_id, platform, client_config).await?;
+
+    if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
+        output::info("Uninstalling local agent service...");
+        super::agent::uninstall_service_if_installed().context(ErrorData::AgentServiceError {
+            message: format!(
+                "Failed to uninstall local agent service after cleanup for data directory '{}'",
+                local.data_dir
+            ),
+        })?;
+    }
+
+    tracker.remove(&args.name)?;
+
+    output::step(total_steps, total_steps, "Done!");
+    output::success("Deployment destroyed successfully.");
+
+    Ok(())
+}
+
+async fn destroy_client_config(
+    platform: Platform,
+    tracked_local: Option<&TrackedLocalDeployment>,
+) -> Result<ClientConfig> {
+    if platform == Platform::Local {
+        let state_directory = tracked_local
+            .map(|local| local.data_dir.clone())
+            .or_else(|| std::env::var("ALIEN_LOCAL_STATE_DIRECTORY").ok())
+            .unwrap_or_else(super::agent::default_service_data_dir);
+
+        return Ok(ClientConfig::Local { state_directory });
+    }
+
+    ClientConfig::from_std_env(platform)
         .await
         .context(ErrorData::ConfigurationError {
             message: format!(
                 "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
                 platform
             ),
-        })?;
-
-    push_deletion(&client, &deployment_id, platform, client_config).await?;
-
-    output::step(total_steps, total_steps, "Done!");
-    output::success("Deployment destroyed successfully.");
-
-    Ok(())
+        })
 }
 
 fn resolve_token(
@@ -239,4 +263,28 @@ fn resolve_token(
                 .and_then(|env_var| std::env::var(env_var).ok())
         })
         .or_else(|| embedded_config.and_then(|c| c.token.clone())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_destroy_uses_tracked_data_dir() {
+        let local = TrackedLocalDeployment {
+            data_dir: "/tmp/alien-tracked-state".to_string(),
+            service_managed: true,
+        };
+
+        let config = destroy_client_config(Platform::Local, Some(&local))
+            .await
+            .expect("local config should resolve");
+
+        assert_eq!(
+            config,
+            ClientConfig::Local {
+                state_directory: "/tmp/alien-tracked-state".to_string(),
+            }
+        );
+    }
 }

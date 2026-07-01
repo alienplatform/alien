@@ -281,12 +281,19 @@ fn has_remaining_setup_resources(stack_state: &StackState) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use alien_core::{
-        ComputeCluster, Platform, Resource, ResourceLifecycle, ResourceStatus, StackResourceState,
-        StackState, StackStatus, Storage,
-    };
+    use std::sync::Arc;
 
-    use super::{compute_runtime_cleanup_status, has_remaining_setup_resources};
+    use alien_core::{
+        ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState, DeploymentStatus,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, Resource, ResourceLifecycle,
+        ResourceStatus, StackResourceState, StackSettings, StackState, StackStatus, Storage,
+    };
+    use alien_infra::DefaultPlatformServiceProvider;
+
+    use super::{
+        compute_runtime_cleanup_status, handle_delete_pending, handle_deleting,
+        has_remaining_setup_resources,
+    };
 
     fn resource_state(
         resource: Resource,
@@ -335,5 +342,97 @@ mod tests {
             StackStatus::Deleted
         );
         assert!(has_remaining_setup_resources(&stack_state));
+    }
+
+    #[tokio::test]
+    async fn local_daemon_runtime_delete_without_local_provider_fails_at_resource() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:test".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let mut stack_state = StackState::new(Platform::Local);
+        let mut daemon_state = resource_state(
+            Resource::new(daemon),
+            ResourceLifecycle::Live,
+            ResourceStatus::Running,
+        );
+        daemon_state.internal_state = Some(serde_json::json!({
+            "type": "LocalDaemonController",
+            "_controllerStateVersion": 1,
+            "extractedImagePath": "/var/lib/alien-agent/daemons/gateway",
+            "daemonName": "gateway",
+            "publicUrl": null,
+            "state": "ready",
+            "internalStayCount": null
+        }));
+        stack_state
+            .resources
+            .insert("gateway".to_string(), daemon_state);
+
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let current = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Local,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let client_config = alien_core::ClientConfig::Local {
+            state_directory: "/var/lib/alien-agent".to_string(),
+        };
+        let service_provider = Arc::new(DefaultPlatformServiceProvider::default());
+
+        let delete_pending = handle_delete_pending(
+            current,
+            config.clone(),
+            client_config.clone(),
+            service_provider.clone(),
+        )
+        .await
+        .expect("delete-pending should transition to deleting");
+
+        let deleting = handle_deleting(
+            delete_pending.state,
+            config,
+            client_config,
+            service_provider,
+        )
+        .await
+        .expect("deleting handler should checkpoint resource failure");
+
+        assert_eq!(deleting.state.status, DeploymentStatus::DeleteFailed);
+        let stack_state = deleting
+            .state
+            .stack_state
+            .expect("delete failed state should keep stack state");
+        let resource = stack_state
+            .resources
+            .get("gateway")
+            .expect("daemon resource should remain in stack state");
+        assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+        let error = resource
+            .error
+            .as_ref()
+            .expect("daemon delete failure should store resource error");
+        assert!(
+            error.message.contains("LocalWorkerManager"),
+            "expected LocalWorkerManager error, got {error:?}"
+        );
     }
 }
