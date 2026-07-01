@@ -1,3 +1,4 @@
+use alien_azure_clients::AzureClientConfig;
 use alien_azure_clients::container_apps::{
     ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
     ManagedEnvironmentCertificateProperties,
@@ -10,14 +11,13 @@ use alien_azure_clients::models::container_apps::{
     IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
     TrafficWeight,
 };
-use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
-    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, ENV_AZURE_CLIENT_ID,
+    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
@@ -34,7 +34,7 @@ use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
-use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
+use crate::worker::readiness_probe::{READINESS_PROBE_MAX_ATTEMPTS, run_readiness_probe};
 use alien_macros::controller;
 
 /// Generates a deterministic Azure Container Apps name for a worker.
@@ -3226,14 +3226,14 @@ impl AzureWorkerController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.resource_id.as_ref().map(|id| {
             // CNAME target = the ingress host; fall back to `url` when `container_app_url` is unset.
-            let load_balancer_endpoint = self
-                .container_app_url
-                .as_ref()
-                .or(self.url.as_ref())
-                .map(|host| alien_core::LoadBalancerEndpoint {
-                    dns_name: dns_name_from_url(host),
-                    hosted_zone_id: None,
-                });
+            let load_balancer_endpoint =
+                self.container_app_url
+                    .as_ref()
+                    .or(self.url.as_ref())
+                    .map(|host| alien_core::LoadBalancerEndpoint {
+                        dns_name: dns_name_from_url(host),
+                        hosted_zone_id: None,
+                    });
 
             ResourceOutputs::new(WorkerOutputs {
                 worker_name: self
@@ -4605,15 +4605,15 @@ mod tests {
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use super::{AZURE_RBAC_WAIT_POLL_SECS, current_unix_timestamp_secs, dns_name_from_url};
+    use crate::AzureWorkerState;
+    use crate::core::{MockPlatformServiceProvider, controller_test::SingleControllerExecutor};
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
-        fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
-        AzureWorkerController,
+        AzureWorkerController, fixtures::*,
+        readiness_probe::test_utils::create_readiness_probe_mock,
     };
-    use crate::AzureWorkerState;
 
     #[test]
     fn strips_scheme_and_path_from_dns_endpoint_url() {
@@ -4667,14 +4667,18 @@ mod tests {
 
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
 
         // Display URL stays the public FQDN.
         assert_eq!(
-            worker_outputs.url.as_deref(),
-            Some("https://test-worker.abc123.dev.vpc.direct")
+            endpoint.url.as_str(),
+            "https://test-worker.abc123.dev.vpc.direct"
         );
         // The CNAME target is the ingress host — and crucially NOT the record's own public FQDN.
-        let dns_name = worker_outputs
+        let dns_name = endpoint
             .load_balancer_endpoint
             .as_ref()
             .map(|endpoint| endpoint.dns_name.as_str());
@@ -4724,7 +4728,11 @@ mod tests {
         // …so build_outputs targets it, NOT the public display FQDN.
         let outputs = controller.build_outputs().unwrap();
         let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        let dns_name = worker_outputs
+        let endpoint = worker_outputs
+            .public_endpoints
+            .get("default")
+            .expect("default public endpoint");
+        let dns_name = endpoint
             .load_balancer_endpoint
             .as_ref()
             .map(|endpoint| endpoint.dns_name.as_str());
