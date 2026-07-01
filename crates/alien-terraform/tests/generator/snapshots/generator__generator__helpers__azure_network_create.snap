@@ -217,6 +217,18 @@ resource "azurerm_subnet" "default_network_private" {
   address_prefixes = [
     cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
   ]
+
+  delegation {
+    name = "container-apps-environment"
+
+    service_delegation {
+      name = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]

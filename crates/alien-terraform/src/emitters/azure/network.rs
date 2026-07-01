@@ -203,6 +203,12 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
+    // The private subnet doubles as the Container Apps environment infrastructure subnet (the
+    // env emitter points `infrastructure_subnet_id` here, mirroring the runtime controller). Azure
+    // requires that subnet to be delegated to `Microsoft.App/environments`; unlike the `az` CLI,
+    // the azurerm provider does not auto-delegate, so the delegation is declared here. A /24 is
+    // sufficient for the consumption environment the env emitter creates (proven against real
+    // Azure: a consumption env on a /24 delegated subnet provisions and schedules apps).
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
         &private_label,
@@ -225,6 +231,31 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
                     "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 1)"
                 ))]),
             ),
+            nested(crate::block::block(
+                "delegation",
+                [
+                    attr(
+                        "name",
+                        Expression::String("container-apps-environment".to_string()),
+                    ),
+                    nested(crate::block::block(
+                        "service_delegation",
+                        [
+                            attr(
+                                "name",
+                                Expression::String("Microsoft.App/environments".to_string()),
+                            ),
+                            attr(
+                                "actions",
+                                Expression::Array(vec![Expression::String(
+                                    "Microsoft.Network/virtualNetworks/subnets/join/action"
+                                        .to_string(),
+                                )]),
+                            ),
+                        ],
+                    )),
+                ],
+            )),
         ],
     ));
 
