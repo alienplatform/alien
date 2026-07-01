@@ -16,6 +16,7 @@ pub use gcp::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
 pub use gcp::cloudbuild::{CloudBuildApi, CloudBuildClient};
 pub use gcp::cloudrun::{CloudRunApi, CloudRunClient};
 pub use gcp::cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient};
+pub use gcp::cloud_sql::{CloudSqlApi, CloudSqlClient};
 pub use gcp::compute::{ComputeApi, ComputeClient};
 pub use gcp::container::{ContainerApi, ContainerClient};
 pub use gcp::firestore::{FirestoreApi, FirestoreClient};
