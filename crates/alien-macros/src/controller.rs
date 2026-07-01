@@ -217,7 +217,6 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut all_states = Vec::new();
     let mut get_binding_params_method = None;
     let mut needs_update_method = None;
-    let mut resolve_binding_params_method = None;
 
     for item in &item_impl.items {
         match item {
@@ -231,12 +230,6 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
                 // Check for needs_update method
                 if method.sig.ident == "needs_update" {
                     needs_update_method = Some(method.clone());
-                    continue;
-                }
-
-                // Check for resolve_binding_params method (async dependency-binding resolution)
-                if method.sig.ident == "resolve_binding_params" {
-                    resolve_binding_params_method = Some(method.clone());
                     continue;
                 }
 
@@ -314,7 +307,6 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         &flow_entries,
         get_binding_params_method.as_ref(),
         needs_update_method.as_ref(),
-        resolve_binding_params_method.as_ref(),
     );
 
     // Generate handler methods
@@ -480,7 +472,6 @@ fn generate_controller_impl(
     flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
     get_binding_params_method: Option<&ImplItemFn>,
     needs_update_method: Option<&ImplItemFn>,
-    resolve_binding_params_method: Option<&ImplItemFn>,
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
@@ -511,22 +502,6 @@ fn generate_controller_impl(
                 &self,
                 ctx: &crate::core::ResourceControllerContext<'_>,
             ) -> crate::Result<bool> {
-                #method_block
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    let resolve_binding_params_impl = if let Some(method) = resolve_binding_params_method {
-        // The block must reference the fixed parameter names `ctx` and `resource_id`.
-        let method_block = &method.block;
-        quote! {
-            async fn resolve_binding_params(
-                &self,
-                ctx: &crate::core::ResourceControllerContext<'_>,
-                resource_id: &str,
-            ) -> Result<Option<serde_json::Value>> {
                 #method_block
             }
         }
@@ -605,8 +580,6 @@ fn generate_controller_impl(
             #get_binding_params_impl
 
             #needs_update_impl
-
-            #resolve_binding_params_impl
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;

@@ -754,19 +754,6 @@ pub trait ResourceController: Send + Sync + Debug {
         // Default implementation returns None for resources that don't expose binding parameters
         Ok(None)
     }
-
-    /// Resolve binding parameters for delivery to a linked workload's environment variable, letting a
-    /// controller that keeps secrets out of persisted state re-resolve them live. Defaults to
-    /// `get_binding_params`; a controller overrides this when the env-var binding a dependent needs
-    /// differs from its synced `remote_binding_params` (e.g. Local Postgres, whose password is stripped
-    /// from the synced copy but required by a linked out-of-process worker that connects directly).
-    async fn resolve_binding_params(
-        &self,
-        _ctx: &ResourceControllerContext<'_>,
-        _resource_id: &str,
-    ) -> Result<Option<serde_json::Value>> {
-        self.get_binding_params()
-    }
 }
 
 impl Clone for Box<dyn ResourceController> {

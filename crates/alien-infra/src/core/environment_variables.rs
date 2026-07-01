@@ -371,14 +371,11 @@ impl EnvironmentVariableBuilder {
                 }));
             }
 
-            // Use the async resolver, not the pure `get_binding_params`, so a resource that keeps
-            // binding data out of persisted state (e.g. Local Postgres) can re-resolve it live —
-            // `get_internal_controller` deserializes, which drops a `#[serde(skip)]` binding.
+            // Synced binding coordinates only (Local Postgres strips its password here); the linked
+            // workload's compute-target manager delivers any runtime-only secret at process start.
             let binding_params =
                 if let Some(dependency_controller) = resource_state.get_internal_controller()? {
-                    dependency_controller
-                        .resolve_binding_params(ctx, binding_name)
-                        .await?
+                    dependency_controller.get_binding_params()?
                 } else {
                     None
                 };
