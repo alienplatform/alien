@@ -389,6 +389,10 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
         self.provider().await?.load_kv(binding_name).await
     }
 
+    async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
+        self.provider().await?.load_postgres(binding_name).await
+    }
+
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
         self.provider().await?.load_queue(binding_name).await
     }
