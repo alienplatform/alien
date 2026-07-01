@@ -1,7 +1,6 @@
 //! Deployment tracking — stores tracked deployments in a local JSON file.
 //!
-//! Unlike the platform project-cli which uses keyring, the OSS deploy-cli
-//! stores deployment info in `~/.config/alien/deployments.json`.
+//! The deploy CLI stores deployment info in `~/.config/alien/deployments.json`.
 
 use crate::error::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
@@ -23,8 +22,21 @@ pub struct TrackedDeployment {
     pub manager_url: String,
     /// Target platform
     pub platform: String,
+    /// Local platform metadata needed to destroy pull-model resources later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<TrackedLocalDeployment>,
     /// When the deployment was tracked
     pub tracked_at: String,
+}
+
+/// Metadata for deployments managed by the local agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedLocalDeployment {
+    /// Data directory used by the local agent for runtime state.
+    pub data_dir: String,
+    /// Whether deploy installed the local agent as an OS service.
+    pub service_managed: bool,
 }
 
 /// Deployment tracking manager
@@ -61,6 +73,7 @@ impl DeploymentTracker {
         token: String,
         manager_url: String,
         platform: String,
+        local: Option<TrackedLocalDeployment>,
     ) -> Result<TrackedDeployment> {
         let tracked = TrackedDeployment {
             name: name.clone(),
@@ -68,6 +81,7 @@ impl DeploymentTracker {
             token,
             manager_url,
             platform,
+            local,
             tracked_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -195,6 +209,7 @@ mod tests {
                 "ax_dg_abc".to_string(),
                 "https://manager.example.com".to_string(),
                 "aws".to_string(),
+                None,
             )
             .unwrap();
 
@@ -220,6 +235,10 @@ mod tests {
                     "ax_dg_def".to_string(),
                     "https://manager.test.com".to_string(),
                     "local".to_string(),
+                    Some(TrackedLocalDeployment {
+                        data_dir: "/tmp/alien-agent-state".to_string(),
+                        service_managed: true,
+                    }),
                 )
                 .unwrap();
         }
@@ -228,6 +247,13 @@ mod tests {
         let tracker = DeploymentTracker::with_path(path.clone()).unwrap();
         let dep = tracker.get("staging").unwrap();
         assert_eq!(dep.deployment_id, "dep_456");
+        assert_eq!(
+            dep.local,
+            Some(TrackedLocalDeployment {
+                data_dir: "/tmp/alien-agent-state".to_string(),
+                service_managed: true,
+            })
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -244,6 +270,7 @@ mod tests {
                 "tok".to_string(),
                 "url".to_string(),
                 "aws".to_string(),
+                None,
             )
             .unwrap();
 
@@ -271,6 +298,7 @@ mod tests {
                 "t".into(),
                 "u".into(),
                 "aws".into(),
+                None,
             )
             .unwrap();
         tracker
@@ -280,6 +308,7 @@ mod tests {
                 "t".into(),
                 "u".into(),
                 "gcp".into(),
+                None,
             )
             .unwrap();
 
@@ -301,6 +330,7 @@ mod tests {
                 "t".into(),
                 "u".into(),
                 "aws".into(),
+                None,
             )
             .unwrap();
         tracker
@@ -310,6 +340,7 @@ mod tests {
                 "t".into(),
                 "u".into(),
                 "aws".into(),
+                None,
             )
             .unwrap();
 
@@ -327,6 +358,7 @@ mod tests {
             token: "ax_dg_abc".to_string(),
             manager_url: "https://example.com".to_string(),
             platform: "aws".to_string(),
+            local: None,
             tracked_at: "2025-01-01T00:00:00Z".to_string(),
         };
 

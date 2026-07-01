@@ -21,7 +21,7 @@ alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
-alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test"] }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-local = { workspace = true }
 alien-agent = { path = "../alien-agent" }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }

@@ -107,9 +107,56 @@ pub fn install_service(args: InstallArgs) -> Result<()> {
     install(args)
 }
 
+/// Stop the service when it is installed and running.
+pub fn stop_service_if_running() -> Result<()> {
+    let manager = get_manager()?;
+    match manager
+        .status(ServiceStatusCtx { label: label() })
+        .into_alien_error()
+        .context(ErrorData::AgentServiceError {
+            message: "Failed to check service status".to_string(),
+        })? {
+        ServiceStatus::Running => stop(),
+        ServiceStatus::Stopped(_) => {
+            output::info("alien-agent service is already stopped");
+            Ok(())
+        }
+        ServiceStatus::NotInstalled => {
+            output::info("alien-agent service is not installed");
+            Ok(())
+        }
+    }
+}
+
+/// Remove the service when it is installed.
+pub fn uninstall_service_if_installed() -> Result<()> {
+    let manager = get_manager()?;
+    match manager
+        .status(ServiceStatusCtx { label: label() })
+        .into_alien_error()
+        .context(ErrorData::AgentServiceError {
+            message: "Failed to check service status".to_string(),
+        })? {
+        ServiceStatus::Running | ServiceStatus::Stopped(_) => uninstall(),
+        ServiceStatus::NotInstalled => {
+            output::info("alien-agent service is not installed");
+            Ok(())
+        }
+    }
+}
+
 /// Generate an encryption key (public for reuse from up.rs).
 pub fn generate_encryption_key_public() -> String {
     generate_encryption_key()
+}
+
+/// Default data directory for the installed agent service.
+pub fn default_service_data_dir() -> String {
+    if cfg!(windows) {
+        r"C:\ProgramData\alien-agent".to_string()
+    } else {
+        "/var/lib/alien-agent".to_string()
+    }
 }
 
 fn install(args: InstallArgs) -> Result<()> {
@@ -126,13 +173,7 @@ fn install(args: InstallArgs) -> Result<()> {
         }));
     }
 
-    let data_dir = args.data_dir.unwrap_or_else(|| {
-        if cfg!(windows) {
-            r"C:\ProgramData\alien-agent".to_string()
-        } else {
-            "/var/lib/alien-agent".to_string()
-        }
-    });
+    let data_dir = args.data_dir.unwrap_or_else(default_service_data_dir);
 
     // Create data directory before writing secret files into it.
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
