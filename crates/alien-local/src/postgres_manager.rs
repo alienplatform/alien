@@ -13,6 +13,8 @@ use crate::error::{ErrorData, Result};
 use alien_core::bindings::PostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
+use bollard::network::InspectNetworkOptions;
+use bollard::Docker;
 use postgresql_embedded::{PostgreSQL, Settings, Status, VersionReq, BOOTSTRAP_SUPERUSER};
 use postgresql_extensions::repository::portal_corp::repository::PortalCorp;
 use postgresql_extensions::repository::{registry, Repository};
@@ -20,7 +22,7 @@ use postgresql_extensions::{AvailableExtension, Version};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
@@ -298,9 +300,26 @@ impl LocalPostgresManager {
                 reason: format!("Invalid Postgres major version '{}'", metadata.version),
             })?;
 
+        // Listen on loopback plus the docker bridge gateway when present, so a same-stack local
+        // container can reach pg via `host.docker.internal` — never 0.0.0.0, so pg stays off every
+        // public/LAN interface. Falls back to loopback-only when the bridge gateway can't be bound.
+        let listen_addresses = match detect_docker_bridge_listen_ip().await {
+            Some(gateway) => format!("127.0.0.1,{gateway}"),
+            None => {
+                debug!(
+                    postgres_id = %metadata.resource_id,
+                    "No bindable docker bridge gateway; local Postgres listening on loopback only (same-stack containers can't reach it)"
+                );
+                "127.0.0.1".to_string()
+            }
+        };
+        let mut configuration = HashMap::new();
+        configuration.insert("listen_addresses".to_string(), listen_addresses);
+
         let settings = Settings {
             version,
-            // private-always applies to Local: bind loopback only, never 0.0.0.0.
+            // Connection host advertised to workloads; the server's actual bind is the
+            // `listen_addresses` set in `configuration` above.
             host: "127.0.0.1".to_string(),
             port: metadata.port,
             username: metadata.username.clone(),
@@ -309,6 +328,7 @@ impl LocalPostgresManager {
             temporary: false,
             data_dir: metadata.data_dir.clone(),
             installation_dir: self.install_cache_dir(),
+            configuration,
             ..Default::default()
         };
 
@@ -322,6 +342,10 @@ impl LocalPostgresManager {
                 operation: "setup".to_string(),
                 reason: "Failed to download/initialise embedded Postgres".to_string(),
             })?;
+
+        // initdb (run by setup()) has created pg_hba.conf; this must land before start() reads it.
+        append_docker_bridge_hba_rule(&metadata.data_dir, &metadata.resource_id).await?;
+
         postgres
             .start()
             .await
@@ -737,9 +761,93 @@ fn allocate_port(id: &str) -> Result<u16> {
     Ok(port)
 }
 
+/// The docker bridge gateway to add to `listen_addresses`, or None for loopback-only.
+/// [`is_docker_bridge_gateway`] keeps it off any routable interface; the bind-test then requires
+/// THIS host to be able to bind it, since an unbindable `listen_addresses` entry is fatal to pg
+/// startup. So Docker Desktop (gateway lives in the Linux VM), Docker being down, or an IPv6-only
+/// bridge all fall back to loopback-only.
+async fn detect_docker_bridge_listen_ip() -> Option<String> {
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    let network = docker
+        .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
+        .await
+        .ok()?;
+    let gateway = network
+        .ipam?
+        .config?
+        .into_iter()
+        .filter_map(|c| c.gateway)
+        .find(|gw| is_docker_bridge_gateway(gw))?;
+    std::net::TcpListener::bind((gateway.as_str(), 0)).ok()?;
+    Some(gateway)
+}
+
+/// True only for a `172.16.0.0/12` IPv4 address — the private docker-bridge range the pg_hba rule
+/// admits. Anything outside it (a custom docker network, a LAN/public IP, or an IPv6 gateway) is
+/// rejected so pg falls back to loopback-only rather than binding an interface auth would refuse.
+fn is_docker_bridge_gateway(gateway: &str) -> bool {
+    match gateway.parse::<std::net::Ipv4Addr>() {
+        Ok(addr) => {
+            let [first, second, ..] = addr.octets();
+            first == 172 && (16..=31).contains(&second)
+        }
+        Err(_) => false,
+    }
+}
+
+/// Marker that makes [`append_docker_bridge_hba_rule`] idempotent across recovery/restart.
+const DOCKER_BRIDGE_HBA_MARKER: &str = "# alien-local: docker bridge access";
+
+/// Adds a pg_hba rule allowing scram auth from the docker bridge subnet, so a same-stack container
+/// can authenticate. `postgresql_embedded` exposes no pg_hba API, so we append to the file initdb
+/// wrote. Unconditional: pg_hba only filters connections that actually arrive, so the rule is inert
+/// unless `listen_addresses` also binds the bridge — it never widens reachability on its own.
+async fn append_docker_bridge_hba_rule(data_dir: &Path, resource_id: &str) -> Result<()> {
+    let hba_path = data_dir.join("pg_hba.conf");
+    let existing = tokio::fs::read_to_string(&hba_path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::LocalProcessError {
+            process_id: resource_id.to_string(),
+            operation: "configure".to_string(),
+            reason: "Failed to read pg_hba.conf".to_string(),
+        })?;
+    if existing.contains(DOCKER_BRIDGE_HBA_MARKER) {
+        return Ok(());
+    }
+    let updated =
+        format!("{existing}\n{DOCKER_BRIDGE_HBA_MARKER}\nhost all all 172.16.0.0/12 scram-sha-256\n");
+    tokio::fs::write(&hba_path, updated)
+        .await
+        .into_alien_error()
+        .context(ErrorData::LocalProcessError {
+            process_id: resource_id.to_string(),
+            operation: "configure".to_string(),
+            reason: "Failed to write pg_hba.conf".to_string(),
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // This range predicate is what keeps pg off a routable interface: it must reject every gateway
+    // outside 172.16.0.0/12, the range the pg_hba rule admits.
+    #[test]
+    fn docker_bridge_gateway_accepts_only_the_private_bridge_range() {
+        assert!(is_docker_bridge_gateway("172.17.0.1"), "default docker0 gateway");
+        assert!(is_docker_bridge_gateway("172.16.0.1"), "low end of /12");
+        assert!(is_docker_bridge_gateway("172.31.255.254"), "high end of /12");
+
+        assert!(!is_docker_bridge_gateway("172.15.0.1"), "just below /12");
+        assert!(!is_docker_bridge_gateway("172.32.0.1"), "just above /12");
+        assert!(!is_docker_bridge_gateway("10.0.0.1"), "private, but pg_hba would reject it");
+        assert!(!is_docker_bridge_gateway("192.168.0.1"), "private, but pg_hba would reject it");
+        assert!(!is_docker_bridge_gateway("8.8.8.8"), "public");
+        assert!(!is_docker_bridge_gateway("fd00::1"), "IPv6");
+        assert!(!is_docker_bridge_gateway("not-an-ip"), "unparseable");
+    }
 
     #[test]
     fn try_get_binding_some_for_fixture_none_for_absent() {
