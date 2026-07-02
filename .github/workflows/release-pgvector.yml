@@ -117,8 +117,11 @@ jobs:
       - name: Build & install pgvector
         run: |
           git clone --depth 1 --branch "v${PGVECTOR_VERSION}" https://github.com/pgvector/pgvector.git
-          make -C pgvector PG_CONFIG="$PG_CONFIG"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" install
+          # theseus's pg_config bakes an -isysroot for its build-time Xcode SDK, which is absent on
+          # the runner; point PGXS at the runner's actual SDK so system headers (stdio.h) resolve.
+          SDK="$(xcrun --show-sdk-path)"
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK"
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" install
 
       - name: Package artifact
         run: |
