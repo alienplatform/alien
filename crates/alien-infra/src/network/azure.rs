@@ -32,8 +32,8 @@ use alien_azure_clients::azure::models::{
 use alien_azure_clients::long_running_operation::OperationResult;
 use alien_core::{
     AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
-    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, Postgres,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
@@ -84,6 +84,7 @@ fn emit_azure_network_heartbeat(
                 public_subnet_name: controller.public_subnet_name.clone(),
                 private_subnet_name: controller.private_subnet_name.clone(),
                 application_gateway_subnet_name: controller.application_gateway_subnet_name.clone(),
+                private_endpoint_subnet_name: controller.private_endpoint_subnet_name.clone(),
                 nat_gateway_id: controller.nat_gateway_id.clone(),
                 public_ip_id: controller.public_ip_id.clone(),
                 nsg_id: controller.nsg_id.clone(),
@@ -96,6 +97,15 @@ fn emit_azure_network_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+/// A Postgres on Azure is reached through a Private Endpoint that must live in its
+/// own subnet, so its presence is what makes `private_endpoint_subnet_name`
+/// mandatory for a BYO-VNet.
+fn stack_contains_postgres(ctx: &ResourceControllerContext<'_>) -> bool {
+    ctx.desired_stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == Postgres::RESOURCE_TYPE)
 }
 
 // =============================================================================================
@@ -115,6 +125,12 @@ pub struct AzureNetworkController {
     pub private_subnet_name: Option<String>,
     #[serde(default)]
     pub application_gateway_subnet_name: Option<String>,
+    /// Dedicated subnet that hosts Private Endpoints (e.g. a Postgres Flexible
+    /// Server PE). Kept separate from `private_subnet_name`: the private subnet is
+    /// the Container Apps environment's `infrastructure_subnet_id` and cannot be
+    /// shared with a Private Endpoint.
+    #[serde(default)]
+    pub private_endpoint_subnet_name: Option<String>,
     pub(crate) nat_gateway_name: Option<String>,
     pub nat_gateway_id: Option<String>,
     pub(crate) public_ip_name: Option<String>,
@@ -162,6 +178,10 @@ impl AzureNetworkController {
         format!("{}-{}-appgw-subnet", resource_prefix, network_id)
     }
 
+    fn get_private_endpoint_subnet_name(&self, resource_prefix: &str, network_id: &str) -> String {
+        format!("{}-{}-pe-subnet", resource_prefix, network_id)
+    }
+
     fn get_nat_gateway_name(&self, resource_prefix: &str, network_id: &str) -> String {
         format!("{}-{}-nat", resource_prefix, network_id)
     }
@@ -184,6 +204,10 @@ impl AzureNetworkController {
 
     fn calculate_application_gateway_subnet_cidr(cidr: &str) -> String {
         Self::calculate_subnet_cidr(cidr, 2)
+    }
+
+    fn calculate_private_endpoint_subnet_cidr(cidr: &str) -> String {
+        Self::calculate_subnet_cidr(cidr, 3)
     }
 
     fn calculate_subnet_cidr(cidr: &str, subnet_index: u32) -> String {
@@ -244,6 +268,7 @@ impl AzureNetworkController {
             public_subnet_name: Some(format!("test-{}-public-subnet", network_id)),
             private_subnet_name: Some(format!("test-{}-private-subnet", network_id)),
             application_gateway_subnet_name: Some(format!("test-{}-appgw-subnet", network_id)),
+            private_endpoint_subnet_name: Some(format!("test-{}-pe-subnet", network_id)),
             nat_gateway_name: Some(format!("test-{}-nat", network_id)),
             nat_gateway_id: Some(format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/test-{}-nat",
@@ -320,6 +345,7 @@ impl AzureNetworkController {
                 public_subnet_name,
                 private_subnet_name,
                 application_gateway_subnet_name,
+                private_endpoint_subnet_name,
             } => {
                 info!(
                     vnet_resource_id = %vnet_resource_id,
@@ -327,6 +353,22 @@ impl AzureNetworkController {
                     private_subnet = %private_subnet_name,
                     "Using existing Azure VNet"
                 );
+
+                // Fail loud rather than fall back to the Container Apps private subnet (see error).
+                if stack_contains_postgres(ctx) && private_endpoint_subnet_name.is_none() {
+                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: config.id.clone(),
+                        message:
+                            "BYO-VNet on Azure has a Postgres resource but no \
+                             privateEndpointSubnetName. A Postgres Flexible Server is reached \
+                             through a Private Endpoint that requires its own dedicated subnet \
+                             (the private subnet is the Container Apps infrastructure subnet and \
+                             cannot be shared). Set privateEndpointSubnetName on the BYO-VNet \
+                             configuration."
+                                .to_string(),
+                    }));
+                }
+                self.private_endpoint_subnet_name = private_endpoint_subnet_name.clone();
 
                 // Parse resource ID
                 let parts: Vec<&str> = vnet_resource_id.split('/').collect();
@@ -752,7 +794,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
-                state: CreatingPublicIp,
+                state: CreatingPrivateEndpointSubnet,
                 suggested_delay: None,
             }),
             OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
@@ -791,6 +833,96 @@ impl AzureNetworkController {
             })?;
 
         info!(subnet_name = %subnet_name, "Application Gateway subnet created");
+
+        Ok(HandlerAction::Continue {
+            state: CreatingPrivateEndpointSubnet,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingPrivateEndpointSubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_private_endpoint_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.get_private_endpoint_subnet_name(ctx.resource_prefix, &config.id);
+        let cidr_block = self.cidr_block.clone().unwrap();
+        let subnet_cidr = Self::calculate_private_endpoint_subnet_cidr(&cidr_block);
+
+        info!(subnet_name = %subnet_name, cidr = %subnet_cidr, "Creating Private Endpoint subnet");
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let subnet = Subnet {
+            properties: Some(SubnetPropertiesFormat {
+                address_prefix: Some(subnet_cidr),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = network_client
+            .create_or_update_subnet(&resource_group, &vnet_name, &subnet_name, &subnet)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: format!("Failed to create Private Endpoint subnet '{}'", subnet_name),
+                operation: Some("create_or_update_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        self.private_endpoint_subnet_name = Some(subnet_name);
+
+        match result {
+            OperationResult::Completed(_) => Ok(HandlerAction::Continue {
+                state: CreatingPublicIp,
+                suggested_delay: None,
+            }),
+            OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
+                state: WaitingForPrivateEndpointSubnet,
+                suggested_delay: Some(std::time::Duration::from_secs(3)),
+            }),
+        }
+    }
+
+    #[handler(
+        state = WaitingForPrivateEndpointSubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_private_endpoint_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.private_endpoint_subnet_name.clone().unwrap();
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let _ = network_client
+            .get_subnet(&resource_group, &vnet_name, &subnet_name)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to check Private Endpoint subnet creation status".to_string(),
+                operation: Some("get_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        info!(subnet_name = %subnet_name, "Private Endpoint subnet created");
 
         Ok(HandlerAction::Continue {
             state: CreatingPublicIp,
@@ -1794,7 +1926,24 @@ impl AzureNetworkController {
 #[cfg(test)]
 mod tests {
     use super::AzureNetworkController;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+    use alien_azure_clients::azure::models::{
+        nat_gateway::NatGateway, network_security_group::NetworkSecurityGroup,
+        public_ip_address::PublicIpAddress,
+        virtual_network::{
+            AddressSpace, Subnet, VirtualNetwork, VirtualNetworkPropertiesFormat,
+        },
+    };
+    use alien_azure_clients::azure::network::MockNetworkApi;
+    use alien_azure_clients::long_running_operation::OperationResult;
+    use alien_core::{Network, NetworkSettings, Platform, Postgres, ResourceStatus, StackSettings};
+    use std::sync::Arc;
 
+    /// The Alien-managed VNet carves four non-overlapping /24s out of the /16, one
+    /// each for public, private, Application Gateway, and the dedicated Private
+    /// Endpoint subnet. The PE subnet must sit at its own range (index 3), never on
+    /// top of the private subnet (the Container Apps infrastructure subnet).
     #[test]
     fn azure_create_subnet_cidrs_do_not_overlap() {
         assert_eq!(
@@ -1808,6 +1957,220 @@ mod tests {
         assert_eq!(
             AzureNetworkController::calculate_application_gateway_subnet_cidr("10.46.0.0/16"),
             "10.46.2.0/24"
+        );
+        assert_eq!(
+            AzureNetworkController::calculate_private_endpoint_subnet_cidr("10.46.0.0/16"),
+            "10.46.3.0/24"
+        );
+
+        // The PE range must be disjoint from the others, especially the private
+        // subnet that backs the Container Apps environment.
+        let public = AzureNetworkController::calculate_public_subnet_cidr("10.46.0.0/16");
+        let private = AzureNetworkController::calculate_private_subnet_cidr("10.46.0.0/16");
+        let appgw = AzureNetworkController::calculate_application_gateway_subnet_cidr("10.46.0.0/16");
+        let pe = AzureNetworkController::calculate_private_endpoint_subnet_cidr("10.46.0.0/16");
+        assert_ne!(pe, public);
+        assert_ne!(pe, private);
+        assert_ne!(pe, appgw);
+    }
+
+    /// The dedicated PE subnet gets a stable, distinct name in the Alien-managed path.
+    #[test]
+    fn azure_private_endpoint_subnet_has_distinct_name() {
+        let controller = AzureNetworkController::default();
+        assert_eq!(
+            controller.get_private_endpoint_subnet_name("acme", "default-network"),
+            "acme-default-network-pe-subnet"
+        );
+        assert_ne!(
+            controller.get_private_endpoint_subnet_name("acme", "default-network"),
+            controller.get_private_subnet_name("acme", "default-network"),
+        );
+    }
+
+    fn byo_network(private_endpoint_subnet_name: Option<String>) -> Network {
+        Network::new("default-network".to_string())
+            .settings(NetworkSettings::ByoVnetAzure {
+                vnet_resource_id:
+                    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/shared/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+                        .to_string(),
+                public_subnet_name: "public".to_string(),
+                private_subnet_name: "private".to_string(),
+                application_gateway_subnet_name: None,
+                private_endpoint_subnet_name,
+            })
+            .build()
+    }
+
+    /// A BYO-VNet with a Postgres in the stack but no `private_endpoint_subnet_name`
+    /// must fail fast: a Postgres is reached through a Private Endpoint that needs its
+    /// own subnet, and silently reusing the private (Container Apps) subnet would
+    /// break the environment.
+    #[tokio::test]
+    async fn byo_vnet_with_postgres_and_no_pe_subnet_fails_fast() {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(byo_network(None))
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .with_dependency(
+                Postgres::new("db".to_string()).build(),
+                AzureNetworkController::mock_ready("db"),
+            )
+            .build()
+            .await
+            .expect("executor should build");
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("create_start should fail fast without a PE subnet");
+
+        assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
+        assert!(
+            error.to_string().contains("privateEndpointSubnetName"),
+            "error should name the missing field, got: {error}"
+        );
+    }
+
+    /// A BYO-VNet that names its PE subnet resolves to that subnet and proceeds,
+    /// even with a Postgres in the stack.
+    #[tokio::test]
+    async fn byo_vnet_with_pe_subnet_resolves_to_named_subnet() {
+        let mut mock_network = MockNetworkApi::new();
+        mock_network
+            .expect_get_virtual_network()
+            .returning(|_, _| {
+                Ok(VirtualNetwork {
+                    location: Some("eastus".to_string()),
+                    properties: Some(VirtualNetworkPropertiesFormat {
+                        address_space: Some(AddressSpace {
+                            address_prefixes: vec!["10.0.0.0/16".to_string()],
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            });
+        let mock_network = Arc::new(mock_network);
+
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_network_client()
+            .returning(move |_| Ok(mock_network.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(byo_network(Some("customer-pe-subnet".to_string())))
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(mock_provider))
+            .with_dependency(
+                Postgres::new("db".to_string()).build(),
+                AzureNetworkController::mock_ready("db"),
+            )
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("BYO-VNet with a named PE subnet should reconcile");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let controller = executor
+            .internal_state::<AzureNetworkController>()
+            .expect("controller should be an AzureNetworkController");
+        assert!(controller.is_byo_vnet, "should be in BYO-VNet mode");
+        assert_eq!(
+            controller.private_endpoint_subnet_name.as_deref(),
+            Some("customer-pe-subnet"),
+            "the PE subnet must resolve to the customer-named subnet"
+        );
+    }
+
+    /// The Alien-managed create path walks through the dedicated PE-subnet states
+    /// (`CreatingPrivateEndpointSubnet` / `WaitingForPrivateEndpointSubnet`) on its way
+    /// to Ready, provisioning the PE subnet alongside the rest of the topology. Every
+    /// API call resolves synchronously, so the controller stays on the `Completed` path
+    /// straight through to Ready.
+    #[tokio::test]
+    async fn managed_create_path_provisions_private_endpoint_subnet() {
+        let mut mock_network = MockNetworkApi::new();
+        mock_network
+            .expect_create_or_update_virtual_network()
+            .returning(|_, _, _| Ok(OperationResult::Completed(VirtualNetwork::default())));
+        // public, private, Application Gateway, Private Endpoint, and the NAT association
+        // all PUT a subnet on the managed create path.
+        mock_network
+            .expect_create_or_update_subnet()
+            .times(5)
+            .returning(|_, _, _, _| Ok(OperationResult::Completed(Subnet::default())));
+        // The NAT gateway handler reads the public IP's id, and the NAT-association handler
+        // reads the NAT gateway's id, so both responses must carry one.
+        mock_network
+            .expect_create_or_update_public_ip_address()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(PublicIpAddress {
+                    id: Some("/public-ip/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_nat_gateway()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(NatGateway {
+                    id: Some("/nat-gateway/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_network_security_group()
+            .returning(|_, _, _| Ok(OperationResult::Completed(NetworkSecurityGroup::default())));
+        let mock_network = Arc::new(mock_network);
+
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_network_client()
+            .returning(move |_| Ok(mock_network.clone()));
+
+        let managed_network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: Some("10.46.0.0/16".to_string()),
+                availability_zones: 2,
+            })
+            .build();
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(managed_network)
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(mock_provider))
+            // The managed create path resolves its resource group from the stack state.
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("managed create path should reconcile to Ready");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let controller = executor
+            .internal_state::<AzureNetworkController>()
+            .expect("controller should be an AzureNetworkController");
+        assert!(!controller.is_byo_vnet, "should be in Alien-managed mode");
+        assert_eq!(
+            controller.private_endpoint_subnet_name.as_deref(),
+            Some("test-default-network-pe-subnet"),
+            "the managed create path must provision the dedicated PE subnet"
         );
     }
 }

@@ -38,6 +38,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             // (instance type, sizing, nestedVirtualization). Auto-generated
             // by the ComputeClusterMutation when not declared.
             "compute-cluster",
+            "postgres",
         ]);
         let mut errors = Vec::new();
 
