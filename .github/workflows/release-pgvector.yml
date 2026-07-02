@@ -162,7 +162,10 @@ jobs:
             "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-x86_64-pc-windows-msvc.tar.gz"
           # theseus tarballs wrap everything in a top-level postgresql-<ver>-<triple>/ dir; strip it
           mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist --strip-components=1
+          # PGROOT (MSYS path) for the bash package step; PGROOT_WIN (C:\ path) for MSVC nmake,
+          # which can't resolve the /c/... form.
           echo "PGROOT=$PWD/pgdist" >> "$GITHUB_ENV"
+          echo "PGROOT_WIN=$(cygpath -w "$PWD/pgdist")" >> "$GITHUB_ENV"
 
       - name: Build pgvector (MSVC nmake)
         shell: cmd
@@ -170,8 +173,8 @@ jobs:
           git clone --depth 1 --branch "v%PGVECTOR_VERSION%" https://github.com/pgvector/pgvector.git
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cd pgvector
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT%"
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT%" install
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%"
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" install
 
       - name: Package artifact
         shell: bash
