@@ -85,6 +85,10 @@ struct WorkerMetadata {
     /// Transport port for the runtime (persisted to enable transparent recovery)
     #[serde(default)]
     transport_port: Option<u16>,
+    /// Names of linked resources whose binding is a runtime-only secret (a local Postgres password),
+    /// persisted so recovery/restart can re-resolve it live; the secret itself is never written here.
+    #[serde(default)]
+    runtime_only_binding_names: Vec<String>,
 }
 
 impl LocalWorkerManager {
@@ -251,6 +255,7 @@ impl LocalWorkerManager {
         Self::start_worker_internal(
             &metadata.worker_id,
             metadata.env_vars,
+            metadata.runtime_only_binding_names,
             state_dir,
             workers,
             bindings_provider,
@@ -336,6 +341,7 @@ impl LocalWorkerManager {
         Self::start_daemon_internal(
             &metadata.worker_id,
             metadata.env_vars,
+            metadata.runtime_only_binding_names,
             state_dir,
             daemons,
             bindings_provider,
@@ -395,6 +401,7 @@ impl LocalWorkerManager {
                 if let Err(e) = Self::start_worker_internal(
                     &metadata.worker_id,
                     metadata.env_vars,
+                    metadata.runtime_only_binding_names,
                     state_dir,
                     workers,
                     bindings_provider.clone(),
@@ -458,6 +465,7 @@ impl LocalWorkerManager {
                 if let Err(e) = Self::start_daemon_internal(
                     &metadata.worker_id,
                     metadata.env_vars,
+                    metadata.runtime_only_binding_names,
                     state_dir,
                     daemons,
                     bindings_provider.clone(),
@@ -503,7 +511,9 @@ impl LocalWorkerManager {
                 message: "Failed to serialize worker metadata".to_string(),
             })?;
 
-        fs::write(&metadata_file, contents)
+        // 0600: the runtime-only-binding split keeps the password out of this file, but write it
+        // owner-only regardless, matching how the Postgres manager writes its own secret metadata.
+        alien_core::file_utils::write_secret_file(&metadata_file, contents.as_bytes())
             .into_alien_error()
             .context(ErrorData::Other {
                 message: format!("Failed to write metadata file: {}", metadata_file.display()),
@@ -561,10 +571,12 @@ impl LocalWorkerManager {
         &self,
         id: &str,
         env_vars: HashMap<String, String>,
+        runtime_only_binding_names: Vec<String>,
     ) -> Result<String> {
         Self::start_worker_internal(
             id,
             env_vars,
+            runtime_only_binding_names,
             &self.state_dir,
             &self.workers,
             self.bindings_provider.clone(),
@@ -578,10 +590,16 @@ impl LocalWorkerManager {
     /// worker URL. The process is still wrapped by alien-runtime so bindings,
     /// commands polling, tracing, graceful shutdown, and log export behave the
     /// same as other local compute resources.
-    pub async fn start_daemon(&self, id: &str, env_vars: HashMap<String, String>) -> Result<()> {
+    pub async fn start_daemon(
+        &self,
+        id: &str,
+        env_vars: HashMap<String, String>,
+        runtime_only_binding_names: Vec<String>,
+    ) -> Result<()> {
         Self::start_daemon_internal(
             id,
             env_vars,
+            runtime_only_binding_names,
             &self.state_dir,
             &self.daemons,
             self.bindings_provider.clone(),
@@ -589,10 +607,45 @@ impl LocalWorkerManager {
         .await
     }
 
+    /// Builds the worker's persisted metadata and its live process env. The persisted metadata has
+    /// each named runtime-only binding's key removed — keyed on the names, not on what re-resolved,
+    /// so a secret never persists even if live re-resolution returns nothing (e.g. the resource
+    /// vanished between env-build and start) — while the live env keeps the re-resolved secret. Pure
+    /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we write.
+    fn plan_worker_launch(
+        id: &str,
+        extracted_dir: &PathBuf,
+        existing: &WorkerMetadata,
+        transport_port: Option<u16>,
+        passed_env: HashMap<String, String>,
+        runtime_only_binding_names: Vec<String>,
+        resolved: &[(String, HashMap<String, String>)],
+    ) -> (WorkerMetadata, HashMap<String, String>) {
+        let mut persisted_env = passed_env.clone();
+        let mut live_env = passed_env;
+        for name in &runtime_only_binding_names {
+            persisted_env.remove(&alien_core::bindings::binding_env_var_name(name));
+        }
+        for (_name, entry) in resolved {
+            live_env.extend(entry.clone());
+        }
+        let metadata = WorkerMetadata {
+            worker_id: id.to_string(),
+            extracted_path: extracted_dir.clone(),
+            env_vars: persisted_env,
+            runtime_command: existing.runtime_command.clone(),
+            working_dir: existing.working_dir.clone(),
+            transport_port,
+            runtime_only_binding_names,
+        };
+        (metadata, live_env)
+    }
+
     /// Internal static implementation of start_worker for use by background task
     async fn start_worker_internal(
         id: &str,
         env_vars: HashMap<String, String>,
+        runtime_only_binding_names: Vec<String>,
         state_dir: &PathBuf,
         workers: &Arc<Mutex<HashMap<String, WorkerRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
@@ -654,8 +707,28 @@ impl LocalWorkerManager {
             extracted_dir.to_string_lossy().to_string()
         };
 
-        // Merge in required environment variables for local platform
-        let runtime_env_vars = env_vars.clone();
+        // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
+        let mut resolved_bindings = Vec::new();
+        for name in &runtime_only_binding_names {
+            if let Some(entry) = bindings_provider
+                .resolve_runtime_only_binding_env(name)
+                .await
+                .context(ErrorData::Other {
+                    message: format!("Failed to resolve runtime-only binding '{}'", name),
+                })?
+            {
+                resolved_bindings.push((name.clone(), entry));
+            }
+        }
+        let (updated_metadata, runtime_env_vars) = Self::plan_worker_launch(
+            id,
+            &extracted_dir,
+            &existing_metadata,
+            Some(port),
+            env_vars,
+            runtime_only_binding_names,
+            &resolved_bindings,
+        );
 
         // Pick a unique port for this runtime's gRPC server
         let grpc_port = port_check::free_local_ipv4_port().ok_or_else(|| {
@@ -704,15 +777,6 @@ impl LocalWorkerManager {
             .log_exporter(log_exporter)
             .build();
 
-        // Update and save metadata with current env_vars and transport port
-        let updated_metadata = WorkerMetadata {
-            worker_id: id.to_string(),
-            extracted_path: extracted_dir.clone(),
-            env_vars: env_vars.clone(),
-            runtime_command: existing_metadata.runtime_command.clone(),
-            working_dir: existing_metadata.working_dir.clone(),
-            transport_port: Some(port),
-        };
         Self::save_metadata_static(state_dir, &updated_metadata)?;
 
         // Create shutdown channel
@@ -818,6 +882,7 @@ impl LocalWorkerManager {
     async fn start_daemon_internal(
         id: &str,
         env_vars: HashMap<String, String>,
+        runtime_only_binding_names: Vec<String>,
         state_dir: &PathBuf,
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
@@ -863,7 +928,28 @@ impl LocalWorkerManager {
             extracted_dir.to_string_lossy().to_string()
         };
 
-        let runtime_env_vars = env_vars.clone();
+        // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
+        let mut resolved_bindings = Vec::new();
+        for name in &runtime_only_binding_names {
+            if let Some(entry) = bindings_provider
+                .resolve_runtime_only_binding_env(name)
+                .await
+                .context(ErrorData::Other {
+                    message: format!("Failed to resolve runtime-only binding '{}'", name),
+                })?
+            {
+                resolved_bindings.push((name.clone(), entry));
+            }
+        }
+        let (updated_metadata, runtime_env_vars) = Self::plan_worker_launch(
+            id,
+            &extracted_dir,
+            &existing_metadata,
+            None,
+            env_vars,
+            runtime_only_binding_names,
+            &resolved_bindings,
+        );
         let grpc_port = port_check::free_local_ipv4_port().ok_or_else(|| {
             AlienError::new(ErrorData::Other {
                 message: "Failed to find free port for gRPC server".to_string(),
@@ -906,14 +992,6 @@ impl LocalWorkerManager {
             .log_exporter(log_exporter)
             .build();
 
-        let updated_metadata = WorkerMetadata {
-            worker_id: id.to_string(),
-            extracted_path: extracted_dir.clone(),
-            env_vars: env_vars.clone(),
-            runtime_command: existing_metadata.runtime_command.clone(),
-            working_dir: existing_metadata.working_dir.clone(),
-            transport_port: None,
-        };
         Self::save_daemon_metadata_static(state_dir, &updated_metadata)?;
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
@@ -1440,6 +1518,7 @@ impl LocalWorkerManager {
                 runtime_command: metadata.runtime_command(),
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
+                runtime_only_binding_names: Vec::new(), // Will be set during start_worker
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1514,6 +1593,7 @@ impl LocalWorkerManager {
                 runtime_command: metadata.runtime_command(),
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
+                runtime_only_binding_names: Vec::new(), // Will be set during start_worker
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1643,6 +1723,120 @@ fn select_host_tarball(tarball_files: &[PathBuf]) -> Result<&PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A resolved runtime-only binding's password reaches the live env but is stripped from the
+    /// persisted metadata we write.
+    #[test]
+    fn plan_worker_launch_keeps_secret_live_but_out_of_persisted_metadata() {
+        let existing = WorkerMetadata {
+            worker_id: "pg-worker".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: vec!["bun".to_string()],
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: Vec::new(),
+        };
+        // The env builder already inlined the binding (with password) into the passed env.
+        let mut base = HashMap::new();
+        base.insert("FOO".to_string(), "bar".to_string());
+        base.insert(
+            "ALIEN_PGDB_BINDING".to_string(),
+            "{\"password\":\"s3cr3t\"}".to_string(),
+        );
+        let mut entry = HashMap::new();
+        entry.insert(
+            "ALIEN_PGDB_BINDING".to_string(),
+            "{\"password\":\"s3cr3t\"}".to_string(),
+        );
+        let resolved = vec![("pgdb".to_string(), entry)];
+
+        let (metadata, live) = LocalWorkerManager::plan_worker_launch(
+            "pg-worker",
+            &PathBuf::from("/w"),
+            &existing,
+            Some(3000),
+            base,
+            vec!["pgdb".to_string()],
+            &resolved,
+        );
+
+        // Persisted metadata: no password, no binding key; the (non-secret) link name stays.
+        let json = serde_json::to_string(&metadata).expect("metadata serializes");
+        assert!(!json.contains("s3cr3t"), "persisted metadata leaks the password: {json}");
+        assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
+        assert!(metadata.runtime_only_binding_names.contains(&"pgdb".to_string()));
+
+        // Live process env: the password is delivered to the worker.
+        assert!(live
+            .get("ALIEN_PGDB_BINDING")
+            .is_some_and(|v| v.contains("s3cr3t")));
+        assert_eq!(live.get("FOO"), Some(&"bar".to_string()));
+    }
+
+    /// Nothing resolved (non-Postgres links, external Postgres, or absent on recover) → env untouched
+    /// on both channels, so non-Postgres bindings and the recover path keep working.
+    #[test]
+    fn plan_worker_launch_leaves_env_untouched_when_nothing_resolved() {
+        let existing = WorkerMetadata {
+            worker_id: "w".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: Vec::new(),
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: Vec::new(),
+        };
+        let mut base = HashMap::new();
+        base.insert("FOO".to_string(), "bar".to_string());
+        let (metadata, live) = LocalWorkerManager::plan_worker_launch(
+            "w",
+            &PathBuf::from("/w"),
+            &existing,
+            None,
+            base.clone(),
+            Vec::new(),
+            &[],
+        );
+        assert_eq!(metadata.env_vars, base);
+        assert_eq!(live, base);
+    }
+
+    /// Structural guarantee: a named runtime-only binding is stripped from persisted metadata even
+    /// when live re-resolution returns nothing (the Postgres metadata vanished between env-build and
+    /// start) — the strip is keyed on the names, so a password can never ride into metadata.json.
+    #[test]
+    fn plan_worker_launch_strips_named_binding_even_when_resolve_returns_nothing() {
+        let existing = WorkerMetadata {
+            worker_id: "pg-worker".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: Vec::new(),
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: Vec::new(),
+        };
+        // The env builder already inlined the binding (with password), but re-resolution finds nothing.
+        let mut base = HashMap::new();
+        base.insert("FOO".to_string(), "bar".to_string());
+        base.insert(
+            "ALIEN_PGDB_BINDING".to_string(),
+            "{\"password\":\"s3cr3t\"}".to_string(),
+        );
+        let (metadata, _live) = LocalWorkerManager::plan_worker_launch(
+            "pg-worker",
+            &PathBuf::from("/w"),
+            &existing,
+            Some(3000),
+            base,
+            vec!["pgdb".to_string()],
+            &[],
+        );
+        let json = serde_json::to_string(&metadata).expect("metadata serializes");
+        assert!(!json.contains("s3cr3t"), "named binding must be stripped even unresolved: {json}");
+        assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
+        assert_eq!(metadata.env_vars.get("FOO"), Some(&"bar".to_string()));
+    }
 
     fn paths(names: &[&str]) -> Vec<PathBuf> {
         names

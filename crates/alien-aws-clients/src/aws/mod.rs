@@ -59,6 +59,7 @@ pub mod elbv2;
 pub mod eventbridge;
 pub mod iam;
 pub mod lambda;
+pub mod rds;
 pub mod s3;
 pub mod secrets_manager;
 pub mod sqs;

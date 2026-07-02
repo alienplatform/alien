@@ -371,7 +371,8 @@ impl EnvironmentVariableBuilder {
                 }));
             }
 
-            // Try to get binding params from internal controller first
+            // Synced binding coordinates only (Local Postgres strips its password here); the linked
+            // workload's compute-target manager delivers any runtime-only secret at process start.
             let binding_params =
                 if let Some(dependency_controller) = resource_state.get_internal_controller()? {
                     dependency_controller.get_binding_params()?
@@ -397,6 +398,18 @@ impl EnvironmentVariableBuilder {
                                 alien_core::ExternalBinding::ContainerAppsEnvironment(b) => {
                                     serde_json::to_value(b)
                                 }
+                                alien_core::ExternalBinding::Postgres(b) => {
+                                    // External (Remote Access) Postgres on the local platform: the
+                                    // binding inlines a raw password with no local manager to
+                                    // re-resolve it, so it would persist into worker metadata.
+                                    if ctx.platform == alien_core::Platform::Local {
+                                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                                            message: "external (Remote Access) Postgres is not supported on the local platform".to_string(),
+                                            resource_id: Some(binding_name.to_string()),
+                                        }));
+                                    }
+                                    serde_json::to_value(b)
+                                }
                             }
                             .into_alien_error()
                             .context(
@@ -420,7 +433,6 @@ impl EnvironmentVariableBuilder {
                     .push((binding_name.to_string(), params.clone()));
 
                 let binding_env_vars = serialize_binding_as_env_var(binding_name, &params)
-                    .into_alien_error()
                     .context(ErrorData::ResourceConfigInvalid {
                         message: "Failed to serialize binding parameters".to_string(),
                         resource_id: Some(binding_name.to_string()),
