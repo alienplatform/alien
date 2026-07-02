@@ -61,6 +61,10 @@ pub use kv::AwsKvImporter;
 pub use kv::LocalKvController;
 pub use kv::{AwsKvController, AzureKvController, AzureKvImporter, GcpKvController, GcpKvImporter};
 
+mod postgres;
+#[cfg(feature = "local")]
+pub use postgres::LocalPostgresController;
+
 mod service_activation;
 pub use service_activation::{
     AzureServiceActivationController, AzureServiceActivationImporter,

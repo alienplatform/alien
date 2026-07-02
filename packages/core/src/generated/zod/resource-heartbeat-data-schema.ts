@@ -16,6 +16,7 @@ import { DaemonHeartbeatDataSchema } from "./daemon-heartbeat-data-schema.js";
 import { KubernetesClusterHeartbeatDataSchema } from "./kubernetes-cluster-heartbeat-data-schema.js";
 import { KvHeartbeatDataSchema } from "./kv-heartbeat-data-schema.js";
 import { NetworkHeartbeatDataSchema } from "./network-heartbeat-data-schema.js";
+import { PostgresHeartbeatDataSchema } from "./postgres-heartbeat-data-schema.js";
 import { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
 import { RemoteStackManagementHeartbeatDataSchema } from "./remote-stack-management-heartbeat-data-schema.js";
 import { ServiceAccountHeartbeatDataSchema } from "./service-account-heartbeat-data-schema.js";
@@ -64,6 +65,11 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return KvHeartbeatDataSchema
               },
 "resourceType": z.enum(["kv"])
+    }), z.object({
+    get "data"(){
+                return PostgresHeartbeatDataSchema
+              },
+"resourceType": z.enum(["postgres"])
     }), z.object({
     get "data"(){
                 return VaultHeartbeatDataSchema

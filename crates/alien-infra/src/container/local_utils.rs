@@ -9,7 +9,7 @@
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
     binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, KvBinding,
-    StorageBinding, VaultBinding, WorkerBinding,
+    PostgresBinding, StorageBinding, VaultBinding, WorkerBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::debug;
@@ -275,7 +275,106 @@ pub(super) fn rewrite_localhost_urls_for_container(
                 }
             }
         }
+
+        // Postgres binding: the Local host is a bare `127.0.0.1` (not a URL), so match it exactly and
+        // swap it for the container-reachable host. Only the Local variant is valid on Local.
+        if let Ok(mut binding) = serde_json::from_str::<PostgresBinding>(binding_json) {
+            match binding {
+                PostgresBinding::Local(ref mut local) => {
+                    let needs_rewrite = if let BindingValue::Value(ref host) = local.host {
+                        host == "127.0.0.1" || host == "localhost"
+                    } else {
+                        false
+                    };
+
+                    if needs_rewrite {
+                        local.host = BindingValue::value("host.docker.internal".to_string());
+                        let new_json = serde_json::to_string(&binding)
+                            .into_alien_error()
+                            .context(ErrorData::ResourceControllerConfigError {
+                                resource_id: binding_key.clone(),
+                                message: "Failed to serialize Postgres binding".to_string(),
+                            })?;
+
+                        debug!(
+                            resource = %binding_key,
+                            "Rewrote Postgres localhost host for container"
+                        );
+                        *binding_json = new_json;
+                    }
+                    continue;
+                }
+                _ => {
+                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: binding_key,
+                        message: "Local platform containers cannot use cloud postgres bindings"
+                            .to_string(),
+                    }));
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding};
+
+    // A container linked to a Local Postgres must receive the full binding (password inline) with the
+    // host rewritten to a container-reachable address. This runs the exact serialize→rewrite
+    // composition the container controller performs, so it fails if the env-builder ever emits a
+    // password-less binding or the rewrite arm regresses.
+    #[test]
+    fn local_postgres_binding_rewritten_for_container_keeps_password() {
+        let binding = PostgresBinding::local("127.0.0.1", 5432, "mydb", "alien", "s3cr3t-pw");
+        let mut env = serialize_binding_as_env_var("mydb", &binding)
+            .expect("serialize local Postgres binding");
+        let key = binding_env_var_name("mydb");
+
+        // Pre-rewrite: the full binding carries host 127.0.0.1 and the inline password.
+        let before = env.get(&key).expect("binding env var present");
+        assert!(before.contains("127.0.0.1"), "host should start as 127.0.0.1");
+        assert!(before.contains("s3cr3t-pw"), "password must be present before the rewrite");
+
+        rewrite_localhost_urls_for_container(&mut env).expect("rewrite should succeed");
+
+        let rewritten: PostgresBinding =
+            serde_json::from_str(env.get(&key).unwrap()).expect("rewritten binding deserializes");
+        let PostgresBinding::Local(local) = rewritten else {
+            panic!("expected a Local Postgres binding after rewrite");
+        };
+        let BindingValue::Value(host) = &local.host else {
+            panic!("host is a concrete value")
+        };
+        assert_eq!(host, "host.docker.internal", "host rewritten to container-reachable address");
+        assert_eq!(local.password, "s3cr3t-pw", "password survives the rewrite");
+        let BindingValue::Value(port) = &local.port else {
+            panic!("port is a concrete value")
+        };
+        assert_eq!(*port, 5432);
+        let BindingValue::Value(database) = &local.database else {
+            panic!("database is a concrete value")
+        };
+        assert_eq!(database, "mydb");
+    }
+
+    // The rewrite fails loud on any non-Local Postgres variant: Local containers must never carry a
+    // cloud/external Postgres binding.
+    #[test]
+    fn non_local_postgres_binding_is_rejected() {
+        let binding = PostgresBinding::external("db.example.com", 5432, "mydb", "alien", "pw");
+        let mut env = serialize_binding_as_env_var("mydb", &binding)
+            .expect("serialize external Postgres binding");
+
+        let err = rewrite_localhost_urls_for_container(&mut env)
+            .expect_err("non-Local Postgres must be rejected");
+        assert_eq!(err.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
+        assert!(
+            format!("{err:?}").contains("cannot use cloud postgres bindings"),
+            "error should name the postgres rejection, got: {err:?}"
+        );
+    }
 }

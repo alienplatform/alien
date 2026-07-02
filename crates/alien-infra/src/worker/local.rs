@@ -6,7 +6,8 @@ use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceCon
 use crate::error::{ErrorData, Result};
 use alien_core::{
     HeartbeatBackend, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, LocalWorkerHeartbeatData,
-    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ObservedHealth, Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData,
     ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker, WorkerCode,
     WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
@@ -139,13 +140,23 @@ impl LocalWorkerController {
             .await?
             .build();
 
+        // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
+        // worker manager delivers the binding to the process but never persists it to metadata.
+        let runtime_only_binding_names: Vec<String> = config
+            .links
+            .iter()
+            .filter(|link| link.resource_type() == &Postgres::RESOURCE_TYPE)
+            .map(|link| link.id().to_string())
+            .collect();
+
         // Start the worker with complete environment
-        let worker_url = func_mgr.start_worker(&config.id, env_vars).await.context(
-            ErrorData::CloudPlatformError {
+        let worker_url = func_mgr
+            .start_worker(&config.id, env_vars, runtime_only_binding_names)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to start worker runtime".to_string(),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         self.worker_url = Some(worker_url);
 
