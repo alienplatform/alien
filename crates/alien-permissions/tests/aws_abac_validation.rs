@@ -15,6 +15,9 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "queue/provision",
     "storage/provision",
     "vault/provision",
+    // postgres/provision creates a runtime (system-generated) DB security group and authorizes
+    // 5432 ingress, so its mutating EC2 actions must carry the stack/resource tag conditions.
+    "postgres/provision",
 ];
 
 #[test]
@@ -484,7 +487,16 @@ fn wildcard_action_allowed(
 }
 
 fn action_is_forced_wildcard_read(action: &str) -> bool {
-    if matches!(action, "ec2:DescribeVpcAttribute" | "ec2:GetConsoleOutput") {
+    // A secret-value read is never benign on Resource "*" — it would read every secret in the
+    // account. It must always be ARN-scoped or condition-gated, so keep it out of the "Get*/List*/
+    // Describe* is a safe wildcard read" allowlist even though the name starts with "Get".
+    if matches!(
+        action,
+        "ec2:DescribeVpcAttribute"
+            | "ec2:GetConsoleOutput"
+            | "secretsmanager:GetSecretValue"
+            | "secretsmanager:BatchGetSecretValue"
+    ) {
         return false;
     }
 

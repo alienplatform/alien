@@ -16,6 +16,7 @@ import eventsRoutes from "./handlers/events.js"
 import healthRoutes from "./handlers/health.js"
 import inspectRoutes from "./handlers/inspect.js"
 import kvRoutes from "./handlers/kv.js"
+import postgresRoutes from "./handlers/postgres.js"
 import queueRoutes from "./handlers/queue.js"
 import serviceAccountRoutes from "./handlers/service-account.js"
 import sseRoutes from "./handlers/sse.js"
@@ -33,6 +34,7 @@ app.route("/", sseRoutes)
 app.route("/", storageRoutes)
 app.route("/", kvRoutes)
 app.route("/", vaultRoutes)
+app.route("/", postgresRoutes)
 app.route("/", queueRoutes)
 app.route("/", buildRoutes)
 app.route("/", artifactRegistryRoutes)

@@ -17,6 +17,7 @@ pub use aws::eks::{EksApi, EksClient};
 pub use aws::eventbridge::{EventBridgeApi, EventBridgeClient};
 pub use aws::iam::{IamApi, IamClient};
 pub use aws::lambda::{LambdaApi, LambdaClient};
+pub use aws::rds::{RdsApi, RdsClient};
 pub use aws::s3::{S3Api, S3Client};
 pub use aws::secrets_manager::{SecretsManagerApi, SecretsManagerClient};
 pub use aws::sqs::{SqsApi, SqsClient};

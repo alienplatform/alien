@@ -239,6 +239,7 @@ fn parse_byo_settings(
                 public_subnet_name,
                 private_subnet_name,
                 application_gateway_subnet_name: None,
+                private_endpoint_subnet_name: None,
             }))
         }
         _ => Err(format!(
@@ -406,6 +407,7 @@ mod tests {
                 public_subnet_name: "pub-subnet".to_string(),
                 private_subnet_name: "priv-subnet".to_string(),
                 application_gateway_subnet_name: None,
+                private_endpoint_subnet_name: None,
             }
         );
     }

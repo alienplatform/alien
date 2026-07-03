@@ -5,6 +5,7 @@ pub mod events;
 pub mod health;
 pub mod inspect;
 pub mod kv;
+pub mod postgres;
 pub mod queue;
 pub mod queue_message;
 pub mod service_account;

@@ -156,6 +156,8 @@ pub enum Binding {
     Kv,
     /// Secret management (SSM, Secret Manager, Key Vault, local file)
     Vault,
+    /// Managed Postgres database (Aurora, Cloud SQL, Flexible Server, embedded pgvector on Local)
+    Postgres,
     /// Message queue (SQS, Pub/Sub, Service Bus)
     Queue,
     /// Direct worker-to-worker invocation
@@ -192,6 +194,7 @@ impl std::fmt::Display for Binding {
             Binding::Storage => write!(f, "storage"),
             Binding::Kv => write!(f, "kv"),
             Binding::Vault => write!(f, "vault"),
+            Binding::Postgres => write!(f, "postgres"),
             Binding::Queue => write!(f, "queue"),
             Binding::Worker => write!(f, "worker"),
             Binding::Container => write!(f, "container"),
@@ -256,6 +259,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             bindings.push(Binding::Events);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
+            // Only the embedded Local controller ships in this repo, so Postgres is
+            // exercised on Local only.
+            bindings.push(Binding::Postgres);
         }
         _ => {}
     }
@@ -499,6 +505,10 @@ console.log(JSON.stringify(stack));
 
     let output = tokio::process::Command::new(&bun_binary)
         .current_dir(app_dir)
+        // Expose the target platform to config evaluation so an app can declare a resource only
+        // where its controller exists. This is the single point the stack is materialized, so a
+        // platform-conditional resource cannot drift between load and deploy.
+        .env("ALIEN_TARGET_PLATFORM", platform.as_str())
         .args(["-e", &script])
         .output()
         .await

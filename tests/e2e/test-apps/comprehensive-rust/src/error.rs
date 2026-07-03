@@ -122,6 +122,19 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// Postgres operation failed.
+    #[error(
+        code = "POSTGRES_OPERATION_FAILED",
+        message = "Postgres operation failed: {operation}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 500
+    )]
+    PostgresOperationFailed {
+        /// Description of the postgres operation that failed
+        operation: String,
+    },
+
     /// KV operation failed.
     #[error(
         code = "KV_OPERATION_FAILED",

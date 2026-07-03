@@ -91,6 +91,18 @@ pub struct VaultTestResponse {
     pub success: bool,
 }
 
+// Postgres test models
+
+/// Response from postgres test endpoint
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PostgresTestResponse {
+    /// Name of the binding being tested
+    pub binding_name: String,
+    /// Whether the test was successful
+    pub success: bool,
+}
+
 // KV test models
 
 /// Response from KV test endpoint

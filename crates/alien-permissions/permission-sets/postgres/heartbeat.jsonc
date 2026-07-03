@@ -1,0 +1,88 @@
+{
+  "id": "postgres/heartbeat",
+  "description": "Allows readonly monitoring and health checks for postgres resources",
+  "platforms": {
+    "aws": [
+      {
+        "label": "check-aurora-health",
+        "description": "Read cluster/instance state and the ServerlessDatabaseCapacity metric (auto-pause verification).",
+        "grant": {
+          "actions": [
+            "rds:DescribeDBClusters",
+            "rds:DescribeDBInstances",
+            "rds:ListTagsForResource",
+            "cloudwatch:GetMetricData"
+          ]
+        },
+        // `cloudwatch:GetMetricData` ignores resource-level ARN scoping (CloudWatch metrics
+        // aren't ARN-addressable), so the binding below effectively scopes only the rds:* actions;
+        // the metric read is account-wide but returns numeric time-series only, never data content.
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        // Read-only confirmation that the database security group still admits
+        // 5432 only from the stack. AWS requires Resource: "*" for this
+        // discovery API; no mutating or data-content access is granted here.
+        "label": "describe-security-groups",
+        "description": "Read the database security group state to verify the network boundary stays intact.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups"]
+        },
+        // `DescribeSecurityGroups` is an un-scopable discovery API, so the resource
+        // binding is also `*` — same shape as `vault/heartbeat`'s `ssm:DescribeParameters`.
+        // This lets per-resource emitters scope the set at `BindingTarget::Resource`.
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "check-cloud-sql-health",
+        "description": "Read Cloud SQL instance metadata needed for health checks.",
+        "grant": {
+          "permissions": ["cloudsql.instances.get", "cloudsql.instances.list"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "check-flexible-server-health",
+        "description": "Read Flexible Server metadata needed for health checks.",
+        "grant": {
+          "predefinedRoles": ["Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}
