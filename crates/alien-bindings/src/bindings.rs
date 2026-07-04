@@ -16,6 +16,26 @@ use std::sync::Arc;
 /// Construction is synchronous and only validates the platform and each configured
 /// binding's JSON shape (see [`BindingsProvider::from_env_lazy`]); cloud client
 /// configuration and each binding's backing client are resolved lazily, on first use.
+///
+/// # Examples
+///
+/// This is the canonical usage for a Container/Daemon-shaped app (a long-running
+/// resident process that only needs bindings, with no Worker event handlers):
+///
+/// ```no_run
+/// use alien_bindings::Bindings;
+/// use object_store::{path::Path, PutPayload};
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let bindings = Bindings::from_env()?;
+///
+/// let storage = bindings.storage("files").await?;
+/// storage
+///     .put(&Path::from("greeting.txt"), PutPayload::from_static(b"hello"))
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct Bindings {
     provider: LazyEnvBindingsProvider,

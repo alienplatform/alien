@@ -63,4 +63,3 @@ pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) ->
         })
     })
 }
-

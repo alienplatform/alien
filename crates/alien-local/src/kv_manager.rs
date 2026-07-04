@@ -229,9 +229,7 @@ impl LocalKvManager {
             return Err(AlienError::new(ErrorData::LocalDatabaseError {
                 database_path: db_path.display().to_string(),
                 operation: "read".to_string(),
-                reason: format!(
-                    "Unsupported store format '{format}' (expected 'localkv.v1')"
-                ),
+                reason: format!("Unsupported store format '{format}' (expected 'localkv.v1')"),
             }));
         }
 

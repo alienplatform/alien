@@ -57,4 +57,3 @@ impl std::str::FromStr for Platform {
         }
     }
 }
-

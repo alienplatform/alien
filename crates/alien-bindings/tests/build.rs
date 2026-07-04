@@ -31,7 +31,6 @@ use alien_aws_clients::{
 #[cfg(feature = "aws")]
 use {reqwest::Client, std::sync::Mutex, uuid::Uuid};
 
-
 fn load_test_env() {
     // Load .env.test from the workspace root
     let root: StdPathBuf = get_workspace_root();

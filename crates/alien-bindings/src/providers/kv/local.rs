@@ -40,12 +40,13 @@ pub struct LocalKv {
 }
 
 fn open_conn(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local KV".to_string(),
-            reason: format!("failed to open sqlite database at {}", path.display()),
-        })?;
+    let conn =
+        Connection::open(path)
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "local KV".to_string(),
+                reason: format!("failed to open sqlite database at {}", path.display()),
+            })?;
     conn.busy_timeout(BUSY_TIMEOUT)
         .into_alien_error()
         .context(ErrorData::BindingSetupFailed {
@@ -205,11 +206,14 @@ impl LocalKv {
                 })?;
             let mut keys = Vec::new();
             for row in rows {
-                keys.push(row.into_alien_error().context(ErrorData::KvOperationFailed {
-                    operation: "keys".to_string(),
-                    key: "*".to_string(),
-                    reason: "failed to read key row".to_string(),
-                })?);
+                keys.push(
+                    row.into_alien_error()
+                        .context(ErrorData::KvOperationFailed {
+                            operation: "keys".to_string(),
+                            key: "*".to_string(),
+                            reason: "failed to read key row".to_string(),
+                        })?,
+                );
             }
             Ok(keys)
         })
@@ -414,9 +418,7 @@ impl Kv for LocalKv {
             .with_conn(move |conn| {
                 let now = Utc::now().timestamp_millis();
                 let mut stmt = conn
-                    .prepare(
-                        "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
-                    )
+                    .prepare("SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key")
                     .into_alien_error()
                     .context(ErrorData::KvOperationFailed {
                         operation: "scan_prefix".to_string(),
@@ -441,11 +443,12 @@ impl Kv for LocalKv {
                 let mut matching = Vec::new();
                 for row in rows {
                     let (k, v, exp) =
-                        row.into_alien_error().context(ErrorData::KvOperationFailed {
-                            operation: "scan_prefix".to_string(),
-                            key: prefix.clone(),
-                            reason: "failed to read scan row".to_string(),
-                        })?;
+                        row.into_alien_error()
+                            .context(ErrorData::KvOperationFailed {
+                                operation: "scan_prefix".to_string(),
+                                key: prefix.clone(),
+                                reason: "failed to read scan row".to_string(),
+                            })?;
                     // Keys are ordered ascending starting at `prefix`; once a key
                     // stops matching the prefix, no later key can match either.
                     if !k.starts_with(&prefix) {
@@ -848,7 +851,10 @@ mod tests {
             "exactly one takeover conditional put must win after expiry"
         );
         let stored = kv_b.get("k").await.unwrap().expect("key present");
-        assert_eq!(stored, winners[0], "stored value must equal the takeover winner");
+        assert_eq!(
+            stored, winners[0],
+            "stored value must equal the takeover winner"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -38,7 +38,6 @@ use alien_azure_clients::{
     AzureClientConfig,
 };
 
-
 fn load_test_env() {
     // Load .env.test from the workspace root
     let root: StdPathBuf = get_workspace_root();

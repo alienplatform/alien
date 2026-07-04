@@ -130,11 +130,12 @@ impl WaitUntilContext {
 
             if use_worker_protocol_grpc {
                 // Require gRPC connection
-                let grpc_address = env_vars.get("ALIEN_BINDINGS_GRPC_ADDRESS").ok_or_else(|| {
-                    AlienError::new(ErrorData::EnvironmentVariableMissing {
-                        variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-                    })
-                })?;
+                let grpc_address =
+                    env_vars.get("ALIEN_BINDINGS_GRPC_ADDRESS").ok_or_else(|| {
+                        AlienError::new(ErrorData::EnvironmentVariableMissing {
+                            variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
+                        })
+                    })?;
 
                 // Create gRPC client
                 let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
@@ -150,7 +151,7 @@ impl WaitUntilContext {
             }
 
             // No gRPC needed - run in-process
-            return Ok(Self::new(Some(app_id)));
+            Ok(Self::new(Some(app_id)))
         }
 
         #[cfg(not(feature = "grpc"))]

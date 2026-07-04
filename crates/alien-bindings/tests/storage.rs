@@ -23,7 +23,6 @@ use tempfile::TempDir;
 use test_context::AsyncTestContext;
 use workspace_root::get_workspace_root;
 
-
 fn load_test_env() {
     // Load .env.test from the workspace root
     let root: StdPathBuf = get_workspace_root();

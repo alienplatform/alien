@@ -43,7 +43,6 @@ use reqwest::Client;
 #[cfg(feature = "azure")]
 use tracing::{info, warn};
 
-
 fn load_test_env() {
     // Load .env.test from the workspace root
     let root: StdPathBuf = get_workspace_root();

@@ -59,12 +59,13 @@ pub struct LocalQueue {
 }
 
 fn open_conn(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local queue".to_string(),
-            reason: format!("failed to open sqlite database at {}", path.display()),
-        })?;
+    let conn =
+        Connection::open(path)
+            .into_alien_error()
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "local queue".to_string(),
+                reason: format!("failed to open sqlite database at {}", path.display()),
+            })?;
     conn.busy_timeout(BUSY_TIMEOUT)
         .into_alien_error()
         .context(ErrorData::BindingSetupFailed {
@@ -101,12 +102,12 @@ fn encode_payload(payload: MessagePayload) -> Result<(&'static str, String)> {
 fn decode_payload(payload_type: &str, payload_data: String) -> Result<MessagePayload> {
     match payload_type {
         "json" => {
-            let value = serde_json::from_str(&payload_data).into_alien_error().context(
-                ErrorData::QueueOperationFailed {
+            let value = serde_json::from_str(&payload_data)
+                .into_alien_error()
+                .context(ErrorData::QueueOperationFailed {
                     operation: "receive".to_string(),
                     reason: "failed to deserialize stored JSON payload".to_string(),
-                },
-            )?;
+                })?;
             Ok(MessagePayload::Json(value))
         }
         "text" => Ok(MessagePayload::Text(payload_data)),
@@ -299,12 +300,13 @@ impl LocalQueue {
                     })?;
                 let mut ids = Vec::new();
                 for row in rows {
-                    ids.push(row.into_alien_error().context(
-                        ErrorData::QueueOperationFailed {
-                            operation: "receive".to_string(),
-                            reason: "failed to read due-message row".to_string(),
-                        },
-                    )?);
+                    ids.push(
+                        row.into_alien_error()
+                            .context(ErrorData::QueueOperationFailed {
+                                operation: "receive".to_string(),
+                                reason: "failed to read due-message row".to_string(),
+                            })?,
+                    );
                 }
                 ids
             };
@@ -794,11 +796,9 @@ mod tests {
         // ... with attempt incremented once per delivery (1 then 2).
         let conn = raw_conn(&queue);
         let attempt: i64 = conn
-            .query_row(
-                "SELECT attempt FROM messages WHERE id = ?1",
-                [id],
-                |r| r.get(0),
-            )
+            .query_row("SELECT attempt FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
             .expect("attempt read");
         assert_eq!(attempt, 2, "two deliveries must mean attempt == 2");
     }
