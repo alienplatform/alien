@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use alien_commands::error::ErrorData as CommandErrorData;
 use alien_commands::server::{
-    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus,
+    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, ResolvedCommandTarget,
 };
-use alien_core::{CommandState, DeploymentModel};
+use alien_core::{CommandDeliveryMode, CommandState, CommandTarget};
 use alien_error::IntoAlienError;
 
 use super::database::{RowParser, SqliteDatabase};
@@ -57,22 +57,36 @@ impl SqliteCommandRegistry {
             request_size_bytes: request_size.map(|n| n as u64),
             response_size_bytes: response_size.map(|n| n as u64),
             error: p.optional_json(12, "error").map_err(to_cmd_err)?,
+            // ALIEN-219 transitional (Task 3 burns this down): the commands
+            // table has no target columns yet, so status reads fall back to
+            // the deployment-scoped placeholder target.
+            #[allow(deprecated)]
+            target: CommandTarget::legacy_deployment_scoped(
+                p.string(1, "deployment_id").map_err(to_cmd_err)?,
+            ),
         })
     }
 
     fn parse_envelope_data(row: &turso::Row) -> alien_commands::error::Result<CommandEnvelopeData> {
         let p = RowParser::new(row);
         let state_str: String = p.string(3, "state").map_err(to_cmd_err)?;
-        let deployment_model_str: String = p.string(4, "deployment_model").map_err(to_cmd_err)?;
+        let delivery_mode_str: String = p.string(4, "deployment_model").map_err(to_cmd_err)?;
 
         Ok(CommandEnvelopeData {
             command_id: p.string(0, "id").map_err(to_cmd_err)?,
             deployment_id: p.string(1, "deployment_id").map_err(to_cmd_err)?,
             command: p.string(2, "name").map_err(to_cmd_err)?,
             state: deserialize_command_state(&state_str),
-            deployment_model: deserialize_deployment_model(&deployment_model_str),
+            delivery_mode: deserialize_delivery_mode(&delivery_mode_str),
             attempt: p.i64(5, "attempt").map_err(to_cmd_err)? as u32,
             deadline: p.optional_datetime(6, "deadline").map_err(to_cmd_err)?,
+            // ALIEN-219 transitional (Task 3 burns this down): the commands
+            // table has no target columns yet, so envelope reads fall back to
+            // the deployment-scoped placeholder target.
+            #[allow(deprecated)]
+            target: CommandTarget::legacy_deployment_scoped(
+                p.string(1, "deployment_id").map_err(to_cmd_err)?,
+            ),
         })
     }
 
@@ -107,10 +121,29 @@ impl SqliteCommandRegistry {
 
 #[async_trait]
 impl CommandRegistry for SqliteCommandRegistry {
+    async fn resolve_target(
+        &self,
+        _deployment_id: &str,
+        _requested: Option<&str>,
+    ) -> alien_commands::error::Result<ResolvedCommandTarget> {
+        // ALIEN-219 transitional (Task 3 burns this down): SQLite-backed
+        // target resolution needs release-store access and target columns,
+        // which land in Task 3. Until then this is a typed, non-retryable
+        // "not supported" error rather than an unimplemented!() panic.
+        Err(alien_error::AlienError::new(
+            CommandErrorData::OperationNotSupported {
+                message: "Command target resolution is not yet available for the SQLite registry"
+                    .to_string(),
+                operation: Some("resolve_target".to_string()),
+            },
+        ))
+    }
+
     async fn create_command(
         &self,
         deployment_id: &str,
         command_name: &str,
+        target: &ResolvedCommandTarget,
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
@@ -146,17 +179,12 @@ impl CommandRegistry for SqliteCommandRegistry {
             }));
         }
 
-        let deployment_model = match deployment.platform {
-            alien_core::Platform::Kubernetes | alien_core::Platform::Local => DeploymentModel::Pull,
-            _ => {
-                deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .deployment_model
-            }
-        };
-        let deployment_model_str = serialize_enum(&deployment_model);
+        // The delivery mode is decided at resolution time and passed in with
+        // the resolved target; store it in the existing deployment_model
+        // column (same "push"/"pull" strings, so old rows stay readable).
+        // ALIEN-219 Task 3 adds dedicated target columns and moves the
+        // platform/stack-settings derivation into resolve_target.
+        let delivery_mode_str = serialize_enum(&target.delivery_mode);
 
         let sql = Query::insert()
             .into_table(Commands::Table)
@@ -176,7 +204,7 @@ impl CommandRegistry for SqliteCommandRegistry {
                 deployment_id.into(),
                 command_name.into(),
                 state_str.into(),
-                deployment_model_str.into(),
+                delivery_mode_str.into(),
                 1i64.into(),
                 deadline.map(|d| d.to_rfc3339()).into(),
                 now.to_rfc3339().into(),
@@ -188,7 +216,8 @@ impl CommandRegistry for SqliteCommandRegistry {
 
         Ok(CommandMetadata {
             command_id,
-            deployment_model,
+            target: target.target.clone(),
+            delivery_mode: target.delivery_mode,
             project_id: "local".to_string(),
         })
     }
@@ -334,15 +363,19 @@ fn deserialize_command_state(s: &str) -> CommandState {
     })
 }
 
-/// Deserialize DeploymentModel from its serde string representation.
-fn deserialize_deployment_model(s: &str) -> DeploymentModel {
+/// Deserialize CommandDeliveryMode from its serde string representation.
+///
+/// The deployment_model column historically stored `DeploymentModel` values;
+/// both enums serialize to the same "push"/"pull" strings, so old rows parse
+/// unchanged.
+fn deserialize_delivery_mode(s: &str) -> CommandDeliveryMode {
     serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap_or_else(|e| {
         tracing::warn!(
-            "Failed to deserialize DeploymentModel '{}': {}, using Pull",
+            "Failed to deserialize CommandDeliveryMode '{}': {}, using Pull",
             s,
             e
         );
-        DeploymentModel::Pull
+        CommandDeliveryMode::Pull
     })
 }
 

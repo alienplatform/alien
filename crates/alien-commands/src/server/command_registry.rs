@@ -9,8 +9,9 @@
 //!
 //! The command KV store holds only operational data: params/response blobs, pending indices, leases.
 
-use crate::error::Result;
-use alien_core::{CommandState, DeploymentModel};
+use crate::error::{ErrorData, Result};
+use alien_core::{CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType};
+use alien_error::AlienError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,13 +20,24 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+/// A command target resolved by the registry, plus how commands reach it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCommandTarget {
+    /// The specific resource the command is addressed to
+    pub target: CommandTarget,
+    /// How commands are delivered to this target (Push or Pull)
+    pub delivery_mode: CommandDeliveryMode,
+}
+
 /// Metadata returned when creating a command
 #[derive(Debug, Clone)]
 pub struct CommandMetadata {
     /// Unique command ID
     pub command_id: String,
+    /// The specific resource the command is addressed to
+    pub target: CommandTarget,
     /// How to dispatch the command (Push or Pull)
-    pub deployment_model: DeploymentModel,
+    pub delivery_mode: CommandDeliveryMode,
     /// Project ID for routing/authorization
     pub project_id: String,
 }
@@ -39,7 +51,8 @@ pub struct CommandEnvelopeData {
     pub attempt: u32,
     pub deadline: Option<DateTime<Utc>>,
     pub state: CommandState,
-    pub deployment_model: DeploymentModel,
+    pub target: CommandTarget,
+    pub delivery_mode: CommandDeliveryMode,
 }
 
 /// Full status for GET /commands/{id}
@@ -57,6 +70,7 @@ pub struct CommandStatus {
     pub error: Option<serde_json::Value>,
     pub request_size_bytes: Option<u64>,
     pub response_size_bytes: Option<u64>,
+    pub target: CommandTarget,
 }
 
 /// Internal command record stored in memory
@@ -75,7 +89,8 @@ struct CommandRecord {
     request_size_bytes: Option<u64>,
     response_size_bytes: Option<u64>,
     error: Option<serde_json::Value>,
-    deployment_model: DeploymentModel,
+    target: CommandTarget,
+    delivery_mode: CommandDeliveryMode,
     project_id: String,
 }
 
@@ -85,14 +100,34 @@ struct CommandRecord {
 /// Implementations store command state, timestamps, and result information.
 #[async_trait]
 pub trait CommandRegistry: Send + Sync {
-    /// Create a new command and return metadata for routing.
+    /// Resolve which command-capable resource a command is addressed to.
     ///
-    /// The registry generates the command_id, determines the deployment_model,
-    /// and stores all metadata (state, timestamps, etc.).
+    /// - `requested = Some(id)`: the target must exist and be command-capable,
+    ///   else `COMMAND_TARGET_NOT_FOUND` (an empty id never resolves).
+    /// - `requested = None` (single-target shorthand): exactly one
+    ///   command-capable target must exist, else `COMMAND_TARGET_AMBIGUOUS`
+    ///   (more than one) or `NO_COMMAND_TARGETS` (none).
+    ///
+    /// The returned delivery mode is derived from the target: Container and
+    /// Daemon targets are always Pull; Worker targets are Push only when the
+    /// deployment's platform has a push path (not Kubernetes/Local) AND its
+    /// stack settings use the Push deployment model, else Pull.
+    async fn resolve_target(
+        &self,
+        deployment_id: &str,
+        requested: Option<&str>,
+    ) -> Result<ResolvedCommandTarget>;
+
+    /// Create a new command addressed to a previously resolved target and
+    /// return metadata for routing.
+    ///
+    /// The registry generates the command_id and stores all metadata
+    /// (state, target, timestamps, etc.).
     async fn create_command(
         &self,
         deployment_id: &str,
         command_name: &str,
+        target: &ResolvedCommandTarget,
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
@@ -127,26 +162,68 @@ pub trait CommandRegistry: Send + Sync {
 
 /// In-memory implementation for tests and local development.
 ///
-/// Tracks command metadata in memory. Configurable deployment model (defaults to Pull).
+/// Tracks command metadata in memory. Targets are registered explicitly via
+/// [`register_target`](Self::register_target); resolution then follows exactly
+/// the production rules documented on [`CommandRegistry::resolve_target`].
 pub struct InMemoryCommandRegistry {
     commands: Arc<RwLock<HashMap<String, CommandRecord>>>,
-    deployment_model: DeploymentModel,
+    /// Registered command-capable targets, in registration (declaration) order.
+    ///
+    /// Not scoped per deployment: this registry models a single local
+    /// deployment universe, so every deployment id resolves against the same
+    /// target set (the per-call resolution rules are identical to production).
+    targets: Arc<RwLock<Vec<CommandTarget>>>,
+    /// Delivery mode for Worker targets.
+    ///
+    /// In production this is derived from the deployment's platform and stack
+    /// settings (Push only when the platform has a push path AND
+    /// `stack_settings.deployment_model == Push`). The registrant supplies
+    /// that derived context here once, and the registry applies the pinned
+    /// per-type rule itself — so it is impossible to register a Container or
+    /// Daemon target with a Push mode that production could never produce.
+    worker_delivery_mode: CommandDeliveryMode,
 }
 
 impl InMemoryCommandRegistry {
-    /// Create a new in-memory registry with Pull deployment model (default).
+    /// Create a new in-memory registry whose Worker targets use Pull delivery
+    /// (the safe default: matches platforms without a push path).
     pub fn new() -> Self {
+        Self::with_worker_delivery_mode(CommandDeliveryMode::Pull)
+    }
+
+    /// Create a new in-memory registry with the specified Worker delivery mode.
+    ///
+    /// Container/Daemon targets are always Pull regardless of this setting.
+    pub fn with_worker_delivery_mode(worker_delivery_mode: CommandDeliveryMode) -> Self {
         Self {
             commands: Arc::new(RwLock::new(HashMap::new())),
-            deployment_model: DeploymentModel::Pull,
+            targets: Arc::new(RwLock::new(Vec::new())),
+            worker_delivery_mode,
         }
     }
 
-    /// Create a new in-memory registry with the specified deployment model.
-    pub fn with_deployment_model(deployment_model: DeploymentModel) -> Self {
-        Self {
-            commands: Arc::new(RwLock::new(HashMap::new())),
-            deployment_model,
+    /// Register a command-capable target that commands can resolve to.
+    ///
+    /// Mirrors production, where the target set comes from the deployment's
+    /// stack (`Stack::command_targets()`: Worker/Container/Daemon resources
+    /// with `commands_enabled`).
+    pub async fn register_target(
+        &self,
+        resource_id: impl Into<String>,
+        resource_type: CommandTargetType,
+    ) {
+        self.targets
+            .write()
+            .await
+            .push(CommandTarget::new(resource_id, resource_type));
+    }
+
+    /// Delivery mode for a target, per the pinned rule: Container/Daemon are
+    /// always Pull; Worker follows the registry's derived worker context.
+    fn delivery_mode_for(&self, resource_type: CommandTargetType) -> CommandDeliveryMode {
+        match resource_type {
+            CommandTargetType::Container | CommandTargetType::Daemon => CommandDeliveryMode::Pull,
+            CommandTargetType::Worker => self.worker_delivery_mode,
         }
     }
 
@@ -166,10 +243,55 @@ impl Default for InMemoryCommandRegistry {
 
 #[async_trait]
 impl CommandRegistry for InMemoryCommandRegistry {
+    async fn resolve_target(
+        &self,
+        deployment_id: &str,
+        requested: Option<&str>,
+    ) -> Result<ResolvedCommandTarget> {
+        let targets = self.targets.read().await;
+
+        let target = match requested {
+            Some(resource_id) => {
+                // An empty resource id is never a valid target — in particular
+                // it must NOT silently fall back to shorthand resolution.
+                let found = if resource_id.is_empty() {
+                    None
+                } else {
+                    targets.iter().find(|t| t.resource_id == resource_id)
+                };
+                found.ok_or_else(|| {
+                    AlienError::new(ErrorData::CommandTargetNotFound {
+                        resource_id: resource_id.to_string(),
+                        deployment_id: deployment_id.to_string(),
+                    })
+                })?
+            }
+            None => match targets.as_slice() {
+                [] => {
+                    return Err(AlienError::new(ErrorData::NoCommandTargets {
+                        deployment_id: deployment_id.to_string(),
+                    }))
+                }
+                [single] => single,
+                _ => {
+                    return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
+                        deployment_id: deployment_id.to_string(),
+                    }))
+                }
+            },
+        };
+
+        Ok(ResolvedCommandTarget {
+            target: target.clone(),
+            delivery_mode: self.delivery_mode_for(target.resource_type),
+        })
+    }
+
     async fn create_command(
         &self,
         deployment_id: &str,
         command_name: &str,
+        target: &ResolvedCommandTarget,
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
@@ -189,7 +311,8 @@ impl CommandRegistry for InMemoryCommandRegistry {
             request_size_bytes,
             response_size_bytes: None,
             error: None,
-            deployment_model: self.deployment_model,
+            target: target.target.clone(),
+            delivery_mode: target.delivery_mode,
             project_id: "local-dev".to_string(),
         };
 
@@ -200,7 +323,8 @@ impl CommandRegistry for InMemoryCommandRegistry {
 
         Ok(CommandMetadata {
             command_id,
-            deployment_model: self.deployment_model,
+            target: target.target.clone(),
+            delivery_mode: target.delivery_mode,
             project_id: "local-dev".to_string(),
         })
     }
@@ -215,7 +339,8 @@ impl CommandRegistry for InMemoryCommandRegistry {
             attempt: r.attempt,
             deadline: r.deadline,
             state: r.state,
-            deployment_model: r.deployment_model,
+            target: r.target.clone(),
+            delivery_mode: r.delivery_mode,
         }))
     }
 
@@ -235,6 +360,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
             error: r.error.clone(),
             request_size_bytes: r.request_size_bytes,
             response_size_bytes: r.response_size_bytes,
+            target: r.target.clone(),
         }))
     }
 
@@ -281,5 +407,185 @@ impl CommandRegistry for InMemoryCommandRegistry {
         } else {
             Ok(1) // Default if not found
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{CommandDeliveryMode, CommandTarget, CommandTargetType};
+
+    async fn resolved(
+        registry: &InMemoryCommandRegistry,
+        requested: Option<&str>,
+    ) -> Result<ResolvedCommandTarget> {
+        registry.resolve_target("dep-1", requested).await
+    }
+
+    #[tokio::test]
+    async fn test_resolve_explicit_target_found() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
+            .await;
+        registry
+            .register_target("daemon-b", CommandTargetType::Daemon)
+            .await;
+
+        let result = resolved(&registry, Some("daemon-b")).await.unwrap();
+        assert_eq!(
+            result.target,
+            CommandTarget::new("daemon-b", CommandTargetType::Daemon)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_explicit_unknown_target_is_not_found() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
+            .await;
+
+        let err = resolved(&registry, Some("no-such-resource"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+        assert_eq!(err.http_status_code, Some(404));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_explicit_empty_string_is_not_found() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
+            .await;
+
+        // An explicitly requested empty resource id must never resolve (in
+        // particular it must NOT fall back to shorthand resolution).
+        let err = resolved(&registry, Some("")).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shorthand_single_target_resolves() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("container-1", CommandTargetType::Container)
+            .await;
+
+        let result = resolved(&registry, None).await.unwrap();
+        assert_eq!(
+            result.target,
+            CommandTarget::new("container-1", CommandTargetType::Container)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shorthand_two_targets_is_ambiguous() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
+            .await;
+        registry
+            .register_target("worker-b", CommandTargetType::Worker)
+            .await;
+
+        let err = resolved(&registry, None).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
+        assert_eq!(err.http_status_code, Some(409));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shorthand_zero_targets_is_no_targets() {
+        let registry = InMemoryCommandRegistry::new();
+
+        let err = resolved(&registry, None).await.unwrap_err();
+        assert_eq!(err.code, "NO_COMMAND_TARGETS");
+        assert_eq!(err.http_status_code, Some(422));
+    }
+
+    #[tokio::test]
+    async fn test_delivery_mode_container_and_daemon_always_pull() {
+        // Even with a Push-capable worker context, Container/Daemon are Pull.
+        let registry =
+            InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Push);
+        registry
+            .register_target("container-1", CommandTargetType::Container)
+            .await;
+        registry
+            .register_target("daemon-1", CommandTargetType::Daemon)
+            .await;
+
+        let container = resolved(&registry, Some("container-1")).await.unwrap();
+        assert_eq!(container.delivery_mode, CommandDeliveryMode::Pull);
+
+        let daemon = resolved(&registry, Some("daemon-1")).await.unwrap();
+        assert_eq!(daemon.delivery_mode, CommandDeliveryMode::Pull);
+    }
+
+    #[tokio::test]
+    async fn test_delivery_mode_worker_follows_registered_context() {
+        let push_registry =
+            InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Push);
+        push_registry
+            .register_target("worker-1", CommandTargetType::Worker)
+            .await;
+        let push_worker = push_registry
+            .resolve_target("dep-1", Some("worker-1"))
+            .await
+            .unwrap();
+        assert_eq!(push_worker.delivery_mode, CommandDeliveryMode::Push);
+
+        // No push path (e.g. Kubernetes/Local, or stack deployment_model == Pull).
+        let pull_registry =
+            InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Pull);
+        pull_registry
+            .register_target("worker-1", CommandTargetType::Worker)
+            .await;
+        let pull_worker = pull_registry
+            .resolve_target("dep-1", Some("worker-1"))
+            .await
+            .unwrap();
+        assert_eq!(pull_worker.delivery_mode, CommandDeliveryMode::Pull);
+    }
+
+    #[tokio::test]
+    async fn test_create_command_stores_target_in_status_and_envelope_data() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("daemon-1", CommandTargetType::Daemon)
+            .await;
+
+        let resolved_target = registry.resolve_target("dep-1", None).await.unwrap();
+        let metadata = registry
+            .create_command(
+                "dep-1",
+                "sync-data",
+                &resolved_target,
+                CommandState::Pending,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let expected = CommandTarget::new("daemon-1", CommandTargetType::Daemon);
+        assert_eq!(metadata.target, expected);
+        assert_eq!(metadata.delivery_mode, CommandDeliveryMode::Pull);
+
+        let status = registry
+            .get_command_status(&metadata.command_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.target, expected);
+
+        let envelope_data = registry
+            .get_command_metadata(&metadata.command_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(envelope_data.target, expected);
+        assert_eq!(envelope_data.delivery_mode, CommandDeliveryMode::Pull);
     }
 }

@@ -578,6 +578,196 @@ mod tests {
     }
 
     // ===============================================
+    // TARGET ROUTING (ALIEN-219)
+    // ===============================================
+
+    /// Status responses and lease envelopes carry the resolved target
+    /// (single-target shorthand: no targetResourceId in the request).
+    #[tokio::test]
+    async fn test_status_and_envelope_carry_resolved_target() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let request = test_inline_create_command("target-agent", "targeted-command");
+        let response = server.create_command(request).await.unwrap();
+
+        let status = server
+            .get_command_status(&response.command_id)
+            .await
+            .unwrap();
+        assert_eq!(status.target, server.default_target);
+
+        let lease = server
+            .acquire_single_lease("target-agent")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.envelope.target, server.default_target);
+    }
+
+    /// An explicitly requested target that doesn't exist is rejected with the
+    /// stable COMMAND_TARGET_NOT_FOUND code.
+    #[tokio::test]
+    async fn test_create_with_unknown_target_rejected() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("target-agent", "targeted-command");
+        request.target_resource_id = Some("no-such-resource".to_string());
+
+        let err = server.create_command(request).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+    }
+
+    /// With two registered targets, shorthand creation (no targetResourceId)
+    /// is rejected with the stable COMMAND_TARGET_AMBIGUOUS code.
+    #[tokio::test]
+    async fn test_create_shorthand_with_two_targets_ambiguous() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await;
+
+        let request = test_inline_create_command("target-agent", "targeted-command");
+        let err = server.create_command(request).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
+    }
+
+    /// Each target leases only its own commands: two targets, two commands,
+    /// each lease scan returns only the requester's command.
+    #[tokio::test]
+    async fn test_lease_scans_only_requesting_targets_prefix() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await;
+        let second_target = CommandTarget::new("second-daemon", CommandTargetType::Daemon);
+
+        // Command for the default target.
+        let mut request_a = test_inline_create_command("target-agent", "for-default");
+        request_a.target_resource_id = Some(server.default_target.resource_id.clone());
+        let cmd_a = server.create_command(request_a).await.unwrap();
+
+        // Command for the second target.
+        let mut request_b = test_inline_create_command("target-agent", "for-second");
+        request_b.target_resource_id = Some("second-daemon".to_string());
+        let cmd_b = server.create_command(request_b).await.unwrap();
+
+        // Default target leases only its own command, even asking for many.
+        let default_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(default_leases.leases.len(), 1);
+        assert_eq!(default_leases.leases[0].command_id, cmd_a.command_id);
+        assert_eq!(default_leases.leases[0].envelope.target, server.default_target);
+
+        // Second target leases only its own command.
+        let second_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: second_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_leases.leases.len(), 1);
+        assert_eq!(second_leases.leases[0].command_id, cmd_b.command_id);
+        assert_eq!(second_leases.leases[0].envelope.target, second_target);
+    }
+
+    /// Defense-in-depth: a pending-index entry under target A's prefix whose
+    /// stored command metadata says target B is corruption — the lease call
+    /// must fail loudly instead of misdelivering the command.
+    #[tokio::test]
+    async fn test_lease_target_mismatch_in_pending_index_is_loud_error() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await;
+
+        // Create a command registered to second-daemon.
+        let mut request = test_inline_create_command("target-agent", "for-second");
+        request.target_resource_id = Some("second-daemon".to_string());
+        let cmd = server.create_command(request).await.unwrap();
+
+        // Corrupt the index: plant the command under the DEFAULT target's prefix.
+        let corrupt_key = format!(
+            "target:target-agent:{}:pending:{}:{}",
+            server.default_target.resource_id,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            cmd.command_id
+        );
+        alien_bindings::traits::Kv::put(server.kv.as_ref(), &corrupt_key, vec![], None)
+            .await
+            .unwrap();
+
+        // Leasing as the default target must fail loudly, not deliver the command.
+        let result = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await;
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains(&cmd.command_id) || err.message.contains("target"),
+            "expected loud target-mismatch error, got: {}",
+            err.message
+        );
+    }
+
+    /// Idempotency keys are scoped per target: same key on two different
+    /// targets creates two distinct commands; same key + same target replays
+    /// the same command.
+    #[tokio::test]
+    async fn test_idempotency_scoped_per_target() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await;
+
+        let make_request = |target: &str| {
+            let mut request = test_inline_create_command("target-agent", "idem-command");
+            request.target_resource_id = Some(target.to_string());
+            request.idempotency_key = Some("same-key".to_string());
+            request
+        };
+
+        let default_id = server.default_target.resource_id.clone();
+        let first = server.create_command(make_request(&default_id)).await.unwrap();
+        let second = server
+            .create_command(make_request("second-daemon"))
+            .await
+            .unwrap();
+        // Same key, different target: distinct commands.
+        assert_ne!(first.command_id, second.command_id);
+
+        // Same key, same target: replays the same command.
+        let replay = server.create_command(make_request(&default_id)).await.unwrap();
+        assert_eq!(replay.command_id, first.command_id);
+    }
+
+    // ===============================================
     // ESSENTIAL COMPONENT TESTS
     // ===============================================
 
@@ -643,13 +833,9 @@ mod tests {
         assert_envelope_command(&lease.envelope, "lease-command");
 
         // Test no available leases
-        // ALIEN-219: `LeaseRequest` no longer implements `Default` (`target` is
-        // required); this test only cares about deployment scope, so it uses the
-        // transitional deployment-scoped target.
-        #[allow(deprecated)]
         let empty_lease_request = LeaseRequest {
             deployment_id: "nonexistent-agent".to_string(),
-            target: CommandTarget::legacy_deployment_scoped("nonexistent-agent"),
+            target: server.default_target.clone(),
             max_leases: 1,
             lease_seconds: 60,
         };

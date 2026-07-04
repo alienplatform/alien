@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use alien_bindings::presigned::PresignedRequest;
 use alien_bindings::traits::{Kv, PutOptions, Storage};
-use alien_core::DeploymentModel;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use chrono::{DateTime, Utc};
 use hex;
@@ -41,6 +40,7 @@ pub use axum_handlers::{
 };
 pub use command_registry::{
     CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
+    ResolvedCommandTarget,
 };
 pub use dispatchers::{CommandDispatcher, NullCommandDispatcher};
 
@@ -208,9 +208,26 @@ impl CommandServer {
         // Validate the request
         self.validate_create_command(&request).await?;
 
-        // Check idempotency if key provided
+        // Resolve which command-capable resource this command targets
+        // (explicit targetResourceId, or single-target shorthand).
+        let resolved_target = self
+            .command_registry
+            .resolve_target(
+                &request.deployment_id,
+                request.target_resource_id.as_deref(),
+            )
+            .await?;
+
+        // Check idempotency if key provided (idempotency is scoped per target:
+        // the same key addressed to two different targets is two commands).
         if let Some(ref idem_key) = request.idempotency_key {
-            if let Some(existing_id) = self.check_idempotency(idem_key).await? {
+            let composed_key = Self::compose_idempotency_key(
+                &request.deployment_id,
+                &resolved_target.target.resource_id,
+                &request.command,
+                idem_key,
+            );
+            if let Some(existing_id) = self.check_idempotency(&composed_key).await? {
                 // Return existing command status
                 let status = self
                     .command_registry
@@ -249,6 +266,7 @@ impl CommandServer {
             .create_command(
                 &request.deployment_id,
                 &request.command,
+                &resolved_target,
                 initial_state,
                 request.deadline,
                 request_size_bytes,
@@ -256,11 +274,17 @@ impl CommandServer {
             .await?;
 
         let command_id = metadata.command_id;
-        let deployment_model = metadata.deployment_model;
+        let delivery_mode = metadata.delivery_mode;
 
-        // 2. Store idempotency mapping in KV
+        // 2. Store idempotency mapping in KV (target-scoped key)
         if let Some(ref idem_key) = request.idempotency_key {
-            self.store_idempotency(idem_key, &command_id).await?;
+            let composed_key = Self::compose_idempotency_key(
+                &request.deployment_id,
+                &metadata.target.resource_id,
+                &request.command,
+                idem_key,
+            );
+            self.store_idempotency(&composed_key, &command_id).await?;
         }
 
         // 3. Store params in KV
@@ -273,21 +297,25 @@ impl CommandServer {
             None
         };
 
-        // 5. Handle dispatch based on state and deployment model
+        // 5. Handle dispatch based on state and the target's delivery mode
         let (final_state, next_action) = if initial_state == CommandState::Pending {
-            match deployment_model {
-                DeploymentModel::Push => {
-                    // Push model: dispatch immediately
+            match delivery_mode {
+                CommandDeliveryMode::Push => {
+                    // Push delivery: dispatch immediately
                     self.dispatch_command_push(&command_id, &request.deployment_id)
                         .await?;
                     (CommandState::Dispatched, "poll")
                 }
-                DeploymentModel::Pull => {
-                    // Pull model: create pending index, deployment will poll
-                    self.create_pending_index(&request.deployment_id, &command_id)
-                        .await?;
+                CommandDeliveryMode::Pull => {
+                    // Pull delivery: create pending index, target will poll
+                    self.create_pending_index(
+                        &request.deployment_id,
+                        &metadata.target.resource_id,
+                        &command_id,
+                    )
+                    .await?;
                     debug!(
-                        "Command {} ready for pull (deployment will poll)",
+                        "Command {} ready for pull (target will poll)",
                         command_id
                     );
                     (CommandState::Pending, "poll")
@@ -351,7 +379,7 @@ impl CommandServer {
             .update_command_state(command_id, CommandState::Pending, None, None, None, None)
             .await?;
 
-        // 5. Get deployment model from registry and handle dispatch
+        // 5. Get delivery mode from registry and handle dispatch
         let metadata = self
             .command_registry
             .get_command_metadata(command_id)
@@ -362,17 +390,21 @@ impl CommandServer {
                 })
             })?;
 
-        let final_state = match metadata.deployment_model {
-            DeploymentModel::Push => {
+        let final_state = match metadata.delivery_mode {
+            CommandDeliveryMode::Push => {
                 self.dispatch_command_push(command_id, &status.deployment_id)
                     .await?;
                 CommandState::Dispatched
             }
-            DeploymentModel::Pull => {
-                self.create_pending_index(&status.deployment_id, command_id)
-                    .await?;
+            CommandDeliveryMode::Pull => {
+                self.create_pending_index(
+                    &status.deployment_id,
+                    &metadata.target.resource_id,
+                    command_id,
+                )
+                .await?;
                 debug!(
-                    "Command {} ready for pull after upload (deployment will poll)",
+                    "Command {} ready for pull after upload (target will poll)",
                     command_id
                 );
                 CommandState::Pending
@@ -416,20 +448,19 @@ impl CommandServer {
                     .await?;
 
                 // Clean up pending index
-                self.delete_pending_index(&status.deployment_id, command_id)
-                    .await?;
+                self.delete_pending_index(
+                    &status.deployment_id,
+                    &status.target.resource_id,
+                    command_id,
+                )
+                .await?;
 
                 // Return expired status directly (avoid recursion)
-                // ALIEN-219: `CommandRegistry`/`CommandStatus` don't carry a
-                // resolved per-resource target yet (that lands with the
-                // registry's `resolve_target`/storage work in later ALIEN-219
-                // tasks), so this uses the transitional deployment-scoped target.
-                #[allow(deprecated)]
                 return Ok(CommandStatusResponse {
                     command_id: command_id.to_string(),
                     state: CommandState::Expired,
                     attempt: status.attempt,
-                    target: CommandTarget::legacy_deployment_scoped(status.deployment_id.clone()),
+                    target: status.target,
                     response: None,
                 });
             }
@@ -442,15 +473,11 @@ impl CommandServer {
             None
         };
 
-        // ALIEN-219: see the note above — no resolved per-resource target is
-        // available from the registry yet, so this uses the transitional
-        // deployment-scoped target.
-        #[allow(deprecated)]
         Ok(CommandStatusResponse {
             command_id: command_id.to_string(),
             state: status.state,
             attempt: status.attempt,
-            target: CommandTarget::legacy_deployment_scoped(status.deployment_id.clone()),
+            target: status.target,
             response,
         })
     }
@@ -522,7 +549,7 @@ impl CommandServer {
         self.delete_lease(command_id).await?;
 
         // 7. Clean up pending index from KV (terminal state)
-        self.delete_pending_index(&status.deployment_id, command_id)
+        self.delete_pending_index(&status.deployment_id, &status.target.resource_id, command_id)
             .await?;
 
         // 8. Update registry state (SOURCE OF TRUTH)
@@ -575,8 +602,12 @@ impl CommandServer {
     ) -> Result<LeaseResponse> {
         let mut leases = Vec::new();
 
-        // 1. Scan KV pending index
-        let target_prefix = format!("target:{}:pending:", deployment_id);
+        // 1. Scan KV pending index — ONLY the requesting target's prefix.
+        // Commands for other targets in the same deployment are invisible here.
+        let target_prefix = format!(
+            "target:{}:{}:pending:",
+            deployment_id, lease_request.target.resource_id
+        );
         let scan_result = self
             .kv
             .scan_prefix(&target_prefix, Some(lease_request.max_leases * 2), None)
@@ -650,6 +681,26 @@ impl CommandServer {
                     continue;
                 }
             };
+
+            // 3.5 Defense-in-depth: the pending index key said this command
+            // belongs to the requesting target — verify the registry agrees.
+            // A mismatch means the index is corrupt; fail loudly rather than
+            // delivering a command to the wrong resource. The corrupt index
+            // key is deliberately retained (only the lease is cleaned up):
+            // genuine corruption should never occur, and the key is the
+            // evidence an operator needs — do not "fix" this by deleting it.
+            if metadata.target != lease_request.target {
+                self.delete_lease(&command_id).await?;
+                return Err(AlienError::new(ErrorData::Other {
+                    message: format!(
+                        "Pending index corruption: command '{}' is indexed under target '{}' \
+                         but the registry says it belongs to target '{}' — refusing to deliver",
+                        command_id,
+                        lease_request.target.resource_id,
+                        metadata.target.resource_id,
+                    ),
+                }));
+            }
 
             // 4. Check if command is in terminal state (stale index)
             if metadata.state.is_terminal() {
@@ -832,6 +883,23 @@ impl CommandServer {
     }
 
     // --- Idempotency ---
+
+    /// Compose the target-scoped idempotency key:
+    /// `{deploymentId}:{targetResourceId}:{commandName}:{key}`.
+    ///
+    /// Scoping by target means the same client key addressed to two different
+    /// targets creates two distinct commands.
+    fn compose_idempotency_key(
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_name: &str,
+        idem_key: &str,
+    ) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            deployment_id, target_resource_id, command_name, idem_key
+        )
+    }
 
     async fn check_idempotency(&self, idem_key: &str) -> Result<Option<String>> {
         let key = format!("idem:{}", idem_key);
@@ -1120,11 +1188,16 @@ impl CommandServer {
 
     // --- Pending Index ---
 
-    async fn create_pending_index(&self, deployment_id: &str, command_id: &str) -> Result<()> {
+    async fn create_pending_index(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
         let key = format!(
-            "target:{}:pending:{}:{}",
-            deployment_id, timestamp, command_id
+            "target:{}:{}:pending:{}:{}",
+            deployment_id, target_resource_id, timestamp, command_id
         );
 
         // Store empty value - just for ordering
@@ -1139,9 +1212,14 @@ impl CommandServer {
         Ok(())
     }
 
-    async fn delete_pending_index(&self, deployment_id: &str, command_id: &str) -> Result<()> {
+    async fn delete_pending_index(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
         // We need to scan to find the exact key since we don't know the timestamp
-        let prefix = format!("target:{}:pending:", deployment_id);
+        let prefix = format!("target:{}:{}:pending:", deployment_id, target_resource_id);
         let scan_result = self
             .kv
             .scan_prefix(&prefix, Some(100), None)
@@ -1323,13 +1401,9 @@ impl CommandServer {
             }
         }
 
-        // ALIEN-219: `CommandEnvelopeData` doesn't carry a resolved per-resource
-        // target yet (registry-side target storage/resolution lands in later
-        // ALIEN-219 tasks), so this uses the transitional deployment-scoped target.
-        #[allow(deprecated)]
         Ok(Envelope::new(
             metadata.deployment_id.clone(),
-            CommandTarget::legacy_deployment_scoped(metadata.deployment_id.clone()),
+            metadata.target.clone(),
             command_id.to_string(),
             metadata.attempt,
             metadata.deadline,
