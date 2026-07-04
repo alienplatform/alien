@@ -1,0 +1,86 @@
+[
+  {
+    "check": "pack",
+    "package": "bindings",
+    "reason": "publishable package not present (nothing to pack)",
+    "owningTask": "04"
+  },
+  {
+    "check": "pack",
+    "package": "commands",
+    "reason": "publishable package not present (nothing to pack)",
+    "owningTask": "08"
+  },
+  {
+    "check": "import",
+    "package": "sdk",
+    "reason": "facade root is missing pinned error re-exports",
+    "owningTask": "03"
+  },
+  {
+    "check": "import",
+    "package": "sdk",
+    "reason": "subpath ./worker-runtime is not exported",
+    "owningTask": "03"
+  },
+  {
+    "check": "import",
+    "package": "bindings",
+    "reason": "cannot import @alienplatform/bindings (package not installed)",
+    "owningTask": "04"
+  },
+  {
+    "check": "import",
+    "package": "commands",
+    "reason": "cannot import @alienplatform/commands (package not installed)",
+    "owningTask": "08"
+  },
+  {
+    "check": "error-code",
+    "package": "bindings",
+    "reason": "cannot assert BINDING_NOT_CONFIGURED (bindings package not installed)",
+    "owningTask": "04"
+  },
+  {
+    "check": "error-code",
+    "package": "commands",
+    "reason": "cannot assert COMMAND_RECEIVER_CONFIG_INVALID (commands package not installed)",
+    "owningTask": "08"
+  },
+  {
+    "check": "typecheck",
+    "package": "sdk",
+    "reason": "cannot find module '@alienplatform/sdk/worker-runtime'",
+    "owningTask": "03"
+  },
+  {
+    "check": "typecheck",
+    "package": "bindings",
+    "reason": "cannot find module '@alienplatform/bindings'",
+    "owningTask": "04"
+  },
+  {
+    "check": "typecheck",
+    "package": "bindings",
+    "reason": "cannot find module '@alienplatform/bindings/native'",
+    "owningTask": "04"
+  },
+  {
+    "check": "typecheck",
+    "package": "commands",
+    "reason": "cannot find module '@alienplatform/commands'",
+    "owningTask": "08"
+  },
+  {
+    "check": "packed-contents",
+    "package": "@alienplatform/bindings-darwin-arm64",
+    "reason": "per-platform prebuild package not present (expected one .node addon + manifest)",
+    "owningTask": "04a"
+  },
+  {
+    "check": "compile",
+    "package": "bindings",
+    "reason": "bun build --compile of ./native entry fails (bindings package not installed)",
+    "owningTask": "04/04a"
+  }
+]
