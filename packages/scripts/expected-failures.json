@@ -1,0 +1,44 @@
+[
+  {
+    "check": "no-commands-subpath",
+    "package": "sdk",
+    "reason": "exports map still contains ./commands",
+    "owningTask": "03"
+  },
+  {
+    "check": "sdk-subpath-containment",
+    "package": "sdk",
+    "reason": "gRPC import (nice-grpc) outside ./worker-runtime source directory",
+    "owningTask": "03"
+  },
+  {
+    "check": "sdk-subpath-containment",
+    "package": "sdk",
+    "reason": "gRPC import (nice-grpc-common) outside ./worker-runtime source directory",
+    "owningTask": "03"
+  },
+  {
+    "check": "sdk-subpath-containment",
+    "package": "sdk",
+    "reason": "gRPC import (@grpc/grpc-js) outside ./worker-runtime source directory",
+    "owningTask": "03"
+  },
+  {
+    "check": "sdk-subpath-containment",
+    "package": "sdk",
+    "reason": "generated binding-service proto client shipped in the package",
+    "owningTask": "03/17"
+  },
+  {
+    "check": "package-not-implemented",
+    "package": "bindings",
+    "reason": "package not yet implemented (only PACKAGE_LAYOUT.md present)",
+    "owningTask": "04"
+  },
+  {
+    "check": "package-not-implemented",
+    "package": "commands",
+    "reason": "package not yet implemented (only PACKAGE_LAYOUT.md present)",
+    "owningTask": "08"
+  }
+]
