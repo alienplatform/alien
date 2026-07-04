@@ -150,6 +150,7 @@ regex = "1"
 reqwest = { version = "0.12.2", default-features = false }
 rkyv = "0.7.43"
 rstest = "0.25.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 schemars = { version = "0.8", features = ["indexmap2"] }
 sea-query = { version = "0.32", features = ["with-chrono", "with-json", "with-uuid"] }
 sec = "1"

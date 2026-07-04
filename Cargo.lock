@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "alien-agent"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -239,6 +239,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rstest",
+ "rusqlite",
  "sec",
  "serde",
  "serde_json",
@@ -262,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -296,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -365,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -379,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -397,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -416,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -431,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -465,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "base64 0.22.1",
@@ -480,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -511,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-agent",
  "alien-cli-common",
@@ -549,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -579,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -592,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -602,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -635,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -649,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -709,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -738,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -779,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -847,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-error",
  "chrono",
@@ -864,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -883,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-error",
  "chrono",
@@ -900,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -917,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "alien-runtime"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -975,14 +976,14 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-bindings",
 ]
 
 [[package]]
 name = "alien-terraform"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -997,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1043,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.10.6"
+version = "1.10.7"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -3736,6 +3737,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
 name = "fastbloom"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4274,6 +4281,9 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+dependencies = [
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -4291,6 +4301,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
 dependencies = [
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5081f264ed7adee96ea4b4778b6bb9da0a7228b084587aa3bd3ff05da7c5a3b"
+dependencies = [
+ "hashbrown 0.17.0",
 ]
 
 [[package]]
@@ -5514,6 +5533,17 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.4",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.38.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -7834,6 +7864,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rstest"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7861,6 +7901,21 @@ dependencies = [
  "rustc_version",
  "syn 2.0.117",
  "unicode-ident",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.40.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11438310b19e3109b6446c33d1ed5e889428cf2e278407bc7896bc4aaea43323"
+dependencies = [
+ "bitflags 2.11.0",
+ "fallible-iterator 0.3.0",
+ "fallible-streaming-iterator",
+ "hashlink 0.12.0",
+ "libsqlite3-sys",
+ "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -8832,6 +8887,18 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
 ]
 
 [[package]]
