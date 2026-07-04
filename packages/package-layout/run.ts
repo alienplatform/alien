@@ -349,6 +349,15 @@ function tarEntries(tarball: string): string[] {
     .filter(line => line.length > 0)
 }
 
+// Hard denylist: never allowed in a packed tarball, regardless of `files` or
+// EXTRA_SHIPPED_TODAY. Catches regressions even if an .npmignore is deleted.
+const HARD_DENYLIST_PATTERNS: RegExp[] = [
+  /(^|\/)node_modules\//,
+  /(^|\/)\.env$/,
+  /\.tgz$/,
+  /(^|\/)\.turbo\//,
+]
+
 // Intended publish set for every publishable package: manifest, docs, license,
 // contract file, and built output. When a manifest carries a `files` allowlist,
 // that allowlist (plus the files npm always includes) is the source of truth.
@@ -411,14 +420,27 @@ for (const name of ["sdk", "core"]) {
   const requiresContract = existsSync(join(packagesDir, name, "PACKAGE_LAYOUT.md"))
   const hasContract = entries.includes("PACKAGE_LAYOUT.md")
 
-  // …and nothing outside the exact allowlist may ship.
+  // …and nothing outside the exact allowlist may ship. Hard-denylisted entries
+  // are reported separately (and always), so exclude them from `unexpected` to
+  // avoid reporting the same file twice.
+  const denylisted = entries.filter(entry =>
+    HARD_DENYLIST_PATTERNS.some(pattern => pattern.test(entry)),
+  )
   const allowed = allowedPatternsFor(name)
-  const unexpected = entries.filter(entry => !allowed.some(pattern => pattern.test(entry)))
+  const unexpected = entries.filter(
+    entry => !denylisted.includes(entry) && !allowed.some(pattern => pattern.test(entry)),
+  )
 
   const problems: string[] = []
   if (!hasManifest) problems.push("missing package.json")
   if (!hasDist) problems.push("missing dist/*.js")
   if (requiresContract && !hasContract) problems.push("missing PACKAGE_LAYOUT.md")
+  if (denylisted.length > 0) {
+    const shown = denylisted.slice(0, 5).join(", ")
+    problems.push(
+      `ships ${denylisted.length} hard-denylisted file(s): ${shown}${denylisted.length > 5 ? ", …" : ""}`,
+    )
+  }
   if (unexpected.length > 0) {
     const shown = unexpected.slice(0, 5).join(", ")
     problems.push(
