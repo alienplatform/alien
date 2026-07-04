@@ -315,25 +315,6 @@ impl CommandTarget {
             resource_type,
         }
     }
-
-    /// **ALIEN-219 scaffolding only.** Builds a target scoped to `deployment_id`,
-    /// defaulting to `CommandTargetType::Worker`.
-    ///
-    /// Real command targets identify a specific resource, not a deployment — this
-    /// helper exists solely to keep the workspace compiling for call sites whose
-    /// true target wiring lands in later ALIEN-219 tasks (server-side resolution,
-    /// runtime polling, agent dispatch). Every call site must be replaced with a
-    /// real resolved target before this branch merges; see the ALIEN-219 Task 1
-    /// report for the current usage list.
-    #[deprecated(
-        note = "ALIEN-219 placeholder: replace with a real resolved CommandTarget (Tasks 2-4)"
-    )]
-    pub fn legacy_deployment_scoped(deployment_id: impl Into<String>) -> Self {
-        Self {
-            resource_id: deployment_id.into(),
-            resource_type: CommandTargetType::Worker,
-        }
-    }
 }
 
 /// Commands envelope sent to deployments

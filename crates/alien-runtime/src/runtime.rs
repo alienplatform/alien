@@ -249,6 +249,7 @@ pub async fn run(
             url,
             commands_config.interval,
             commands_config.deployment_id.clone(),
+            commands_config.target_resource_id.clone(),
             commands_config.token.clone(),
             control_server.clone(),
         );

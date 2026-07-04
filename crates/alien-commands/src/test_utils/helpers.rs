@@ -59,10 +59,10 @@ pub fn test_envelope_for_agent(
     command: &str,
     params: BodySpec,
 ) -> Envelope {
-    #[allow(deprecated)]
     Envelope::new(
         deployment_id,
-        CommandTarget::legacy_deployment_scoped(deployment_id),
+        // Matches the default target auto-registered by `TestCommandServer`.
+        CommandTarget::new("test-worker", CommandTargetType::Worker),
         command_id,
         1,
         None,
