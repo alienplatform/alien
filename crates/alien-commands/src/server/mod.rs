@@ -314,10 +314,7 @@ impl CommandServer {
                         &command_id,
                     )
                     .await?;
-                    debug!(
-                        "Command {} ready for pull (target will poll)",
-                        command_id
-                    );
+                    debug!("Command {} ready for pull (target will poll)", command_id);
                     (CommandState::Pending, "poll")
                 }
             }
@@ -549,8 +546,12 @@ impl CommandServer {
         self.delete_lease(command_id).await?;
 
         // 7. Clean up pending index from KV (terminal state)
-        self.delete_pending_index(&status.deployment_id, &status.target.resource_id, command_id)
-            .await?;
+        self.delete_pending_index(
+            &status.deployment_id,
+            &status.target.resource_id,
+            command_id,
+        )
+        .await?;
 
         // 8. Update registry state (SOURCE OF TRUTH)
         let (new_state, error) = if response.is_success() {
@@ -695,9 +696,7 @@ impl CommandServer {
                     message: format!(
                         "Pending index corruption: command '{}' is indexed under target '{}' \
                          but the registry says it belongs to target '{}' — refusing to deliver",
-                        command_id,
-                        lease_request.target.resource_id,
-                        metadata.target.resource_id,
+                        command_id, lease_request.target.resource_id, metadata.target.resource_id,
                     ),
                 }));
             }

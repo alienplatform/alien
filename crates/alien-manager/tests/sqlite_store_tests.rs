@@ -15,11 +15,11 @@ use alien_manager::stores::sqlite::{
 
 // ALIEN-219 command-target resolution test imports.
 use alien_commands::server::CommandRegistry;
+use alien_core::{CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType};
 use alien_core::{
     Container, ContainerCode, Daemon, DaemonCode, ResourceLifecycle, ResourceSpec, RuntimeMetadata,
     Stack, StackState, Worker, WorkerCode,
 };
-use alien_core::{CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType};
 use alien_manager::traits::deployment_store::*;
 use alien_manager::traits::release_store::*;
 use alien_manager::traits::token_store::*;
@@ -1417,7 +1417,10 @@ async fn resolve_target_shorthand_single_worker_push() {
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
     let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
-    assert_eq!(resolved.target, CommandTarget::new("w1", CommandTargetType::Worker));
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("w1", CommandTargetType::Worker)
+    );
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Push);
 }
 
@@ -1431,7 +1434,10 @@ async fn resolve_target_explicit_daemon_is_pull() {
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
     let resolved = registry.resolve_target(&dep_id, Some("d1")).await.unwrap();
-    assert_eq!(resolved.target, CommandTarget::new("d1", CommandTargetType::Daemon));
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("d1", CommandTargetType::Daemon)
+    );
     // Daemons are always Pull, even on a push-capable platform/model.
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
 }
@@ -1479,7 +1485,10 @@ async fn resolve_target_unknown_is_404() {
     assert_eq!(err.http_status_code, Some(404));
 
     // An explicit empty id never falls back to shorthand.
-    let err = registry.resolve_target(&dep_id, Some("")).await.unwrap_err();
+    let err = registry
+        .resolve_target(&dep_id, Some(""))
+        .await
+        .unwrap_err();
     assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
 }
 
@@ -1533,7 +1542,10 @@ async fn resolve_target_container_always_pull() {
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
     let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
-    assert_eq!(resolved.target, CommandTarget::new("c1", CommandTargetType::Container));
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("c1", CommandTargetType::Container)
+    );
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
 }
 
@@ -1548,7 +1560,14 @@ async fn create_command_round_trips_target_columns() {
     let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
     let expected = CommandTarget::new("d1", CommandTargetType::Daemon);
     let metadata = registry
-        .create_command(&dep_id, "sync-data", &resolved, CommandState::Pending, None, None)
+        .create_command(
+            &dep_id,
+            "sync-data",
+            &resolved,
+            CommandState::Pending,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(metadata.target, expected);

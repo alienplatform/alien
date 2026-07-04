@@ -202,8 +202,14 @@ async fn poll_and_dispatch(
             debug!(resource_id = %target.resource_id, "Rebuilt command dispatcher");
         }
 
-        match lease_and_dispatch_target(client, &lease_url, &deployment_id, target, dispatcher_cache)
-            .await
+        match lease_and_dispatch_target(
+            client,
+            &lease_url,
+            &deployment_id,
+            target,
+            dispatcher_cache,
+        )
+        .await
         {
             Ok(n) => dispatched += n,
             Err(e) => {
@@ -440,11 +446,16 @@ mod tests {
             commands_push_target: push_target.map(|s| s.to_string()),
         };
 
-        StackResourceState::new_pending("worker".to_string(), Resource::new(worker), None, Vec::new())
-            .with_updates(|state| {
-                state.status = ResourceStatus::Running;
-                state.outputs = Some(ResourceOutputs::new(outputs));
-            })
+        StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(worker),
+            None,
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Running;
+            state.outputs = Some(ResourceOutputs::new(outputs));
+        })
     }
 
     /// A Worker resource state that has no outputs yet (still provisioning).
@@ -455,18 +466,25 @@ mod tests {
             })
             .permissions("test-profile".to_string())
             .build();
-        StackResourceState::new_pending("worker".to_string(), Resource::new(worker), None, Vec::new())
+        StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(worker),
+            None,
+            Vec::new(),
+        )
     }
 
     #[test]
     fn enumerate_collects_all_workers_with_push_target_sorted() {
         let mut stack_state = StackState::new(Platform::Aws);
-        stack_state
-            .resources
-            .insert("worker-b".to_string(), worker_state("worker-b", Some("lambda-b")));
-        stack_state
-            .resources
-            .insert("worker-a".to_string(), worker_state("worker-a", Some("lambda-a")));
+        stack_state.resources.insert(
+            "worker-b".to_string(),
+            worker_state("worker-b", Some("lambda-b")),
+        );
+        stack_state.resources.insert(
+            "worker-a".to_string(),
+            worker_state("worker-a", Some("lambda-a")),
+        );
         // Worker with commands disabled → no push target → excluded.
         stack_state
             .resources
@@ -532,9 +550,11 @@ mod tests {
         assert_eq!(builds.get(), 1);
 
         // Changed push target → rebuild.
-        assert!(ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
-            .await
-            .unwrap());
+        assert!(
+            ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
+                .await
+                .unwrap()
+        );
         assert_eq!(builds.get(), 2);
         assert_eq!(cache.get("worker-a").unwrap().push_target, "lambda-a-v2");
 
@@ -545,9 +565,11 @@ mod tests {
         assert_eq!(builds.get(), 3);
         assert_eq!(cache.len(), 2);
         // worker-a entry untouched by worker-b build.
-        assert!(!ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
-            .await
-            .unwrap());
+        assert!(
+            !ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
+                .await
+                .unwrap()
+        );
         assert_eq!(builds.get(), 3);
     }
 }

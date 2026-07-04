@@ -187,6 +187,22 @@ impl CommandsPolling {
         Ok(count)
     }
 
+    /// Build the lease request this runtime sends to the manager.
+    ///
+    /// Extracted as a pure function (no I/O) so the request shape — in
+    /// particular that it names this runtime's own target resource, typed as
+    /// a Worker (a K8s/Local runtime is always a Worker target — Container/
+    /// Daemon poll their own runtimes) — is directly unit-testable without a
+    /// mock HTTP server.
+    fn build_lease_request(&self) -> LeaseRequest {
+        LeaseRequest {
+            deployment_id: self.deployment_id.clone(),
+            target: CommandTarget::new(self.target_resource_id.clone(), CommandTargetType::Worker),
+            max_leases: 10,
+            lease_seconds: 60,
+        }
+    }
+
     /// Acquire leases from command server
     async fn acquire_leases(&self) -> Result<Vec<LeaseInfo>> {
         let mut lease_endpoint = self.url.clone();
@@ -207,12 +223,7 @@ impl CommandsPolling {
         // ALIEN-219: lease scoped to this runtime's own target resource. The
         // manager scans only this target's pending index (a K8s/Local runtime is
         // always a Worker target — Container/Daemon poll their own runtimes).
-        let request = LeaseRequest {
-            deployment_id: self.deployment_id.clone(),
-            target: CommandTarget::new(self.target_resource_id.clone(), CommandTargetType::Worker),
-            max_leases: 10,
-            lease_seconds: 60,
-        };
+        let request = self.build_lease_request();
 
         let response = self
             .client
@@ -399,15 +410,56 @@ mod tests {
 
     #[test]
     fn lease_request_carries_worker_target() {
-        // The lease request built for the manager names this runtime's own
-        // target resource, typed as a Worker.
-        let request = LeaseRequest {
-            deployment_id: "dep-123".to_string(),
-            target: CommandTarget::new("worker-7", CommandTargetType::Worker),
-            max_leases: 10,
-            lease_seconds: 60,
-        };
+        // Exercise the real request-building path off a `CommandsPolling`
+        // constructed via `from_env` (not a hand-built `LeaseRequest`
+        // literal) — proves `acquire_leases` would actually send this shape.
+        let mut env = base_env();
+        env.insert(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+            "worker-7".to_string(),
+        );
+        let polling = CommandsPolling::from_env(&env, &HashMap::new(), control_server())
+            .unwrap()
+            .expect("polling should be enabled");
+
+        let request = polling.build_lease_request();
+
+        assert_eq!(request.deployment_id, "dep-123");
         assert_eq!(request.target.resource_id, "worker-7");
         assert_eq!(request.target.resource_type, CommandTargetType::Worker);
+        assert_eq!(request.max_leases, 10);
+        assert_eq!(request.lease_seconds, 60);
+    }
+
+    #[test]
+    fn build_lease_request_reflects_constructor_target() {
+        // Two runtimes built via `new()` with different target resource ids
+        // never build a lease request for the other's target — the request
+        // shape is derived purely from `self`, not from any shared state.
+        let polling_a = CommandsPolling::new(
+            Url::parse("https://commands.example.com").unwrap(),
+            Duration::from_secs(5),
+            "dep-123".to_string(),
+            "worker-a".to_string(),
+            "tok".to_string(),
+            control_server(),
+        );
+        let polling_b = CommandsPolling::new(
+            Url::parse("https://commands.example.com").unwrap(),
+            Duration::from_secs(5),
+            "dep-123".to_string(),
+            "worker-b".to_string(),
+            "tok".to_string(),
+            control_server(),
+        );
+
+        assert_eq!(
+            polling_a.build_lease_request().target.resource_id,
+            "worker-a"
+        );
+        assert_eq!(
+            polling_b.build_lease_request().target.resource_id,
+            "worker-b"
+        );
     }
 }

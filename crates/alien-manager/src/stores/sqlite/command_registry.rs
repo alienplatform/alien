@@ -600,11 +600,7 @@ mod tests {
         .unwrap();
 
         // Status read tolerates the NULL target with a synthesized marker.
-        let status = reg
-            .get_command_status("legacy-cmd")
-            .await
-            .unwrap()
-            .unwrap();
+        let status = reg.get_command_status("legacy-cmd").await.unwrap().unwrap();
         assert_eq!(status.target.resource_id, "dep-legacy");
         assert_eq!(status.target.resource_type, CommandTargetType::Worker);
 

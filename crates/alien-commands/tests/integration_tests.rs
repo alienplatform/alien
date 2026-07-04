@@ -668,7 +668,10 @@ mod tests {
             .unwrap();
         assert_eq!(default_leases.leases.len(), 1);
         assert_eq!(default_leases.leases[0].command_id, cmd_a.command_id);
-        assert_eq!(default_leases.leases[0].envelope.target, server.default_target);
+        assert_eq!(
+            default_leases.leases[0].envelope.target,
+            server.default_target
+        );
 
         // Second target leases only its own command.
         let second_leases = server
@@ -754,7 +757,10 @@ mod tests {
         };
 
         let default_id = server.default_target.resource_id.clone();
-        let first = server.create_command(make_request(&default_id)).await.unwrap();
+        let first = server
+            .create_command(make_request(&default_id))
+            .await
+            .unwrap();
         let second = server
             .create_command(make_request("second-daemon"))
             .await
@@ -763,8 +769,88 @@ mod tests {
         assert_ne!(first.command_id, second.command_id);
 
         // Same key, same target: replays the same command.
-        let replay = server.create_command(make_request(&default_id)).await.unwrap();
+        let replay = server
+            .create_command(make_request(&default_id))
+            .await
+            .unwrap();
         assert_eq!(replay.command_id, first.command_id);
+    }
+
+    /// One deployment, two command-capable targets of different types
+    /// (Worker + Daemon) sharing the exact same command name: the Worker's
+    /// command routes Push (mock dispatcher receives it), the Daemon's lands
+    /// only in the Daemon's own pending index (leasable there, absent from
+    /// the Worker's). The two never cross.
+    #[tokio::test]
+    async fn test_worker_and_daemon_share_command_name_route_independently() {
+        // Push-capable dispatcher: the default auto-registered target is a
+        // Worker in Push mode (see TestCommandServerBuilder::build).
+        let server = TestCommandServer::new().await;
+        server
+            .registry
+            .register_target("shared-daemon", CommandTargetType::Daemon)
+            .await;
+        let daemon_target = CommandTarget::new("shared-daemon", CommandTargetType::Daemon);
+
+        // Command addressed to the Worker.
+        let mut worker_request = test_inline_create_command("target-agent", "shared-command");
+        worker_request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let worker_response = server.create_command(worker_request).await.unwrap();
+        assert_eq!(worker_response.state, CommandState::Dispatched);
+
+        // Command addressed to the Daemon, same command name.
+        let mut daemon_request = test_inline_create_command("target-agent", "shared-command");
+        daemon_request.target_resource_id = Some("shared-daemon".to_string());
+        let daemon_response = server.create_command(daemon_request).await.unwrap();
+        assert_eq!(daemon_response.state, CommandState::Pending);
+
+        // The Worker's command reached the mock dispatcher (push); the
+        // Daemon's did not — exactly one dispatch, and it's the Worker's.
+        let mock_dispatcher = server
+            .mock_dispatcher()
+            .expect("Should have mock dispatcher");
+        mock_dispatcher.assert_dispatch_count(1).await;
+        let dispatched = mock_dispatcher.get_latest().await.unwrap();
+        assert_eq!(dispatched.envelope.command_id, worker_response.command_id);
+        assert_eq!(dispatched.envelope.target, server.default_target);
+
+        // The Daemon's command sits only in ITS OWN pending index: leasing as
+        // the Daemon target returns exactly the Daemon's command.
+        let daemon_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: daemon_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(daemon_leases.leases.len(), 1);
+        assert_eq!(
+            daemon_leases.leases[0].command_id,
+            daemon_response.command_id
+        );
+        assert_eq!(daemon_leases.leases[0].envelope.target, daemon_target);
+
+        // Leasing as the Worker target never surfaces the Daemon's command
+        // (the Worker's pending index is untouched — its command was pushed,
+        // not enqueued, and the Daemon's command was never indexed there).
+        let worker_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(worker_leases.leases.len(), 0);
     }
 
     // ===============================================

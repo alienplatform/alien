@@ -124,7 +124,10 @@ async fn non_worker_target_is_rejected_before_dispatch() {
 
     // A Container target reaching the push dispatcher is a routing bug (they
     // are always Pull) — it must be rejected loudly, not dispatched.
-    let env = envelope(&dep_id, CommandTarget::new("c1", CommandTargetType::Container));
+    let env = envelope(
+        &dep_id,
+        CommandTarget::new("c1", CommandTargetType::Container),
+    );
     let err = dispatcher.dispatch(&env).await.unwrap_err();
     assert_eq!(err.code, "OPERATION_NOT_SUPPORTED");
     assert!(
@@ -145,7 +148,10 @@ async fn worker_target_output_lookup_is_keyed_by_envelope_target() {
     // The worker id comes straight from the envelope target; with an empty
     // stack state the outputs lookup fails, and the error names that exact id
     // (proving the dispatcher no longer scans for a commands-enabled worker).
-    let env = envelope(&dep_id, CommandTarget::new("worker-xyz", CommandTargetType::Worker));
+    let env = envelope(
+        &dep_id,
+        CommandTarget::new("worker-xyz", CommandTargetType::Worker),
+    );
     let err = dispatcher.dispatch(&env).await.unwrap_err();
     assert!(
         err.message.contains("worker-xyz"),

@@ -744,7 +744,9 @@ mod tests {
         assert!(json.contains("\"commandId\":\"cmd_123\""));
         assert!(json.contains("\"command\":\"test-command\""));
         assert!(json.contains("\"protocol\":\"arc.v1\""));
-        assert!(json.contains("\"target\":{\"resourceId\":\"worker-1\",\"resourceType\":\"worker\"}"));
+        assert!(
+            json.contains("\"target\":{\"resourceId\":\"worker-1\",\"resourceType\":\"worker\"}")
+        );
     }
 
     #[test]
@@ -801,7 +803,10 @@ mod tests {
     fn test_command_target_round_trip_camel_case() {
         let target = CommandTarget::new("container-1", CommandTargetType::Container);
         let json = serde_json::to_string(&target).unwrap();
-        assert_eq!(json, "{\"resourceId\":\"container-1\",\"resourceType\":\"container\"}");
+        assert_eq!(
+            json,
+            "{\"resourceId\":\"container-1\",\"resourceType\":\"container\"}"
+        );
 
         let round_tripped: CommandTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, target);
@@ -864,7 +869,10 @@ mod tests {
         });
         let request: LeaseRequest = serde_json::from_value(json_with_target).unwrap();
         assert_eq!(request.deployment_id, "deployment_123");
-        assert_eq!(request.target, CommandTarget::new("worker-1", CommandTargetType::Worker));
+        assert_eq!(
+            request.target,
+            CommandTarget::new("worker-1", CommandTargetType::Worker)
+        );
         assert_eq!(request.max_leases, 1);
         assert_eq!(request.lease_seconds, 60);
     }
@@ -880,7 +888,9 @@ mod tests {
         };
 
         let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"target\":{\"resourceId\":\"daemon-1\",\"resourceType\":\"daemon\"}"));
+        assert!(
+            json.contains("\"target\":{\"resourceId\":\"daemon-1\",\"resourceType\":\"daemon\"}")
+        );
 
         let round_tripped: CommandStatusResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, response);
