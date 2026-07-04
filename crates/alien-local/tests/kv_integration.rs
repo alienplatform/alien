@@ -2,7 +2,7 @@
 //!
 //! These tests verify that:
 //! 1. Manager creates KV databases usable by LocalKv binding
-//! 2. Health checks read the localkv.v1 SQLite format marker
+//! 2. Health checks read the localkv.v1 format marker
 //! 3. Data persists across sessions
 
 use alien_bindings::providers::kv::local::LocalKv;
@@ -18,7 +18,7 @@ async fn test_manager_creates_usable_kv() {
     let temp_dir = TempDir::new().unwrap();
     let manager = LocalKvManager::new(temp_dir.path().to_path_buf());
 
-    // Manager creates the KV directory (LocalKv creates the SQLite file on open)
+    // Manager creates the KV directory (LocalKv creates the store file on open)
     let kv_path = manager.create_kv("my-kv").await.unwrap();
 
     // LocalKv opens the SQLite store at that path (creating localkv.sqlite)
@@ -32,7 +32,7 @@ async fn test_manager_creates_usable_kv() {
     assert_eq!(value, Some(b"value1".to_vec()));
 }
 
-/// Health check reads the SQLite format marker
+/// Health check reads the localkv.v1 format marker
 #[tokio::test]
 async fn test_health_check_opens_database() {
     let temp_dir = TempDir::new().unwrap();
@@ -42,7 +42,7 @@ async fn test_health_check_opens_database() {
     assert!(manager.check_health("nonexistent").await.is_err());
 
     // Directory created but store not yet opened → healthy (not-yet-materialized
-    // is a valid state; the SQLite file only appears on first LocalKv::new).
+    // is a valid state; the store file only appears on first LocalKv::new).
     let kv_path = manager.create_kv("healthy-kv").await.unwrap();
     manager.check_health("healthy-kv").await.unwrap();
 
@@ -97,7 +97,7 @@ async fn test_get_binding_returns_local_variant() {
     let temp_dir = TempDir::new().unwrap();
     let manager = LocalKvManager::new(temp_dir.path().to_path_buf());
 
-    // Create path and open the SQLite store (so the directory exists)
+    // Create path and open the store (so the directory exists)
     let kv_path = manager.create_kv("binding-test").await.unwrap();
     let _kv = LocalKv::new(kv_path).await.unwrap();
 

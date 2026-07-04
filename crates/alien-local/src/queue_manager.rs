@@ -6,7 +6,7 @@ use tracing::{debug, info};
 /// Manager for local Queue resources.
 ///
 /// Creates the on-disk directory for each queue resource. The `LocalQueue`
-/// binding opens its own SQLite database (`localqueue.v1`) inside that
+/// binding opens its own SQLite-compatible database (`localqueue.v1`) inside that
 /// directory and performs all operations directly.
 ///
 /// # State Scoping
@@ -122,13 +122,13 @@ impl LocalQueueManager {
     /// Verifies that a queue resource exists and is accessible.
     ///
     /// Checks that the queue directory exists and is readable. This is a
-    /// lightweight liveness probe that does not open the SQLite database: the
+    /// lightweight liveness probe that does not open the database: the
     /// `LocalQueue` binding materializes `localqueue.sqlite` on first use, and a
     /// readable resource directory is a valid (possibly not-yet-opened) state.
-    /// SQLite (WAL + busy_timeout) would in fact allow a concurrent read-only
-    /// open alongside the worker runtime and trigger service, so this could be
-    /// upgraded to a format probe like the KV check if deeper validation is ever
-    /// needed.
+    /// The engine's multi-process WAL mode would in fact allow a concurrent
+    /// probe open alongside the worker runtime and trigger service, so this
+    /// could be upgraded to a format probe like the KV check if deeper
+    /// validation is ever needed.
     pub async fn check_health(&self, id: &str) -> Result<()> {
         let queue_path = self.state_dir.join("queue").join(id);
 
@@ -148,7 +148,7 @@ impl LocalQueueManager {
         }
 
         // Verify the directory is readable (lightweight probe; the binding opens
-        // the SQLite database itself on first use).
+        // the database itself on first use).
         std::fs::read_dir(&queue_path).into_alien_error().context(
             ErrorData::LocalDirectoryError {
                 path: queue_path.display().to_string(),

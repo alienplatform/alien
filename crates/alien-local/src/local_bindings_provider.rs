@@ -478,9 +478,9 @@ impl BindingsProviderApi for LocalBindingsProvider {
         use alien_bindings::providers::queue::local::LocalQueue;
         use alien_core::bindings::QueueBinding;
 
-        // SQLite (WAL + busy_timeout) allows concurrent opens on the same file
-        // across handles and processes, so each caller constructs its own
-        // `LocalQueue` directly — no handle cache is needed.
+        // The engine (multi-process WAL mode + busy_timeout) allows concurrent
+        // opens on the same file across handles and processes, so each caller
+        // constructs its own `LocalQueue` directly — no handle cache is needed.
         let binding = self.queue_manager.get_binding(binding_name).context(
             BindingsErrorData::config_invalid(
                 binding_name,

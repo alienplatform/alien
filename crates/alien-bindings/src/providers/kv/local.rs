@@ -1,35 +1,35 @@
-//! Local disk-persisted KV backed by SQLite (`localkv.v1`), multi-process safe.
+//! Local disk-persisted KV backed by turso (`localkv.v1`), multi-process safe.
 //!
 //! # Connection strategy
 //!
-//! `rusqlite::Connection` is `Send` but **not** `Sync`, and every SQLite call is
-//! blocking. We therefore never store a connection on `LocalKv` (which must be
-//! `Send + Sync` to live behind `Arc<dyn Kv>`): each operation runs inside
-//! `tokio::task::spawn_blocking` and opens its **own** short-lived connection to
-//! `<dataDir>/localkv.sqlite`, then drops it. A connection is never held across
-//! an `.await`, and there is no `Mutex<Connection>` anywhere — the two footguns
-//! called out by the async/blocking boundary constraint simply cannot occur.
+//! turso is async-native and its `Connection` is `Send + Sync`, so there is no
+//! `spawn_blocking` boundary and no `Mutex<Connection>` anywhere. `LocalKv`
+//! holds one `turso::Database` handle on `<dataDir>/localkv.sqlite`; each
+//! operation opens its **own** short-lived connection from it and drops it
+//! when the operation completes, so no statement state leaks between
+//! operations.
 //!
 //! Correctness under concurrent access (multiple handles on one file, i.e.
-//! multiple processes) comes from SQLite itself: every connection enables WAL
-//! (concurrent readers alongside a single writer) and a `busy_timeout` (writers
-//! wait for the write lock instead of returning `SQLITE_BUSY`). The schema is
-//! created once in [`LocalKv::new`]; per-operation connections only set the
-//! connection-scoped pragmas. Reads of live rows never take the write lock; a
-//! read that encounters an expired row escalates to a short delete (see `get`
-//! and `exists`). Conditional puts are a single atomic
-//! `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the race is resolved by the
-//! database, not by application-level locking.
+//! multiple processes) comes from turso's multi-process WAL mode — enabled
+//! explicitly, experimental upstream, and gated by the multi-handle tests
+//! below — plus a `busy_timeout` (writers wait for the write lock instead of
+//! failing with `Busy`). The schema is created once in [`LocalKv::new`]. Reads
+//! of live rows never take the write lock; a read that encounters an expired
+//! row escalates to a short delete (see `get` and `exists`). Conditional puts
+//! are a single atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the
+//! race is resolved by the database, not by application-level locking.
 //!
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v1` contract.
 use crate::error::{ErrorData, Result};
-use crate::providers::sqlite_store::{SqliteStore, StoreSpec};
+use crate::providers::local_store::{
+    as_blob, as_i64, as_opt_i64, as_text, opt_i64_value, query_all, LocalStore, StoreSpec,
+};
 use crate::traits::{Binding, Kv, PutOptions, ScanResult};
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
+use turso::Connection;
 
 static KV_SPEC: StoreSpec = StoreSpec {
     db_filename: "localkv.sqlite",
@@ -40,13 +40,35 @@ static KV_SPEC: StoreSpec = StoreSpec {
 
 #[derive(Debug)]
 pub struct LocalKv {
-    store: SqliteStore,
+    store: LocalStore,
+}
+
+/// Build the standard KV operation error context.
+fn kv_error(operation: &str, key: &str, reason: &str) -> ErrorData {
+    ErrorData::KvOperationFailed {
+        operation: operation.to_string(),
+        key: key.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+/// Delete a row that is already expired (`expires_at <= now`), used by the
+/// lazy-expiry paths of `get` and `exists`.
+async fn delete_expired(conn: &Connection, operation: &str, key: &str, now: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM kv WHERE key = ?1 AND expires_at IS NOT NULL AND expires_at <= ?2",
+        (key, now),
+    )
+    .await
+    .into_alien_error()
+    .context(kv_error(operation, key, "failed to delete expired row"))?;
+    Ok(())
 }
 
 impl LocalKv {
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
-            store: SqliteStore::open(data_dir, &KV_SPEC).await?,
+            store: LocalStore::open(data_dir, &KV_SPEC).await?,
         })
     }
 
@@ -55,30 +77,25 @@ impl LocalKv {
         self.store.data_dir()
     }
 
-    /// Run a blocking closure with a freshly opened, WAL-configured connection.
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    {
-        self.store.with_conn(f).await
-    }
-
     /// Get the number of items currently stored (including expired items).
     /// Useful for testing.
     pub async fn len(&self) -> Result<usize> {
-        self.with_conn(|conn| {
-            let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM kv", [], |row| row.get(0))
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "len".to_string(),
-                    key: "*".to_string(),
-                    reason: "failed to count rows".to_string(),
-                })?;
-            Ok(count as usize)
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                let rows = query_all(&conn, "SELECT COUNT(*) FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("len", "*", "failed to count rows"))?;
+                let count = rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(as_i64)
+                    .ok_or_else(|| {
+                        AlienError::new(kv_error("len", "*", "count query returned no value"))
+                    })?;
+                Ok(count as usize)
+            })
+            .await
     }
 
     /// Check if the store is empty (including expired items).
@@ -90,53 +107,35 @@ impl LocalKv {
     /// Clear all data from the store.
     /// Useful for testing.
     pub async fn clear(&self) -> Result<()> {
-        self.with_conn(|conn| {
-            conn.execute("DELETE FROM kv", [])
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "clear".to_string(),
-                    key: "*".to_string(),
-                    reason: "failed to clear local KV store".to_string(),
-                })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("clear", "*", "failed to clear local KV store"))?;
+                Ok(())
+            })
+            .await
     }
 
     /// Get all keys currently in the store (including expired ones).
     /// Useful for testing and debugging.
     pub async fn keys(&self) -> Result<Vec<String>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn
-                .prepare("SELECT key FROM kv")
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "keys".to_string(),
-                    key: "*".to_string(),
-                    reason: "failed to prepare key scan".to_string(),
-                })?;
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "keys".to_string(),
-                    key: "*".to_string(),
-                    reason: "failed to scan keys".to_string(),
-                })?;
-            let mut keys = Vec::new();
-            for row in rows {
-                keys.push(
-                    row.into_alien_error()
-                        .context(ErrorData::KvOperationFailed {
-                            operation: "keys".to_string(),
-                            key: "*".to_string(),
-                            reason: "failed to read key row".to_string(),
-                        })?,
-                );
-            }
-            Ok(keys)
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                let rows = query_all(&conn, "SELECT key FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("keys", "*", "failed to scan keys"))?;
+                let mut keys = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    keys.push(row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(kv_error("keys", "*", "failed to read key row"))
+                    })?);
+                }
+                Ok(keys)
+            })
+            .await
     }
 
     /// Validate key constraints using global KV validation.
@@ -156,157 +155,128 @@ impl Binding for LocalKv {}
 impl Kv for LocalKv {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         Self::validate_key(key)?;
-        let key = key.to_string();
 
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            let row: Option<(Vec<u8>, Option<i64>)> = conn
-                .query_row(
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let rows = query_all(
+                    &conn,
                     "SELECT value, expires_at FROM kv WHERE key = ?1",
-                    params![key],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    (key,),
                 )
-                .optional()
+                .await
                 .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "get".to_string(),
-                    key: key.clone(),
-                    reason: "failed to read value".to_string(),
+                .context(kv_error("get", key, "failed to read value"))?;
+
+                let Some(row) = rows.first() else {
+                    return Ok(None);
+                };
+                let value = row.first().and_then(as_blob).ok_or_else(|| {
+                    AlienError::new(kv_error("get", key, "stored value is not a blob"))
+                })?;
+                let expires_at = row.get(1).and_then(as_opt_i64).ok_or_else(|| {
+                    AlienError::new(kv_error("get", key, "stored expires_at is not an integer"))
                 })?;
 
-            match row {
-                None => Ok(None),
-                Some((value, expires_at)) => {
-                    if matches!(expires_at, Some(exp) if exp <= now) {
-                        // Lazily remove the expired row.
-                        conn.execute(
-                            "DELETE FROM kv WHERE key = ?1 AND expires_at IS NOT NULL AND expires_at <= ?2",
-                            params![key, now],
-                        )
-                        .into_alien_error()
-                        .context(ErrorData::KvOperationFailed {
-                            operation: "get".to_string(),
-                            key: key.clone(),
-                            reason: "failed to delete expired row".to_string(),
-                        })?;
-                        Ok(None)
-                    } else {
-                        Ok(Some(value))
-                    }
+                if matches!(expires_at, Some(exp) if exp <= now) {
+                    // Lazily remove the expired row.
+                    delete_expired(&conn, "get", key, now).await?;
+                    Ok(None)
+                } else {
+                    Ok(Some(value))
                 }
-            }
-        })
-        .await
+            })
+            .await
     }
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool> {
         Self::validate_key(key)?;
         Self::validate_value(&value)?;
-        let key = key.to_string();
         let options = options.unwrap_or_default();
 
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            let expires_at: Option<i64> = options
-                .ttl
-                .map(|d| now.saturating_add(i64::try_from(d.as_millis()).unwrap_or(i64::MAX)));
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let expires_at: Option<i64> = options
+                    .ttl
+                    .map(|d| now.saturating_add(i64::try_from(d.as_millis()).unwrap_or(i64::MAX)));
 
-            if options.if_not_exists {
-                // One atomic statement: insert if absent, otherwise overwrite
-                // ONLY when the existing row is already expired. `changes()`
-                // (returned by `execute`) is 1 for the winner, 0 for a loser.
-                let changed = conn
-                    .execute(
+                if options.if_not_exists {
+                    // One atomic statement: insert if absent, otherwise overwrite
+                    // ONLY when the existing row is already expired. The changed
+                    // row count (returned by `execute`) is 1 for the winner, 0
+                    // for a loser.
+                    let changed = conn
+                        .execute(
+                            "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
+                             ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3 \
+                             WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4",
+                            (key, value, opt_i64_value(expires_at), now),
+                        )
+                        .await
+                        .into_alien_error()
+                        .context(kv_error("put", key, "failed conditional put"))?;
+                    Ok(changed == 1)
+                } else {
+                    conn.execute(
                         "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
-                         ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3 \
-                         WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4",
-                        params![key, value, expires_at, now],
+                         ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3",
+                        (key, value, opt_i64_value(expires_at)),
                     )
+                    .await
                     .into_alien_error()
-                    .context(ErrorData::KvOperationFailed {
-                        operation: "put".to_string(),
-                        key: key.clone(),
-                        reason: "failed conditional put".to_string(),
-                    })?;
-                Ok(changed == 1)
-            } else {
-                conn.execute(
-                    "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
-                     ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3",
-                    params![key, value, expires_at],
-                )
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "put".to_string(),
-                    key: key.clone(),
-                    reason: "failed to upsert value".to_string(),
-                })?;
-                Ok(true)
-            }
-        })
-        .await
+                    .context(kv_error("put", key, "failed to upsert value"))?;
+                    Ok(true)
+                }
+            })
+            .await
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
         Self::validate_key(key)?;
-        let key = key.to_string();
 
-        self.with_conn(move |conn| {
-            conn.execute("DELETE FROM kv WHERE key = ?1", params![key])
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "delete".to_string(),
-                    key: key.clone(),
-                    reason: "failed to delete key".to_string(),
-                })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM kv WHERE key = ?1", (key,))
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("delete", key, "failed to delete key"))?;
+                Ok(())
+            })
+            .await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
         Self::validate_key(key)?;
-        let key = key.to_string();
 
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            let expires_at: Option<Option<i64>> = conn
-                .query_row(
-                    "SELECT expires_at FROM kv WHERE key = ?1",
-                    params![key],
-                    |r| r.get::<_, Option<i64>>(0),
-                )
-                .optional()
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "exists".to_string(),
-                    key: key.clone(),
-                    reason: "failed to check existence".to_string(),
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let rows = query_all(&conn, "SELECT expires_at FROM kv WHERE key = ?1", (key,))
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("exists", key, "failed to check existence"))?;
+
+                let Some(row) = rows.first() else {
+                    return Ok(false);
+                };
+                let expires_at = row.first().and_then(as_opt_i64).ok_or_else(|| {
+                    AlienError::new(kv_error(
+                        "exists",
+                        key,
+                        "stored expires_at is not an integer",
+                    ))
                 })?;
 
-            match expires_at {
-                None => Ok(false),
-                Some(exp) => {
-                    if matches!(exp, Some(e) if e <= now) {
-                        // Lazily remove the expired row.
-                        conn.execute(
-                            "DELETE FROM kv WHERE key = ?1 AND expires_at IS NOT NULL AND expires_at <= ?2",
-                            params![key, now],
-                        )
-                        .into_alien_error()
-                        .context(ErrorData::KvOperationFailed {
-                            operation: "exists".to_string(),
-                            key: key.clone(),
-                            reason: "failed to delete expired row".to_string(),
-                        })?;
-                        Ok(false)
-                    } else {
-                        Ok(true)
-                    }
+                if matches!(expires_at, Some(exp) if exp <= now) {
+                    // Lazily remove the expired row.
+                    delete_expired(&conn, "exists", key, now).await?;
+                    Ok(false)
+                } else {
+                    Ok(true)
                 }
-            }
-        })
-        .await
+            })
+            .await
     }
 
     async fn scan_prefix(
@@ -330,49 +300,48 @@ impl Kv for LocalKv {
             0
         };
 
-        let prefix = prefix.to_string();
-
         // Collect matching, non-expired items in sorted key order.
         let matching: Vec<(String, Vec<u8>)> = self
-            .with_conn(move |conn| {
+            .store
+            .with_conn(|conn| async move {
                 let now = Utc::now().timestamp_millis();
-                let mut stmt = conn
-                    .prepare("SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key")
-                    .into_alien_error()
-                    .context(ErrorData::KvOperationFailed {
-                        operation: "scan_prefix".to_string(),
-                        key: prefix.clone(),
-                        reason: "failed to prepare scan".to_string(),
-                    })?;
-                let rows = stmt
-                    .query_map(params![prefix], |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, Vec<u8>>(1)?,
-                            r.get::<_, Option<i64>>(2)?,
-                        ))
-                    })
-                    .into_alien_error()
-                    .context(ErrorData::KvOperationFailed {
-                        operation: "scan_prefix".to_string(),
-                        key: prefix.clone(),
-                        reason: "failed to scan prefix".to_string(),
-                    })?;
+                let rows = query_all(
+                    &conn,
+                    "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
+                    (prefix,),
+                )
+                .await
+                .into_alien_error()
+                .context(kv_error("scan_prefix", prefix, "failed to scan prefix"))?;
 
                 let mut matching = Vec::new();
-                for row in rows {
-                    let (k, v, exp) =
-                        row.into_alien_error()
-                            .context(ErrorData::KvOperationFailed {
-                                operation: "scan_prefix".to_string(),
-                                key: prefix.clone(),
-                                reason: "failed to read scan row".to_string(),
-                            })?;
+                for row in &rows {
+                    let k = row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "failed to read scan row key",
+                        ))
+                    })?;
                     // Keys are ordered ascending starting at `prefix`; once a key
                     // stops matching the prefix, no later key can match either.
-                    if !k.starts_with(&prefix) {
+                    if !k.starts_with(prefix) {
                         break;
                     }
+                    let v = row.get(1).and_then(as_blob).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "stored value is not a blob",
+                        ))
+                    })?;
+                    let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "stored expires_at is not an integer",
+                        ))
+                    })?;
                     if matches!(exp, Some(e) if e <= now) {
                         continue; // expired: treat as absent
                     }
@@ -405,6 +374,7 @@ impl Kv for LocalKv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::local_store::open_database;
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -621,11 +591,15 @@ mod tests {
             kv.put("k", b"v".to_vec(), None).await.unwrap();
         }
         {
-            let conn = Connection::open(dir.join("localkv.sqlite")).expect("raw open");
+            let db = open_database(&dir.join("localkv.sqlite"), "test")
+                .await
+                .expect("raw open");
+            let conn = db.connect().expect("raw connect");
             conn.execute(
                 "UPDATE meta SET value = 'localkv.v2' WHERE key = 'format'",
-                [],
+                (),
             )
+            .await
             .expect("format overwrite");
         }
 
@@ -793,7 +767,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let key = format!("key_{i}");
                 let val = format!("v{i}").into_bytes();
-                // No busy errors expected under WAL + busy_timeout.
+                // No busy errors expected under multi-process WAL + busy_timeout.
                 kv.put(&key, val.clone(), None).await.expect("put ok");
                 let got = kv.get(&key).await.expect("get ok");
                 assert_eq!(got, Some(val));

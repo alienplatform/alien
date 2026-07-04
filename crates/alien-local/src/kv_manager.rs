@@ -6,8 +6,8 @@ use tracing::{debug, info};
 /// Manager for local KV resources.
 ///
 /// Creates the on-disk directory for each KV resource. The `LocalKv` binding
-/// opens its own SQLite database (`localkv.v1`) inside that directory and
-/// performs all operations directly.
+/// opens its own SQLite-compatible database (`localkv.v1`) inside that
+/// directory and performs all operations directly.
 ///
 /// # State Scoping
 /// All KV databases are created under `{state_dir}/kv/{resource_id}/`.
@@ -29,8 +29,8 @@ impl LocalKvManager {
 
     /// Creates a KV database directory for a resource.
     ///
-    /// The binding will open its own SQLite database (`localkv.sqlite`) inside
-    /// this directory.
+    /// The binding will open its own SQLite-compatible database
+    /// (`localkv.sqlite`) inside this directory.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -124,14 +124,17 @@ impl LocalKvManager {
     }
 
     /// Verifies that a KV resource exists and is healthy by inspecting its
-    /// SQLite store against the `localkv.v1` on-disk contract.
+    /// store against the `localkv.v1` on-disk contract.
     ///
-    /// Mirrors the format check `LocalKv` performs on open, but read-only: it
-    /// opens `<kv_path>/localkv.sqlite` with `SQLITE_OPEN_READ_ONLY`, reads the
-    /// `('format', ...)` row from the `meta` table, and reports healthy only
-    /// when it equals `localkv.v1`. WAL + a busy_timeout let this run
-    /// concurrently with the worker runtime and trigger service that hold live
-    /// read-write handles to the same file, so no exclusive lock is taken.
+    /// Mirrors the format check `LocalKv` performs on open: it opens
+    /// `<kv_path>/localkv.sqlite` with turso (SQLite-compatible file format),
+    /// reads the `('format', ...)` row from the `meta` table, and reports
+    /// healthy only when it equals `localkv.v1`. turso exposes no read-only
+    /// open, so the probe is a plain open that only ever runs `SELECT`;
+    /// turso's multi-process WAL mode (experimental upstream, enabled
+    /// explicitly here exactly as in the binding) plus a busy_timeout let it
+    /// run concurrently with the worker runtime and trigger service that hold
+    /// live read-write handles to the same file.
     ///
     /// Health-vs-not decisions (faithful to the previous embedded-KV check):
     /// - Missing resource directory → `ServiceResourceNotFound` (the resource
@@ -147,10 +150,6 @@ impl LocalKvManager {
     ///   that behavior; a not-yet-opened store is a valid state, not a failure.
     /// - `localkv.sqlite` present with a wrong/unreadable format → error.
     ///
-    /// Note: a read-only probe can report unhealthy on a store that exists but
-    /// no writer has initialized yet (e.g. the WAL `-shm` sidecar cannot be
-    /// mapped read-only before a writer creates it) — conservative by design.
-    ///
     /// # Arguments
     /// * `id` - Resource identifier
     ///
@@ -158,7 +157,6 @@ impl LocalKvManager {
     /// Ok(()) if KV exists and is healthy, error otherwise
     pub async fn check_health(&self, id: &str) -> Result<()> {
         use alien_error::AlienError;
-        use rusqlite::{Connection, OpenFlags};
 
         let kv_path = self.state_dir.join("kv").join(id);
 
@@ -185,45 +183,62 @@ impl LocalKvManager {
             return Ok(());
         }
 
-        // rusqlite is blocking; run the read-only format probe off the async
-        // runtime. The connection is created, used, and dropped entirely inside
-        // the spawned task, so it never crosses an `.await`.
-        let probe_path = db_path.clone();
-        let format: String = tokio::task::spawn_blocking(move || -> Result<String> {
-            let conn = Connection::open_with_flags(
-                &probe_path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
+        let db = turso::Builder::new_local(&db_path.to_string_lossy())
+            // Same explicit opt-in as the LocalKv binding: the store may be
+            // held open by other processes while we probe it.
+            .experimental_multiprocess_wal(true)
+            .build()
+            .await
             .into_alien_error()
             .context(ErrorData::LocalDatabaseError {
-                database_path: probe_path.display().to_string(),
+                database_path: db_path.display().to_string(),
                 operation: "open".to_string(),
-                reason: "Failed to open localkv.v1 SQLite database read-only".to_string(),
+                reason: "Failed to open localkv.v1 database for probing".to_string(),
             })?;
-            conn.busy_timeout(std::time::Duration::from_secs(5))
-                .into_alien_error()
-                .context(ErrorData::LocalDatabaseError {
-                    database_path: probe_path.display().to_string(),
-                    operation: "open".to_string(),
-                    reason: "Failed to set busy_timeout".to_string(),
-                })?;
-            conn.query_row("SELECT value FROM meta WHERE key = 'format'", [], |row| {
-                row.get(0)
-            })
+        let conn = db
+            .connect()
             .into_alien_error()
             .context(ErrorData::LocalDatabaseError {
-                database_path: probe_path.display().to_string(),
-                operation: "read".to_string(),
-                reason: "Failed to read format marker from meta table".to_string(),
-            })
-        })
-        .await
-        .into_alien_error()
-        .context(ErrorData::LocalDatabaseError {
+                database_path: db_path.display().to_string(),
+                operation: "open".to_string(),
+                reason: "Failed to open probe connection".to_string(),
+            })?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .into_alien_error()
+            .context(ErrorData::LocalDatabaseError {
+                database_path: db_path.display().to_string(),
+                operation: "open".to_string(),
+                reason: "Failed to set busy_timeout".to_string(),
+            })?;
+
+        // Read the format marker, draining the query to completion (an
+        // unfinished turso statement would keep a read transaction open).
+        let read_error = |reason: &str| ErrorData::LocalDatabaseError {
             database_path: db_path.display().to_string(),
             operation: "read".to_string(),
-            reason: "Health-check task failed".to_string(),
-        })??;
+            reason: reason.to_string(),
+        };
+        let mut rows = conn
+            .query("SELECT value FROM meta WHERE key = 'format'", ())
+            .await
+            .into_alien_error()
+            .context(read_error("Failed to read format marker from meta table"))?;
+        let mut format: Option<String> = None;
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(read_error("Failed to read format marker row"))?
+        {
+            if format.is_none() {
+                format = row.get_value(0).ok().and_then(|value| match value {
+                    turso::Value::Text(s) => Some(s),
+                    _ => None,
+                });
+            }
+        }
+        let format = format
+            .ok_or_else(|| AlienError::new(read_error("Format marker missing from meta table")))?;
 
         if format != "localkv.v1" {
             return Err(AlienError::new(ErrorData::LocalDatabaseError {

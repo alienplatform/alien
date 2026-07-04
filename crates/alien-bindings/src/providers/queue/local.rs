@@ -1,20 +1,19 @@
-//! Local disk-persisted queue backed by SQLite (`localqueue.v1`), multi-process safe.
+//! Local disk-persisted queue backed by turso (`localqueue.v1`), multi-process safe.
 //!
 //! # Connection strategy
 //!
-//! `rusqlite::Connection` is `Send` but **not** `Sync`, and every SQLite call is
-//! blocking. We therefore never store a connection on `LocalQueue` (which must
-//! be `Send + Sync` to live behind `Arc<dyn Queue>`): each operation runs inside
-//! `tokio::task::spawn_blocking` and opens its **own** short-lived connection to
-//! `<dataDir>/localqueue.sqlite`, then drops it. A connection is never held
-//! across an `.await`, and there is no `Mutex<Connection>` anywhere — the two
-//! footguns called out by the async/blocking boundary constraint simply cannot
-//! occur.
+//! turso is async-native and its `Connection` is `Send + Sync`, so there is no
+//! `spawn_blocking` boundary and no `Mutex<Connection>` anywhere. `LocalQueue`
+//! holds one `turso::Database` handle on `<dataDir>/localqueue.sqlite`; each
+//! operation opens its **own** short-lived connection from it and drops it
+//! when the operation completes, so no statement state leaks between
+//! operations.
 //!
 //! Correctness under concurrent access (multiple handles on one file, i.e.
-//! multiple processes) comes from SQLite itself: every connection enables WAL
-//! (concurrent readers alongside a single writer) and a `busy_timeout` (writers
-//! wait for the write lock instead of returning `SQLITE_BUSY`).
+//! multiple processes) comes from turso's multi-process WAL mode — enabled
+//! explicitly, experimental upstream, and gated by the multi-handle tests
+//! below — plus a `busy_timeout` (writers wait for the write lock instead of
+//! failing with `Busy`).
 //!
 //! # Receive design: one `BEGIN IMMEDIATE` transaction per batch
 //!
@@ -31,7 +30,7 @@
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localqueue.v1`
 //! contract, including the `"{id}:{uuid}"` caller-facing receipt-handle format.
 use crate::error::{ErrorData, Result};
-use crate::providers::sqlite_store::{SqliteStore, StoreSpec};
+use crate::providers::local_store::{as_i64, as_text, query_all, LocalStore, StoreSpec};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, LEASE_SECONDS, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
@@ -39,9 +38,10 @@ use alien_core::bindings::LocalQueueBinding;
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::PathBuf;
 use std::time::Duration;
+use turso::transaction::TransactionBehavior;
+use turso::Connection;
 
 static QUEUE_SPEC: StoreSpec = StoreSpec {
     db_filename: "localqueue.sqlite",
@@ -59,7 +59,7 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
                  CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);",
 };
 
-/// Local disk-persisted queue on SQLite (`localqueue.v1`).
+/// Local disk-persisted queue on turso (`localqueue.v1`).
 ///
 /// Implements the `Queue` trait (send/receive/ack) plus inherent `nack` and
 /// `purge`. Messages survive process restarts, and multiple `LocalQueue`
@@ -67,7 +67,15 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
 /// one data directory.
 #[derive(Debug)]
 pub struct LocalQueue {
-    store: SqliteStore,
+    store: LocalStore,
+}
+
+/// Build the standard queue operation error context.
+fn queue_error(operation: &str, reason: String) -> ErrorData {
+    ErrorData::QueueOperationFailed {
+        operation: operation.to_string(),
+        reason,
+    }
 }
 
 /// Split a `MessagePayload` into its stored `(payload_type, payload_data)`
@@ -75,12 +83,12 @@ pub struct LocalQueue {
 fn encode_payload(payload: MessagePayload) -> Result<(&'static str, String)> {
     match payload {
         MessagePayload::Json(v) => {
-            let data = serde_json::to_string(&v).into_alien_error().context(
-                ErrorData::QueueOperationFailed {
-                    operation: "send".to_string(),
-                    reason: "failed to serialize JSON payload".to_string(),
-                },
-            )?;
+            let data = serde_json::to_string(&v)
+                .into_alien_error()
+                .context(queue_error(
+                    "send",
+                    "failed to serialize JSON payload".to_string(),
+                ))?;
             Ok(("json", data))
         }
         MessagePayload::Text(s) => Ok(("text", s)),
@@ -93,17 +101,17 @@ fn decode_payload(payload_type: &str, payload_data: String) -> Result<MessagePay
         "json" => {
             let value = serde_json::from_str(&payload_data)
                 .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "receive".to_string(),
-                    reason: "failed to deserialize stored JSON payload".to_string(),
-                })?;
+                .context(queue_error(
+                    "receive",
+                    "failed to deserialize stored JSON payload".to_string(),
+                ))?;
             Ok(MessagePayload::Json(value))
         }
         "text" => Ok(MessagePayload::Text(payload_data)),
-        other => Err(AlienError::new(ErrorData::QueueOperationFailed {
-            operation: "receive".to_string(),
-            reason: format!("unknown payload_type '{other}' in localqueue.v1 store"),
-        })),
+        other => Err(AlienError::new(queue_error(
+            "receive",
+            format!("unknown payload_type '{other}' in localqueue.v1 store"),
+        ))),
     }
 }
 
@@ -114,7 +122,7 @@ impl LocalQueue {
     /// `<data_dir>/localqueue.sqlite`.
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
-            store: SqliteStore::open(data_dir, &QUEUE_SPEC).await?,
+            store: LocalStore::open(data_dir, &QUEUE_SPEC).await?,
         })
     }
 
@@ -134,17 +142,6 @@ impl LocalQueue {
     /// Get the data directory path (the directory that holds `localqueue.sqlite`).
     pub fn data_dir(&self) -> &PathBuf {
         self.store.data_dir()
-    }
-
-    /// Run a blocking closure with a freshly opened, WAL-configured connection.
-    ///
-    /// The closure gets a `&mut Connection` so it can open rusqlite transactions.
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    {
-        self.store.with_conn(f).await
     }
 
     /// Split a caller-facing `"{id}:{uuid}"` receipt handle into its parts.
@@ -168,86 +165,96 @@ impl LocalQueue {
         max_messages: usize,
         visibility: Duration,
     ) -> Result<Vec<QueueMessage>> {
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            let visible_until =
-                now.saturating_add(i64::try_from(visibility.as_millis()).unwrap_or(i64::MAX));
-            let limit = i64::try_from(max_messages).unwrap_or(i64::MAX);
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let visible_until =
+                    now.saturating_add(i64::try_from(visibility.as_millis()).unwrap_or(i64::MAX));
+                let limit = i64::try_from(max_messages).unwrap_or(i64::MAX);
 
-            // IMMEDIATE takes the write lock at BEGIN: the select-then-claim
-            // below is one critical section across all handles and processes.
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                // IMMEDIATE takes the write lock at BEGIN: the select-then-claim
+                // below is one critical section across all handles and processes.
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "receive",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+
+                let id_rows = query_all(
+                    &tx,
+                    "SELECT id FROM messages WHERE visible_at <= ?1 \
+                     ORDER BY enqueued_at, id LIMIT ?2",
+                    (now, limit),
+                )
+                .await
                 .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "receive".to_string(),
-                    reason: "failed to begin immediate transaction".to_string(),
-                })?;
-
-            let ids: Vec<i64> = {
-                let mut stmt = tx
-                    .prepare(
-                        "SELECT id FROM messages WHERE visible_at <= ?1 \
-                         ORDER BY enqueued_at, id LIMIT ?2",
-                    )
-                    .into_alien_error()
-                    .context(ErrorData::QueueOperationFailed {
-                        operation: "receive".to_string(),
-                        reason: "failed to prepare due-message scan".to_string(),
-                    })?;
-                let rows = stmt
-                    .query_map(params![now, limit], |r| r.get::<_, i64>(0))
-                    .into_alien_error()
-                    .context(ErrorData::QueueOperationFailed {
-                        operation: "receive".to_string(),
-                        reason: "failed to scan due messages".to_string(),
-                    })?;
-                let mut ids = Vec::new();
-                for row in rows {
-                    ids.push(
-                        row.into_alien_error()
-                            .context(ErrorData::QueueOperationFailed {
-                                operation: "receive".to_string(),
-                                reason: "failed to read due-message row".to_string(),
-                            })?,
-                    );
+                .context(queue_error(
+                    "receive",
+                    "failed to scan due messages".to_string(),
+                ))?;
+                let mut ids = Vec::with_capacity(id_rows.len());
+                for row in &id_rows {
+                    ids.push(row.first().and_then(as_i64).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            "failed to read due-message row".to_string(),
+                        ))
+                    })?);
                 }
-                ids
-            };
 
-            let mut messages = Vec::with_capacity(ids.len());
-            for id in ids {
-                // The pinned claim statement, with a fresh UUID per row.
-                let receipt = uuid::Uuid::new_v4().to_string();
-                let (payload_type, payload_data): (String, String) = tx
-                    .query_row(
+                let mut messages = Vec::with_capacity(ids.len());
+                for id in ids {
+                    // The pinned claim statement, with a fresh UUID per row.
+                    let receipt = uuid::Uuid::new_v4().to_string();
+                    let claimed = query_all(
+                        &tx,
                         "UPDATE messages \
                          SET visible_at = ?1, attempt = attempt + 1, receipt_handle = ?2 \
                          WHERE id = ?3 \
                          RETURNING payload_type, payload_data",
-                        params![visible_until, receipt, id],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
+                        (visible_until, receipt.as_str(), id),
                     )
+                    .await
                     .into_alien_error()
-                    .context(ErrorData::QueueOperationFailed {
-                        operation: "receive".to_string(),
-                        reason: format!("failed to claim message {id}"),
+                    .context(queue_error(
+                        "receive",
+                        format!("failed to claim message {id}"),
+                    ))?;
+                    let row = claimed.first().ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claim of message {id} returned no row"),
+                        ))
                     })?;
-                messages.push(QueueMessage {
-                    payload: decode_payload(&payload_type, payload_data)?,
-                    receipt_handle: format!("{id}:{receipt}"),
-                });
-            }
+                    let payload_type = row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claimed message {id} has a non-text payload_type"),
+                        ))
+                    })?;
+                    let payload_data = row.get(1).and_then(as_text).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claimed message {id} has a non-text payload_data"),
+                        ))
+                    })?;
+                    messages.push(QueueMessage {
+                        payload: decode_payload(&payload_type, payload_data)?,
+                        receipt_handle: format!("{id}:{receipt}"),
+                    });
+                }
 
-            tx.commit()
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "receive".to_string(),
-                    reason: "failed to commit receive transaction".to_string(),
-                })?;
-            Ok(messages)
-        })
-        .await
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "receive",
+                    "failed to commit receive transaction".to_string(),
+                ))?;
+                Ok(messages)
+            })
+            .await
     }
 
     /// Negative-acknowledge a message: make it immediately visible again.
@@ -260,76 +267,74 @@ impl LocalQueue {
             return Ok(());
         };
 
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "nack".to_string(),
-                    reason: "failed to begin immediate transaction".to_string(),
-                })?;
-            let updated = tx
-                .execute(
-                    "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3",
-                    params![now, id, receipt],
-                )
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "nack".to_string(),
-                    reason: format!("failed to nack message {id}"),
-                })?;
-            if updated == 0 && message_exists(&tx, id, "nack")? {
-                return Err(stale_receipt_error(id, "nack"));
-            }
-            tx.commit()
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "nack".to_string(),
-                    reason: "failed to commit nack transaction".to_string(),
-                })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "nack",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let updated = tx
+                    .execute(
+                        "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3",
+                        (now, id, receipt.as_str()),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("nack", format!("failed to nack message {id}")))?;
+                if updated == 0 && message_exists(&tx, id, "nack").await? {
+                    return Err(stale_receipt_error(id, "nack"));
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "nack",
+                    "failed to commit nack transaction".to_string(),
+                ))?;
+                Ok(())
+            })
+            .await
     }
 
     /// Delete every message in the queue, visible or in flight.
     pub async fn purge(&self, _queue: &str) -> Result<()> {
-        self.with_conn(|conn| {
-            conn.execute("DELETE FROM messages", [])
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "purge".to_string(),
-                    reason: "failed to purge queue".to_string(),
-                })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM messages", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("purge", "failed to purge queue".to_string()))?;
+                Ok(())
+            })
+            .await
     }
 }
 
 /// Does a message row with this id still exist (under the current transaction)?
-fn message_exists(tx: &rusqlite::Transaction<'_>, id: i64, operation: &str) -> Result<bool> {
-    let exists: Option<i64> = tx
-        .query_row("SELECT 1 FROM messages WHERE id = ?1", params![id], |r| {
-            r.get(0)
-        })
-        .optional()
+///
+/// Inside `ack`/`nack` this runs on the open `BEGIN IMMEDIATE` transaction
+/// (turso's `Transaction` derefs to `Connection`).
+async fn message_exists(conn: &Connection, id: i64, operation: &str) -> Result<bool> {
+    let rows = query_all(conn, "SELECT 1 FROM messages WHERE id = ?1", (id,))
+        .await
         .into_alien_error()
-        .context(ErrorData::QueueOperationFailed {
-            operation: operation.to_string(),
-            reason: format!("failed to check message {id} existence"),
-        })?;
-    Ok(exists.is_some())
+        .context(queue_error(
+            operation,
+            format!("failed to check message {id} existence"),
+        ))?;
+    Ok(!rows.is_empty())
 }
 
 fn stale_receipt_error(id: i64, operation: &str) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::QueueOperationFailed {
-        operation: operation.to_string(),
-        reason: format!(
+    AlienError::new(queue_error(
+        operation,
+        format!(
             "stale receipt handle for message {id}: the message was redelivered and a newer receipt supersedes this one"
         ),
-    })
+    ))
 }
 
 impl Binding for LocalQueue {}
@@ -350,21 +355,20 @@ impl Queue for LocalQueue {
             }));
         }
 
-        self.with_conn(move |conn| {
-            let now = Utc::now().timestamp_millis();
-            conn.execute(
-                "INSERT INTO messages (payload_type, payload_data, enqueued_at, visible_at, attempt) \
-                 VALUES (?1, ?2, ?3, ?3, 0)",
-                params![payload_type, payload_data, now],
-            )
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "send".to_string(),
-                reason: "failed to insert message".to_string(),
-            })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                conn.execute(
+                    "INSERT INTO messages (payload_type, payload_data, enqueued_at, visible_at, attempt) \
+                     VALUES (?1, ?2, ?3, ?3, 0)",
+                    (payload_type, payload_data.as_str(), now),
+                )
+                .await
+                .into_alien_error()
+                .context(queue_error("send", "failed to insert message".to_string()))?;
+                Ok(())
+            })
+            .await
     }
 
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
@@ -389,46 +393,45 @@ impl Queue for LocalQueue {
             return Ok(());
         };
 
-        self.with_conn(move |conn| {
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "ack".to_string(),
-                    reason: "failed to begin immediate transaction".to_string(),
-                })?;
-            let deleted = tx
-                .execute(
-                    "DELETE FROM messages WHERE id = ?1 AND receipt_handle = ?2",
-                    params![id, receipt],
-                )
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "ack".to_string(),
-                    reason: format!("failed to ack message {id}"),
-                })?;
-            if deleted == 0 && message_exists(&tx, id, "ack")? {
-                // The row is still there but under a different (newer) receipt:
-                // this caller lost its lease. Rejecting prevents a slow consumer
-                // from deleting work that has been handed to someone else.
-                return Err(stale_receipt_error(id, "ack"));
-            }
-            tx.commit()
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "ack".to_string(),
-                    reason: "failed to commit ack transaction".to_string(),
-                })?;
-            Ok(())
-        })
-        .await
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "ack",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let deleted = tx
+                    .execute(
+                        "DELETE FROM messages WHERE id = ?1 AND receipt_handle = ?2",
+                        (id, receipt.as_str()),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("ack", format!("failed to ack message {id}")))?;
+                if deleted == 0 && message_exists(&tx, id, "ack").await? {
+                    // The row is still there but under a different (newer) receipt:
+                    // this caller lost its lease. Rejecting prevents a slow consumer
+                    // from deleting work that has been handed to someone else.
+                    return Err(stale_receipt_error(id, "ack"));
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "ack",
+                    "failed to commit ack transaction".to_string(),
+                ))?;
+                Ok(())
+            })
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use crate::providers::local_store::open_database;
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
@@ -453,8 +456,11 @@ mod tests {
     }
 
     /// Open a raw connection to the store for white-box column inspection.
-    fn raw_conn(queue: &LocalQueue) -> Connection {
-        Connection::open(queue.data_dir().join("localqueue.sqlite")).expect("raw open")
+    async fn raw_conn(queue: &LocalQueue) -> Connection {
+        let db = open_database(&queue.data_dir().join("localqueue.sqlite"), "test")
+            .await
+            .expect("raw open");
+        db.connect().expect("raw connect")
     }
 
     async fn create_test_queue() -> (LocalQueue, TempDir) {
@@ -637,11 +643,15 @@ mod tests {
                 .unwrap();
         }
         {
-            let conn = Connection::open(dir.join("localqueue.sqlite")).expect("raw open");
+            let db = open_database(&dir.join("localqueue.sqlite"), "test")
+                .await
+                .expect("raw open");
+            let conn = db.connect().expect("raw connect");
             conn.execute(
                 "UPDATE meta SET value = 'localqueue.v2' WHERE key = 'format'",
-                [],
+                (),
             )
+            .await
             .expect("format overwrite");
         }
 
@@ -699,12 +709,15 @@ mod tests {
         );
 
         // ... with attempt incremented once per delivery (1 then 2).
-        let conn = raw_conn(&queue);
-        let attempt: i64 = conn
-            .query_row("SELECT attempt FROM messages WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
+        let conn = raw_conn(&queue).await;
+        let rows = query_all(&conn, "SELECT attempt FROM messages WHERE id = ?1", (id,))
+            .await
             .expect("attempt read");
+        let attempt = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(as_i64)
+            .expect("attempt value");
         assert_eq!(attempt, 2, "two deliveries must mean attempt == 2");
     }
 
@@ -790,10 +803,15 @@ mod tests {
         queue.purge("q").await.unwrap();
 
         assert!(queue.receive("q", 10).await.unwrap().is_empty());
-        let conn = raw_conn(&queue);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        let conn = raw_conn(&queue).await;
+        let rows = query_all(&conn, "SELECT COUNT(*) FROM messages", ())
+            .await
             .expect("count read");
+        let count = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(as_i64)
+            .expect("count value");
         assert_eq!(count, 0, "purge must delete every row, leased or not");
     }
 

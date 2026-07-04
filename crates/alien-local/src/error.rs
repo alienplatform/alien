@@ -94,7 +94,7 @@ pub enum ErrorData {
         binding_id: String,
     },
 
-    /// Failed to open or access a local SQLite database.
+    /// Failed to open or access a local database.
     #[error(
         code = "LOCAL_DATABASE_ERROR",
         message = "Failed to {operation} database '{database_path}': {reason}",

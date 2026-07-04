@@ -1,36 +1,57 @@
 # alien-bindings local store formats
 
-On-disk formats for the SQLite-backed local development providers. These files
-are the source of truth for the schema and semantics; the implementations must
-match them exactly.
+On-disk formats for the local development providers. These files are the
+source of truth for the schema and semantics; the implementations must match
+them exactly.
+
+## Engine
+
+Both stores run on **turso**, an async-native database engine that reads and
+writes the **SQLite-compatible file format** — the `.sqlite` file extension
+stays truthful, and the files can be inspected with standard SQLite tooling.
+
+Multi-process safety comes from turso's **multi-process WAL mode**
+(`Builder::experimental_multiprocess_wal(true)`), enabled explicitly on every
+open. Honest caveats, straight from turso's own positioning of the feature:
+
+- The mode is **experimental** upstream. Its cross-process WAL coordination
+  format may change between turso releases, which is why the crate pins an
+  exact turso version.
+- It targets 64-bit Unix platforms.
+
+Both trade-offs are acceptable here: these are local development stores with
+disposable state, and the multi-handle concurrency tests in the provider
+modules are the gate that the mode actually delivers the semantics pinned
+below. Alongside the database file turso maintains WAL sidecar files (e.g.
+`-wal`); treat every `<file>.sqlite*` sibling as part of the store.
 
 ## `localkv.v1` — `LocalKv`
 
-Backed by a single SQLite database file at `<dataDir>/localkv.sqlite`, where
+Backed by a single database file at `<dataDir>/localkv.sqlite`, where
 `<dataDir>` is the directory passed to `LocalKv::new`. The directory is created
-if missing; the SQLite file (plus its `-wal`/`-shm` siblings) lives inside it.
+if missing; the database file (plus its WAL siblings) lives inside it.
 
 ### Connection strategy
 
-`rusqlite::Connection` is `Send` but not `Sync`, and every call is blocking.
-`LocalKv` therefore stores **no** connection — only the resolved file path. Every
-operation runs inside `tokio::task::spawn_blocking` and opens its own short-lived
-connection, which is dropped before the task returns. A connection is never held
-across an `.await`, and there is no `Mutex<Connection>` anywhere. `LocalKv` is
-consequently `Send + Sync` with no interior locking.
+turso is async-native and its `Connection` is `Send + Sync`, so there is no
+blocking boundary and no `Mutex<Connection>` anywhere. `LocalKv` holds one
+`turso::Database` handle; every operation opens its own short-lived connection
+from it, which is dropped when the operation completes. Statements are always
+driven to completion (queries drained until exhausted) — an unfinished turso
+statement keeps its implicit transaction open, which would block writers and
+freeze read snapshots.
 
-Correctness under concurrent access — including multiple `LocalKv` handles on the
-same file, i.e. multiple OS processes — is provided by SQLite:
+Correctness under concurrent access — including multiple `LocalKv` handles on
+the same file, i.e. multiple OS processes — is provided by the engine:
 
-- **WAL** (`PRAGMA journal_mode=WAL`) allows concurrent readers alongside a
-  single writer.
+- **Multi-process WAL mode** (see *Engine* above) coordinates readers and
+  writers across processes.
 - **`busy_timeout`** (5s) makes a writer wait for the write lock instead of
-  failing with `SQLITE_BUSY`.
+  failing with `Busy`.
 
-The schema is created once in `LocalKv::new`; per-operation connections only set
-the connection-scoped pragmas (`journal_mode`, `synchronous`, `busy_timeout`).
-Reads of live rows never take the write lock; a read that encounters an expired
-row escalates to a short delete.
+The schema is created once in `LocalKv::new`. Reads of live rows never take
+the write lock; a read that encounters an expired row escalates to a short
+delete.
 
 ### DDL
 
@@ -48,13 +69,8 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 ```
 
-Pragmas applied on every connection:
-
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = NORMAL;
--- busy_timeout = 5000 ms (set via the rusqlite API)
-```
+Settings applied per open: multi-process WAL mode (on the database handle) and
+a 5s `busy_timeout` (on every connection, via the turso API).
 
 ### Versioning rule
 
@@ -90,7 +106,7 @@ IGNORE`, so re-opening an existing store never overwrites it.
   Always returns `true`.
 
 - **Conditional put (`if_not_exists`).** One atomic statement; the winner is
-  detected via `changes()` (the row count returned by `execute`):
+  detected via the changed-row count returned by `execute`:
 
   ```sql
   INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3)
@@ -98,15 +114,16 @@ IGNORE`, so re-opening an existing store never overwrites it.
   WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4;   -- ?4 = now
   ```
 
-  - Key absent → `INSERT` runs → `changes() == 1` → **win** (returns `true`).
+  - Key absent → `INSERT` runs → changed count `== 1` → **win** (returns
+    `true`).
   - Key present but expired → the `DO UPDATE ... WHERE` matches → overwrite →
-    `changes() == 1` → **win** (takeover of an expired key).
+    changed count `== 1` → **win** (takeover of an expired key).
   - Key present and live → the `WHERE` fails, so the conflict resolves to a
-    no-op → `changes() == 0` → **lose** (returns `false`).
+    no-op → changed count `== 0` → **lose** (returns `false`).
 
-  Because SQLite serializes writers, when N callers (across any number of
+  Because the engine serializes writers, when N callers (across any number of
   handles/processes) race this statement on the same key, exactly one observes
-  `changes() == 1`.
+  a changed count of 1.
 
 - **Scan.** `scan_prefix` selects `WHERE key >= ?prefix ORDER BY key`, stops at
   the first key that no longer starts with the prefix, filters expired rows, and
@@ -117,30 +134,28 @@ IGNORE`, so re-opening an existing store never overwrites it.
 
 `LocalKv` (`src/providers/kv/local.rs`) is the **only** reader/writer of
 `localkv.v1`. There is no separate migration binary or alternate accessor; the
-schema, pragmas, and the statements above are defined once in that file. Any
+schema, settings, and the statements above are defined once in that file (the
+shared open/init handshake lives in `src/providers/local_store.rs`). Any
 change to the on-disk contract must update both this document and that file
 together (and bump the `meta` format string if incompatible).
 
 ## `localqueue.v1` — `LocalQueue`
 
-Backed by a single SQLite database file at `<dataDir>/localqueue.sqlite`, where
+Backed by a single database file at `<dataDir>/localqueue.sqlite`, where
 `<dataDir>` is the directory passed to `LocalQueue::new` (for
 `LocalQueue::from_binding` it is the binding's `queue_path`). The directory is
-created if missing; the SQLite file (plus its `-wal`/`-shm` siblings) lives
-inside it.
+created if missing; the database file (plus its WAL siblings) lives inside it.
 
 ### Connection strategy
 
-Identical to `localkv.v1`: `LocalQueue` stores **no** connection — only the
-resolved file path. Every operation runs inside `tokio::task::spawn_blocking`
-and opens its own short-lived connection, which is dropped before the task
-returns. A connection is never held across an `.await`, and there is no
-`Mutex<Connection>` anywhere. `LocalQueue` is consequently `Send + Sync` with
-no interior locking. Correctness under concurrent access — including multiple
-handles on the same file, i.e. multiple OS processes — is provided by SQLite:
-**WAL** for concurrent readers alongside a single writer, and a 5s
-**`busy_timeout`** so writers wait for the write lock instead of failing with
-`SQLITE_BUSY`.
+Identical to `localkv.v1`: `LocalQueue` holds one `turso::Database` handle;
+every operation opens its own short-lived connection from it, which is dropped
+when the operation completes, and every statement is driven to completion. No
+connection crosses operations and there is no `Mutex<Connection>` anywhere.
+Correctness under concurrent access — including multiple handles on the same
+file, i.e. multiple OS processes — is provided by the engine's multi-process
+WAL mode (see *Engine* above) and a 5s **`busy_timeout`** so writers wait for
+the write lock instead of failing with `Busy`.
 
 ### DDL
 
@@ -163,13 +178,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);
 ```
 
-Pragmas applied on every connection:
-
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = NORMAL;
--- busy_timeout = 5000 ms (set via the rusqlite API)
-```
+Settings applied per open: multi-process WAL mode (on the database handle) and
+a 5s `busy_timeout` (on every connection, via the turso API).
 
 ### Versioning rule
 
@@ -229,8 +239,8 @@ with `INSERT OR IGNORE`, so re-opening an existing store never overwrites it.
   claim statement above once per id, commit. `IMMEDIATE` acquires the write
   lock at `BEGIN`, so concurrent receivers across handles and processes
   serialize on the whole claim: each message is delivered to exactly one
-  receiver per visibility window. If the transaction fails, the connection is
-  dropped and SQLite rolls it back — no partial claims.
+  receiver per visibility window. If the transaction fails, it is rolled back
+  — no partial claims.
 
 - **Ack.** Parse the handle into `(id, uuid)`, then in one transaction:
 
@@ -263,6 +273,7 @@ with `INSERT OR IGNORE`, so re-opening an existing store never overwrites it.
 
 `LocalQueue` (`src/providers/queue/local.rs`) is the **only** reader/writer of
 `localqueue.v1`. There is no separate migration binary or alternate accessor;
-the schema, pragmas, and the statements above are defined once in that file.
-Any change to the on-disk contract must update both this document and that file
+the schema, settings, and the statements above are defined once in that file
+(the shared open/init handshake lives in `src/providers/local_store.rs`). Any
+change to the on-disk contract must update both this document and that file
 together (and bump the `meta` format string if incompatible).

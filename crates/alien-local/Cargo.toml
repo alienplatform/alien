@@ -20,8 +20,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # Database
-# Read-only format probe for the localkv.v1 SQLite store in KV health checks.
-rusqlite = { workspace = true }
+# Format probe for the localkv.v1 store in KV health checks. Same exact pin
+# and rationale as alien-bindings: `experimental_multiprocess_wal` (needed to
+# probe a store other processes hold open) is 0.7-pre only, and
+# `default-features = false` avoids a second mimalloc `#[global_allocator]`
+# clashing with turso 0.5.x in combined binaries.
+turso = { version = "=0.7.0-pre.17", default-features = false }
 # Embedded Postgres for the Local platform (downloads + runs native binaries)
 postgresql_embedded = { workspace = true }
 # Installs the pgvector extension into the embedded server from Alien's release host
