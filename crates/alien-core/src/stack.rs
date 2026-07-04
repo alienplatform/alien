@@ -101,6 +101,40 @@ impl Stack {
             None => true,
         }
     }
+
+    /// Returns the ordered list of command-capable targets in this stack:
+    /// Worker, Container, and Daemon resources with `commands_enabled` set,
+    /// in stack declaration order.
+    ///
+    /// Declaration order is the order resources were added to the stack
+    /// (via `StackBuilder::add`/`add_with_dependencies`/`add_with_remote_access`).
+    /// `resources` is an `IndexMap`, which preserves insertion order, so
+    /// iterating it directly yields declaration order without any extra
+    /// bookkeeping.
+    pub fn command_targets(&self) -> Vec<crate::commands_types::CommandTarget> {
+        use crate::commands_types::{CommandTarget, CommandTargetType};
+
+        self.resources
+            .iter()
+            .filter_map(|(id, entry)| {
+                if let Some(worker) = entry.config.downcast_ref::<crate::Worker>() {
+                    worker
+                        .commands_enabled
+                        .then(|| CommandTarget::new(id.clone(), CommandTargetType::Worker))
+                } else if let Some(container) = entry.config.downcast_ref::<crate::Container>() {
+                    container
+                        .commands_enabled
+                        .then(|| CommandTarget::new(id.clone(), CommandTargetType::Container))
+                } else if let Some(daemon) = entry.config.downcast_ref::<crate::Daemon>() {
+                    daemon
+                        .commands_enabled
+                        .then(|| CommandTarget::new(id.clone(), CommandTargetType::Daemon))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl StackBuilder {
@@ -516,5 +550,114 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&stack_extend).expect("Failed to serialize");
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
+    }
+
+    #[test]
+    fn command_targets_returns_only_commands_enabled_resources_in_declaration_order() {
+        let worker_enabled = Worker::new("worker-a".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let container_disabled = Container::new("container-b".to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .build();
+
+        let daemon_enabled = Daemon::new("daemon-c".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let container_enabled = Container::new("container-d".to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let worker_disabled = Worker::new("worker-e".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        let storage = Storage::new("bucket-f".to_string()).build();
+
+        // Declaration order: worker-a (enabled), container-b (disabled),
+        // daemon-c (enabled), container-d (enabled), worker-e (disabled),
+        // bucket-f (not a command-capable resource type at all).
+        let stack = Stack::new("command-targets-stack".to_string())
+            .add(worker_enabled, ResourceLifecycle::Live)
+            .add(container_disabled, ResourceLifecycle::Live)
+            .add(daemon_enabled, ResourceLifecycle::Live)
+            .add(container_enabled, ResourceLifecycle::Live)
+            .add(worker_disabled, ResourceLifecycle::Live)
+            .add(storage, ResourceLifecycle::Frozen)
+            .build();
+
+        let targets = stack.command_targets();
+
+        assert_eq!(
+            targets,
+            vec![
+                crate::commands_types::CommandTarget::new(
+                    "worker-a",
+                    crate::commands_types::CommandTargetType::Worker
+                ),
+                crate::commands_types::CommandTarget::new(
+                    "daemon-c",
+                    crate::commands_types::CommandTargetType::Daemon
+                ),
+                crate::commands_types::CommandTarget::new(
+                    "container-d",
+                    crate::commands_types::CommandTargetType::Container
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_targets_empty_when_no_commands_enabled_resources() {
+        let worker = Worker::new("worker-only".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        let stack = Stack::new("no-targets-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        assert!(stack.command_targets().is_empty());
     }
 }

@@ -398,6 +398,18 @@ export class Container {
   }
 
   /**
+   * Enables or disables the Commands protocol for the container.
+   * When enabled, the container polls the manager for pending commands and executes registered handlers.
+   * Default: false.
+   * @param enabled Whether to enable commands for this container.
+   * @returns The Container builder instance.
+   */
+  public commandsEnabled(enabled: boolean): this {
+    this._config.commandsEnabled = enabled
+    return this
+  }
+
+  /**
    * Builds and validates the container configuration.
    * @returns An immutable Resource representing the configured container.
    * @throws Error if the container configuration is invalid.

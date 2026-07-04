@@ -18,6 +18,11 @@ pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENA
 pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
 pub const ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS: &str = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS";
 pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
+/// Identifies which stack resource a command-capable runtime is polling
+/// leases for (its own resource id within the deployment's stack). Consumed
+/// by runtime polling in a later ALIEN-219 task; declared here so it's
+/// reserved from day one.
+pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_ID";
 pub const ENV_ALIEN_BINDINGS_ADDRESS: &str = "ALIEN_BINDINGS_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
@@ -410,6 +415,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS
                 | ENV_ALIEN_COMMANDS_POLLING_URL
                 | ENV_ALIEN_COMMANDS_TOKEN
+                | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                 | ENV_ALIEN_DEPLOYMENT_ID
                 | ENV_ALIEN_DEPLOYMENT_NAME
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
@@ -488,6 +494,17 @@ mod tests {
             "ALIEN_BINDING_STORAGE_URL"
         ));
         assert!(!is_reserved_runtime_environment_name("USER_DEFINED"));
+    }
+
+    #[test]
+    fn reserves_commands_target_resource_id() {
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+        ));
+        assert_eq!(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+            "ALIEN_COMMANDS_TARGET_RESOURCE_ID"
+        );
     }
 
     #[test]

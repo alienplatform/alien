@@ -268,6 +268,13 @@ pub struct Container {
     /// Command to override image default
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+
+    /// Whether the container can receive remote commands via the Commands protocol.
+    /// When enabled, the container polls the manager for pending commands and executes registered handlers.
+    #[builder(default = default_commands_enabled())]
+    #[serde(default = "default_commands_enabled")]
+    #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
+    pub commands_enabled: bool,
 }
 
 impl Container {
@@ -328,6 +335,10 @@ impl Container {
 
         Ok(())
     }
+}
+
+fn default_commands_enabled() -> bool {
+    false
 }
 
 impl<S: container_builder::State> ContainerBuilder<S> {
@@ -967,5 +978,78 @@ mod tests {
             .build();
 
         assert!(container.validate_public_endpoints().is_ok());
+    }
+
+    #[test]
+    fn test_container_commands_enabled_defaults_false() {
+        let container = Container::new("no-commands".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("test".to_string())
+            .build();
+
+        assert!(!container.commands_enabled);
+    }
+
+    #[test]
+    fn test_container_commands_enabled_builder() {
+        let container = Container::new("cmd-container".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("test".to_string())
+            .commands_enabled(true)
+            .build();
+
+        assert!(container.commands_enabled);
+    }
+
+    #[test]
+    fn test_container_commands_enabled_serializes_camel_case() {
+        let container = Container::new("cmd-container".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("test".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let json = serde_json::to_value(&container).expect("container should serialize");
+        assert_eq!(json["commandsEnabled"], true);
+
+        let deserialized: Container =
+            serde_json::from_value(json).expect("container should deserialize");
+        assert_eq!(deserialized, container);
     }
 }

@@ -144,8 +144,17 @@ impl TestCommandServer {
 
     /// Acquire a single lease for a polling deployment
     pub async fn acquire_single_lease(&self, deployment_id: &str) -> Result<Option<LeaseInfo>> {
-        let mut lease_request = LeaseRequest::default();
-        lease_request.deployment_id = deployment_id.to_string();
+        // ALIEN-219: `LeaseRequest` no longer implements `Default` — `target` is
+        // required. This test helper only knows a deployment id, not a specific
+        // resource, so it uses the transitional `legacy_deployment_scoped` target
+        // (mirrors the pre-ALIEN-219 max_leases/lease_seconds defaults).
+        #[allow(deprecated)]
+        let lease_request = LeaseRequest {
+            deployment_id: deployment_id.to_string(),
+            target: CommandTarget::legacy_deployment_scoped(deployment_id),
+            max_leases: 1,
+            lease_seconds: 60,
+        };
         let response = self.acquire_lease(deployment_id, lease_request).await?;
         Ok(response.leases.into_iter().next())
     }

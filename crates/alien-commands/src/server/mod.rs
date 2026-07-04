@@ -420,10 +420,16 @@ impl CommandServer {
                     .await?;
 
                 // Return expired status directly (avoid recursion)
+                // ALIEN-219: `CommandRegistry`/`CommandStatus` don't carry a
+                // resolved per-resource target yet (that lands with the
+                // registry's `resolve_target`/storage work in later ALIEN-219
+                // tasks), so this uses the transitional deployment-scoped target.
+                #[allow(deprecated)]
                 return Ok(CommandStatusResponse {
                     command_id: command_id.to_string(),
                     state: CommandState::Expired,
                     attempt: status.attempt,
+                    target: CommandTarget::legacy_deployment_scoped(status.deployment_id.clone()),
                     response: None,
                 });
             }
@@ -436,10 +442,15 @@ impl CommandServer {
             None
         };
 
+        // ALIEN-219: see the note above — no resolved per-resource target is
+        // available from the registry yet, so this uses the transitional
+        // deployment-scoped target.
+        #[allow(deprecated)]
         Ok(CommandStatusResponse {
             command_id: command_id.to_string(),
             state: status.state,
             attempt: status.attempt,
+            target: CommandTarget::legacy_deployment_scoped(status.deployment_id.clone()),
             response,
         })
     }
@@ -1312,8 +1323,13 @@ impl CommandServer {
             }
         }
 
+        // ALIEN-219: `CommandEnvelopeData` doesn't carry a resolved per-resource
+        // target yet (registry-side target storage/resolution lands in later
+        // ALIEN-219 tasks), so this uses the transitional deployment-scoped target.
+        #[allow(deprecated)]
         Ok(Envelope::new(
             metadata.deployment_id.clone(),
+            CommandTarget::legacy_deployment_scoped(metadata.deployment_id.clone()),
             command_id.to_string(),
             metadata.attempt,
             metadata.deadline,

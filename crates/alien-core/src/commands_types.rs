@@ -267,6 +267,75 @@ pub struct ResponseHandling {
     pub storage_upload_request: PresignedRequest,
 }
 
+/// The kind of command-capable resource a command targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CommandTargetType {
+    /// A Worker resource (serverless function).
+    Worker,
+    /// A Container resource (long-running container workload).
+    Container,
+    /// A Daemon resource (host-level long-running process).
+    Daemon,
+}
+
+/// How a command is delivered to its target resource.
+///
+/// This is a Commands-protocol-specific concept and is intentionally distinct
+/// from `DeploymentModel` (see `stack_settings.rs`), which governs the
+/// infrastructure-level push/pull wiring for a deployment. Serialized
+/// lowercase for consistency with `CommandTargetType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CommandDeliveryMode {
+    /// The manager pushes the command directly to the target (e.g. Lambda invoke).
+    Push,
+    /// The target polls the manager for pending commands.
+    Pull,
+}
+
+/// Identifies the specific resource a command is addressed to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CommandTarget {
+    /// The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id).
+    pub resource_id: String,
+    /// The kind of resource `resource_id` refers to.
+    pub resource_type: CommandTargetType,
+}
+
+impl CommandTarget {
+    /// Create a new command target.
+    pub fn new(resource_id: impl Into<String>, resource_type: CommandTargetType) -> Self {
+        Self {
+            resource_id: resource_id.into(),
+            resource_type,
+        }
+    }
+
+    /// **ALIEN-219 scaffolding only.** Builds a target scoped to `deployment_id`,
+    /// defaulting to `CommandTargetType::Worker`.
+    ///
+    /// Real command targets identify a specific resource, not a deployment — this
+    /// helper exists solely to keep the workspace compiling for call sites whose
+    /// true target wiring lands in later ALIEN-219 tasks (server-side resolution,
+    /// runtime polling, agent dispatch). Every call site must be replaced with a
+    /// real resolved target before this branch merges; see the ALIEN-219 Task 1
+    /// report for the current usage list.
+    #[deprecated(
+        note = "ALIEN-219 placeholder: replace with a real resolved CommandTarget (Tasks 2-4)"
+    )]
+    pub fn legacy_deployment_scoped(deployment_id: impl Into<String>) -> Self {
+        Self {
+            resource_id: deployment_id.into(),
+            resource_type: CommandTargetType::Worker,
+        }
+    }
+}
+
 /// Commands envelope sent to deployments
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -276,6 +345,8 @@ pub struct Envelope {
     pub protocol: String,
     /// Target deployment identifier
     pub deployment_id: String,
+    /// The specific resource this command is addressed to
+    pub target: CommandTarget,
     /// Unique command identifier
     pub command_id: String,
     /// Attempt number (starts at 1)
@@ -293,8 +364,10 @@ pub struct Envelope {
 
 impl Envelope {
     /// Create a new Commands envelope
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         deployment_id: impl Into<String>,
+        target: CommandTarget,
         command_id: impl Into<String>,
         attempt: u32,
         deadline: Option<DateTime<Utc>>,
@@ -305,6 +378,7 @@ impl Envelope {
         Self {
             protocol: COMMANDS_PROTOCOL_VERSION.to_string(),
             deployment_id: deployment_id.into(),
+            target,
             command_id: command_id.into(),
             attempt,
             deadline,
@@ -347,6 +421,13 @@ impl Envelope {
             }));
         }
 
+        if self.target.resource_id.is_empty() {
+            return Err(AlienError::new(ErrorData::InvalidEnvelope {
+                message: "Target resource ID cannot be empty".to_string(),
+                field: Some("target.resourceId".to_string()),
+            }));
+        }
+
         Ok(())
     }
 }
@@ -370,6 +451,11 @@ pub struct CreateCommandRequest {
     /// Optional idempotency key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// Optional explicit target resource ID within the deployment's stack.
+    /// When omitted, the target is resolved server-side (single-target shorthand):
+    /// exactly one command-capable resource must exist, or resolution fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_resource_id: Option<String>,
 }
 
 /// Storage upload information
@@ -432,6 +518,8 @@ pub struct CommandStatusResponse {
     pub state: CommandState,
     /// Current attempt number
     pub attempt: u32,
+    /// The specific resource this command is addressed to
+    pub target: CommandTarget,
     /// Response data (only for succeeded/failed state)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<CommandResponse>,
@@ -456,6 +544,9 @@ pub struct SubmitResponseRequest {
 pub struct LeaseRequest {
     /// Deployment identifier
     pub deployment_id: String,
+    /// The specific resource requesting leases. Required: leases are scoped to a
+    /// single target, so callers must identify which resource they're polling for.
+    pub target: CommandTarget,
     /// Maximum number of leases to acquire
     #[serde(default = "default_max_leases")]
     pub max_leases: usize,
@@ -472,15 +563,11 @@ fn default_lease_seconds() -> u64 {
     60
 }
 
-impl Default for LeaseRequest {
-    fn default() -> Self {
-        Self {
-            deployment_id: "default-deployment".to_string(),
-            max_leases: default_max_leases(),
-            lease_seconds: default_lease_seconds(),
-        }
-    }
-}
+// NOTE(ALIEN-219): `LeaseRequest` no longer implements `Default`. Its `target`
+// field is required and there is no sensible default resource to lease for —
+// a fabricated default here would be a footgun (silently leasing for the wrong
+// resource). The single prior caller (test-only) now constructs the request
+// explicitly.
 
 /// Lease information
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -597,6 +684,7 @@ mod tests {
 
         let envelope = Envelope::new(
             "deployment_123",
+            CommandTarget::new("worker-1", CommandTargetType::Worker),
             "cmd_123",
             1,
             None,
@@ -625,6 +713,11 @@ mod tests {
         // Test empty command name
         let mut invalid_envelope = envelope.clone();
         invalid_envelope.command = "".to_string();
+        assert!(invalid_envelope.validate().is_err());
+
+        // Test empty target resource ID
+        let mut invalid_envelope = envelope.clone();
+        invalid_envelope.target.resource_id = "".to_string();
         assert!(invalid_envelope.validate().is_err());
     }
 
@@ -656,6 +749,7 @@ mod tests {
 
         let envelope = Envelope::new(
             "deployment_123",
+            CommandTarget::new("worker-1", CommandTargetType::Worker),
             "cmd_123",
             1,
             None,
@@ -669,5 +763,145 @@ mod tests {
         assert!(json.contains("\"commandId\":\"cmd_123\""));
         assert!(json.contains("\"command\":\"test-command\""));
         assert!(json.contains("\"protocol\":\"arc.v1\""));
+        assert!(json.contains("\"target\":{\"resourceId\":\"worker-1\",\"resourceType\":\"worker\"}"));
+    }
+
+    #[test]
+    fn test_command_target_type_serde_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&CommandTargetType::Worker).unwrap(),
+            "\"worker\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandTargetType::Container).unwrap(),
+            "\"container\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandTargetType::Daemon).unwrap(),
+            "\"daemon\""
+        );
+
+        assert_eq!(
+            serde_json::from_str::<CommandTargetType>("\"worker\"").unwrap(),
+            CommandTargetType::Worker
+        );
+        assert_eq!(
+            serde_json::from_str::<CommandTargetType>("\"container\"").unwrap(),
+            CommandTargetType::Container
+        );
+        assert_eq!(
+            serde_json::from_str::<CommandTargetType>("\"daemon\"").unwrap(),
+            CommandTargetType::Daemon
+        );
+    }
+
+    #[test]
+    fn test_command_delivery_mode_serde_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&CommandDeliveryMode::Push).unwrap(),
+            "\"push\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandDeliveryMode::Pull).unwrap(),
+            "\"pull\""
+        );
+
+        assert_eq!(
+            serde_json::from_str::<CommandDeliveryMode>("\"push\"").unwrap(),
+            CommandDeliveryMode::Push
+        );
+        assert_eq!(
+            serde_json::from_str::<CommandDeliveryMode>("\"pull\"").unwrap(),
+            CommandDeliveryMode::Pull
+        );
+    }
+
+    #[test]
+    fn test_command_target_round_trip_camel_case() {
+        let target = CommandTarget::new("container-1", CommandTargetType::Container);
+        let json = serde_json::to_string(&target).unwrap();
+        assert_eq!(json, "{\"resourceId\":\"container-1\",\"resourceType\":\"container\"}");
+
+        let round_tripped: CommandTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, target);
+    }
+
+    #[test]
+    fn test_create_command_request_target_resource_id_omitted_when_none() {
+        let request = CreateCommandRequest {
+            deployment_id: "deployment_123".to_string(),
+            command: "generate-report".to_string(),
+            params: BodySpec::inline(b"{}"),
+            deadline: None,
+            idempotency_key: None,
+            target_resource_id: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("targetResourceId"));
+
+        let round_tripped: CreateCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn test_create_command_request_target_resource_id_present_camel_case() {
+        let request = CreateCommandRequest {
+            deployment_id: "deployment_123".to_string(),
+            command: "generate-report".to_string(),
+            params: BodySpec::inline(b"{}"),
+            deadline: None,
+            idempotency_key: None,
+            target_resource_id: Some("worker-1".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"targetResourceId\":\"worker-1\""));
+
+        let round_tripped: CreateCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn test_lease_request_target_is_required() {
+        // Without `target`, deserialization must fail: leases are scoped to a
+        // single target and there is no sensible default resource.
+        let json_missing_target = serde_json::json!({
+            "deploymentId": "deployment_123",
+        });
+        let result: std::result::Result<LeaseRequest, _> =
+            serde_json::from_value(json_missing_target);
+        assert!(result.is_err());
+
+        // With `target` present, it deserializes and defaults max_leases/lease_seconds.
+        let json_with_target = serde_json::json!({
+            "deploymentId": "deployment_123",
+            "target": {
+                "resourceId": "worker-1",
+                "resourceType": "worker",
+            },
+        });
+        let request: LeaseRequest = serde_json::from_value(json_with_target).unwrap();
+        assert_eq!(request.deployment_id, "deployment_123");
+        assert_eq!(request.target, CommandTarget::new("worker-1", CommandTargetType::Worker));
+        assert_eq!(request.max_leases, 1);
+        assert_eq!(request.lease_seconds, 60);
+    }
+
+    #[test]
+    fn test_command_status_response_carries_target() {
+        let response = CommandStatusResponse {
+            command_id: "cmd_123".to_string(),
+            state: CommandState::Pending,
+            attempt: 1,
+            target: CommandTarget::new("daemon-1", CommandTargetType::Daemon),
+            response: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"target\":{\"resourceId\":\"daemon-1\",\"resourceType\":\"daemon\"}"));
+
+        let round_tripped: CommandStatusResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, response);
     }
 }

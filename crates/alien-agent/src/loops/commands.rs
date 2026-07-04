@@ -13,7 +13,7 @@ use alien_commands::dispatchers::{
     CommandDispatcher, LambdaCommandDispatcher, PubSubCommandDispatcher,
     ServiceBusCommandDispatcher,
 };
-use alien_commands::{LeaseRequest, LeaseResponse};
+use alien_commands::{CommandTarget, LeaseRequest, LeaseResponse};
 use alien_core::{ClientConfig, Platform, WorkerOutputs};
 use alien_infra::ClientConfigExt;
 use reqwest::Client;
@@ -153,7 +153,14 @@ async fn poll_and_dispatch(
 
     // 6. Acquire leases from the manager
     let lease_url = format!("{}/commands/leases", commands_url.trim_end_matches('/'));
+    // ALIEN-219: `target` is required on `LeaseRequest`. This loop still leases
+    // at deployment scope (the global push-target scan below is itself
+    // deployment-scoped scaffolding); real per-resource targeting lands when
+    // `find_push_target` is replaced with per-target leasing in a later
+    // ALIEN-219 task.
+    #[allow(deprecated)]
     let lease_request = LeaseRequest {
+        target: CommandTarget::legacy_deployment_scoped(deployment_id.clone()),
         deployment_id,
         max_leases: 10,
         lease_seconds: 60,

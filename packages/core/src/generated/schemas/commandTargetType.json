@@ -1,0 +1,1 @@
+{"type":"string","description":"The kind of command-capable resource a command targets.","enum":["worker","container","daemon"],"x-readme-ref-name":"CommandTargetType"}

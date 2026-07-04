@@ -314,9 +314,11 @@ mod tests {
     use alien_bindings::presigned::PresignedRequest;
     use chrono::Utc;
 
+    #[allow(deprecated)]
     fn create_test_envelope() -> Envelope {
         Envelope {
             protocol: PROTOCOL_VERSION.to_string(),
+            target: crate::types::CommandTarget::legacy_deployment_scoped("dep_123"),
             command_id: "cmd_123".to_string(),
             attempt: 1,
             deadline: None,
@@ -451,8 +453,10 @@ mod tests {
         let params_json = serde_json::json!({"key": "value", "num": 42});
         let params_bytes = serde_json::to_vec(&params_json).unwrap();
 
+        #[allow(deprecated)]
         let envelope = Envelope {
             protocol: PROTOCOL_VERSION.to_string(),
+            target: crate::types::CommandTarget::legacy_deployment_scoped("dep_123"),
             command_id: "cmd_decode".to_string(),
             attempt: 1,
             deadline: None,

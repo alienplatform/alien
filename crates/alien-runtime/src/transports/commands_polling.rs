@@ -11,7 +11,7 @@ use alien_bindings::grpc::control_service::{
 };
 use alien_commands::{
     runtime::submit_response,
-    types::{CommandResponse, LeaseInfo, LeaseRequest, LeaseResponse},
+    types::{CommandResponse, CommandTarget, LeaseInfo, LeaseRequest, LeaseResponse},
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use reqwest::{Client, Url};
@@ -176,8 +176,15 @@ impl CommandsPolling {
             .push("commands")
             .push("leases");
 
+        // ALIEN-219: `target` is required on `LeaseRequest`. This runtime-level
+        // polling transport doesn't yet know which specific resource it's
+        // polling for (that wiring — reading `ALIEN_COMMANDS_TARGET_RESOURCE_ID`
+        // — lands in a later ALIEN-219 task), so it leases at deployment scope
+        // via the transitional helper.
+        #[allow(deprecated)]
         let request = LeaseRequest {
             deployment_id: self.deployment_id.clone(),
+            target: CommandTarget::legacy_deployment_scoped(self.deployment_id.clone()),
             max_leases: 10,
             lease_seconds: 60,
         };

@@ -643,8 +643,18 @@ mod tests {
         assert_envelope_command(&lease.envelope, "lease-command");
 
         // Test no available leases
+        // ALIEN-219: `LeaseRequest` no longer implements `Default` (`target` is
+        // required); this test only cares about deployment scope, so it uses the
+        // transitional deployment-scoped target.
+        #[allow(deprecated)]
+        let empty_lease_request = LeaseRequest {
+            deployment_id: "nonexistent-agent".to_string(),
+            target: CommandTarget::legacy_deployment_scoped("nonexistent-agent"),
+            max_leases: 1,
+            lease_seconds: 60,
+        };
         let empty_response = server
-            .acquire_lease("nonexistent-agent", LeaseRequest::default())
+            .acquire_lease("nonexistent-agent", empty_lease_request)
             .await
             .unwrap();
         assert_eq!(empty_response.leases.len(), 0);
@@ -778,6 +788,7 @@ mod tests {
             params: BodySpec::inline(b"{}"),
             deadline: None,
             idempotency_key: None,
+            target_resource_id: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());
@@ -789,6 +800,7 @@ mod tests {
             params: BodySpec::inline(b"{}"),
             deadline: None,
             idempotency_key: None,
+            target_resource_id: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());
