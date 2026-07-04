@@ -1,16 +1,5 @@
-pub(crate) mod artifact_registry_service;
-pub(crate) mod build_service;
-pub(crate) mod container_service;
 pub mod control_service;
-pub(crate) mod kv_service;
-pub(crate) mod queue_service;
-pub(crate) mod service_account_service;
-pub(crate) mod status_conversion;
-pub(crate) mod storage_service;
-pub(crate) mod storage_utils;
-pub(crate) mod vault_service;
 pub mod wait_until_service;
-pub(crate) mod worker_service;
 
 pub mod server;
 pub use server::{run_grpc_server, GrpcServerHandles};

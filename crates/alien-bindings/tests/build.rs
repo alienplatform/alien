@@ -5,8 +5,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, BindingValue};
 
 // Platform-specific providers are now internal implementation details
@@ -19,8 +17,6 @@ use std::path::PathBuf as StdPathBuf;
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
 use workspace_root::get_workspace_root;
 
 #[cfg(feature = "aws")]
@@ -35,7 +31,6 @@ use alien_aws_clients::{
 #[cfg(feature = "aws")]
 use {reqwest::Client, std::sync::Mutex, uuid::Uuid};
 
-const GRPC_BINDING_NAME: &str = "test-grpc-build-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -103,111 +98,6 @@ impl BuildTestContext for LocalProviderBuildTestContext {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderBuildTestContext {
-    build: Arc<dyn Build>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir,
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderBuildTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
-        let temp_data_dir_path = temp_data_dir.path().to_str().unwrap().to_string();
-
-        let server_binding = bindings::BuildBinding::local(
-            temp_data_dir_path.clone(),
-            std::collections::HashMap::new(),
-        );
-
-        let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-        let server_binding_json =
-            serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-        server_provider_env_map.insert(
-            bindings::binding_env_var_name(GRPC_BINDING_NAME),
-            server_binding_json,
-        );
-        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-        let local_provider_for_server = Arc::new(
-            BindingsProvider::from_env(server_provider_env_map)
-                .await
-                .expect("Failed to load bindings provider"),
-        );
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind to random port");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        drop(listener);
-
-        let server_addr_str = addr.to_string();
-        let server_addr_for_spawn = server_addr_str.clone();
-
-        let server_handle = tokio::spawn(async move {
-            let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                .await
-                .unwrap();
-
-            // Wait for server to be ready
-            handles
-                .readiness_receiver
-                .await
-                .expect("Server should become ready");
-            handles.server_task.await.unwrap()
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-        service_provider_env_map.insert(
-            "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-            server_addr_str.clone(),
-        );
-        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-        let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-            .expect("Failed to load bindings provider");
-
-        let build_client = grpc_provider
-            .load_build(GRPC_BINDING_NAME)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Grpc build for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                    GRPC_BINDING_NAME, server_addr_str, e
-                )
-            });
-
-        Self {
-            build: build_client,
-            _server_handle: server_handle,
-            _temp_data_dir: temp_data_dir,
-        }
-    }
-
-    async fn teardown(self) {
-        self._server_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl BuildTestContext for GrpcProviderBuildTestContext {
-    async fn get_build(&self) -> Arc<dyn Build> {
-        self.build.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-    async fn cleanup(&self) {
-        // gRPC provider doesn't need cleanup (server is cleaned up in teardown)
-    }
-}
-
 // --- AWS Provider Context ---
 #[cfg(feature = "aws")]
 struct AwsProviderBuildTestContext {
@@ -650,7 +540,6 @@ async fn wait_for_build_completion(
 
 #[rstest]
 #[case::local(LocalProviderBuildTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]
@@ -704,7 +593,6 @@ async fn test_start_build_and_get_status(#[case] ctx: impl BuildTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderBuildTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]
@@ -766,7 +654,6 @@ async fn test_stop_build(#[case] ctx: impl BuildTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderBuildTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]
@@ -816,7 +703,6 @@ async fn test_build_with_environment_variables(#[case] ctx: impl BuildTestContex
 
 #[rstest]
 #[case::local(LocalProviderBuildTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]
@@ -875,7 +761,6 @@ async fn test_build_with_different_compute_types(#[case] ctx: impl BuildTestCont
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderBuildTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderBuildTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderBuildTestContext::setup().await))]
 // #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 // #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]

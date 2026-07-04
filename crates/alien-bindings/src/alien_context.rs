@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
 use crate::wait_until::WaitUntilContext;
-use crate::{BindingsMode, BindingsProvider, BindingsProviderApi, WaitUntil};
+use crate::{BindingsProvider, BindingsProviderApi, WaitUntil};
 use alien_core::{ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME};
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -113,25 +113,10 @@ impl AlienContext {
     /// Creates a new AlienContext from provided environment variables.
     /// This is useful for testing or when environment variables are not available via std::env.
     pub async fn from_env_with_vars(env_vars: &HashMap<String, String>) -> Result<Self> {
-        // Choose the appropriate bindings provider based on ALIEN_BINDINGS_MODE
-        let bindings_mode = crate::get_bindings_mode_from_env(env_vars)?;
-
-        let bindings_provider: Arc<dyn BindingsProviderApi> = match bindings_mode {
-            BindingsMode::Grpc => {
-                #[cfg(feature = "grpc")]
-                {
-                    use crate::providers::grpc_provider::GrpcBindingsProvider;
-                    Arc::new(GrpcBindingsProvider::new_with_env(env_vars.clone())?)
-                }
-                #[cfg(not(feature = "grpc"))]
-                {
-                    return Err(AlienError::new(ErrorData::FeatureNotEnabled {
-                        feature: "grpc".to_string(),
-                    }));
-                }
-            }
-            BindingsMode::Direct => Arc::new(BindingsProvider::from_env(env_vars.clone()).await?),
-        };
+        // Bindings are always resolved in-process by the direct provider. The
+        // former gRPC bindings mode was removed with the binding-gRPC services.
+        let bindings_provider: Arc<dyn BindingsProviderApi> =
+            Arc::new(BindingsProvider::from_env(env_vars.clone()).await?);
 
         let app_id = uuid::Uuid::new_v4().to_string();
 

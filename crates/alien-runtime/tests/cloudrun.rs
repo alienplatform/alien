@@ -149,6 +149,9 @@ struct CloudRunTestContext {
     runtime_handle: Option<RuntimeHandle>,
     transport_port: u16,
     grpc_resources: Option<GrpcTestResources>,
+    // Backing dir for the child app's in-process `test-kv` binding; kept alive
+    // for the lifetime of the test so the event round-trip can read it back.
+    _app_data_dir: TempDir,
 }
 
 impl std::fmt::Debug for CloudRunTestContext {
@@ -180,8 +183,28 @@ impl AsyncTestContext for CloudRunTestContext {
             "ALIEN_SKIP_WAIT_UNTIL_EXTENSION".to_string(),
             "1".to_string(),
         );
-        env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
+        // Bindings are now resolved in-process by the direct provider, so the child
+        // app runs under the `local` platform (no cloud feature required to build the
+        // provider). The CloudRun transport under test is selected explicitly via
+        // RuntimeConfig::transport, independent of this deployment type. The
+        // ALIEN_BINDINGS_MODE=grpc injection stays: it selects the worker-protocol
+        // (control + wait_until) gRPC channel that this test's server provides.
+        env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
         env_vars.insert("ALIEN_BINDINGS_MODE".to_string(), "grpc".to_string());
+
+        // The event handlers in alien-test-app persist events into the `test-kv`
+        // binding and the read-back endpoints load it. With bindings resolved
+        // in-process (no binding gRPC), give the child app its own local test-kv
+        // binding so the storage/queue event round-trips still work end-to-end.
+        let app_data_dir =
+            tempfile::tempdir().expect("Failed to create app data dir for test-kv binding");
+        let kv_binding =
+            bindings::KvBinding::local(app_data_dir.path().to_str().unwrap().to_string());
+        env_vars.insert(
+            bindings::binding_env_var_name("test-kv"),
+            serde_json::to_string(&kv_binding).expect("Failed to serialize test-kv binding"),
+        );
+
         env_vars.insert(
             "RUST_LOG".to_string(),
             env::var("RUST_LOG")
@@ -250,6 +273,7 @@ impl AsyncTestContext for CloudRunTestContext {
             runtime_handle: Some(runtime_handle),
             transport_port,
             grpc_resources: Some(grpc_resources),
+            _app_data_dir: app_data_dir,
         }
     }
 

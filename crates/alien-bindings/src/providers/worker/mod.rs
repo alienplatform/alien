@@ -6,8 +6,6 @@ pub mod aws_lambda;
 pub mod azure_container_app;
 #[cfg(feature = "gcp")]
 pub mod gcp_cloudrun;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;
 #[cfg(feature = "local")]
@@ -19,8 +17,6 @@ pub use aws_lambda::LambdaWorker;
 pub use azure_container_app::ContainerAppWorker;
 #[cfg(feature = "gcp")]
 pub use gcp_cloudrun::CloudRunWorker;
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcWorker;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::KubernetesWorker;
 #[cfg(feature = "local")]

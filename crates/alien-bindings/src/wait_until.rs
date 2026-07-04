@@ -120,35 +120,37 @@ impl WaitUntilContext {
 
         #[cfg(feature = "grpc")]
         {
-            let bindings_mode = crate::get_bindings_mode_from_env(env_vars)?;
+            // Task 11 note: the worker-protocol drain channel is selected here by a
+            // raw check of ALIEN_BINDINGS_MODE == "grpc". Task 11 moves this selection
+            // onto the worker-protocol env; until then read the raw env value directly.
+            let use_worker_protocol_grpc = env_vars
+                .get("ALIEN_BINDINGS_MODE")
+                .map(|mode| mode == "grpc")
+                .unwrap_or(false);
 
-            match bindings_mode {
-                crate::BindingsMode::Direct => {
-                    // No gRPC needed - run in-process
-                    return Ok(Self::new(Some(app_id)));
-                }
-                crate::BindingsMode::Grpc => {
-                    // Require gRPC connection
-                    let grpc_address =
-                        env_vars.get("ALIEN_BINDINGS_GRPC_ADDRESS").ok_or_else(|| {
-                            AlienError::new(ErrorData::EnvironmentVariableMissing {
-                                variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-                            })
-                        })?;
+            if use_worker_protocol_grpc {
+                // Require gRPC connection
+                let grpc_address = env_vars.get("ALIEN_BINDINGS_GRPC_ADDRESS").ok_or_else(|| {
+                    AlienError::new(ErrorData::EnvironmentVariableMissing {
+                        variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
+                    })
+                })?;
 
-                    // Create gRPC client
-                    let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
-                    let grpc_client = WaitUntilServiceClient::new(channel);
+                // Create gRPC client
+                let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
+                let grpc_client = WaitUntilServiceClient::new(channel);
 
-                    return Ok(Self {
-                        application_id: app_id,
-                        tasks: Arc::new(Mutex::new(HashMap::new())),
-                        task_counter: AtomicU32::new(0),
-                        grpc_client: Some(grpc_client),
-                        draining: Arc::new(Mutex::new(false)),
-                    });
-                }
+                return Ok(Self {
+                    application_id: app_id,
+                    tasks: Arc::new(Mutex::new(HashMap::new())),
+                    task_counter: AtomicU32::new(0),
+                    grpc_client: Some(grpc_client),
+                    draining: Arc::new(Mutex::new(false)),
+                });
             }
+
+            // No gRPC needed - run in-process
+            return Ok(Self::new(Some(app_id)));
         }
 
         #[cfg(not(feature = "grpc"))]

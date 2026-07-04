@@ -4,8 +4,6 @@ pub mod aws_parameter_store;
 pub mod azure_key_vault;
 #[cfg(feature = "gcp")]
 pub mod gcp_secret_manager;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes_secret;
 #[cfg(feature = "local")]
@@ -17,8 +15,6 @@ pub use aws_parameter_store::*;
 pub use azure_key_vault::*;
 #[cfg(feature = "gcp")]
 pub use gcp_secret_manager::*;
-#[cfg(feature = "grpc")]
-pub use grpc::*;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes_secret::*;
 #[cfg(feature = "local")]

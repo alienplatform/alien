@@ -3,8 +3,7 @@ use alien_error::AlienError;
 // Re-export core traits and types
 pub use alien_context::AlienContext;
 pub use alien_core::{
-    BindingsMode, Platform, ENV_ALIEN_BASE_PLATFORM, ENV_ALIEN_BINDINGS_MODE,
-    ENV_ALIEN_DEPLOYMENT_TYPE,
+    Platform, ENV_ALIEN_BASE_PLATFORM, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE,
 };
 pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
@@ -65,21 +64,3 @@ pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) ->
     })
 }
 
-/// Parse ALIEN_BINDINGS_MODE from environment variables.
-/// Defaults to Direct if not specified.
-pub fn get_bindings_mode_from_env(
-    env: &std::collections::HashMap<String, String>,
-) -> Result<BindingsMode> {
-    let mode_str = env
-        .get(ENV_ALIEN_BINDINGS_MODE)
-        .map(|s| s.as_str())
-        .unwrap_or("direct");
-
-    mode_str.parse().map_err(|reason: String| {
-        AlienError::new(ErrorData::InvalidEnvironmentVariable {
-            variable_name: ENV_ALIEN_BINDINGS_MODE.to_string(),
-            value: mode_str.to_string(),
-            reason,
-        })
-    })
-}

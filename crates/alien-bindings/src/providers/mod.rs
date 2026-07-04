@@ -10,8 +10,4 @@ pub mod storage;
 pub mod vault;
 pub mod worker;
 
-// gRPC provider (cross-service)
-#[cfg(feature = "grpc")]
-pub mod grpc_provider;
-
 pub mod utils;

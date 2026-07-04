@@ -5,8 +5,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, WorkerBinding};
 
 // Import cloud clients for creating test resources
@@ -54,15 +52,11 @@ use std::{
     env,
     sync::{Arc, Mutex},
 };
-use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
-const GRPC_BINDING_NAME: &str = "test-grpc-function-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -78,111 +72,6 @@ pub trait FunctionTestContext: AsyncTestContext + Send + Sync {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderTestContext {
-    function: Arc<dyn Worker>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir,
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
-
-        // Mock worker binding for gRPC - this will simulate a local HTTP endpoint
-        let server_binding =
-            WorkerBinding::lambda("test-worker".to_string(), "us-east-1".to_string());
-
-        let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-        let server_binding_json =
-            serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-        server_provider_env_map.insert(
-            bindings::binding_env_var_name(GRPC_BINDING_NAME),
-            server_binding_json,
-        );
-        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-        let local_provider_for_server = Arc::new(
-            BindingsProvider::from_env(server_provider_env_map)
-                .await
-                .expect("Failed to load bindings provider"),
-        );
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind to random port");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        drop(listener); // Release the port so the server can bind to it
-
-        let server_addr_str = addr.to_string();
-        let server_addr_for_spawn = server_addr_str.clone();
-
-        let server_handle = tokio::spawn(async move {
-            let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                .await
-                .unwrap();
-
-            // Wait for server to be ready
-            handles
-                .readiness_receiver
-                .await
-                .expect("Server should become ready");
-            handles.server_task.await.unwrap()
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await; // Allow server to start
-
-        // Env map for the GrpcBindingsProvider (client-side)
-        let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-        service_provider_env_map.insert(
-            "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-            server_addr_str.clone(),
-        );
-        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-
-        let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-            .expect("Failed to load bindings provider");
-
-        let function = grpc_provider
-            .load_worker(GRPC_BINDING_NAME)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Grpc function for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                    GRPC_BINDING_NAME, server_addr_str, e
-                )
-            });
-
-        Self {
-            function,
-            _server_handle: server_handle,
-            _temp_data_dir: temp_data_dir,
-        }
-    }
-
-    async fn teardown(self) {
-        self._server_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl FunctionTestContext for GrpcProviderTestContext {
-    async fn get_function(&self) -> Arc<dyn Worker> {
-        self.function.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-    fn get_test_endpoint(&self) -> String {
-        "test-worker".to_string()
-    }
-}
-
 // --- AWS Provider Context ---
 #[cfg(feature = "aws")]
 struct AwsProviderTestContext {
@@ -1244,7 +1133,6 @@ impl FunctionTestContext for AzureProviderTestContext {
 
 /// Test function invoke functionality with various HTTP methods and payloads
 #[rstest]
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1343,7 +1231,6 @@ async fn test_function_invoke(#[case] ctx: impl FunctionTestContext) {
 
 /// Test getting worker URL and making direct HTTP request
 #[rstest]
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
