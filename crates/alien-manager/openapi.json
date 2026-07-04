@@ -1610,6 +1610,46 @@
           }
         }
       },
+      "AuroraPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterIdentifier",
+          "neverPauses"
+        ],
+        "properties": {
+          "clusterIdentifier": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engineVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "neverPauses": {
+            "type": "boolean",
+            "description": "True when a `minCapacity: 0` instance has not reached 0 ACU over the observation\nwindow — it is silently paying always-on prices (auto-pause verification)."
+          },
+          "serverlessCapacity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Latest sampled `ServerlessDatabaseCapacity` (ACU)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
       "AwsCodeBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -3630,6 +3670,33 @@
           }
         }
       },
+      "AzureFlexibleServerPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "serverName"
+        ],
+        "properties": {
+          "serverName": {
+            "type": "string"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "AzureKeyVaultHeartbeatData": {
         "type": "object",
         "required": [
@@ -4659,6 +4726,12 @@
               "null"
             ]
           },
+          "privateEndpointSubnetName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "privateSubnetName": {
             "type": [
               "string",
@@ -5028,7 +5101,8 @@
         "required": [
           "commandId",
           "state",
-          "attempt"
+          "attempt",
+          "target"
         ],
         "properties": {
           "attempt": {
@@ -5055,8 +5129,39 @@
           "state": {
             "$ref": "#/components/schemas/CommandState",
             "description": "Current command state"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
           }
         }
+      },
+      "CommandTarget": {
+        "type": "object",
+        "description": "Identifies the specific resource a command is addressed to.",
+        "required": [
+          "resourceId",
+          "resourceType"
+        ],
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "description": "The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id)."
+          },
+          "resourceType": {
+            "$ref": "#/components/schemas/CommandTargetType",
+            "description": "The kind of resource `resource_id` refers to."
+          }
+        }
+      },
+      "CommandTargetType": {
+        "type": "string",
+        "description": "The kind of command-capable resource a command targets.",
+        "enum": [
+          "worker",
+          "container",
+          "daemon"
+        ]
       },
       "CommandsInfo": {
         "type": "object",
@@ -5528,6 +5633,13 @@
           "params": {
             "$ref": "#/components/schemas/BodySpec",
             "description": "Command parameters (JSON, can be large)"
+          },
+          "targetResourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional explicit target resource ID within the deployment's stack.\nWhen omitted, the target is resolved server-side (single-target shorthand):\nexactly one command-capable resource must exist, or resolution fails."
           }
         }
       },
@@ -6100,6 +6212,7 @@
         "required": [
           "protocol",
           "deploymentId",
+          "target",
           "commandId",
           "attempt",
           "command",
@@ -6144,6 +6257,10 @@
           "responseHandling": {
             "$ref": "#/components/schemas/ResponseHandling",
             "description": "Response handling configuration"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
           }
         }
       },
@@ -6462,6 +6579,33 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "GcpCloudSqlPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName"
+        ],
+        "properties": {
+          "databaseVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
           }
         }
       },
@@ -9338,7 +9482,8 @@
         "type": "object",
         "description": "Request for acquiring leases",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "target"
         ],
         "properties": {
           "deploymentId": {
@@ -9355,6 +9500,10 @@
             "type": "integer",
             "description": "Maximum number of leases to acquire",
             "minimum": 0
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource requesting leases. Required: leases are scoped to a\nsingle target, so callers must identify which resource they're polling for."
           }
         }
       },
@@ -9736,6 +9885,37 @@
           "get",
           "delete"
         ]
+      },
+      "LocalPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
       },
       "LocalQueueHeartbeatData": {
         "type": "object",
@@ -10709,6 +10889,13 @@
                 ],
                 "description": "Name of the dedicated classic Application Gateway subnet within the VNet."
               },
+              "private_endpoint_subnet_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused."
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -10781,6 +10968,138 @@
           "local",
           "test"
         ]
+      },
+      "PostgresHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresHeartbeatData",
+                "description": "AWS Aurora Serverless v2 backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "aurora"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Aurora Serverless v2 backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpCloudSqlPostgresHeartbeatData",
+                "description": "GCP Cloud SQL backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "cloudSql"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Cloud SQL backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFlexibleServerPostgresHeartbeatData",
+                "description": "Azure Flexible Server backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "flexibleServer"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Flexible Server backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalPostgresHeartbeatData",
+                "description": "Local embedded Postgres backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local embedded Postgres backend."
+          }
+        ]
+      },
+      "PostgresHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
       },
       "PresignedOperation": {
         "type": "string",
@@ -11530,6 +11849,24 @@
                 "type": "string",
                 "enum": [
                   "kv"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PostgresHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "postgres"
                 ]
               }
             }

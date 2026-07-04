@@ -83,6 +83,16 @@ pub fn router() -> Router<AppState> {
 /// Create a new command.
 ///
 /// Auth: Admin or DeploymentGroup token (must own the target deployment's group).
+///
+/// ALIEN-219: authorization is intentionally deployment-scoped. There is no
+/// per-resource auth primitive (the finest auth grain is the deployment), so
+/// naming a `targetResourceId` grants no extra access. Target selection is
+/// validated server-side by the registry as an EXISTENCE/CAPABILITY check
+/// (does this deployment have such a command-capable resource?), not as an
+/// authorization boundary — resolution failures surface as
+/// `COMMAND_TARGET_NOT_FOUND` (404), `COMMAND_TARGET_AMBIGUOUS` (409), or
+/// `NO_COMMAND_TARGETS` (422), which map to HTTP via each error's
+/// `http_status_code`.
 async fn create_command(
     State(state): State<AppState>,
     headers: HeaderMap,

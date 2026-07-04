@@ -473,12 +473,12 @@ impl AlienManagerBuilder {
                 Arc::new(crate::stores::sqlite::SqliteCommandRegistry::new(
                     db.clone(),
                     self.deployment_store.clone().unwrap(),
+                    self.release_store.clone().unwrap(),
                 ));
 
             let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> =
                 Arc::new(crate::commands::DefaultCommandDispatcher::new(
                     self.deployment_store.clone().unwrap(),
-                    self.release_store.clone().unwrap(),
                     self.credential_resolver.clone().unwrap(),
                 ));
 

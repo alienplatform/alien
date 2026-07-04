@@ -41,6 +41,11 @@ pub struct InvokeOptions {
     pub deadline: Option<DateTime<Utc>>,
     /// Idempotency key to prevent duplicate commands.
     pub idempotency_key: Option<String>,
+    /// Explicit target resource id within the deployment's stack. When `None`
+    /// the server resolves the target via single-target shorthand (exactly one
+    /// command-capable resource must exist). Set this when a deployment has
+    /// more than one command-capable resource.
+    pub target_resource_id: Option<String>,
 }
 
 /// High-level client for invoking commands on Alien deployments.
@@ -65,6 +70,11 @@ struct CommandStatusResponse {
     state: String,
     #[serde(default)]
     response: Option<CommandResponseBody>,
+    /// The resolved target this command was addressed to (ALIEN-219). Carried
+    /// on the wire for observability; the polling logic keys off `state` only.
+    #[serde(default)]
+    #[allow(dead_code)]
+    target: Option<alien_core::CommandTarget>,
 }
 
 #[derive(Deserialize)]
@@ -269,6 +279,9 @@ impl CommandsClient {
             }
             if let Some(ref key) = opts.idempotency_key {
                 body["idempotencyKey"] = serde_json::Value::String(key.clone());
+            }
+            if let Some(ref target) = opts.target_resource_id {
+                body["targetResourceId"] = serde_json::Value::String(target.clone());
             }
         }
 
