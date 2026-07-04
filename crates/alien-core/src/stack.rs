@@ -136,23 +136,62 @@ impl Stack {
             .collect()
     }
 
-    /// Returns the `ALIEN_COMMANDS_TARGET_RESOURCE_ID` environment variable for
-    /// each command-capable Worker in this stack, scoped via `target_resources`
-    /// so every Worker receives only its own resource id — never another
-    /// Worker's.
+    /// Returns the commands polling environment variables
+    /// (`ALIEN_COMMANDS_POLLING_ENABLED`, `ALIEN_COMMANDS_POLLING_URL`,
+    /// `ALIEN_COMMANDS_TOKEN`, `ALIEN_COMMANDS_TARGET_RESOURCE_ID`) for each
+    /// command-enabled Worker in this stack, scoped via `target_resources` so
+    /// every var reaches only its own Worker.
+    ///
+    /// Scoping the whole quartet (not just the target id) matters twice over:
+    /// a commands-disabled Worker must never see `POLLING_ENABLED=true` — the
+    /// runtime fail-fast-requires the target id once polling is on, so a
+    /// deployment-wide flag would crash it at startup — and it also shouldn't
+    /// run a pointless polling loop.
     ///
     /// Container/Daemon command targets are out of scope here: their commands
     /// receiver env injection lands with the controller wiring (a separate,
     /// not-yet-landed slice), so this only covers polling Workers.
-    pub fn worker_command_target_env_vars(&self) -> Vec<crate::EnvironmentVariable> {
+    pub fn worker_command_polling_env_vars(
+        &self,
+        polling_url: &str,
+        polling_token: Option<&str>,
+    ) -> Vec<crate::EnvironmentVariable> {
         self.command_targets()
             .into_iter()
-            .filter(|target| target.resource_type == crate::commands_types::CommandTargetType::Worker)
-            .map(|target| crate::EnvironmentVariable {
-                name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
-                value: target.resource_id.clone(),
-                var_type: crate::EnvironmentVariableType::Plain,
-                target_resources: Some(vec![target.resource_id]),
+            .filter(|target| {
+                target.resource_type == crate::commands_types::CommandTargetType::Worker
+            })
+            .flat_map(|target| {
+                let scope = Some(vec![target.resource_id.clone()]);
+                let mut vars = vec![
+                    crate::EnvironmentVariable {
+                        name: crate::ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
+                        value: "true".to_string(),
+                        var_type: crate::EnvironmentVariableType::Plain,
+                        target_resources: scope.clone(),
+                    },
+                    crate::EnvironmentVariable {
+                        name: crate::ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
+                        value: polling_url.to_string(),
+                        var_type: crate::EnvironmentVariableType::Plain,
+                        target_resources: scope.clone(),
+                    },
+                ];
+                if let Some(token) = polling_token {
+                    vars.push(crate::EnvironmentVariable {
+                        name: crate::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                        value: token.to_string(),
+                        var_type: crate::EnvironmentVariableType::Secret,
+                        target_resources: scope.clone(),
+                    });
+                }
+                vars.push(crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                    value: target.resource_id,
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: scope,
+                });
+                vars
             })
             .collect()
     }
@@ -683,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_command_target_env_vars_scopes_each_worker_to_its_own_id() {
+    fn worker_command_polling_env_vars_scopes_quartet_per_worker() {
         let worker_a = Worker::new("worker-a".to_string())
             .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -700,6 +739,16 @@ mod tests {
             .commands_enabled(true)
             .build();
 
+        // Commands-DISABLED Worker: must receive NONE of the polling vars.
+        // A deployment-wide POLLING_ENABLED=true would crash it at startup
+        // (the runtime fail-fast-requires the target id once polling is on).
+        let worker_disabled = Worker::new("worker-off".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
         let daemon_enabled = Daemon::new("daemon-c".to_string())
             .code(DaemonCode::Image {
                 image: "daemon:latest".to_string(),
@@ -708,34 +757,68 @@ mod tests {
             .commands_enabled(true)
             .build();
 
-        // Two command-enabled Workers in the same stack must each get their
-        // own scoped ALIEN_COMMANDS_TARGET_RESOURCE_ID — never a shared/global
-        // value, and the Daemon target must not receive a Worker env var at all
-        // (its own commands receiver env is separate, not-yet-landed work).
-        let stack = Stack::new("worker-target-env-stack".to_string())
+        let stack = Stack::new("worker-polling-env-stack".to_string())
             .add(worker_a, ResourceLifecycle::Live)
             .add(worker_b, ResourceLifecycle::Live)
+            .add(worker_disabled, ResourceLifecycle::Live)
             .add(daemon_enabled, ResourceLifecycle::Live)
             .build();
 
-        let vars = stack.worker_command_target_env_vars();
+        let vars =
+            stack.worker_command_polling_env_vars("https://cmd.example.test/v1", Some("tok"));
 
-        assert_eq!(
-            vars,
-            vec![
-                crate::EnvironmentVariable {
-                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
-                    value: "worker-a".to_string(),
-                    var_type: crate::EnvironmentVariableType::Plain,
-                    target_resources: Some(vec!["worker-a".to_string()]),
-                },
-                crate::EnvironmentVariable {
-                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
-                    value: "worker-b".to_string(),
-                    var_type: crate::EnvironmentVariableType::Plain,
-                    target_resources: Some(vec!["worker-b".to_string()]),
-                },
-            ]
-        );
+        // Every var is scoped to exactly one command-enabled Worker — nothing
+        // is deployment-wide, and neither the disabled Worker nor the Daemon
+        // is ever a scope target.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["worker-a".to_string()])
+                || v.target_resources == Some(vec!["worker-b".to_string()])
+        }));
+
+        // Each command-enabled Worker gets the full quartet.
+        for worker_id in ["worker-a", "worker-b"] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![worker_id.to_string()]))
+                .collect();
+            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_POLLING_ENABLED && v.value == "true"
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_POLLING_URL
+                    && v.value == "https://cmd.example.test/v1"
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_TOKEN
+                    && v.value == "tok"
+                    && v.var_type == crate::EnvironmentVariableType::Secret
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID && v.value == worker_id
+            }));
+        }
+    }
+
+    #[test]
+    fn worker_command_polling_env_vars_omits_token_when_absent() {
+        let worker = Worker::new("worker-a".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let stack = Stack::new("worker-no-token-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let vars = stack.worker_command_polling_env_vars("https://cmd.example.test/v1", None);
+
+        assert_eq!(vars.len(), 3);
+        assert!(!vars
+            .iter()
+            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TOKEN));
     }
 }

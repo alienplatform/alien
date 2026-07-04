@@ -16,8 +16,7 @@ use crate::db::AgentDb;
 use crate::AgentState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
-    KubernetesClientConfig, Platform, ResourceHeartbeat, ENV_ALIEN_COMMANDS_POLLING_ENABLED,
-    ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYMENT_ID,
+    KubernetesClientConfig, Platform, ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
@@ -317,31 +316,27 @@ async fn enrich_config(
 
             let mut vars = config.environment_variables.variables.clone();
 
-            vars.extend([
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
-                    value: "true".to_string(),
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
-                    value: commands_url,
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                // SECURITY: The sync token is reused as the commands polling token.
-                // This means deployed application code has access to the agent's sync token.
-                // TODO: Issue a separate, scoped commands-only token during initialization
-                // to limit the blast radius if the application is compromised.
-                // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
-                    value: sync_config.token.clone(),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                },
-            ]);
+            // Polling quartet (ENABLED/URL/TOKEN/TARGET_RESOURCE_ID), each var
+            // scoped via `target_resources` to a single command-enabled Worker.
+            // Nothing is injected deployment-wide: a commands-disabled Worker
+            // receiving POLLING_ENABLED=true would crash at startup (the
+            // runtime fail-fast-requires the target id once polling is on) and
+            // would otherwise run a pointless polling loop. Container/Daemon
+            // receiver env is separate, not-yet-landed work.
+            //
+            // SECURITY: The sync token is reused as the commands polling token.
+            // This means deployed application code has access to the agent's sync token.
+            // TODO: Issue a separate, scoped commands-only token during initialization
+            // to limit the blast radius if the application is compromised.
+            // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
+            if let Some(stack) = stack {
+                vars.extend(
+                    stack.worker_command_polling_env_vars(
+                        &commands_url,
+                        Some(&sync_config.token),
+                    ),
+                );
+            }
 
             // Ensure ALIEN_DEPLOYMENT_ID is present (should come from manager config,
             // but add defensively in case it's missing)
@@ -365,16 +360,6 @@ async fn enrich_config(
                         target_resources: None,
                     });
                 }
-            }
-
-            // ALIEN_COMMANDS_TARGET_RESOURCE_ID — required by the Worker runtime
-            // once polling is enabled (fail-fast). Scoped per-Worker via
-            // `target_resources` so each Worker gets only its own resource id,
-            // never a value shared across multiple command-enabled Workers in
-            // the same stack. Container/Daemon receiver env is separate,
-            // not-yet-landed work.
-            if let Some(stack) = stack {
-                vars.extend(stack.worker_command_target_env_vars());
             }
 
             config.environment_variables.variables = vars;
@@ -543,7 +528,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrich_config_scopes_command_target_id_per_worker_when_polling() {
+    async fn enrich_config_scopes_polling_quartet_per_command_enabled_worker() {
         let temp_dir = tempfile::tempdir().unwrap();
         let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
@@ -576,9 +561,19 @@ mod tests {
             .permissions("execution".to_string())
             .commands_enabled(true)
             .build();
+        // Commands-disabled Worker: must receive NONE of the polling vars —
+        // a deployment-wide POLLING_ENABLED=true would crash it at startup
+        // (the runtime fail-fast-requires the target id once polling is on).
+        let worker_off = alien_core::Worker::new("worker-off".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
         let stack = alien_core::Stack::new("agent-command-target-stack".to_string())
             .add(worker_a, alien_core::ResourceLifecycle::Live)
             .add(worker_b, alien_core::ResourceLifecycle::Live)
+            .add(worker_off, alien_core::ResourceLifecycle::Live)
             .build();
 
         let enriched = enrich_config(
@@ -591,19 +586,47 @@ mod tests {
         .await
         .unwrap();
 
-        let target_id_vars: Vec<_> = enriched
+        let polling_var_names = [
+            alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+            alien_core::ENV_ALIEN_COMMANDS_POLLING_URL,
+            alien_core::ENV_ALIEN_COMMANDS_TOKEN,
+            alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+        ];
+        let polling_vars: Vec<_> = enriched
             .environment_variables
             .variables
             .iter()
-            .filter(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)
+            .filter(|var| polling_var_names.contains(&var.name.as_str()))
             .collect();
 
-        assert_eq!(target_id_vars.len(), 2, "expected one target id var per Worker");
-        assert!(target_id_vars.iter().any(|var| {
-            var.value == "worker-a" && var.target_resources == Some(vec!["worker-a".to_string()])
+        // Every polling var is scoped to exactly one command-enabled Worker —
+        // nothing deployment-wide, nothing scoped to the disabled Worker.
+        assert!(polling_vars.iter().all(|var| {
+            var.target_resources == Some(vec!["worker-a".to_string()])
+                || var.target_resources == Some(vec!["worker-b".to_string()])
         }));
-        assert!(target_id_vars.iter().any(|var| {
-            var.value == "worker-b" && var.target_resources == Some(vec!["worker-b".to_string()])
-        }));
+
+        // Full quartet per command-enabled Worker, with its own target id.
+        for worker_id in ["worker-a", "worker-b"] {
+            let scoped: Vec<_> = polling_vars
+                .iter()
+                .filter(|var| var.target_resources == Some(vec![worker_id.to_string()]))
+                .collect();
+            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED
+                    && var.value == "true"
+            }));
+            assert!(scoped
+                .iter()
+                .any(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && var.value == "ax_dep_test"
+            }));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && var.value == worker_id
+            }));
+        }
     }
 }
