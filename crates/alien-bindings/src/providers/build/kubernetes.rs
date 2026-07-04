@@ -1,5 +1,5 @@
 use crate::{
-    error::{Error, ErrorData},
+    error::{binding_env_var, Error, ErrorData},
     traits::{Binding, Build},
 };
 use alien_core::{BuildConfig, BuildExecution, BuildStatus};
@@ -40,6 +40,7 @@ impl KubernetesBuild {
         // Create Kubernetes client from environment
         let k8s_config = KubernetesClientConfig::from_std_env().await.context(
             ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to create Kubernetes configuration from environment".to_string(),
             },
@@ -49,6 +50,7 @@ impl KubernetesBuild {
             KubernetesClient::new(k8s_config)
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Failed to create Kubernetes client".to_string(),
                 })?;
@@ -70,6 +72,7 @@ impl KubernetesBuild {
             alien_core::bindings::BuildBinding::Kubernetes(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Expected Kubernetes binding, got different service type".to_string(),
                 }));
@@ -80,6 +83,7 @@ impl KubernetesBuild {
             .namespace
             .into_value(binding_name, "namespace")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to extract namespace from binding".to_string(),
             })?;
@@ -88,6 +92,7 @@ impl KubernetesBuild {
             .service_account_name
             .into_value(binding_name, "service_account_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to extract service_account_name from binding".to_string(),
             })?;
@@ -96,6 +101,7 @@ impl KubernetesBuild {
             .build_env_vars
             .into_value(binding_name, "build_env_vars")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to extract build_env_vars from binding".to_string(),
             })?;
@@ -127,6 +133,7 @@ impl KubernetesBuild {
             KubernetesClient::new(k8s_config)
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Failed to create Kubernetes client".to_string(),
                 })?;

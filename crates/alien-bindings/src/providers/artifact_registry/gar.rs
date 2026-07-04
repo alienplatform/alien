@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{binding_env_var, map_cloud_client_error, ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         ComputeServiceType, CrossAccountAccess, CrossAccountPermissions, GcpCrossAccountAccess,
@@ -54,6 +54,7 @@ impl GarArtifactRegistry {
             ArtifactRegistryBinding::Gar(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected GAR binding, got different service type".to_string(),
                 }));
@@ -64,6 +65,7 @@ impl GarArtifactRegistry {
             .repository_name
             .into_value(&binding_name, "repository_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract repository_name from binding".to_string(),
             })?;
@@ -73,6 +75,7 @@ impl GarArtifactRegistry {
             .map(|v| {
                 v.into_value(&binding_name, "pull_service_account_email")
                     .context(ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&binding_name),
                         binding_name: binding_name.clone(),
                         reason: "Failed to extract pull_service_account_email from binding"
                             .to_string(),
@@ -85,6 +88,7 @@ impl GarArtifactRegistry {
             .map(|v| {
                 v.into_value(&binding_name, "push_service_account_email")
                     .context(ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&binding_name),
                         binding_name: binding_name.clone(),
                         reason: "Failed to extract push_service_account_email from binding"
                             .to_string(),
@@ -115,6 +119,7 @@ impl GarArtifactRegistry {
             Ok(name.to_string())
         } else {
             Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&self.binding_name),
                 binding_name: self.binding_name.clone(),
                 reason: format!("Invalid repository ID format: {}", repo_id),
             }))
@@ -264,6 +269,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&self.binding_name),
                     binding_name: self.binding_name.clone(),
                     reason: "GCP artifact registry can only accept GCP cross-account access configuration".to_string(),
                 }));
@@ -341,6 +347,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&self.binding_name),
                     binding_name: self.binding_name.clone(),
                     reason: "GCP artifact registry can only accept GCP cross-account access configuration".to_string(),
                 }));
@@ -524,6 +531,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             ArtifactRegistryPermissions::Pull => {
                 self.pull_service_account_email.clone()
                     .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&self.binding_name),
                         binding_name: self.binding_name.clone(),
                         reason: "Pull service account email not available - ensure the artifact registry resource is properly linked".to_string(),
                     }))?
@@ -531,6 +539,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             ArtifactRegistryPermissions::PushPull => {
                 self.push_service_account_email.clone()
                     .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&self.binding_name),
                         binding_name: self.binding_name.clone(),
                         reason: "Push service account email not available - ensure the artifact registry resource is properly linked".to_string(),
                     }))?

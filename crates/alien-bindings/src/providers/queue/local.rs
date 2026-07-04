@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
@@ -102,6 +102,7 @@ impl LocalQueue {
             .queue_path
             .into_value("queue", "queue_path")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("queue"),
                 binding_name: "queue".to_string(),
                 reason: "Failed to resolve queue_path from binding".to_string(),
             })?;

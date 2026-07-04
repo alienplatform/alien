@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{
     Binding, GcpServiceAccountInfo, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
@@ -33,6 +33,7 @@ impl GcpServiceAccount {
             .clone()
             .into_value("service-account", "email")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve email from binding".to_string(),
             })
@@ -45,6 +46,7 @@ impl GcpServiceAccount {
             .clone()
             .into_value("service-account", "unique_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve unique_id from binding".to_string(),
             })

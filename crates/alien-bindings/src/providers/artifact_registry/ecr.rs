@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{binding_env_var, map_cloud_client_error, ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
         AwsCrossAccountAccess, Binding, ComputeServiceType, CrossAccountAccess,
@@ -53,6 +53,7 @@ impl EcrArtifactRegistry {
             ArtifactRegistryBinding::Ecr(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected ECR binding, got different service type".to_string(),
                 }));
@@ -63,6 +64,7 @@ impl EcrArtifactRegistry {
             .repository_prefix
             .into_value(&binding_name, "repository_prefix")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract repository_prefix from binding".to_string(),
             })?;
@@ -72,6 +74,7 @@ impl EcrArtifactRegistry {
             .map(|v| {
                 v.into_value(&binding_name, "pull_role_arn").context(
                     ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&binding_name),
                         binding_name: binding_name.clone(),
                         reason: "Failed to extract pull_role_arn from binding".to_string(),
                     },
@@ -84,6 +87,7 @@ impl EcrArtifactRegistry {
             .map(|v| {
                 v.into_value(&binding_name, "push_role_arn").context(
                     ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&binding_name),
                         binding_name: binding_name.clone(),
                         reason: "Failed to extract push_role_arn from binding".to_string(),
                     },
@@ -444,6 +448,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         // Assume the pull role for repository reads
         let pull_role_arn = self.pull_role_arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&self.binding_name),
                 binding_name: self.binding_name.clone(),
                 reason: "Pull role ARN not available".to_string(),
             })
@@ -558,6 +563,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             CrossAccountAccess::Aws(aws_access) => aws_access,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&self.binding_name),
                     binding_name: self.binding_name.clone(),
                     reason: "AWS artifact registry can only accept AWS cross-account access configuration".to_string(),
                 }));
@@ -678,6 +684,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             CrossAccountAccess::Aws(aws_access) => aws_access,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&self.binding_name),
                     binding_name: self.binding_name.clone(),
                     reason: "AWS artifact registry can only accept AWS cross-account access configuration".to_string(),
                 }));

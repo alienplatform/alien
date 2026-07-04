@@ -6,6 +6,7 @@ pub use alien_core::{
     BindingsMode, Platform, ENV_ALIEN_BASE_PLATFORM, ENV_ALIEN_BINDINGS_MODE,
     ENV_ALIEN_DEPLOYMENT_TYPE,
 };
+pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
@@ -17,6 +18,7 @@ pub use traits::{
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 
+pub mod bindings;
 pub mod error;
 #[cfg(feature = "grpc")]
 pub mod grpc;

@@ -1,5 +1,5 @@
 use crate::{
-    error::{Error, ErrorData},
+    error::{binding_env_var, Error, ErrorData},
     providers::{
         artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild, kv::grpc::GrpcKv,
         queue::grpc::GrpcQueue, service_account::grpc::GrpcServiceAccount,
@@ -150,6 +150,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -158,6 +159,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcStorage::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC storage".to_string(),
                 })?,
@@ -175,6 +177,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -183,6 +186,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcBuild::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC build".to_string(),
                 })?,
@@ -199,6 +203,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -207,6 +212,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcArtifactRegistry::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC artifact registry".to_string(),
                 })?,
@@ -220,6 +226,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -228,6 +235,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcVault::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC vault".to_string(),
                 })?,
@@ -241,6 +249,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -249,6 +258,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcKv::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC KV".to_string(),
                 })?,
@@ -265,6 +275,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
         let binding: alien_core::bindings::PostgresBinding =
             alien_core::bindings::parse_binding_from_env(&self.env, binding_name).context(
                 ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to read Postgres binding from environment".to_string(),
                 },
@@ -280,6 +291,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -288,6 +300,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcQueue::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC Queue".to_string(),
                 })?,
@@ -301,6 +314,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -309,6 +323,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcWorker::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC Function".to_string(),
                 })?,
@@ -324,6 +339,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -332,6 +348,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcContainer::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC Container".to_string(),
                 })?,
@@ -348,6 +365,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             .get_channel()
             .await
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(binding_name),
                 binding_name: binding_name.to_string(),
                 reason: "Failed to get shared gRPC channel".to_string(),
             })?;
@@ -356,6 +374,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             GrpcServiceAccount::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: "Failed to initialize gRPC service account".to_string(),
                 })?,

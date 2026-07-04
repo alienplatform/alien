@@ -1,5 +1,5 @@
 use crate::{
-    error::{ErrorData, Result},
+    error::{binding_env_var, ErrorData, Result},
     traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse},
 };
 use alien_core::bindings::KubernetesWorkerBinding;
@@ -23,6 +23,7 @@ impl KubernetesWorker {
             .namespace
             .into_value(&binding_name, "namespace")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract namespace from Kubernetes worker binding".to_string(),
             })?;
@@ -31,6 +32,7 @@ impl KubernetesWorker {
             .service_name
             .into_value(&binding_name, "service_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract service_name from Kubernetes worker binding".to_string(),
             })?;
@@ -39,6 +41,7 @@ impl KubernetesWorker {
             .service_port
             .into_value(&binding_name, "service_port")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract service_port from Kubernetes worker binding".to_string(),
             })?;
@@ -48,6 +51,7 @@ impl KubernetesWorker {
             .map(|v| v.into_value(&binding_name, "public_url"))
             .transpose()
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract public_url from Kubernetes worker binding".to_string(),
             })?;

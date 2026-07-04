@@ -1,4 +1,4 @@
-use crate::error::ErrorData;
+use crate::error::{binding_env_var, ErrorData};
 use crate::grpc::storage_utils;
 use crate::grpc::MAX_GRPC_MESSAGE_SIZE;
 use crate::{
@@ -108,6 +108,7 @@ impl GrpcStorage {
         );
         let base_url = Url::parse(&get_url_resp.url).into_alien_error().context(
             ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: format!("Invalid base_url: {}", get_url_resp.url),
             },

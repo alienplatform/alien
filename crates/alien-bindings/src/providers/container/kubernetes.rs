@@ -1,5 +1,5 @@
 use crate::{
-    error::{ErrorData, Result},
+    error::{binding_env_var, ErrorData, Result},
     traits::{Binding, Container},
 };
 use alien_core::bindings::KubernetesContainerBinding;
@@ -20,6 +20,7 @@ impl KubernetesContainer {
             .namespace
             .into_value(&binding_name, "namespace")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract namespace from Kubernetes container binding".to_string(),
             })?;
@@ -28,6 +29,7 @@ impl KubernetesContainer {
             .service_name
             .into_value(&binding_name, "service_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract service_name from Kubernetes container binding"
                     .to_string(),
@@ -37,6 +39,7 @@ impl KubernetesContainer {
             .service_port
             .into_value(&binding_name, "service_port")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract service_port from Kubernetes container binding"
                     .to_string(),
@@ -47,6 +50,7 @@ impl KubernetesContainer {
             .map(|v| v.into_value(&binding_name, "public_url"))
             .transpose()
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract public_url from Kubernetes container binding"
                     .to_string(),
