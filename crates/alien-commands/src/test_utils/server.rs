@@ -360,7 +360,8 @@ impl TestCommandServerBuilder {
                 default_target.resource_id.clone(),
                 default_target.resource_type,
             )
-            .await;
+            .await
+            .expect("default target id is well-formed");
 
         // Find a free port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

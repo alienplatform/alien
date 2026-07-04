@@ -625,7 +625,8 @@ mod tests {
         server
             .registry
             .register_target("second-daemon", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         let request = test_inline_create_command("target-agent", "targeted-command");
         let err = server.create_command(request).await.unwrap_err();
@@ -640,7 +641,8 @@ mod tests {
         server
             .registry
             .register_target("second-daemon", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
         let second_target = CommandTarget::new("second-daemon", CommandTargetType::Daemon);
 
         // Command for the default target.
@@ -700,7 +702,8 @@ mod tests {
         server
             .registry
             .register_target("second-daemon", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         // Create a command registered to second-daemon.
         let mut request = test_inline_create_command("target-agent", "for-second");
@@ -747,7 +750,8 @@ mod tests {
         server
             .registry
             .register_target("second-daemon", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         let make_request = |target: &str| {
             let mut request = test_inline_create_command("target-agent", "idem-command");
@@ -789,7 +793,8 @@ mod tests {
         server
             .registry
             .register_target("shared-daemon", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
         let daemon_target = CommandTarget::new("shared-daemon", CommandTargetType::Daemon);
 
         // Command addressed to the Worker.

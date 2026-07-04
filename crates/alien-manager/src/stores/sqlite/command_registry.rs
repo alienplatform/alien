@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use alien_commands::error::ErrorData as CommandErrorData;
 use alien_commands::server::{
-    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, ResolvedCommandTarget,
+    delivery_mode_for, select_command_target, CommandEnvelopeData, CommandMetadata,
+    CommandRegistry, CommandStatus, ResolvedCommandTarget,
 };
 use alien_core::{
     CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType, DeploymentModel, Platform,
@@ -36,29 +37,52 @@ impl SqliteCommandRegistry {
         }
     }
 
-    /// Delivery mode for a resolved target, per the pinned ALIEN-219 rule.
+    /// Derive the Worker delivery context for this deployment: Push only when
+    /// the platform has a push path (not Kubernetes or Local) AND the stack
+    /// settings use the Push deployment model; otherwise Pull.
     ///
-    /// Container and Daemon targets are always Pull. A Worker target is Push
-    /// only when the deployment's platform has a push path (not Kubernetes or
-    /// Local) AND the stack settings use the Push deployment model; otherwise
-    /// it is Pull.
-    fn delivery_mode_for(
-        resource_type: CommandTargetType,
+    /// This platform-dependent derivation stays manager-side; the pinned
+    /// per-type rule (Container/Daemon always Pull) lives in the shared
+    /// [`delivery_mode_for`] that both registries call.
+    fn worker_delivery_mode(
         platform: Platform,
         stack_deployment_model: DeploymentModel,
     ) -> CommandDeliveryMode {
-        match resource_type {
-            CommandTargetType::Container | CommandTargetType::Daemon => CommandDeliveryMode::Pull,
-            CommandTargetType::Worker => {
-                let platform_has_push_path =
-                    !matches!(platform, Platform::Kubernetes | Platform::Local);
-                if platform_has_push_path && stack_deployment_model == DeploymentModel::Push {
-                    CommandDeliveryMode::Push
-                } else {
-                    CommandDeliveryMode::Pull
-                }
-            }
+        let platform_has_push_path = !matches!(platform, Platform::Kubernetes | Platform::Local);
+        if platform_has_push_path && stack_deployment_model == DeploymentModel::Push {
+            CommandDeliveryMode::Push
+        } else {
+            CommandDeliveryMode::Pull
         }
+    }
+
+    /// Derive the delivery mode for a resolved target, failing fast when the
+    /// deployment carries no stack settings.
+    ///
+    /// A missing `stack_settings` is an invariant violation: defaulting it
+    /// (`DeploymentModel::default()` is Push) would silently resolve Worker
+    /// targets to Push delivery — the riskiest direction. Per the repo's "fail
+    /// fast, don't fall back silently" rule we return a typed error naming the
+    /// deployment instead. The per-type dispatch (Container/Daemon always Pull)
+    /// then goes through the shared [`delivery_mode_for`].
+    fn resolve_delivery_mode(
+        resource_type: CommandTargetType,
+        platform: Platform,
+        stack_settings: Option<&alien_core::StackSettings>,
+        deployment_id: &str,
+    ) -> alien_commands::error::Result<CommandDeliveryMode> {
+        let stack_deployment_model =
+            stack_settings.map(|s| s.deployment_model).ok_or_else(|| {
+                alien_error::AlienError::new(CommandErrorData::Other {
+                    message: format!(
+                        "Deployment '{}' is missing stack_settings.deployment_model; \
+                     cannot derive command delivery mode",
+                        deployment_id
+                    ),
+                })
+            })?;
+        let worker_mode = Self::worker_delivery_mode(platform, stack_deployment_model);
+        Ok(delivery_mode_for(resource_type, worker_mode))
     }
 
     fn parse_command_status(row: &turso::Row) -> alien_commands::error::Result<CommandStatus> {
@@ -230,54 +254,20 @@ impl CommandRegistry for SqliteCommandRegistry {
             None => Vec::new(),
         };
 
-        // Resolution rules — identical to the in-memory production registry:
-        // explicit request must exist (an empty id NEVER falls back to
-        // shorthand); shorthand requires exactly one target.
-        let target = match requested {
-            Some(resource_id) => {
-                let found = if resource_id.is_empty() {
-                    None
-                } else {
-                    targets.iter().find(|t| t.resource_id == resource_id)
-                };
-                found
-                    .ok_or_else(|| {
-                        alien_error::AlienError::new(CommandErrorData::CommandTargetNotFound {
-                            resource_id: resource_id.to_string(),
-                            deployment_id: deployment_id.to_string(),
-                        })
-                    })?
-                    .clone()
-            }
-            None => match targets.as_slice() {
-                [] => {
-                    return Err(alien_error::AlienError::new(
-                        CommandErrorData::NoCommandTargets {
-                            deployment_id: deployment_id.to_string(),
-                        },
-                    ))
-                }
-                [single] => single.clone(),
-                _ => {
-                    return Err(alien_error::AlienError::new(
-                        CommandErrorData::CommandTargetAmbiguous {
-                            deployment_id: deployment_id.to_string(),
-                        },
-                    ))
-                }
-            },
-        };
+        // Selection rules (empty-id guard, explicit lookup, shorthand codes,
+        // and the `:`-charset guard) come from the single shared implementation
+        // in alien-commands — the same one the in-memory registry calls.
+        let target = select_command_target(deployment_id, &targets, requested)?;
 
-        let stack_deployment_model = deployment
-            .stack_settings
-            .as_ref()
-            .map(|s| s.deployment_model)
-            .unwrap_or_default();
-        let delivery_mode = Self::delivery_mode_for(
+        // Fail fast if the stored deployment carries no stack settings rather
+        // than silently defaulting Worker delivery to Push (the riskiest
+        // direction).
+        let delivery_mode = Self::resolve_delivery_mode(
             target.resource_type,
             deployment.platform,
-            stack_deployment_model,
-        );
+            deployment.stack_settings.as_ref(),
+            deployment_id,
+        )?;
 
         Ok(ResolvedCommandTarget {
             target,
@@ -582,6 +572,46 @@ mod tests {
         let rel_store = Arc::new(SqliteReleaseStore::new(db.clone()));
         let reg = SqliteCommandRegistry::new(db.clone(), dep_store, rel_store);
         (db, reg)
+    }
+
+    /// A deployment with no stack settings is an invariant violation. The
+    /// delivery-mode derivation must fail loudly (naming the deployment) rather
+    /// than silently default to Push — the store's `stack_settings` column is
+    /// NOT NULL so this state is unreachable through the store, but the guard
+    /// still protects the resolver if that invariant is ever broken upstream.
+    #[test]
+    fn resolve_delivery_mode_fails_fast_without_stack_settings() {
+        let err = SqliteCommandRegistry::resolve_delivery_mode(
+            CommandTargetType::Worker,
+            Platform::Aws,
+            None,
+            "dep-x",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("deployment_model"),
+            "expected a fail-fast deployment-model error, got: {}",
+            err.message
+        );
+    }
+
+    /// With stack settings present, the derivation returns a real mode (Push for
+    /// a Worker on a push-capable platform with the Push model) — never the
+    /// silent default masking a missing invariant.
+    #[test]
+    fn resolve_delivery_mode_worker_push_when_present() {
+        let settings = alien_core::StackSettings {
+            deployment_model: DeploymentModel::Push,
+            ..alien_core::StackSettings::default()
+        };
+        let mode = SqliteCommandRegistry::resolve_delivery_mode(
+            CommandTargetType::Worker,
+            Platform::Aws,
+            Some(&settings),
+            "dep-x",
+        )
+        .unwrap();
+        assert_eq!(mode, CommandDeliveryMode::Push);
     }
 
     /// A pre-ALIEN-219 command row has NULL target columns. Status reads must

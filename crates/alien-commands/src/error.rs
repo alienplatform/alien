@@ -84,6 +84,24 @@ pub enum ErrorData {
         deployment_id: String,
     },
 
+    /// A command target resource id contains a character that would break the
+    /// `:`-delimited pending-index / idempotency key grammar.
+    ///
+    /// 400: the request (or a stored target) is malformed. Resource ids must
+    /// match the documented `[A-Za-z0-9-_]` charset — in particular they may
+    /// never contain `:`, which delimits key segments.
+    #[error(
+        code = "COMMAND_TARGET_ID_INVALID",
+        message = "Command target id '{resource_id}' is invalid: ids must match [A-Za-z0-9-_] and cannot contain ':'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    CommandTargetIdInvalid {
+        /// The offending resource id
+        resource_id: String,
+    },
+
     /// Invalid state transition attempted on command.
     #[error(
         code = "INVALID_STATE_TRANSITION",

@@ -94,6 +94,96 @@ struct CommandRecord {
     project_id: String,
 }
 
+/// Reject a command-target resource id that would break the `:`-delimited key
+/// grammar used by the pending index (`target:{dep}:{rid}:pending:…`) and the
+/// idempotency key (`{dep}:{rid}:{command}:{key}`).
+///
+/// An id containing `:` could forge or collide with another target's key
+/// segments, so it is rejected at the commands layer with a typed error. This
+/// is the targeted ALIEN-219 guard: only `:` is enforced here. Full
+/// `[A-Za-z0-9-_]` charset validation in alien-core (a wider blast radius) is a
+/// documented follow-up; the error message still cites the intended charset.
+pub fn validate_command_target_id(resource_id: &str) -> Result<()> {
+    if resource_id.contains(':') {
+        return Err(AlienError::new(ErrorData::CommandTargetIdInvalid {
+            resource_id: resource_id.to_string(),
+        }));
+    }
+    Ok(())
+}
+
+/// Pinned ALIEN-219 target-selection rules — the single implementation both the
+/// in-memory and SQLite registries route through.
+///
+/// - `requested = Some(id)`: the id must be well-formed (no `:`) and name an
+///   existing command-capable target, else `COMMAND_TARGET_NOT_FOUND`. An empty
+///   id never falls back to shorthand.
+/// - `requested = None` (single-target shorthand): exactly one target must
+///   exist, else `COMMAND_TARGET_AMBIGUOUS` (more than one) or
+///   `NO_COMMAND_TARGETS` (none).
+///
+/// The resolved target's own id is also validated, so a target registered with
+/// a `:`-bearing id can never resolve into the key grammar.
+pub fn select_command_target(
+    deployment_id: &str,
+    targets: &[CommandTarget],
+    requested: Option<&str>,
+) -> Result<CommandTarget> {
+    let target = match requested {
+        Some(resource_id) => {
+            // Reject ids that would break the key grammar before any lookup.
+            validate_command_target_id(resource_id)?;
+            // An empty resource id is never a valid target — in particular it
+            // must NOT silently fall back to shorthand resolution.
+            let found = if resource_id.is_empty() {
+                None
+            } else {
+                targets.iter().find(|t| t.resource_id == resource_id)
+            };
+            found
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::CommandTargetNotFound {
+                        resource_id: resource_id.to_string(),
+                        deployment_id: deployment_id.to_string(),
+                    })
+                })?
+                .clone()
+        }
+        None => match targets {
+            [] => {
+                return Err(AlienError::new(ErrorData::NoCommandTargets {
+                    deployment_id: deployment_id.to_string(),
+                }))
+            }
+            [single] => single.clone(),
+            _ => {
+                return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
+                    deployment_id: deployment_id.to_string(),
+                }))
+            }
+        },
+    };
+
+    // A registered target whose id breaks the key grammar must never resolve.
+    validate_command_target_id(&target.resource_id)?;
+    Ok(target)
+}
+
+/// Pinned per-type delivery rule — the single implementation both registries
+/// route through. Container and Daemon targets are always Pull; a Worker target
+/// follows `worker_mode`, the caller's derived worker context (production: Push
+/// only when the platform has a push path AND `stack_settings.deployment_model`
+/// is Push).
+pub fn delivery_mode_for(
+    resource_type: CommandTargetType,
+    worker_mode: CommandDeliveryMode,
+) -> CommandDeliveryMode {
+    match resource_type {
+        CommandTargetType::Container | CommandTargetType::Daemon => CommandDeliveryMode::Pull,
+        CommandTargetType::Worker => worker_mode,
+    }
+}
+
 /// Abstraction for command metadata storage and lifecycle tracking.
 ///
 /// The CommandRegistry is the source of truth for all command metadata.
@@ -206,25 +296,21 @@ impl InMemoryCommandRegistry {
     ///
     /// Mirrors production, where the target set comes from the deployment's
     /// stack (`Stack::command_targets()`: Worker/Container/Daemon resources
-    /// with `commands_enabled`).
+    /// with `commands_enabled`). The id is validated through the same shared
+    /// guard as resolution, so a `:`-bearing id is rejected here at registration
+    /// rather than surfacing later as a key-grammar collision.
     pub async fn register_target(
         &self,
         resource_id: impl Into<String>,
         resource_type: CommandTargetType,
-    ) {
+    ) -> Result<()> {
+        let resource_id = resource_id.into();
+        validate_command_target_id(&resource_id)?;
         self.targets
             .write()
             .await
             .push(CommandTarget::new(resource_id, resource_type));
-    }
-
-    /// Delivery mode for a target, per the pinned rule: Container/Daemon are
-    /// always Pull; Worker follows the registry's derived worker context.
-    fn delivery_mode_for(&self, resource_type: CommandTargetType) -> CommandDeliveryMode {
-        match resource_type {
-            CommandTargetType::Container | CommandTargetType::Daemon => CommandDeliveryMode::Pull,
-            CommandTargetType::Worker => self.worker_delivery_mode,
-        }
+        Ok(())
     }
 
     /// List all command IDs (useful for debugging/testing)
@@ -249,41 +335,11 @@ impl CommandRegistry for InMemoryCommandRegistry {
         requested: Option<&str>,
     ) -> Result<ResolvedCommandTarget> {
         let targets = self.targets.read().await;
-
-        let target = match requested {
-            Some(resource_id) => {
-                // An empty resource id is never a valid target — in particular
-                // it must NOT silently fall back to shorthand resolution.
-                let found = if resource_id.is_empty() {
-                    None
-                } else {
-                    targets.iter().find(|t| t.resource_id == resource_id)
-                };
-                found.ok_or_else(|| {
-                    AlienError::new(ErrorData::CommandTargetNotFound {
-                        resource_id: resource_id.to_string(),
-                        deployment_id: deployment_id.to_string(),
-                    })
-                })?
-            }
-            None => match targets.as_slice() {
-                [] => {
-                    return Err(AlienError::new(ErrorData::NoCommandTargets {
-                        deployment_id: deployment_id.to_string(),
-                    }))
-                }
-                [single] => single,
-                _ => {
-                    return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
-                        deployment_id: deployment_id.to_string(),
-                    }))
-                }
-            },
-        };
-
+        let target = select_command_target(deployment_id, &targets, requested)?;
+        let delivery_mode = delivery_mode_for(target.resource_type, self.worker_delivery_mode);
         Ok(ResolvedCommandTarget {
-            target: target.clone(),
-            delivery_mode: self.delivery_mode_for(target.resource_type),
+            target,
+            delivery_mode,
         })
     }
 
@@ -427,10 +483,12 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("worker-a", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
         registry
             .register_target("daemon-b", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         let result = resolved(&registry, Some("daemon-b")).await.unwrap();
         assert_eq!(
@@ -444,7 +502,8 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("worker-a", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
 
         let err = resolved(&registry, Some("no-such-resource"))
             .await
@@ -458,7 +517,8 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("worker-a", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
 
         // An explicitly requested empty resource id must never resolve (in
         // particular it must NOT fall back to shorthand resolution).
@@ -471,7 +531,8 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("container-1", CommandTargetType::Container)
-            .await;
+            .await
+            .unwrap();
 
         let result = resolved(&registry, None).await.unwrap();
         assert_eq!(
@@ -485,10 +546,12 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("worker-a", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
         registry
             .register_target("worker-b", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
 
         let err = resolved(&registry, None).await.unwrap_err();
         assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
@@ -511,10 +574,12 @@ mod tests {
             InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Push);
         registry
             .register_target("container-1", CommandTargetType::Container)
-            .await;
+            .await
+            .unwrap();
         registry
             .register_target("daemon-1", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         let container = resolved(&registry, Some("container-1")).await.unwrap();
         assert_eq!(container.delivery_mode, CommandDeliveryMode::Pull);
@@ -529,7 +594,8 @@ mod tests {
             InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Push);
         push_registry
             .register_target("worker-1", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
         let push_worker = push_registry
             .resolve_target("dep-1", Some("worker-1"))
             .await
@@ -541,7 +607,8 @@ mod tests {
             InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Pull);
         pull_registry
             .register_target("worker-1", CommandTargetType::Worker)
-            .await;
+            .await
+            .unwrap();
         let pull_worker = pull_registry
             .resolve_target("dep-1", Some("worker-1"))
             .await
@@ -554,7 +621,8 @@ mod tests {
         let registry = InMemoryCommandRegistry::new();
         registry
             .register_target("daemon-1", CommandTargetType::Daemon)
-            .await;
+            .await
+            .unwrap();
 
         let resolved_target = registry.resolve_target("dep-1", None).await.unwrap();
         let metadata = registry
@@ -587,5 +655,41 @@ mod tests {
             .unwrap();
         assert_eq!(envelope_data.target, expected);
         assert_eq!(envelope_data.delivery_mode, CommandDeliveryMode::Pull);
+    }
+
+    #[tokio::test]
+    async fn test_register_target_rejects_colon_in_id() {
+        let registry = InMemoryCommandRegistry::new();
+        let err = registry
+            .register_target("evil:pending:x", CommandTargetType::Worker)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
+        assert_eq!(err.http_status_code, Some(400));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_explicit_colon_id_is_invalid() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
+            .await
+            .unwrap();
+
+        // A requested id containing ':' is rejected with a typed error before
+        // any lookup — it can never be resolved into the key grammar.
+        let err = resolved(&registry, Some("worker-a:pending:1"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
+    }
+
+    #[test]
+    fn test_select_command_target_rejects_registered_colon_id() {
+        // Even if a `:`-bearing target slips into the slice (e.g. an unvalidated
+        // upstream path), selecting it fails loudly rather than resolving.
+        let targets = vec![CommandTarget::new("a:pending:x", CommandTargetType::Worker)];
+        let err = select_command_target("dep-1", &targets, None).unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
     }
 }

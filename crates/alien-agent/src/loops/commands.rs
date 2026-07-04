@@ -177,10 +177,11 @@ async fn poll_and_dispatch(
     // 5. Lease + dispatch for each target in turn.
     let mut dispatched = 0;
     for target in &targets {
-        // Ensure a dispatcher for this target (create or reuse cached).
+        // Ensure a dispatcher for this target (create or reuse cached) and take
+        // the reference to it directly — no second lookup, so no `.expect`.
         let push_target = target.push_target.clone();
         let config = &state.config;
-        let rebuilt = match ensure_dispatcher(
+        let (cached, rebuilt) = match ensure_dispatcher(
             dispatcher_cache,
             &target.resource_id,
             &target.push_target,
@@ -188,7 +189,7 @@ async fn poll_and_dispatch(
         )
         .await
         {
-            Ok(rebuilt) => rebuilt,
+            Ok(pair) => pair,
             Err(e) => {
                 warn!(
                     resource_id = %target.resource_id,
@@ -207,7 +208,7 @@ async fn poll_and_dispatch(
             &lease_url,
             &deployment_id,
             target,
-            dispatcher_cache,
+            cached.dispatcher.as_ref(),
         )
         .await
         {
@@ -232,7 +233,7 @@ async fn lease_and_dispatch_target(
     lease_url: &str,
     deployment_id: &str,
     target: &PushTarget,
-    dispatcher_cache: &DispatcherCache,
+    dispatcher: &dyn CommandDispatcher,
 ) -> Result<usize, String> {
     // ALIEN-219: `LeaseRequest.target` names the specific push-capable Worker
     // this lease is for; the manager scans only that target's pending index.
@@ -264,11 +265,6 @@ async fn lease_and_dispatch_target(
     if lease_response.leases.is_empty() {
         return Ok(0);
     }
-
-    let dispatcher = &dispatcher_cache
-        .get(&target.resource_id)
-        .expect("dispatcher was ensured for this target before leasing")
-        .dispatcher;
 
     let mut dispatched = 0;
     for lease in &lease_response.leases {
@@ -323,37 +319,48 @@ fn enumerate_push_targets(stack_state: &StackState) -> Vec<PushTarget> {
 }
 
 /// Ensure the cache holds a dispatcher for `resource_id` built for the current
-/// `push_target`. Reuses an existing entry when the push target is unchanged;
-/// otherwise builds a new dispatcher via `factory` and replaces it.
+/// `push_target`, and return a reference to it. Reuses an existing entry when
+/// the push target is unchanged; otherwise builds a new dispatcher via
+/// `factory` and replaces it.
 ///
-/// Returns `true` if a (re)build happened, `false` if the cached dispatcher was
-/// reused. Generic over the dispatcher type so the caching logic is unit-testable
+/// Returns `(&cached, rebuilt)` where `rebuilt` is `true` if a (re)build
+/// happened. The reference is produced through the `Entry` API, so the caller
+/// gets the dispatcher without a second fallible lookup — the removed `.expect`.
+/// Generic over the dispatcher type so the caching logic is unit-testable
 /// without constructing a real platform dispatcher.
-async fn ensure_dispatcher<D, F, Fut>(
-    cache: &mut HashMap<String, CachedDispatcher<D>>,
+async fn ensure_dispatcher<'c, D, F, Fut>(
+    cache: &'c mut HashMap<String, CachedDispatcher<D>>,
     resource_id: &str,
     push_target: &str,
     factory: F,
-) -> Result<bool, String>
+) -> Result<(&'c CachedDispatcher<D>, bool), String>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<D, String>>,
 {
-    if let Some(existing) = cache.get(resource_id) {
-        if existing.push_target == push_target {
-            return Ok(false);
+    use std::collections::hash_map::Entry;
+    match cache.entry(resource_id.to_string()) {
+        Entry::Occupied(mut e) => {
+            let rebuilt = e.get().push_target != push_target;
+            if rebuilt {
+                let dispatcher = factory().await?;
+                e.insert(CachedDispatcher {
+                    push_target: push_target.to_string(),
+                    dispatcher,
+                });
+            }
+            let cached: &CachedDispatcher<D> = e.into_mut();
+            Ok((cached, rebuilt))
+        }
+        Entry::Vacant(e) => {
+            let dispatcher = factory().await?;
+            let cached: &CachedDispatcher<D> = e.insert(CachedDispatcher {
+                push_target: push_target.to_string(),
+                dispatcher,
+            });
+            Ok((cached, true))
         }
     }
-
-    let dispatcher = factory().await?;
-    cache.insert(
-        resource_id.to_string(),
-        CachedDispatcher {
-            push_target: push_target.to_string(),
-            dispatcher,
-        },
-    );
-    Ok(true)
 }
 
 /// Create a platform-specific command dispatcher.
@@ -536,40 +543,42 @@ mod tests {
             Ok::<u32, String>(builds.get())
         };
 
-        // First build for worker-a.
-        assert!(ensure_dispatcher(&mut cache, "worker-a", "lambda-a", bump)
+        // First build for worker-a: returns the freshly built dispatcher ref.
+        let (cached, rebuilt) = ensure_dispatcher(&mut cache, "worker-a", "lambda-a", bump)
             .await
-            .unwrap());
+            .unwrap();
+        assert!(rebuilt);
+        assert_eq!(cached.dispatcher, 1);
         assert_eq!(builds.get(), 1);
-        assert_eq!(cache.get("worker-a").unwrap().dispatcher, 1);
 
-        // Same push target → reused, no rebuild.
-        assert!(!ensure_dispatcher(&mut cache, "worker-a", "lambda-a", bump)
+        // Same push target → reused, no rebuild, same dispatcher ref returned.
+        let (cached, rebuilt) = ensure_dispatcher(&mut cache, "worker-a", "lambda-a", bump)
             .await
-            .unwrap());
+            .unwrap();
+        assert!(!rebuilt);
+        assert_eq!(cached.dispatcher, 1);
         assert_eq!(builds.get(), 1);
 
         // Changed push target → rebuild.
-        assert!(
-            ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
-                .await
-                .unwrap()
-        );
+        let (cached, rebuilt) = ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
+            .await
+            .unwrap();
+        assert!(rebuilt);
+        assert_eq!(cached.push_target, "lambda-a-v2");
         assert_eq!(builds.get(), 2);
-        assert_eq!(cache.get("worker-a").unwrap().push_target, "lambda-a-v2");
 
         // Different target → independent cache entry.
-        assert!(ensure_dispatcher(&mut cache, "worker-b", "lambda-b", bump)
+        let (_, rebuilt) = ensure_dispatcher(&mut cache, "worker-b", "lambda-b", bump)
             .await
-            .unwrap());
+            .unwrap();
+        assert!(rebuilt);
         assert_eq!(builds.get(), 3);
         assert_eq!(cache.len(), 2);
         // worker-a entry untouched by worker-b build.
-        assert!(
-            !ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
-                .await
-                .unwrap()
-        );
+        let (_, rebuilt) = ensure_dispatcher(&mut cache, "worker-a", "lambda-a-v2", bump)
+            .await
+            .unwrap();
+        assert!(!rebuilt);
         assert_eq!(builds.get(), 3);
     }
 }

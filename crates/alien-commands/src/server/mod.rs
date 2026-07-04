@@ -39,7 +39,8 @@ pub use axum_handlers::{
     create_axum_router, CommandPayloadResponse, HasCommandServer, StorePayloadRequest,
 };
 pub use command_registry::{
-    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
+    delivery_mode_for, select_command_target, validate_command_target_id, CommandEnvelopeData,
+    CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
     ResolvedCommandTarget,
 };
 pub use dispatchers::{CommandDispatcher, NullCommandDispatcher};
@@ -894,6 +895,14 @@ impl CommandServer {
         command_name: &str,
         idem_key: &str,
     ) -> String {
+        // Invariant: the target id is `:`-free (enforced at resolution via
+        // `validate_command_target_id`), so it occupies exactly one key
+        // segment and cannot collide across the `{dep}:{rid}:{command}:{key}`
+        // fields.
+        debug_assert!(
+            !target_resource_id.contains(':'),
+            "target_resource_id must be ':'-free before key composition: {target_resource_id}"
+        );
         format!(
             "{}:{}:{}:{}",
             deployment_id, target_resource_id, command_name, idem_key
@@ -1193,6 +1202,13 @@ impl CommandServer {
         target_resource_id: &str,
         command_id: &str,
     ) -> Result<()> {
+        // Invariant: the target id is `:`-free (enforced at resolution via
+        // `validate_command_target_id`), so its prefix `target:{dep}:{rid}:`
+        // cannot overlap another target's pending keys.
+        debug_assert!(
+            !target_resource_id.contains(':'),
+            "target_resource_id must be ':'-free in the pending index: {target_resource_id}"
+        );
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
         let key = format!(
             "target:{}:{}:pending:{}:{}",
@@ -1497,5 +1513,32 @@ impl CommandServer {
                 })
             })
             .map(|s| s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod idempotency_key_tests {
+    use super::*;
+    use crate::server::validate_command_target_id;
+
+    /// Idempotency keys are `{dep}:{rid}:{command}:{key}`. If a target id could
+    /// contain ':', the `rid` segment would be ambiguous: the two triples
+    ///   (rid="svc",   command="a:b", key="k")
+    ///   (rid="svc:a", command="b",   key="k")
+    /// both compose to `dep:svc:a:b:k`. The shared guard forbids ':' in a target
+    /// id, so the second can never be a resolved target — closing the collision
+    /// at the rid boundary. Only the colon-free composition is exercised here;
+    /// the colliding one is proven unreachable via the guard.
+    #[test]
+    fn target_id_colon_guard_prevents_idempotency_key_collision() {
+        let colliding = CommandServer::compose_idempotency_key("dep", "svc", "a:b", "k");
+        assert_eq!(colliding, "dep:svc:a:b:k");
+
+        // The alternate triple that would collide needs target id "svc:a".
+        assert!(
+            validate_command_target_id("svc:a").is_err(),
+            "a ':'-bearing target id must be rejected so it cannot forge the rid segment"
+        );
+        assert!(validate_command_target_id("svc").is_ok());
     }
 }

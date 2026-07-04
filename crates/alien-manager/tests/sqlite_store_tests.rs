@@ -1550,6 +1550,31 @@ async fn resolve_target_container_always_pull() {
 }
 
 #[tokio::test]
+async fn resolve_target_colon_id_is_invalid() {
+    // A requested target id containing ':' would break the pending-index /
+    // idempotency key grammar; the shared guard rejects it with a typed error
+    // through the SQLite resolve path, identically to the in-memory registry.
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let err = registry
+        .resolve_target(&dep_id, Some("w1:pending:1"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
+    assert_eq!(err.http_status_code, Some(400));
+}
+
+// NB: the fail-fast guard for a deployment missing stack_settings is exercised
+// by an in-crate unit test (`resolve_delivery_mode_fails_fast_without_stack_settings`
+// in stores::sqlite::command_registry) — the `stack_settings` column is NOT NULL,
+// so that invariant-violation state cannot be reached through this store's
+// public API, only through the private derivation helper.
+
+#[tokio::test]
 async fn create_command_round_trips_target_columns() {
     let stack = Stack::new("s".to_string())
         .add(daemon("d1", true), ResourceLifecycle::Live)
