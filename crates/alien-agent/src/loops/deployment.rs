@@ -66,9 +66,15 @@ impl DeploymentLoopTransport for AgentTransport {
             .await
             .map_err(|e| e.into_generic())?;
 
+        let stack = state
+            .target_release
+            .as_ref()
+            .or(state.current_release.as_ref())
+            .map(|release| &release.stack);
+
         let enriched_config = match config {
             Some(config) => Some(
-                enrich_config(config, &self.agent_config, self.platform, &self.db)
+                enrich_config(config, &self.agent_config, self.platform, &self.db, stack)
                     .await
                     .map_err(|e| e.into_generic())?,
             ),
@@ -192,8 +198,14 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
             return Ok(0);
         }
     };
-    let mut enriched_config =
-        enrich_config(base_config, &state.config, current.platform, &state.db).await?;
+    let mut enriched_config = enrich_config(
+        base_config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&target_release.stack),
+    )
+    .await?;
 
     // Resolve client config once (it doesn't change between steps)
     let client_config = resolve_client_config(
@@ -272,6 +284,7 @@ async fn enrich_config(
     agent_config: &AgentConfig,
     platform: Platform,
     db: &AgentDb,
+    stack: Option<&alien_core::Stack>,
 ) -> Result<DeploymentConfig> {
     // Pass through public endpoints from agent config.
     if agent_config.public_endpoints.is_some() {
@@ -352,6 +365,16 @@ async fn enrich_config(
                         target_resources: None,
                     });
                 }
+            }
+
+            // ALIEN_COMMANDS_TARGET_RESOURCE_ID — required by the Worker runtime
+            // once polling is enabled (fail-fast). Scoped per-Worker via
+            // `target_resources` so each Worker gets only its own resource id,
+            // never a value shared across multiple command-enabled Workers in
+            // the same stack. Container/Daemon receiver env is separate,
+            // not-yet-landed work.
+            if let Some(stack) = stack {
+                vars.extend(stack.worker_command_target_env_vars());
             }
 
             config.environment_variables.variables = vars;
@@ -472,7 +495,7 @@ mod tests {
             .encryption_key(encryption_key)
             .build();
 
-        let enriched = enrich_config(config, &agent_config, Platform::Local, &db)
+        let enriched = enrich_config(config, &agent_config, Platform::Local, &db, None)
             .await
             .unwrap();
 
@@ -512,10 +535,75 @@ mod tests {
             .encryption_key(encryption_key)
             .build();
 
-        let enriched = enrich_config(config, &agent_config, Platform::Local, &db)
+        let enriched = enrich_config(config, &agent_config, Platform::Local, &db, None)
             .await
             .unwrap();
 
         assert_eq!(enriched.public_endpoints, Some(public_endpoints));
+    }
+
+    #[tokio::test]
+    async fn enrich_config_scopes_command_target_id_per_worker_when_polling() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = AgentDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_local").await.unwrap();
+
+        let config = test_deployment_config();
+        let agent_config = AgentConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_dep_test".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+
+        let worker_a = alien_core::Worker::new("worker-a".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let worker_b = alien_core::Worker::new("worker-b".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = alien_core::Stack::new("agent-command-target-stack".to_string())
+            .add(worker_a, alien_core::ResourceLifecycle::Live)
+            .add(worker_b, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let enriched = enrich_config(
+            config,
+            &agent_config,
+            Platform::Local,
+            &db,
+            Some(&stack),
+        )
+        .await
+        .unwrap();
+
+        let target_id_vars: Vec<_> = enriched
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)
+            .collect();
+
+        assert_eq!(target_id_vars.len(), 2, "expected one target id var per Worker");
+        assert!(target_id_vars.iter().any(|var| {
+            var.value == "worker-a" && var.target_resources == Some(vec!["worker-a".to_string()])
+        }));
+        assert!(target_id_vars.iter().any(|var| {
+            var.value == "worker-b" && var.target_resources == Some(vec!["worker-b".to_string()])
+        }));
     }
 }

@@ -135,6 +135,27 @@ impl Stack {
             })
             .collect()
     }
+
+    /// Returns the `ALIEN_COMMANDS_TARGET_RESOURCE_ID` environment variable for
+    /// each command-capable Worker in this stack, scoped via `target_resources`
+    /// so every Worker receives only its own resource id — never another
+    /// Worker's.
+    ///
+    /// Container/Daemon command targets are out of scope here: their commands
+    /// receiver env injection lands with the controller wiring (a separate,
+    /// not-yet-landed slice), so this only covers polling Workers.
+    pub fn worker_command_target_env_vars(&self) -> Vec<crate::EnvironmentVariable> {
+        self.command_targets()
+            .into_iter()
+            .filter(|target| target.resource_type == crate::commands_types::CommandTargetType::Worker)
+            .map(|target| crate::EnvironmentVariable {
+                name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                value: target.resource_id.clone(),
+                var_type: crate::EnvironmentVariableType::Plain,
+                target_resources: Some(vec![target.resource_id]),
+            })
+            .collect()
+    }
 }
 
 impl StackBuilder {
@@ -659,5 +680,62 @@ mod tests {
             .build();
 
         assert!(stack.command_targets().is_empty());
+    }
+
+    #[test]
+    fn worker_command_target_env_vars_scopes_each_worker_to_its_own_id() {
+        let worker_a = Worker::new("worker-a".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let worker_b = Worker::new("worker-b".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let daemon_enabled = Daemon::new("daemon-c".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        // Two command-enabled Workers in the same stack must each get their
+        // own scoped ALIEN_COMMANDS_TARGET_RESOURCE_ID — never a shared/global
+        // value, and the Daemon target must not receive a Worker env var at all
+        // (its own commands receiver env is separate, not-yet-landed work).
+        let stack = Stack::new("worker-target-env-stack".to_string())
+            .add(worker_a, ResourceLifecycle::Live)
+            .add(worker_b, ResourceLifecycle::Live)
+            .add(daemon_enabled, ResourceLifecycle::Live)
+            .build();
+
+        let vars = stack.worker_command_target_env_vars();
+
+        assert_eq!(
+            vars,
+            vec![
+                crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                    value: "worker-a".to_string(),
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: Some(vec!["worker-a".to_string()]),
+                },
+                crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                    value: "worker-b".to_string(),
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: Some(vec!["worker-b".to_string()]),
+                },
+            ]
+        );
     }
 }
