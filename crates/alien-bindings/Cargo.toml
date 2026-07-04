@@ -48,13 +48,10 @@ utoipa = { workspace = true, optional = true }
 
 # Local
 oci-client = { workspace = true, default-features = false, features = ["rustls-tls-native-roots"], optional = true }
-# Engine for the local KV/queue stores. Pinned to this exact pre-release (not
-# the workspace `turso = "0.5"` used elsewhere) because the local providers
-# need `Builder::experimental_multiprocess_wal`, which first shipped in the
-# 0.7 pre-releases. `default-features = false` drops turso's `mimalloc`
-# feature: its `#[global_allocator]` would collide with the one registered by
-# turso 0.5.x when both versions link into a single binary.
-turso = { version = "=0.7.0-pre.17", default-features = false, optional = true }
+# Engine for the local KV/queue stores. The exact 0.7 pre-release pin (needed
+# for `Builder::experimental_multiprocess_wal`) and its rationale live in the
+# workspace Cargo.toml so every crate links the same turso_core.
+turso = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
 # AWS
