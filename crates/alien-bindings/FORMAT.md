@@ -28,8 +28,9 @@ same file, i.e. multiple OS processes — is provided by SQLite:
   failing with `SQLITE_BUSY`.
 
 The schema is created once in `LocalKv::new`; per-operation connections only set
-the connection-scoped pragmas (`journal_mode`, `synchronous`, `busy_timeout`),
-so reads never take the write lock.
+the connection-scoped pragmas (`journal_mode`, `synchronous`, `busy_timeout`).
+Reads of live rows never take the write lock; a read that encounters an expired
+row escalates to a short delete.
 
 ### DDL
 
@@ -61,9 +62,10 @@ The `meta` table carries the format identifier in the row
 `('format', 'localkv.v1')`. Any future incompatible change to the `kv` schema
 MUST bump this string (e.g. `localkv.v2`) and add explicit migration/rejection
 logic. Readers MUST reject a format they do not understand — and this
-implementation does: `LocalKv::new` reads the marker after schema init and fails
-fast (`BINDING_SETUP_FAILED`, naming both the found and the supported format)
-unless it equals `localkv.v1`. The `meta` row is written with `INSERT OR
+implementation does: `LocalKv::new` checks the marker before creating any
+provider tables and fails fast (`BINDING_SETUP_FAILED`, naming both the found
+and the supported format) unless it equals `localkv.v1`, so a rejected foreign
+store is left untouched. The `meta` row is written with `INSERT OR
 IGNORE`, so re-opening an existing store never overwrites it.
 
 ### Semantics

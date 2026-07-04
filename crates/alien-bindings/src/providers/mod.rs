@@ -6,6 +6,7 @@ pub mod kv;
 pub mod postgres;
 pub mod queue;
 pub mod service_account;
+pub(crate) mod sqlite_store;
 pub mod storage;
 pub mod vault;
 pub mod worker;

@@ -124,7 +124,7 @@ impl WaitUntilContext {
             // raw check of ALIEN_BINDINGS_MODE == "grpc". Task 11 moves this selection
             // onto the worker-protocol env; until then read the raw env value directly.
             let use_worker_protocol_grpc = env_vars
-                .get("ALIEN_BINDINGS_MODE")
+                .get(alien_core::ENV_ALIEN_BINDINGS_MODE)
                 .map(|mode| mode == "grpc")
                 .unwrap_or(false);
 

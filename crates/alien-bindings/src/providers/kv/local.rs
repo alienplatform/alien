@@ -15,134 +15,53 @@
 //! (concurrent readers alongside a single writer) and a `busy_timeout` (writers
 //! wait for the write lock instead of returning `SQLITE_BUSY`). The schema is
 //! created once in [`LocalKv::new`]; per-operation connections only set the
-//! connection-scoped pragmas, so reads never take the write lock. Conditional
-//! puts are a single atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the
-//! race is resolved by the database, not by application-level locking.
+//! connection-scoped pragmas. Reads of live rows never take the write lock; a
+//! read that encounters an expired row escalates to a short delete (see `get`
+//! and `exists`). Conditional puts are a single atomic
+//! `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the race is resolved by the
+//! database, not by application-level locking.
 //!
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v1` contract.
 use crate::error::{ErrorData, Result};
+use crate::providers::sqlite_store::{SqliteStore, StoreSpec};
 use crate::traits::{Binding, Kv, PutOptions, ScanResult};
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::PathBuf;
 
-const DB_FILENAME: &str = "localkv.sqlite";
-const FORMAT_VERSION: &str = "localkv.v1";
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+static KV_SPEC: StoreSpec = StoreSpec {
+    db_filename: "localkv.sqlite",
+    format_version: "localkv.v1",
+    binding_type: "local KV",
+    schema_ddl: "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER);",
+};
 
 #[derive(Debug)]
 pub struct LocalKv {
-    data_dir: PathBuf,
-    db_path: PathBuf,
-}
-
-fn open_conn(path: &Path) -> Result<Connection> {
-    let conn =
-        Connection::open(path)
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "local KV".to_string(),
-                reason: format!("failed to open sqlite database at {}", path.display()),
-            })?;
-    conn.busy_timeout(BUSY_TIMEOUT)
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local KV".to_string(),
-            reason: "failed to set busy_timeout".to_string(),
-        })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local KV".to_string(),
-            reason: "failed to configure WAL pragmas".to_string(),
-        })?;
-    Ok(conn)
+    store: SqliteStore,
 }
 
 impl LocalKv {
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
-        let db_path = data_dir.join(DB_FILENAME);
-        let dir = data_dir.clone();
-        let init_path = db_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            std::fs::create_dir_all(&dir)
-                .into_alien_error()
-                .context(ErrorData::LocalFilesystemError {
-                    path: dir.display().to_string(),
-                    operation: "create_dir_all".to_string(),
-                })?;
-            let conn = open_conn(&init_path)?;
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
-                 INSERT OR IGNORE INTO meta (key, value) VALUES ('format', 'localkv.v1');\
-                 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER);",
-            )
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "local KV".to_string(),
-                reason: "failed to initialize localkv.v1 schema".to_string(),
-            })?;
-
-            // Fail fast on a format we do not understand. `INSERT OR IGNORE`
-            // above never overwrites an existing marker, so this catches
-            // stores written by a newer (or foreign) implementation.
-            let format: String = conn
-                .query_row("SELECT value FROM meta WHERE key = 'format'", [], |row| {
-                    row.get(0)
-                })
-                .into_alien_error()
-                .context(ErrorData::BindingSetupFailed {
-                    binding_type: "local KV".to_string(),
-                    reason: "failed to read format marker from meta table".to_string(),
-                })?;
-            if format != FORMAT_VERSION {
-                return Err(AlienError::new(ErrorData::BindingSetupFailed {
-                    binding_type: "local KV".to_string(),
-                    reason: format!(
-                        "unsupported store format '{format}' (this implementation supports '{FORMAT_VERSION}')"
-                    ),
-                }));
-            }
-            Ok(())
+        Ok(Self {
+            store: SqliteStore::open(data_dir, &KV_SPEC).await?,
         })
-        .await
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local KV".to_string(),
-            reason: "schema init task failed".to_string(),
-        })??;
-
-        Ok(Self { data_dir, db_path })
     }
 
     /// Get the data directory path (the directory that holds `localkv.sqlite`).
     pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
+        self.store.data_dir()
     }
 
     /// Run a blocking closure with a freshly opened, WAL-configured connection.
-    ///
-    /// The connection lives entirely inside the `spawn_blocking` task — it is
-    /// created, used, and dropped there, so it never crosses an `.await` and
-    /// `LocalKv` stays `Send + Sync` without any lock.
     async fn with_conn<T, F>(&self, f: F) -> Result<T>
     where
         T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
     {
-        let path = self.db_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<T> {
-            let conn = open_conn(&path)?;
-            f(&conn)
-        })
-        .await
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "sqlite blocking task failed to join".to_string(),
-        })?
+        self.store.with_conn(f).await
     }
 
     /// Get the number of items currently stored (including expired items).

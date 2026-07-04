@@ -206,6 +206,28 @@ impl BindingsProvider {
         Ok(bindings)
     }
 
+    /// Look up a binding's JSON and parse it into its strongly-typed form.
+    ///
+    /// Maps a missing binding to [`ErrorData::not_configured`] and a malformed
+    /// one to [`ErrorData::config_invalid`], tagged with `type_label` (e.g.
+    /// `"storage"`, `"KV"`) so the message reads `Failed to parse <label> binding`.
+    fn parse_binding<T: serde::de::DeserializeOwned>(
+        &self,
+        binding_name: &str,
+        type_label: &str,
+    ) -> Result<T> {
+        let binding_json = self
+            .bindings
+            .get(binding_name)
+            .ok_or_else(|| AlienError::new(ErrorData::not_configured(binding_name)))?;
+        serde_json::from_value(binding_json.clone())
+            .into_alien_error()
+            .context(ErrorData::config_invalid(
+                binding_name,
+                format!("Failed to parse {type_label} binding"),
+            ))
+    }
+
     /// Pattern 1: Creates a BindingsProvider from stack state and client config.
     ///
     /// Convenience helper that extracts bindings from stack state's remote_binding_params.
@@ -434,21 +456,7 @@ impl BindingsProviderApi for BindingsProvider {
         use alien_core::bindings::StorageBinding;
 
         // Get binding JSON from our pre-parsed map
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        // Parse to strongly-typed binding
-        let binding: StorageBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse storage binding".to_string(),
-            })?;
+        let binding: StorageBinding = self.parse_binding(binding_name, "storage")?;
 
         let result: Arc<dyn Storage> = match binding {
             #[cfg(feature = "aws")]
@@ -475,11 +483,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let bucket_name = config
                     .bucket_name
                     .into_value(binding_name, "bucket_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract bucket_name from S3 binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract bucket_name from S3 binding",
+                    ))?;
 
                 let storage: Arc<dyn Storage> = Arc::new(S3Storage::new(bucket_name, credentials)?);
                 Ok(storage)
@@ -504,20 +511,18 @@ impl BindingsProviderApi for BindingsProvider {
                 let container_name = config
                     .container_name
                     .into_value(binding_name, "container_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract container_name from Blob binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract container_name from Blob binding",
+                    ))?;
 
                 let account_name = config
                     .account_name
                     .into_value(binding_name, "account_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract account_name from Blob binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract account_name from Blob binding",
+                    ))?;
 
                 let storage: Arc<dyn Storage> = Arc::new(BlobStorage::new(
                     container_name,
@@ -546,11 +551,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let bucket_name = config
                     .bucket_name
                     .into_value(binding_name, "bucket_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract bucket_name from Gcs binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract bucket_name from Gcs binding",
+                    ))?;
 
                 let storage: Arc<dyn Storage> = Arc::new(GcsStorage::new(bucket_name, gcp_config)?);
                 Ok(storage)
@@ -568,11 +572,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let storage_path = config
                     .storage_path
                     .into_value(binding_name, "storage_path")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract storage_path from Local binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract storage_path from Local binding",
+                    ))?;
 
                 let storage: Arc<dyn Storage> = Arc::new(LocalStorage::new(storage_path)?);
                 Ok(storage)
@@ -591,20 +594,7 @@ impl BindingsProviderApi for BindingsProvider {
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
         use alien_core::bindings::BuildBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: BuildBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse build binding".to_string(),
-            })?;
+        let binding: BuildBinding = self.parse_binding(binding_name, "build")?;
 
         match binding {
             #[cfg(feature = "aws")]
@@ -628,11 +618,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let build = Arc::new(
                     CodebuildBuild::new(binding_name.to_string(), binding, &credentials)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize AWS CodeBuild client".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize AWS CodeBuild client",
+                        ))?,
                 );
                 Ok(build)
             }
@@ -655,11 +644,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let build = Arc::new(
                     AcaBuild::new(binding_name.to_string(), binding, azure_config)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize Azure Container Apps build".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize Azure Container Apps build",
+                        ))?,
                 );
                 Ok(build)
             }
@@ -682,11 +670,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let build = Arc::new(
                     CloudbuildBuild::new(binding_name.to_string(), binding, gcp_config)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize GCP Cloud Build client".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize GCP Cloud Build client",
+                        ))?,
                 );
                 Ok(build)
             }
@@ -735,20 +722,8 @@ impl BindingsProviderApi for BindingsProvider {
 
         use alien_core::bindings::ArtifactRegistryBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: ArtifactRegistryBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse artifact registry binding".to_string(),
-            })?;
+        let binding: ArtifactRegistryBinding =
+            self.parse_binding(binding_name, "artifact registry")?;
 
         let registry: Arc<dyn ArtifactRegistry> = match binding {
             #[cfg(feature = "aws")]
@@ -772,11 +747,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let registry: Arc<dyn ArtifactRegistry> = Arc::new(
                     EcrArtifactRegistry::new(binding_name.to_string(), binding, &credentials)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize AWS ECR artifact registry".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize AWS ECR artifact registry",
+                        ))?,
                 );
                 Ok(registry)
             }
@@ -801,11 +775,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let registry: Arc<dyn ArtifactRegistry> = Arc::new(
                     AcrArtifactRegistry::new(binding_name.to_string(), binding, azure_config)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize Azure ACR artifact registry".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize Azure ACR artifact registry",
+                        ))?,
                 );
                 Ok(registry)
             }
@@ -830,11 +803,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let registry: Arc<dyn ArtifactRegistry> = Arc::new(
                     GarArtifactRegistry::new(binding_name.to_string(), binding, gcp_config)
                         .await
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to initialize GCP GAR artifact registry".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to initialize GCP GAR artifact registry",
+                        ))?,
                 );
                 Ok(registry)
             }
@@ -877,20 +849,7 @@ impl BindingsProviderApi for BindingsProvider {
 
         use alien_core::bindings::VaultBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: VaultBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse vault binding".to_string(),
-            })?;
+        let binding: VaultBinding = self.parse_binding(binding_name, "vault")?;
 
         let result: Arc<dyn Vault> = match binding {
             #[cfg(feature = "aws")]
@@ -921,12 +880,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let vault_prefix = config
                     .vault_prefix
                     .into_value(&binding_name, "vault_prefix")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract vault_prefix from ParameterStore binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract vault_prefix from ParameterStore binding",
+                    ))?;
 
                 let vault: Arc<dyn Vault> =
                     Arc::new(AwsParameterStoreVault::new(client, vault_prefix));
@@ -959,11 +916,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let vault_name = config
                     .vault_name
                     .into_value(&binding_name, "vault_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract vault_name from KeyVault binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract vault_name from KeyVault binding",
+                    ))?;
 
                 // Construct the vault base URL
                 // Azure Key Vault URLs typically follow: https://{vault-name}.vault.azure.net/
@@ -998,12 +954,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let vault_prefix = config
                     .vault_prefix
                     .into_value(&binding_name, "vault_prefix")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract vault_prefix from SecretManager binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract vault_prefix from SecretManager binding",
+                    ))?;
 
                 let vault: Arc<dyn Vault> = Arc::new(GcpSecretManagerVault::new(
                     client,
@@ -1024,11 +978,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let vault_dir = config
                     .data_dir
                     .into_value(binding_name, "data_dir")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract data_dir from vault binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract data_dir from vault binding",
+                    ))?;
 
                 let vault: Arc<dyn Vault> = Arc::new(LocalVault::new(
                     binding_name.to_string(),
@@ -1067,22 +1020,18 @@ impl BindingsProviderApi for BindingsProvider {
                 let namespace = config
                     .namespace
                     .into_value(binding_name, "namespace")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract namespace from KubernetesSecret binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract namespace from KubernetesSecret binding",
+                    ))?;
 
                 let vault_prefix = config
                     .vault_prefix
                     .into_value(binding_name, "vault_prefix")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract vault_prefix from KubernetesSecret binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract vault_prefix from KubernetesSecret binding",
+                    ))?;
 
                 let vault: Arc<dyn Vault> =
                     Arc::new(KubernetesSecretVault::new(client, namespace, vault_prefix));
@@ -1107,20 +1056,7 @@ impl BindingsProviderApi for BindingsProvider {
 
         use alien_core::bindings::KvBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: KvBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse KV binding".to_string(),
-            })?;
+        let binding: KvBinding = self.parse_binding(binding_name, "KV")?;
 
         let result: Arc<dyn Kv> = match binding {
             #[cfg(feature = "aws")]
@@ -1130,11 +1066,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let table_name = config
                     .table_name
                     .into_value(binding_name, "table_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract table_name from DynamoDB binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract table_name from DynamoDB binding",
+                    ))?;
 
                 let aws_config = self.client_config.aws_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1183,30 +1118,26 @@ impl BindingsProviderApi for BindingsProvider {
                 let project_id = config
                     .project_id
                     .into_value(binding_name, "project_id")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract project_id from Firestore binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract project_id from Firestore binding",
+                    ))?;
 
                 let database_id = config
                     .database_id
                     .into_value(binding_name, "database_id")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract database_id from Firestore binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract database_id from Firestore binding",
+                    ))?;
 
                 let collection_name = config
                     .collection_name
                     .into_value(binding_name, "collection_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract collection_name from Firestore binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract collection_name from Firestore binding",
+                    ))?;
 
                 let kv: Arc<dyn Kv> = Arc::new(GcpFirestoreKv::new(
                     client,
@@ -1237,32 +1168,26 @@ impl BindingsProviderApi for BindingsProvider {
                 let resource_group_name = config
                     .resource_group_name
                     .into_value(binding_name, "resource_group_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract resource_group_name from TableStorage binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract resource_group_name from TableStorage binding",
+                    ))?;
 
                 let account_name = config
                     .account_name
                     .into_value(binding_name, "account_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract account_name from TableStorage binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract account_name from TableStorage binding",
+                    ))?;
 
                 let table_name = config
                     .table_name
                     .into_value(binding_name, "table_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract table_name from TableStorage binding"
-                            .to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract table_name from TableStorage binding",
+                    ))?;
 
                 let client = AzureTableStorageClient::new(
                     crate::http_client::create_http_client(),
@@ -1289,11 +1214,10 @@ impl BindingsProviderApi for BindingsProvider {
                     local_binding
                         .data_dir
                         .into_value(binding_name, "data_dir")
-                        .context(ErrorData::BindingConfigInvalid {
-                            env_var: binding_env_var(binding_name),
-                            binding_name: binding_name.to_string(),
-                            reason: "Failed to extract data_dir from Local binding".to_string(),
-                        })?,
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to extract data_dir from Local binding",
+                        ))?,
                 );
 
                 // Create local disk-persisted KV implementation
@@ -1326,20 +1250,7 @@ impl BindingsProviderApi for BindingsProvider {
             return Ok(cached);
         }
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: PostgresBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse Postgres binding".to_string(),
-            })?;
+        let binding: PostgresBinding = self.parse_binding(binding_name, "Postgres")?;
 
         let result: Arc<dyn Postgres> = Arc::new(
             crate::providers::postgres::local::LocalPostgres::from_binding(binding_name, &binding)?,
@@ -1360,20 +1271,7 @@ impl BindingsProviderApi for BindingsProvider {
 
         use alien_core::bindings::QueueBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: QueueBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse Queue binding".to_string(),
-            })?;
+        let binding: QueueBinding = self.parse_binding(binding_name, "Queue")?;
 
         let result: Arc<dyn Queue> = match binding {
             #[cfg(feature = "aws")]
@@ -1383,11 +1281,10 @@ impl BindingsProviderApi for BindingsProvider {
                 let queue_url = config
                     .queue_url
                     .into_value(binding_name, "queue_url")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract queue_url from SQS binding".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract queue_url from SQS binding",
+                    ))?;
 
                 let aws_config = self.client_config.aws_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1418,20 +1315,15 @@ impl BindingsProviderApi for BindingsProvider {
             QueueBinding::Pubsub(config) => {
                 use crate::providers::queue::gcp_pubsub::GcpPubSubQueue;
                 let topic_name = config.topic.into_value(binding_name, "topic").context(
-                    ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract topic".to_string(),
-                    },
+                    ErrorData::config_invalid(binding_name, "Failed to extract topic"),
                 )?;
                 let subscription_name = config
                     .subscription
                     .into_value(binding_name, "subscription")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract subscription".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract subscription",
+                    ))?;
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
                         platform: Platform::Gcp,
@@ -1471,19 +1363,17 @@ impl BindingsProviderApi for BindingsProvider {
                 let namespace = config
                     .namespace
                     .into_value(binding_name, "namespace")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract namespace".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract namespace",
+                    ))?;
                 let queue_name = config
                     .queue_name
                     .into_value(binding_name, "queue_name")
-                    .context(ErrorData::BindingConfigInvalid {
-                        env_var: binding_env_var(binding_name),
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to extract queue_name".to_string(),
-                    })?;
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract queue_name",
+                    ))?;
                 let azure_config = self.client_config.azure_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
                         platform: Platform::Azure,
@@ -1521,20 +1411,7 @@ impl BindingsProviderApi for BindingsProvider {
     async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
         use alien_core::bindings::WorkerBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: WorkerBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse worker binding".to_string(),
-            })?;
+        let binding: WorkerBinding = self.parse_binding(binding_name, "worker")?;
 
         match binding {
             #[cfg(feature = "aws")]
@@ -1644,20 +1521,7 @@ impl BindingsProviderApi for BindingsProvider {
     ) -> Result<Arc<dyn crate::traits::Container>> {
         use alien_core::bindings::ContainerBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: ContainerBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse container binding".to_string(),
-            })?;
+        let binding: ContainerBinding = self.parse_binding(binding_name, "container")?;
 
         match binding {
             ContainerBinding::Horizon(horizon_binding) => {
@@ -1703,20 +1567,7 @@ impl BindingsProviderApi for BindingsProvider {
     ) -> Result<Arc<dyn crate::traits::ServiceAccount>> {
         use alien_core::bindings::ServiceAccountBinding;
 
-        let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
-            AlienError::new(ErrorData::BindingNotConfigured {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var(binding_name),
-            })
-        })?;
-
-        let binding: ServiceAccountBinding = serde_json::from_value(binding_json.clone())
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(binding_name),
-                binding_name: binding_name.to_string(),
-                reason: "Failed to parse service account binding".to_string(),
-            })?;
+        let binding: ServiceAccountBinding = self.parse_binding(binding_name, "service account")?;
 
         match binding {
             #[cfg(feature = "aws")]
@@ -1996,18 +1847,16 @@ mod conversions {
         let stack_state: StackState = serde_json::from_value(
             serde_json::to_value(sdk_stack_state)
                 .into_alien_error()
-                .context(ErrorData::BindingConfigInvalid {
-                    env_var: binding_env_var("stack_state"),
-                    binding_name: "stack_state".to_string(),
-                    reason: "Failed to serialize SDK stack state".to_string(),
-                })?,
+                .context(ErrorData::config_invalid(
+                    "stack_state",
+                    "Failed to serialize SDK stack state",
+                ))?,
         )
         .into_alien_error()
-        .context(ErrorData::BindingConfigInvalid {
-            env_var: binding_env_var("stack_state"),
-            binding_name: "stack_state".to_string(),
-            reason: "Failed to parse stack state".to_string(),
-        })?;
+        .context(ErrorData::config_invalid(
+            "stack_state",
+            "Failed to parse stack state",
+        ))?;
 
         Ok(stack_state)
     }

@@ -23,7 +23,7 @@ use alien_bindings::{
         ServiceAccount, Storage, Vault, Worker,
     },
 };
-use alien_core::bindings::{binding_env_var_name, KvBinding, VaultBinding};
+use alien_core::bindings::{KvBinding, VaultBinding};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -290,18 +290,16 @@ impl BindingsProviderApi for LocalBindingsProvider {
         match self
             .postgres_manager
             .try_get_binding(binding_name)
-            .context(BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: "Failed to read the local Postgres metadata".to_string(),
-            })? {
+            .context(BindingsErrorData::config_invalid(
+                binding_name,
+                "Failed to read the local Postgres metadata",
+            ))? {
             Some(binding) => Ok(Some(
                 alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
-                    .context(BindingsErrorData::BindingConfigInvalid {
-                        binding_name: binding_name.to_string(),
-                        env_var: binding_env_var_name(binding_name),
-                        reason: "Failed to serialize local Postgres binding".to_string(),
-                    })?,
+                    .context(BindingsErrorData::config_invalid(
+                        binding_name,
+                        "Failed to serialize local Postgres binding",
+                    ))?,
             )),
             None => Ok(None),
         }
@@ -318,11 +316,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
         // ALIEN_<NAME>_BINDING env var is not set", but this lookup is resolved
         // from local deployment state, not the environment.
         let binding = self.storage_manager.get_binding(binding_name).context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Directory not found for '{}'", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Directory not found for '{}'", binding_name),
+            ),
         )?;
 
         // Extract storage path from binding
@@ -330,17 +327,15 @@ impl BindingsProviderApi for LocalBindingsProvider {
             StorageBinding::Local(config) => config
                 .storage_path
                 .into_value(binding_name, "storage_path")
-                .context(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Invalid storage_path in binding".to_string(),
-                })?,
+                .context(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Invalid storage_path in binding",
+                ))?,
             _ => {
-                return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Expected Local storage binding variant".to_string(),
-                }));
+                return Err(AlienError::new(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Expected Local storage binding variant",
+                )));
             }
         };
 
@@ -375,11 +370,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
             .artifact_registry_manager
             .get_binding(binding_name)
             .await
-            .context(BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Artifact registry '{}' not running", binding_name),
-            })?;
+            .context(BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Artifact registry '{}' not running", binding_name),
+            ))?;
 
         let registry = LocalArtifactRegistry::new(binding_name.to_string(), binding)
             .await
@@ -396,11 +390,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
         binding_name: &str,
     ) -> alien_bindings::error::Result<Arc<dyn Vault>> {
         let binding = self.vault_manager.get_binding(binding_name).context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Directory not found for '{}'", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Directory not found for '{}'", binding_name),
+            ),
         )?;
 
         let vault_dir = match binding {
@@ -408,19 +401,17 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 let dir_str = config
                     .data_dir
                     .into_value(binding_name, "data_dir")
-                    .context(BindingsErrorData::BindingConfigInvalid {
-                        binding_name: binding_name.to_string(),
-                        env_var: binding_env_var_name(binding_name),
-                        reason: "Invalid data_dir in binding".to_string(),
-                    })?;
+                    .context(BindingsErrorData::config_invalid(
+                        binding_name,
+                        "Invalid data_dir in binding",
+                    ))?;
                 PathBuf::from(dir_str)
             }
             _ => {
-                return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Expected Local vault binding variant".to_string(),
-                }));
+                return Err(AlienError::new(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Expected Local vault binding variant",
+                )));
             }
         };
 
@@ -430,11 +421,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
 
     async fn load_kv(&self, binding_name: &str) -> alien_bindings::error::Result<Arc<dyn Kv>> {
         let binding = self.kv_manager.get_binding(binding_name).context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Database not found for '{}'", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Database not found for '{}'", binding_name),
+            ),
         )?;
 
         let db_path = match binding {
@@ -442,19 +432,17 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 let path_str = config
                     .data_dir
                     .into_value(binding_name, "data_dir")
-                    .context(BindingsErrorData::BindingConfigInvalid {
-                        binding_name: binding_name.to_string(),
-                        env_var: binding_env_var_name(binding_name),
-                        reason: "Invalid data_dir in binding".to_string(),
-                    })?;
+                    .context(BindingsErrorData::config_invalid(
+                        binding_name,
+                        "Invalid data_dir in binding",
+                    ))?;
                 PathBuf::from(path_str)
             }
             _ => {
-                return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Expected Local KV binding variant".to_string(),
-                }));
+                return Err(AlienError::new(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Expected Local KV binding variant",
+                )));
             }
         };
 
@@ -473,11 +461,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
         binding_name: &str,
     ) -> alien_bindings::error::Result<Arc<dyn Postgres>> {
         let binding = self.postgres_manager.get_binding(binding_name).context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Postgres not found for '{}'", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Postgres not found for '{}'", binding_name),
+            ),
         )?;
 
         let postgres = LocalPostgres::from_binding(binding_name, &binding)?;
@@ -495,11 +482,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
         // across handles and processes, so each caller constructs its own
         // `LocalQueue` directly — no handle cache is needed.
         let binding = self.queue_manager.get_binding(binding_name).context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Queue not found for '{}'", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Queue not found for '{}'", binding_name),
+            ),
         )?;
 
         let queue_path = match binding {
@@ -507,19 +493,17 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 let path_str = config
                     .queue_path
                     .into_value(binding_name, "queue_path")
-                    .context(BindingsErrorData::BindingConfigInvalid {
-                        binding_name: binding_name.to_string(),
-                        env_var: binding_env_var_name(binding_name),
-                        reason: "Invalid queue_path in binding".to_string(),
-                    })?;
+                    .context(BindingsErrorData::config_invalid(
+                        binding_name,
+                        "Invalid queue_path in binding",
+                    ))?;
                 PathBuf::from(path_str)
             }
             _ => {
-                return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Expected Local queue binding variant".to_string(),
-                }));
+                return Err(AlienError::new(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Expected Local queue binding variant",
+                )));
             }
         };
 
@@ -540,20 +524,18 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let worker_manager = {
             let guard = self.worker_manager.read().unwrap();
             guard.clone().ok_or_else(|| {
-                AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.to_string(),
-                    env_var: binding_env_var_name(binding_name),
-                    reason: "Worker manager not initialized".to_string(),
-                })
+                AlienError::new(BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Worker manager not initialized",
+                ))
             })?
         };
 
         let binding = worker_manager.get_binding(binding_name).await.context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Worker '{}' not running", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Worker '{}' not running", binding_name),
+            ),
         )?;
 
         use alien_bindings::providers::worker::local::LocalWorker;
@@ -564,11 +546,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 let worker = LocalWorker::new(local_binding);
                 Ok(Arc::new(worker))
             }
-            _ => Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: "Expected Local worker binding variant".to_string(),
-            })),
+            _ => Err(AlienError::new(BindingsErrorData::config_invalid(
+                binding_name,
+                "Expected Local worker binding variant",
+            ))),
         }
     }
 
@@ -579,19 +560,17 @@ impl BindingsProviderApi for LocalBindingsProvider {
         use alien_core::bindings::ContainerBinding;
 
         let container_manager = self.container_manager().ok_or_else(|| {
-            AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: "Container manager not available (Docker not running?)".to_string(),
-            })
+            AlienError::new(BindingsErrorData::config_invalid(
+                binding_name,
+                "Container manager not available (Docker not running?)",
+            ))
         })?;
 
         let binding = container_manager.get_binding(binding_name).await.context(
-            BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: format!("Container '{}' not running", binding_name),
-            },
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Container '{}' not running", binding_name),
+            ),
         )?;
 
         match binding {
@@ -604,11 +583,10 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 )?;
                 Ok(Arc::new(container))
             }
-            _ => Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                env_var: binding_env_var_name(binding_name),
-                reason: "Expected Local container binding variant".to_string(),
-            })),
+            _ => Err(AlienError::new(BindingsErrorData::config_invalid(
+                binding_name,
+                "Expected Local container binding variant",
+            ))),
         }
     }
 

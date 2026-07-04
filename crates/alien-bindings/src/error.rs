@@ -307,21 +307,6 @@ pub enum ErrorData {
         message: String,
     },
 
-    /// Operation is not implemented yet.
-    #[error(
-        code = "NOT_IMPLEMENTED",
-        message = "Operation '{operation}' is not implemented: {reason}",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 501
-    )]
-    NotImplemented {
-        /// Name of the operation that is not implemented
-        operation: String,
-        /// Reason why the operation is not implemented
-        reason: String,
-    },
-
     /// Response format from provider API is unexpected or missing required fields.
     #[error(
         code = "UNEXPECTED_RESPONSE_FORMAT",
@@ -659,6 +644,28 @@ pub enum ErrorData {
         /// Description of the configuration issue
         message: String,
     },
+}
+
+impl ErrorData {
+    /// Construct a [`ErrorData::BindingConfigInvalid`] for `binding_name`,
+    /// deriving the exact `ALIEN_<NAME>_BINDING` env var name internally so call
+    /// sites cannot forget it (the omission that repeatedly broke bindings).
+    pub fn config_invalid(binding_name: &str, reason: impl Into<String>) -> Self {
+        ErrorData::BindingConfigInvalid {
+            env_var: binding_env_var(binding_name),
+            binding_name: binding_name.to_string(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Construct a [`ErrorData::BindingNotConfigured`] for `binding_name`,
+    /// deriving the exact `ALIEN_<NAME>_BINDING` env var name internally.
+    pub fn not_configured(binding_name: &str) -> Self {
+        ErrorData::BindingNotConfigured {
+            binding_name: binding_name.to_string(),
+            env_var: binding_env_var(binding_name),
+        }
+    }
 }
 
 /// Convenient alias with default error type `ErrorData`.

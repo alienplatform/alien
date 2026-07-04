@@ -30,7 +30,8 @@
 //!
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localqueue.v1`
 //! contract, including the `"{id}:{uuid}"` caller-facing receipt-handle format.
-use crate::error::{binding_env_var, ErrorData, Result};
+use crate::error::{ErrorData, Result};
+use crate::providers::sqlite_store::{SqliteStore, StoreSpec};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, LEASE_SECONDS, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
@@ -39,12 +40,24 @@ use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-const DB_FILENAME: &str = "localqueue.sqlite";
-const FORMAT_VERSION: &str = "localqueue.v1";
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+static QUEUE_SPEC: StoreSpec = StoreSpec {
+    db_filename: "localqueue.sqlite",
+    format_version: "localqueue.v1",
+    binding_type: "local queue",
+    schema_ddl: "CREATE TABLE IF NOT EXISTS messages (\
+                     id             INTEGER PRIMARY KEY AUTOINCREMENT,\
+                     payload_type   TEXT    NOT NULL,\
+                     payload_data   TEXT    NOT NULL,\
+                     enqueued_at    INTEGER NOT NULL,\
+                     visible_at     INTEGER NOT NULL,\
+                     attempt        INTEGER NOT NULL DEFAULT 0,\
+                     receipt_handle TEXT\
+                 );\
+                 CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);",
+};
 
 /// Local disk-persisted queue on SQLite (`localqueue.v1`).
 ///
@@ -54,31 +67,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// one data directory.
 #[derive(Debug)]
 pub struct LocalQueue {
-    data_dir: PathBuf,
-    db_path: PathBuf,
-}
-
-fn open_conn(path: &Path) -> Result<Connection> {
-    let conn =
-        Connection::open(path)
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "local queue".to_string(),
-                reason: format!("failed to open sqlite database at {}", path.display()),
-            })?;
-    conn.busy_timeout(BUSY_TIMEOUT)
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local queue".to_string(),
-            reason: "failed to set busy_timeout".to_string(),
-        })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local queue".to_string(),
-            reason: "failed to configure WAL pragmas".to_string(),
-        })?;
-    Ok(conn)
+    store: SqliteStore,
 }
 
 /// Split a `MessagePayload` into its stored `(payload_type, payload_data)`
@@ -124,67 +113,9 @@ impl LocalQueue {
     /// The directory is created if missing; the store lives at
     /// `<data_dir>/localqueue.sqlite`.
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
-        let db_path = data_dir.join(DB_FILENAME);
-        let dir = data_dir.clone();
-        let init_path = db_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            std::fs::create_dir_all(&dir)
-                .into_alien_error()
-                .context(ErrorData::LocalFilesystemError {
-                    path: dir.display().to_string(),
-                    operation: "create_dir_all".to_string(),
-                })?;
-            let conn = open_conn(&init_path)?;
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
-                 INSERT OR IGNORE INTO meta (key, value) VALUES ('format', 'localqueue.v1');\
-                 CREATE TABLE IF NOT EXISTS messages (\
-                     id             INTEGER PRIMARY KEY AUTOINCREMENT,\
-                     payload_type   TEXT    NOT NULL,\
-                     payload_data   TEXT    NOT NULL,\
-                     enqueued_at    INTEGER NOT NULL,\
-                     visible_at     INTEGER NOT NULL,\
-                     attempt        INTEGER NOT NULL DEFAULT 0,\
-                     receipt_handle TEXT\
-                 );\
-                 CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);",
-            )
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "local queue".to_string(),
-                reason: "failed to initialize localqueue.v1 schema".to_string(),
-            })?;
-
-            // Fail fast on a format we do not understand. `INSERT OR IGNORE`
-            // above never overwrites an existing marker, so this catches
-            // stores written by a newer (or foreign) implementation.
-            let format: String = conn
-                .query_row("SELECT value FROM meta WHERE key = 'format'", [], |row| {
-                    row.get(0)
-                })
-                .into_alien_error()
-                .context(ErrorData::BindingSetupFailed {
-                    binding_type: "local queue".to_string(),
-                    reason: "failed to read format marker from meta table".to_string(),
-                })?;
-            if format != FORMAT_VERSION {
-                return Err(AlienError::new(ErrorData::BindingSetupFailed {
-                    binding_type: "local queue".to_string(),
-                    reason: format!(
-                        "unsupported store format '{format}' (this implementation supports '{FORMAT_VERSION}')"
-                    ),
-                }));
-            }
-            Ok(())
+        Ok(Self {
+            store: SqliteStore::open(data_dir, &QUEUE_SPEC).await?,
         })
-        .await
-        .into_alien_error()
-        .context(ErrorData::BindingSetupFailed {
-            binding_type: "local queue".to_string(),
-            reason: "schema init task failed".to_string(),
-        })??;
-
-        Ok(Self { data_dir, db_path })
     }
 
     /// Create a LocalQueue from a LocalQueueBinding.
@@ -192,55 +123,28 @@ impl LocalQueue {
         let queue_path = binding
             .queue_path
             .into_value("queue", "queue_path")
-            .context(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var("queue"),
-                binding_name: "queue".to_string(),
-                reason: "Failed to resolve queue_path from binding".to_string(),
-            })?;
+            .context(ErrorData::config_invalid(
+                "queue",
+                "Failed to resolve queue_path from binding",
+            ))?;
 
         Self::new(PathBuf::from(queue_path)).await
     }
 
     /// Get the data directory path (the directory that holds `localqueue.sqlite`).
     pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
+        self.store.data_dir()
     }
 
     /// Run a blocking closure with a freshly opened, WAL-configured connection.
     ///
-    /// The connection lives entirely inside the `spawn_blocking` task — it is
-    /// created, used, and dropped there, so it never crosses an `.await` and
-    /// `LocalQueue` stays `Send + Sync` without any lock. The closure gets a
-    /// `&mut Connection` so it can open rusqlite transactions.
+    /// The closure gets a `&mut Connection` so it can open rusqlite transactions.
     async fn with_conn<T, F>(&self, f: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
     {
-        let path = self.db_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<T> {
-            let mut conn = open_conn(&path)?;
-            f(&mut conn)
-        })
-        .await
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "sqlite blocking task failed to join".to_string(),
-        })?
-    }
-
-    /// Serialized size of a payload, for the `MAX_MESSAGE_BYTES` check.
-    fn message_size(payload: &MessagePayload) -> Result<usize> {
-        match payload {
-            MessagePayload::Json(v) => serde_json::to_string(v)
-                .map(|s| s.len())
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "measure message size".to_string(),
-                    reason: "Failed to serialize JSON payload".to_string(),
-                }),
-            MessagePayload::Text(s) => Ok(s.len()),
-        }
+        self.store.with_conn(f).await
     }
 
     /// Split a caller-facing `"{id}:{uuid}"` receipt handle into its parts.
@@ -433,17 +337,18 @@ impl Binding for LocalQueue {}
 #[async_trait]
 impl Queue for LocalQueue {
     async fn send(&self, _queue: &str, message: MessagePayload) -> Result<()> {
-        let size = Self::message_size(&message)?;
-        if size > MAX_MESSAGE_BYTES {
+        // Encode once, then measure the encoded bytes we will actually store.
+        let (payload_type, payload_data) = encode_payload(message)?;
+        if payload_data.len() > MAX_MESSAGE_BYTES {
             return Err(AlienError::new(ErrorData::BindingSetupFailed {
                 binding_type: "queue.local".to_string(),
                 reason: format!(
                     "Message size {} bytes exceeds limit of {} bytes",
-                    size, MAX_MESSAGE_BYTES
+                    payload_data.len(),
+                    MAX_MESSAGE_BYTES
                 ),
             }));
         }
-        let (payload_type, payload_data) = encode_payload(message)?;
 
         self.with_conn(move |conn| {
             let now = Utc::now().timestamp_millis();
