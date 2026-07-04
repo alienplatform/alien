@@ -296,7 +296,7 @@ mod tests {
 
         assert_eq!(
             local.data_dir,
-            crate::commands::agent::default_service_data_dir()
+            crate::commands::operator::default_service_data_dir()
         );
         assert!(local.service_managed);
     }
@@ -917,7 +917,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
     } else if current_deployment.status == "running" {
-        output::info("Deployment is already active; updating local agent public endpoint config.");
+        output::info(
+            "Deployment is already active; updating local operator public endpoint config.",
+        );
     }
 
     match (platform, base_platform) {

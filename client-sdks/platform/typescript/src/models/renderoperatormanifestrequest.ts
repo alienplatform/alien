@@ -20,6 +20,18 @@ export type RenderOperatorManifestRequestFormat = ClosedEnum<
 >;
 
 /**
+ * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
+ */
+export const ScopeEnum = {
+  Namespace: "namespace",
+  Cluster: "cluster",
+} as const;
+/**
+ * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
+ */
+export type ScopeEnum = ClosedEnum<typeof ScopeEnum>;
+
+/**
  * Operator permission tier
  */
 export const Permission = {
@@ -55,13 +67,21 @@ export type RenderOperatorManifestRequest = {
    */
   namespace?: string | undefined;
   /**
-   * Optional Kubernetes label selector narrowing what is observed.
+   * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
+   */
+  scope?: ScopeEnum | undefined;
+  /**
+   * Optional Kubernetes label selector narrowing what is managed, applied within the scope.
    */
   labelSelector?: string | undefined;
   /**
    * Operator permission tier
    */
   permission?: Permission | undefined;
+  /**
+   * Ready operator-image package to use for the Operator image. If omitted, the latest ready operator-image package for the project is used.
+   */
+  operatorImagePackageId?: string | undefined;
   /**
    * Deployment-group token embedded in the operator Secret
    */
@@ -76,6 +96,11 @@ export type RenderOperatorManifestRequest = {
 export const RenderOperatorManifestRequestFormat$outboundSchema: z.ZodEnum<
   typeof RenderOperatorManifestRequestFormat
 > = z.enum(RenderOperatorManifestRequestFormat);
+
+/** @internal */
+export const ScopeEnum$outboundSchema: z.ZodEnum<typeof ScopeEnum> = z.enum(
+  ScopeEnum,
+);
 
 /** @internal */
 export const Permission$outboundSchema: z.ZodEnum<typeof Permission> = z.enum(
@@ -105,8 +130,10 @@ export type RenderOperatorManifestRequest$Outbound = {
   format: string;
   environmentName?: string | undefined;
   namespace?: string | undefined;
+  scope: string;
   labelSelector?: string | undefined;
   permission: string;
+  operatorImagePackageId?: string | undefined;
   deploymentGroupToken: string;
   logCollector?: LogCollector$Outbound | undefined;
 };
@@ -120,8 +147,10 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   format: RenderOperatorManifestRequestFormat$outboundSchema.default("raw"),
   environmentName: z.string().optional(),
   namespace: z.string().optional(),
+  scope: ScopeEnum$outboundSchema.default("namespace"),
   labelSelector: z.string().optional(),
   permission: Permission$outboundSchema.default("observe"),
+  operatorImagePackageId: z.string().optional(),
   deploymentGroupToken: z.string(),
   logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),
 });

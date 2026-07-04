@@ -13,8 +13,8 @@ let value: DataAzureContainerApps2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -36,5 +36,5 @@ let value: DataAzureContainerApps2 = {
 | `managedIdentityId`                                                        | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `resourceGroupName`                                                        | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `resourcePrefix`                                                           | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus52](../models/resourceheartbeatstatus52.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus56](../models/resourceheartbeatstatus56.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"azureContainerApps"*                                                     | :heavy_check_mark:                                                         | N/A                                                                        |

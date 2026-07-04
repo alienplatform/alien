@@ -6,21 +6,22 @@
 import { DataLocal9 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal9 = {
-  configured: false,
-  identity: "<value>",
+  path: "/usr/include",
+  pathExists: false,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "unknown",
+    health: "unknown",
+    lifecycle: "creating",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
@@ -28,9 +29,13 @@ let value: DataLocal9 = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `configured`                                                               | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
-| `identity`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus39](../models/resourceheartbeatstatus39.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"local"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `isDirectory`                                                                                 | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `modifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `secretMetadataListed`                                                                        | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `status`                                                                                      | [models.ResourceHeartbeatStatus39](../models/resourceheartbeatstatus39.md)                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

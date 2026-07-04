@@ -479,7 +479,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 serde_json::from_value::<alien_core::Stack>(stack_json)
                             {
                                 current.target_release = Some(alien_core::ReleaseInfo {
-                                    release_id: release_id.clone(),
+                                    release_id: Some(release_id.clone()),
                                     version: None,
                                     description: None,
                                     stack,

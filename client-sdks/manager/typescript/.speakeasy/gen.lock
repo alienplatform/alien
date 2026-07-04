@@ -5,12 +5,12 @@ management:
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
-  releaseVersion: 1.2.62
-  configChecksum: 05dc589000becb2958dc9e7386335a90
+  releaseVersion: 1.2.63
+  configChecksum: f1c8aed4c0cc4757aeb8d1446431e3de
 persistentEdits:
-  generation_id: 22a79f01-1402-4747-8983-5749556ba331
-  pristine_commit_hash: fda53d9184af0307cf70e1790a89a2d65fb997d2
-  pristine_tree_hash: ad1785e7eb5cd6115ef338a42134e99a6d681116
+  generation_id: ebb8ef6d-6702-4abc-8165-c1549a19ddd4
+  pristine_commit_hash: daa18fba944e8cac06d59a87fec1ffc682310782
+  pristine_tree_hash: 4bc7575926f785a982e70f1ccb71a55a1eb63b9c
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -1342,12 +1342,12 @@ trackedFiles:
     pristine_git_object: ee6bb1a089f199ee421f67dd2cfd0e26a3b112c9
   jsr.json:
     id: 7f6ab7767282
-    last_write_checksum: sha1:167bad206db075b7166948baa5c2af3886d2edad
-    pristine_git_object: 4bfd0cfee12736653b67d7c28baa54e78fd30e1e
+    last_write_checksum: sha1:d3f22fa38e73df32b92a868d620ea6dee6581daa
+    pristine_git_object: efbf17a31876b1bb401a5e9ec18dafffa515549b
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:ca260a1e1f211496fbc4a7a36879c4fa9393309a
-    pristine_git_object: b640e399949ee20707f99e6654f9cf565cb6ac5b
+    last_write_checksum: sha1:16ed4579d743756fbfa432e9f6d6722d973a1361
+    pristine_git_object: d462d3a6092420afd81b026bfd99f86aa9a54666
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -1502,8 +1502,8 @@ trackedFiles:
     pristine_git_object: 962ea486e17eabe13bcf068493a556110c944df8
   src/lib/config.ts:
     id: 320761608fb3
-    last_write_checksum: sha1:a9ff9484a4863989539dc709bb686e88c163cfbb
-    pristine_git_object: 854693dd2b90f37326e3c60138885d7160c37697
+    last_write_checksum: sha1:1bf49e9fe84af8b2365ef6938931020ba29b3e0d
+    pristine_git_object: 9a7a913f9cf49dca98de44d86d0caed2f9d0c8ad
   src/lib/dlv.ts:
     id: b1988214835a
     last_write_checksum: sha1:1dd3e3fbb4550c4bf31f5ef997faff355d6f3250

@@ -3,89 +3,59 @@
 
 ## Supported Types
 
-### `models.DataAwsParameterStore`
+### `models.DataAurora`
 
 ```typescript
-const value: models.DataAwsParameterStore = {
-  accountId: "<id>",
-  parameterMetadataSampled: true,
-  prefix: "<value>",
-  region: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "unknown",
-    partial: true,
-    stale: false,
-  },
-  backend: "awsParameterStore",
-};
-```
-
-### `models.DataGcpSecretManager`
-
-```typescript
-const value: models.DataGcpSecretManager = {
-  location: "<value>",
-  prefix: "<value>",
-  projectId: "<id>",
-  secretMetadataListed: true,
+const value: models.DataAurora = {
+  clusterIdentifier: "<value>",
+  neverPauses: false,
   status: {
     collectionIssues: [],
     health: "degraded",
-    lifecycle: "stopping",
+    lifecycle: "deleted",
     partial: true,
     stale: false,
   },
-  backend: "gcpSecretManager",
+  backend: "aurora",
 };
 ```
 
-### `models.DataAzureKeyVault`
+### `models.DataCloudSQL`
 
 ```typescript
-const value: models.DataAzureKeyVault = {
-  accessPolicyCount: 923246,
-  name: "<value>",
-  privateEndpointConnectionCount: 319306,
-  publicNetworkAccess: "<value>",
-  rbacAuthorizationEnabled: true,
-  secretMetadataListed: false,
-  softDeleteEnabled: false,
-  softDeleteRetentionDays: 497787,
-  status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "creating",
-    partial: true,
-    stale: false,
-  },
-  backend: "azureKeyVault",
-};
-```
-
-### `models.DataKubernetesSecret`
-
-```typescript
-const value: models.DataKubernetesSecret = {
-  namespace: "<value>",
-  prefix: "<value>",
-  secretMetadataListed: false,
+const value: models.DataCloudSQL = {
+  instanceName: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "error",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "deleting",
-    partial: false,
+    lifecycle: "creating",
+    partial: true,
+    stale: true,
+  },
+  backend: "cloudSql",
+};
+```
+
+### `models.DataFlexibleServer`
+
+```typescript
+const value: models.DataFlexibleServer = {
+  serverName: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopped",
+    partial: true,
     stale: false,
   },
-  backend: "kubernetesSecret",
+  backend: "flexibleServer",
 };
 ```
 
@@ -93,23 +63,16 @@ const value: models.DataKubernetesSecret = {
 
 ```typescript
 const value: models.DataLocal8 = {
-  path: "/usr/local/src",
-  pathExists: true,
-  secretMetadataListed: false,
+  name: "<value>",
+  processRunning: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "failed",
-    partial: false,
-    stale: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "deleted",
+    partial: true,
+    stale: false,
   },
+  version: "<value>",
   backend: "local",
 };
 ```

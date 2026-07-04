@@ -78,6 +78,8 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             suggested_delay_ms,
             resource_heartbeats: heartbeats,
             observed_inventory_batches: vec![],
+            capabilities: Vec::new(),
+            operator_version: None,
         };
         #[cfg(not(feature = "openapi"))]
         let body = alien_manager_api::types::ReconcileRequest {
@@ -88,6 +90,8 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             suggested_delay_ms,
             resource_heartbeats: heartbeats,
             observed_inventory_batches,
+            capabilities: Vec::new(),
+            operator_version: None,
         };
 
         // POST state to the manager
@@ -459,6 +463,8 @@ pub async fn final_reconcile(
             suggested_delay_ms: None,
             resource_heartbeats: vec![],
             observed_inventory_batches: vec![],
+            capabilities: Vec::new(),
+            operator_version: None,
         })
         .send()
         .await

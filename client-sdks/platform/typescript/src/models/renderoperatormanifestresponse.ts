@@ -24,6 +24,10 @@ export type RenderOperatorManifestResponse = {
    * Manager URL embedded in the manifest
    */
   managerUrl: string;
+  /**
+   * True when the operator image is still building. The manifest contains a placeholder image (<PENDING_IMAGE>) and must not be applied yet — re-render once the operator-image package is ready to get the real image.
+   */
+  imagePending: boolean;
 };
 
 /** @internal */
@@ -35,6 +39,7 @@ export const RenderOperatorManifestResponse$inboundSchema: z.ZodType<
   applyCommand: z.string(),
   filename: z.string(),
   managerUrl: z.string(),
+  imagePending: z.boolean(),
 });
 
 export function renderOperatorManifestResponseFromJSON(

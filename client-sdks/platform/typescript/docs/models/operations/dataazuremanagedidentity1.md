@@ -29,7 +29,7 @@ let value: DataAzureManagedIdentity1 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "error",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -59,7 +59,7 @@ let value: DataAzureManagedIdentity1 = {
 | `roleAssignmentCount`                                              | *number*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `roleAssignmentIds`                                                | *string*[]                                                         | :heavy_check_mark:                                                 | N/A                                                                |
 | `stackPermissionsApplied`                                          | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus38](../../models/operations/datastatus38.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus42](../../models/operations/datastatus42.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `tenantId`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `type`                                                             | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `backend`                                                          | *"azureManagedIdentity"*                                           | :heavy_check_mark:                                                 | N/A                                                                |

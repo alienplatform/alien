@@ -28,5 +28,5 @@ let value: DataVault = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion8* | :heavy_check_mark:      | N/A                     |
+| `data`                  | *operations.DataUnion9* | :heavy_check_mark:      | N/A                     |
 | `resourceType`          | *"vault"*               | :heavy_check_mark:      | N/A                     |

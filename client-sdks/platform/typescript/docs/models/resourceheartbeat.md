@@ -10,29 +10,24 @@ let value: ResourceHeartbeat = {
   controllerPlatform: "kubernetes",
   data: {
     data: {
-      bindMountCount: 947766,
+      commandSupported: false,
       events: [],
-      portCount: 126023,
-      runtimeReachable: false,
+      name: "<value>",
+      namespace: "<value>",
+      pods: [],
+      replicas: {},
       status: {
-        collectionIssues: [
-          {
-            message: "<value>",
-            reason: "not-installed",
-            severity: "info",
-            source: "<value>",
-          },
-        ],
-        health: "unhealthy",
-        lifecycle: "stopping",
+        collectionIssues: [],
+        health: "degraded",
+        lifecycle: "deleted",
         partial: true,
         stale: true,
       },
-      backend: "local",
+      backend: "kubernetes",
     },
-    resourceType: "container",
+    resourceType: "daemon",
   },
-  observedAt: new Date("2024-04-21T00:33:03.766Z"),
+  observedAt: new Date("2026-05-08T10:59:50.217Z"),
   raw: [],
   resourceId: "<id>",
   resourceType: "<value>",
@@ -45,7 +40,7 @@ let value: ResourceHeartbeat = {
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend`                                                                                                                                                  | [models.ResourceHeartbeatBackendEnum](../models/resourceheartbeatbackendenum.md)                                                                           | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `controllerPlatform`                                                                                                                                       | [models.ResourceHeartbeatControllerPlatform](../models/resourceheartbeatcontrollerplatform.md)                                                             | :heavy_check_mark:                                                                                                                                         | Represents the target cloud platform.                                                                                                                      |
-| `data`                                                                                                                                                     | *models.SyncReconcileRequestDataUnion15*                                                                                                                   | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
+| `data`                                                                                                                                                     | *models.SyncReconcileRequestDataUnion16*                                                                                                                   | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `deploymentId`                                                                                                                                             | *string*                                                                                                                                                   | :heavy_minus_sign:                                                                                                                                         | N/A                                                                                                                                                        |
 | `observedAt`                                                                                                                                               | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                                              | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `raw`                                                                                                                                                      | [models.ResourceHeartbeatRaw](../models/resourceheartbeatraw.md)[]                                                                                         | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |

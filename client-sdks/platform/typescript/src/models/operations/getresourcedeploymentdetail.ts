@@ -87,6 +87,351 @@ export const ControllerPlatform = {
  */
 export type ControllerPlatform = ClosedEnum<typeof ControllerPlatform>;
 
+export const Reason63 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason63 = ClosedEnum<typeof Reason63>;
+
+export const CollectionIssueSeverity63 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity63 = ClosedEnum<
+  typeof CollectionIssueSeverity63
+>;
+
+export type CollectionIssue63 = {
+  message: string;
+  reason: Reason63;
+  severity: CollectionIssueSeverity63;
+  source: string;
+};
+
+export const Health63 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health63 = ClosedEnum<typeof Health63>;
+
+export const Lifecycle63 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle63 = ClosedEnum<typeof Lifecycle63>;
+
+export type DataStatus63 = {
+  collectionIssues: Array<CollectionIssue63>;
+  health: Health63;
+  lifecycle: Lifecycle63;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type Data5 = {
+  createdAt?: string | null | undefined;
+  disableLocalAuth?: boolean | null | undefined;
+  location?: string | null | undefined;
+  metricId?: string | null | undefined;
+  minimumTlsVersion?: string | null | undefined;
+  name: string;
+  namespaceStatus?: string | null | undefined;
+  premiumMessagingPartitions?: number | null | undefined;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  serviceBusEndpoint?: string | null | undefined;
+  skuCapacity?: number | null | undefined;
+  skuName?: string | null | undefined;
+  skuTier?: string | null | undefined;
+  status: DataStatus63;
+  updatedAt?: string | null | undefined;
+  zoneRedundant?: boolean | null | undefined;
+};
+
+export type DataAzureServiceBusNamespace = {
+  data: Data5;
+  resourceType: "azure_service_bus_namespace";
+};
+
+export const Reason62 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason62 = ClosedEnum<typeof Reason62>;
+
+export const CollectionIssueSeverity62 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity62 = ClosedEnum<
+  typeof CollectionIssueSeverity62
+>;
+
+export type CollectionIssue62 = {
+  message: string;
+  reason: Reason62;
+  severity: CollectionIssueSeverity62;
+  source: string;
+};
+
+export const Health62 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health62 = ClosedEnum<typeof Health62>;
+
+export const Lifecycle62 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle62 = ClosedEnum<typeof Lifecycle62>;
+
+export type DataStatus62 = {
+  collectionIssues: Array<CollectionIssue62>;
+  health: Health62;
+  lifecycle: Lifecycle62;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type WorkloadProfile = {
+  maximumCount?: number | null | undefined;
+  minimumCount?: number | null | undefined;
+  name: string;
+  workloadProfileType: string;
+};
+
+export type Data4 = {
+  customDomainVerificationId?: string | null | undefined;
+  defaultDomain?: string | null | undefined;
+  eventStreamEndpoint?: string | null | undefined;
+  infrastructureResourceGroup?: string | null | undefined;
+  kind?: string | null | undefined;
+  location?: string | null | undefined;
+  name: string;
+  provisioningState?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  staticIp?: string | null | undefined;
+  status: DataStatus62;
+  workloadProfileCount: number;
+  workloadProfiles: Array<WorkloadProfile>;
+  zoneRedundant?: boolean | null | undefined;
+};
+
+export type DataAzureContainerAppsEnvironment = {
+  data: Data4;
+  resourceType: "azure_container_apps_environment";
+};
+
+export type PrimaryEndpoints = {
+  blob?: string | null | undefined;
+  dfs?: string | null | undefined;
+  file?: string | null | undefined;
+  queue?: string | null | undefined;
+  table?: string | null | undefined;
+  web?: string | null | undefined;
+};
+
+export type SecondaryEndpoints = {
+  blob?: string | null | undefined;
+  dfs?: string | null | undefined;
+  file?: string | null | undefined;
+  queue?: string | null | undefined;
+  table?: string | null | undefined;
+  web?: string | null | undefined;
+};
+
+export const Reason61 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason61 = ClosedEnum<typeof Reason61>;
+
+export const CollectionIssueSeverity61 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity61 = ClosedEnum<
+  typeof CollectionIssueSeverity61
+>;
+
+export type CollectionIssue61 = {
+  message: string;
+  reason: Reason61;
+  severity: CollectionIssueSeverity61;
+  source: string;
+};
+
+export const Health61 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health61 = ClosedEnum<typeof Health61>;
+
+export const Lifecycle61 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle61 = ClosedEnum<typeof Lifecycle61>;
+
+export type DataStatus61 = {
+  collectionIssues: Array<CollectionIssue61>;
+  health: Health61;
+  lifecycle: Lifecycle61;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type Data3 = {
+  allowBlobPublicAccess?: boolean | null | undefined;
+  allowSharedKeyAccess?: boolean | null | undefined;
+  encryptionKeySource?: string | null | undefined;
+  kind?: string | null | undefined;
+  location?: string | null | undefined;
+  minimumTlsVersion?: string | null | undefined;
+  name: string;
+  networkBypass?: string | null | undefined;
+  networkDefaultAction?: string | null | undefined;
+  networkIpRuleCount?: number | null | undefined;
+  networkResourceAccessRuleCount?: number | null | undefined;
+  networkVirtualNetworkRuleCount?: number | null | undefined;
+  primaryEndpoints: PrimaryEndpoints;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess?: string | null | undefined;
+  requireInfrastructureEncryption?: boolean | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  secondaryEndpoints: SecondaryEndpoints;
+  skuName?: string | null | undefined;
+  skuTier?: string | null | undefined;
+  status: DataStatus61;
+  supportsHttpsTrafficOnly?: boolean | null | undefined;
+};
+
+export type DataAzureStorageAccount = {
+  data: Data3;
+  resourceType: "azure_storage_account";
+};
+
+export const Reason60 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason60 = ClosedEnum<typeof Reason60>;
+
+export const CollectionIssueSeverity60 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity60 = ClosedEnum<
+  typeof CollectionIssueSeverity60
+>;
+
+export type CollectionIssue60 = {
+  message: string;
+  reason: Reason60;
+  severity: CollectionIssueSeverity60;
+  source: string;
+};
+
+export const Health60 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health60 = ClosedEnum<typeof Health60>;
+
+export const Lifecycle60 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle60 = ClosedEnum<typeof Lifecycle60>;
+
+export type DataStatus60 = {
+  collectionIssues: Array<CollectionIssue60>;
+  health: Health60;
+  lifecycle: Lifecycle60;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type Data2 = {
+  location?: string | null | undefined;
+  managedTags: { [k: string]: string };
+  name: string;
+  provisioningState?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  status: DataStatus60;
+};
+
+export type DataAzureResourceGroup = {
+  data: Data2;
+  resourceType: "azure_resource_group";
+};
+
 export const Reason59 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -143,32 +488,15 @@ export type DataStatus59 = {
   stale: boolean;
 };
 
-export type Data5 = {
-  createdAt?: string | null | undefined;
-  disableLocalAuth?: boolean | null | undefined;
-  location?: string | null | undefined;
-  metricId?: string | null | undefined;
-  minimumTlsVersion?: string | null | undefined;
-  name: string;
-  namespaceStatus?: string | null | undefined;
-  premiumMessagingPartitions?: number | null | undefined;
-  privateEndpointConnectionCount: number;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  serviceBusEndpoint?: string | null | undefined;
-  skuCapacity?: number | null | undefined;
-  skuName?: string | null | undefined;
-  skuTier?: string | null | undefined;
+export type DataAzureResourceProvider = {
+  namespace: string;
+  providerId?: string | null | undefined;
+  registered: boolean;
+  registrationPolicy?: string | null | undefined;
+  registrationState?: string | null | undefined;
+  resourceTypeCount: number;
   status: DataStatus59;
-  updatedAt?: string | null | undefined;
-  zoneRedundant?: boolean | null | undefined;
-};
-
-export type DataAzureServiceBusNamespace = {
-  data: Data5;
-  resourceType: "azure_service_bus_namespace";
+  backend: "azureResourceProvider";
 };
 
 export const Reason58 = {
@@ -227,52 +555,55 @@ export type DataStatus58 = {
   stale: boolean;
 };
 
-export type WorkloadProfile = {
-  maximumCount?: number | null | undefined;
-  minimumCount?: number | null | undefined;
-  name: string;
-  workloadProfileType: string;
-};
-
-export type Data4 = {
-  customDomainVerificationId?: string | null | undefined;
-  defaultDomain?: string | null | undefined;
-  eventStreamEndpoint?: string | null | undefined;
-  infrastructureResourceGroup?: string | null | undefined;
-  kind?: string | null | undefined;
-  location?: string | null | undefined;
-  name: string;
-  provisioningState?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  staticIp?: string | null | undefined;
+export type DataGcpServiceUsage = {
+  enabled: boolean;
+  lastOperationName?: string | null | undefined;
+  projectId: string;
+  serviceName: string;
+  serviceResourceName?: string | null | undefined;
+  state?: string | null | undefined;
   status: DataStatus58;
-  workloadProfileCount: number;
-  workloadProfiles: Array<WorkloadProfile>;
-  zoneRedundant?: boolean | null | undefined;
+  title?: string | null | undefined;
+  backend: "gcpServiceUsage";
 };
 
-export type DataAzureContainerAppsEnvironment = {
-  data: Data4;
-  resourceType: "azure_container_apps_environment";
+export type DataUnion15 = DataGcpServiceUsage | DataAzureResourceProvider;
+
+export type DataServiceActivation = {
+  data: DataGcpServiceUsage | DataAzureResourceProvider;
+  resourceType: "service_activation";
 };
 
-export type PrimaryEndpoints = {
-  blob?: string | null | undefined;
-  dfs?: string | null | undefined;
-  file?: string | null | undefined;
-  queue?: string | null | undefined;
-  table?: string | null | undefined;
-  web?: string | null | undefined;
+export type InvolvedObject9 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
+  uid?: string | null | undefined;
 };
 
-export type SecondaryEndpoints = {
-  blob?: string | null | undefined;
-  dfs?: string | null | undefined;
-  file?: string | null | undefined;
-  queue?: string | null | undefined;
-  table?: string | null | undefined;
-  web?: string | null | undefined;
+export type InvolvedObjectUnion9 = InvolvedObject9 | any;
+
+export type GetResourceDeploymentDetailSource9 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
+
+export type Event12 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject9 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason57 = {
@@ -331,35 +662,19 @@ export type DataStatus57 = {
   stale: boolean;
 };
 
-export type Data3 = {
-  allowBlobPublicAccess?: boolean | null | undefined;
-  allowSharedKeyAccess?: boolean | null | undefined;
-  encryptionKeySource?: string | null | undefined;
-  kind?: string | null | undefined;
-  location?: string | null | undefined;
-  minimumTlsVersion?: string | null | undefined;
-  name: string;
-  networkBypass?: string | null | undefined;
-  networkDefaultAction?: string | null | undefined;
-  networkIpRuleCount?: number | null | undefined;
-  networkResourceAccessRuleCount?: number | null | undefined;
-  networkVirtualNetworkRuleCount?: number | null | undefined;
-  primaryEndpoints: PrimaryEndpoints;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess?: string | null | undefined;
-  requireInfrastructureEncryption?: boolean | null | undefined;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  secondaryEndpoints: SecondaryEndpoints;
-  skuName?: string | null | undefined;
-  skuTier?: string | null | undefined;
+export type DataKubernetesJob = {
+  active?: number | null | undefined;
+  completionTime?: Date | null | undefined;
+  conditionCount: number;
+  events: Array<Event12>;
+  failed?: number | null | undefined;
+  imageDigest?: string | null | undefined;
+  jobName: string;
+  namespace: string;
+  startTime?: Date | null | undefined;
   status: DataStatus57;
-  supportsHttpsTrafficOnly?: boolean | null | undefined;
-};
-
-export type DataAzureStorageAccount = {
-  data: Data3;
-  resourceType: "azure_storage_account";
+  succeeded?: number | null | undefined;
+  backend: "kubernetesJob";
 };
 
 export const Reason56 = {
@@ -418,18 +733,14 @@ export type DataStatus56 = {
   stale: boolean;
 };
 
-export type Data2 = {
-  location?: string | null | undefined;
-  managedTags: { [k: string]: string };
-  name: string;
-  provisioningState?: string | null | undefined;
-  resourceId?: string | null | undefined;
+export type DataAzureContainerApps2 = {
+  environmentVariableCount: number;
+  managedEnvironmentId: string;
+  managedIdentityId?: string | null | undefined;
+  resourceGroupName: string;
+  resourcePrefix?: string | null | undefined;
   status: DataStatus56;
-};
-
-export type DataAzureResourceGroup = {
-  data: Data2;
-  resourceType: "azure_resource_group";
+  backend: "azureContainerApps";
 };
 
 export const Reason55 = {
@@ -488,15 +799,14 @@ export type DataStatus55 = {
   stale: boolean;
 };
 
-export type DataAzureResourceProvider = {
-  namespace: string;
-  providerId?: string | null | undefined;
-  registered: boolean;
-  registrationPolicy?: string | null | undefined;
-  registrationState?: string | null | undefined;
-  resourceTypeCount: number;
+export type DataGcpCloudBuild = {
+  buildConfigId: string;
+  environmentVariableCount: number;
+  location: string;
+  projectId: string;
+  serviceAccount?: string | null | undefined;
   status: DataStatus55;
-  backend: "azureResourceProvider";
+  backend: "gcpCloudBuild";
 };
 
 export const Reason54 = {
@@ -555,55 +865,44 @@ export type DataStatus54 = {
   stale: boolean;
 };
 
-export type DataGcpServiceUsage = {
-  enabled: boolean;
-  lastOperationName?: string | null | undefined;
-  projectId: string;
-  serviceName: string;
-  serviceResourceName?: string | null | undefined;
-  state?: string | null | undefined;
+export type DataAwsCodeBuild = {
+  artifactsEncryptionDisabled?: boolean | null | undefined;
+  artifactsType?: string | null | undefined;
+  cloudWatchLogsStatus?: string | null | undefined;
+  computeType?: string | null | undefined;
+  created?: number | null | undefined;
+  description?: string | null | undefined;
+  encryptionKeyPresent: boolean;
+  environmentImage?: string | null | undefined;
+  environmentType?: string | null | undefined;
+  environmentVariableCount: number;
+  imagePullCredentialsType?: string | null | undefined;
+  lastModified?: number | null | undefined;
+  privilegedMode?: boolean | null | undefined;
+  projectArn?: string | null | undefined;
+  projectName: string;
+  queuedTimeoutInMinutes?: number | null | undefined;
+  s3LogsStatus?: string | null | undefined;
+  serviceRolePresent: boolean;
+  sourceType?: string | null | undefined;
   status: DataStatus54;
-  title?: string | null | undefined;
-  backend: "gcpServiceUsage";
+  timeoutInMinutes?: number | null | undefined;
+  backend: "awsCodeBuild";
 };
 
-export type DataUnion14 = DataGcpServiceUsage | DataAzureResourceProvider;
+export type DataUnion14 =
+  | DataAwsCodeBuild
+  | DataGcpCloudBuild
+  | DataAzureContainerApps2
+  | DataKubernetesJob;
 
-export type DataServiceActivation = {
-  data: DataGcpServiceUsage | DataAzureResourceProvider;
-  resourceType: "service_activation";
-};
-
-export type InvolvedObject9 = {
-  apiVersion?: string | null | undefined;
-  fieldPath?: string | null | undefined;
-  kind?: string | null | undefined;
-  name?: string | null | undefined;
-  namespace?: string | null | undefined;
-  resourceVersion?: string | null | undefined;
-  uid?: string | null | undefined;
-};
-
-export type InvolvedObjectUnion9 = InvolvedObject9 | any;
-
-export type GetResourceDeploymentDetailSource9 = {
-  component?: string | null | undefined;
-  host?: string | null | undefined;
-};
-
-export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
-
-export type Event12 = {
-  count?: number | null | undefined;
-  eventTime?: Date | null | undefined;
-  firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject9 | any | null | undefined;
-  lastTimestamp?: Date | null | undefined;
-  message: string;
-  raw?: any | null | undefined;
-  reason: string;
-  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
-  type?: string | null | undefined;
+export type DataBuild = {
+  data:
+    | DataAwsCodeBuild
+    | DataGcpCloudBuild
+    | DataAzureContainerApps2
+    | DataKubernetesJob;
+  resourceType: "build";
 };
 
 export const Reason53 = {
@@ -662,19 +961,11 @@ export type DataStatus53 = {
   stale: boolean;
 };
 
-export type DataKubernetesJob = {
-  active?: number | null | undefined;
-  completionTime?: Date | null | undefined;
-  conditionCount: number;
-  events: Array<Event12>;
-  failed?: number | null | undefined;
-  imageDigest?: string | null | undefined;
-  jobName: string;
-  namespace: string;
-  startTime?: Date | null | undefined;
+export type DataLocal11 = {
+  reachable: boolean;
+  registryUrl: string;
   status: DataStatus53;
-  succeeded?: number | null | undefined;
-  backend: "kubernetesJob";
+  backend: "local";
 };
 
 export const Reason52 = {
@@ -733,14 +1024,35 @@ export type DataStatus52 = {
   stale: boolean;
 };
 
-export type DataAzureContainerApps2 = {
-  environmentVariableCount: number;
-  managedEnvironmentId: string;
-  managedIdentityId?: string | null | undefined;
-  resourceGroupName: string;
-  resourcePrefix?: string | null | undefined;
+export type DataAzureContainerRegistry = {
+  adminUserEnabled: boolean;
+  anonymousPullEnabled: boolean;
+  creationDate?: string | null | undefined;
+  dataEndpointEnabled?: boolean | null | undefined;
+  dataEndpointHostNames: Array<string>;
+  encryptionKeyIdentifierPresent: boolean;
+  encryptionKeyVaultUriPresent: boolean;
+  encryptionStatus?: string | null | undefined;
+  ipRuleCount: number;
+  location: string;
+  loginServer?: string | null | undefined;
+  managedTagCount: number;
+  name: string;
+  networkRuleBypassOptions: string;
+  networkRuleDefaultAction?: string | null | undefined;
+  policiesPresent: boolean;
+  policyCount: number;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess: string;
+  resourceGroup: string;
+  resourceId?: string | null | undefined;
+  skuName: string;
+  skuTier?: string | null | undefined;
   status: DataStatus52;
-  backend: "azureContainerApps";
+  type?: string | null | undefined;
+  zoneRedundancy: string;
+  backend: "azureContainerRegistry";
 };
 
 export const Reason51 = {
@@ -799,14 +1111,41 @@ export type DataStatus51 = {
   stale: boolean;
 };
 
-export type DataGcpCloudBuild = {
-  buildConfigId: string;
-  environmentVariableCount: number;
+export type DataGcpArtifactRegistry = {
+  cleanupPolicyCount: number;
+  cleanupPolicyDryRun?: boolean | null | undefined;
+  createTime?: string | null | undefined;
+  description?: string | null | undefined;
+  format?: string | null | undefined;
+  iamBindingCount: number;
+  iamPolicyEtagPresent: boolean;
+  iamRoles: Array<string>;
+  kmsKeyNamePresent: boolean;
+  labelCount: number;
   location: string;
+  mode?: string | null | undefined;
+  name?: string | null | undefined;
   projectId: string;
-  serviceAccount?: string | null | undefined;
+  pullServiceAccountEmail?: string | null | undefined;
+  pushServiceAccountEmail?: string | null | undefined;
+  repositoryId: string;
+  satisfiesPzs?: boolean | null | undefined;
+  sizeBytes?: string | null | undefined;
   status: DataStatus51;
-  backend: "gcpCloudBuild";
+  updateTime?: string | null | undefined;
+  backend: "gcpArtifactRegistry";
+};
+
+export type Repository = {
+  createdAt: number;
+  encryptionType?: string | null | undefined;
+  imageTagMutability?: string | null | undefined;
+  kmsKeyPresent: boolean;
+  registryId: string;
+  repositoryArn: string;
+  repositoryName: string;
+  repositoryUri: string;
+  scanOnPush?: boolean | null | undefined;
 };
 
 export const Reason50 = {
@@ -865,44 +1204,33 @@ export type DataStatus50 = {
   stale: boolean;
 };
 
-export type DataAwsCodeBuild = {
-  artifactsEncryptionDisabled?: boolean | null | undefined;
-  artifactsType?: string | null | undefined;
-  cloudWatchLogsStatus?: string | null | undefined;
-  computeType?: string | null | undefined;
-  created?: number | null | undefined;
-  description?: string | null | undefined;
-  encryptionKeyPresent: boolean;
-  environmentImage?: string | null | undefined;
-  environmentType?: string | null | undefined;
-  environmentVariableCount: number;
-  imagePullCredentialsType?: string | null | undefined;
-  lastModified?: number | null | undefined;
-  privilegedMode?: boolean | null | undefined;
-  projectArn?: string | null | undefined;
-  projectName: string;
-  queuedTimeoutInMinutes?: number | null | undefined;
-  s3LogsStatus?: string | null | undefined;
-  serviceRolePresent: boolean;
-  sourceType?: string | null | undefined;
+export type DataAwsEcr = {
+  pullRoleArn?: string | null | undefined;
+  pushRoleArn?: string | null | undefined;
+  region: string;
+  registryId: string;
+  registryUri: string;
+  repositories: Array<Repository>;
+  repositoriesTruncated: boolean;
+  repositoryCount: number;
+  repositoryPrefix: string;
   status: DataStatus50;
-  timeoutInMinutes?: number | null | undefined;
-  backend: "awsCodeBuild";
+  backend: "awsEcr";
 };
 
 export type DataUnion13 =
-  | DataAwsCodeBuild
-  | DataGcpCloudBuild
-  | DataAzureContainerApps2
-  | DataKubernetesJob;
+  | DataAwsEcr
+  | DataGcpArtifactRegistry
+  | DataAzureContainerRegistry
+  | DataLocal11;
 
-export type DataBuild = {
+export type DataArtifactRegistry = {
   data:
-    | DataAwsCodeBuild
-    | DataGcpCloudBuild
-    | DataAzureContainerApps2
-    | DataKubernetesJob;
-  resourceType: "build";
+    | DataAwsEcr
+    | DataGcpArtifactRegistry
+    | DataAzureContainerRegistry
+    | DataLocal11;
+  resourceType: "artifact-registry";
 };
 
 export const Reason49 = {
@@ -961,11 +1289,16 @@ export type DataStatus49 = {
   stale: boolean;
 };
 
-export type DataLocal10 = {
-  reachable: boolean;
-  registryUrl: string;
+export type DataAzureManagedIdentity2 = {
+  ficName?: string | null | undefined;
+  roleAssignmentIds: Array<string>;
+  roleDefinitionId?: string | null | undefined;
   status: DataStatus49;
-  backend: "local";
+  tenantId?: string | null | undefined;
+  uamiClientId?: string | null | undefined;
+  uamiPrincipalId?: string | null | undefined;
+  uamiResourceId?: string | null | undefined;
+  backend: "azureManagedIdentity";
 };
 
 export const Reason48 = {
@@ -1024,35 +1357,13 @@ export type DataStatus48 = {
   stale: boolean;
 };
 
-export type DataAzureContainerRegistry = {
-  adminUserEnabled: boolean;
-  anonymousPullEnabled: boolean;
-  creationDate?: string | null | undefined;
-  dataEndpointEnabled?: boolean | null | undefined;
-  dataEndpointHostNames: Array<string>;
-  encryptionKeyIdentifierPresent: boolean;
-  encryptionKeyVaultUriPresent: boolean;
-  encryptionStatus?: string | null | undefined;
-  ipRuleCount: number;
-  location: string;
-  loginServer?: string | null | undefined;
-  managedTagCount: number;
-  name: string;
-  networkRuleBypassOptions: string;
-  networkRuleDefaultAction?: string | null | undefined;
-  policiesPresent: boolean;
-  policyCount: number;
-  privateEndpointConnectionCount: number;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess: string;
-  resourceGroup: string;
-  resourceId?: string | null | undefined;
-  skuName: string;
-  skuTier?: string | null | undefined;
+export type DataGcpServiceAccount2 = {
+  impersonationGranted: boolean;
+  roleBound: boolean;
+  serviceAccountEmail?: string | null | undefined;
+  serviceAccountUniqueId?: string | null | undefined;
   status: DataStatus48;
-  type?: string | null | undefined;
-  zoneRedundancy: string;
-  backend: "azureContainerRegistry";
+  backend: "gcpServiceAccount";
 };
 
 export const Reason47 = {
@@ -1111,41 +1422,22 @@ export type DataStatus47 = {
   stale: boolean;
 };
 
-export type DataGcpArtifactRegistry = {
-  cleanupPolicyCount: number;
-  cleanupPolicyDryRun?: boolean | null | undefined;
-  createTime?: string | null | undefined;
-  description?: string | null | undefined;
-  format?: string | null | undefined;
-  iamBindingCount: number;
-  iamPolicyEtagPresent: boolean;
-  iamRoles: Array<string>;
-  kmsKeyNamePresent: boolean;
-  labelCount: number;
-  location: string;
-  mode?: string | null | undefined;
-  name?: string | null | undefined;
-  projectId: string;
-  pullServiceAccountEmail?: string | null | undefined;
-  pushServiceAccountEmail?: string | null | undefined;
-  repositoryId: string;
-  satisfiesPzs?: boolean | null | undefined;
-  sizeBytes?: string | null | undefined;
+export type DataAwsIamRole2 = {
+  managementPermissionsApplied: boolean;
+  roleArn?: string | null | undefined;
+  roleName?: string | null | undefined;
   status: DataStatus47;
-  updateTime?: string | null | undefined;
-  backend: "gcpArtifactRegistry";
+  backend: "awsIamRole";
 };
 
-export type Repository = {
-  createdAt: number;
-  encryptionType?: string | null | undefined;
-  imageTagMutability?: string | null | undefined;
-  kmsKeyPresent: boolean;
-  registryId: string;
-  repositoryArn: string;
-  repositoryName: string;
-  repositoryUri: string;
-  scanOnPush?: boolean | null | undefined;
+export type DataUnion12 =
+  | DataAwsIamRole2
+  | DataGcpServiceAccount2
+  | DataAzureManagedIdentity2;
+
+export type DataRemoteStackManagement = {
+  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
+  resourceType: "remote-stack-management";
 };
 
 export const Reason46 = {
@@ -1204,33 +1496,23 @@ export type DataStatus46 = {
   stale: boolean;
 };
 
-export type DataAwsEcr = {
-  pullRoleArn?: string | null | undefined;
-  pushRoleArn?: string | null | undefined;
-  region: string;
-  registryId: string;
-  registryUri: string;
-  repositories: Array<Repository>;
-  repositoriesTruncated: boolean;
-  repositoryCount: number;
-  repositoryPrefix: string;
+export type DataAzureVnet = {
+  applicationGatewaySubnetName?: string | null | undefined;
+  cidrBlock?: string | null | undefined;
+  isByoVnet: boolean;
+  lastByoVnetVerificationErrorCode?: string | null | undefined;
+  location?: string | null | undefined;
+  natGatewayId?: string | null | undefined;
+  nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
+  privateSubnetName?: string | null | undefined;
+  publicIpId?: string | null | undefined;
+  publicSubnetName?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
   status: DataStatus46;
-  backend: "awsEcr";
-};
-
-export type DataUnion12 =
-  | DataAwsEcr
-  | DataGcpArtifactRegistry
-  | DataAzureContainerRegistry
-  | DataLocal10;
-
-export type DataArtifactRegistry = {
-  data:
-    | DataAwsEcr
-    | DataGcpArtifactRegistry
-    | DataAzureContainerRegistry
-    | DataLocal10;
-  resourceType: "artifact-registry";
+  vnetName?: string | null | undefined;
+  vnetResourceId?: string | null | undefined;
+  backend: "azureVnet";
 };
 
 export const Reason45 = {
@@ -1289,16 +1571,19 @@ export type DataStatus45 = {
   stale: boolean;
 };
 
-export type DataAzureManagedIdentity2 = {
-  ficName?: string | null | undefined;
-  roleAssignmentIds: Array<string>;
-  roleDefinitionId?: string | null | undefined;
+export type DataGcpVpc = {
+  cidrBlock?: string | null | undefined;
+  cloudNatName?: string | null | undefined;
+  firewallName?: string | null | undefined;
+  isByoVpc: boolean;
+  networkName?: string | null | undefined;
+  networkSelfLink?: string | null | undefined;
+  region?: string | null | undefined;
+  routerName?: string | null | undefined;
   status: DataStatus45;
-  tenantId?: string | null | undefined;
-  uamiClientId?: string | null | undefined;
-  uamiPrincipalId?: string | null | undefined;
-  uamiResourceId?: string | null | undefined;
-  backend: "azureManagedIdentity";
+  subnetworkName?: string | null | undefined;
+  subnetworkSelfLink?: string | null | undefined;
+  backend: "gcpVpc";
 };
 
 export const Reason44 = {
@@ -1357,13 +1642,27 @@ export type DataStatus44 = {
   stale: boolean;
 };
 
-export type DataGcpServiceAccount2 = {
-  impersonationGranted: boolean;
-  roleBound: boolean;
-  serviceAccountEmail?: string | null | undefined;
-  serviceAccountUniqueId?: string | null | undefined;
+export type DataAwsVpc = {
+  availabilityZones: Array<string>;
+  cidrBlock?: string | null | undefined;
+  internetGatewayId?: string | null | undefined;
+  isByoVpc: boolean;
+  natGatewayId?: string | null | undefined;
+  privateSubnetIds: Array<string>;
+  publicSubnetIds: Array<string>;
+  routeTableCount: number;
+  securityGroupId?: string | null | undefined;
   status: DataStatus44;
-  backend: "gcpServiceAccount";
+  vpcId?: string | null | undefined;
+  vpcState?: string | null | undefined;
+  backend: "awsVpc";
+};
+
+export type DataUnion11 = DataAwsVpc | DataGcpVpc | DataAzureVnet;
+
+export type DataNetwork = {
+  data: DataAwsVpc | DataGcpVpc | DataAzureVnet;
+  resourceType: "network";
 };
 
 export const Reason43 = {
@@ -1422,22 +1721,11 @@ export type DataStatus43 = {
   stale: boolean;
 };
 
-export type DataAwsIamRole2 = {
-  managementPermissionsApplied: boolean;
-  roleArn?: string | null | undefined;
-  roleName?: string | null | undefined;
+export type DataLocal10 = {
+  configured: boolean;
+  identity: string;
   status: DataStatus43;
-  backend: "awsIamRole";
-};
-
-export type DataUnion11 =
-  | DataAwsIamRole2
-  | DataGcpServiceAccount2
-  | DataAzureManagedIdentity2;
-
-export type DataRemoteStackManagement = {
-  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
-  resourceType: "remote-stack-management";
+  backend: "local";
 };
 
 export const Reason42 = {
@@ -1496,22 +1784,24 @@ export type DataStatus42 = {
   stale: boolean;
 };
 
-export type DataAzureVnet = {
-  applicationGatewaySubnetName?: string | null | undefined;
-  cidrBlock?: string | null | undefined;
-  isByoVnet: boolean;
-  lastByoVnetVerificationErrorCode?: string | null | undefined;
-  location?: string | null | undefined;
-  natGatewayId?: string | null | undefined;
-  nsgId?: string | null | undefined;
-  privateSubnetName?: string | null | undefined;
-  publicIpId?: string | null | undefined;
-  publicSubnetName?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
+export type DataAzureManagedIdentity1 = {
+  clientId?: string | null | undefined;
+  customRoleDefinitionCount: number;
+  customRoleDefinitionIds: Array<string>;
+  isolationScope?: string | null | undefined;
+  location: string;
+  managedTagCount: number;
+  name: string;
+  principalId?: string | null | undefined;
+  resourceGroup: string;
+  resourceId: string;
+  roleAssignmentCount: number;
+  roleAssignmentIds: Array<string>;
+  stackPermissionsApplied: boolean;
   status: DataStatus42;
-  vnetName?: string | null | undefined;
-  vnetResourceId?: string | null | undefined;
-  backend: "azureVnet";
+  tenantId?: string | null | undefined;
+  type?: string | null | undefined;
+  backend: "azureManagedIdentity";
 };
 
 export const Reason41 = {
@@ -1570,19 +1860,22 @@ export type DataStatus41 = {
   stale: boolean;
 };
 
-export type DataGcpVpc = {
-  cidrBlock?: string | null | undefined;
-  cloudNatName?: string | null | undefined;
-  firewallName?: string | null | undefined;
-  isByoVpc: boolean;
-  networkName?: string | null | undefined;
-  networkSelfLink?: string | null | undefined;
-  region?: string | null | undefined;
-  routerName?: string | null | undefined;
+export type DataGcpServiceAccount1 = {
+  description?: string | null | undefined;
+  disabled?: boolean | null | undefined;
+  displayName?: string | null | undefined;
+  email: string;
+  etag?: string | null | undefined;
+  name?: string | null | undefined;
+  oauth2ClientId?: string | null | undefined;
+  projectBindingCount: number;
+  projectId?: string | null | undefined;
+  projectRoles: Array<string>;
+  serviceAccountBindingCount: number;
+  serviceAccountRoles: Array<string>;
   status: DataStatus41;
-  subnetworkName?: string | null | undefined;
-  subnetworkSelfLink?: string | null | undefined;
-  backend: "gcpVpc";
+  uniqueId?: string | null | undefined;
+  backend: "gcpServiceAccount";
 };
 
 export const Reason40 = {
@@ -1641,27 +1934,43 @@ export type DataStatus40 = {
   stale: boolean;
 };
 
-export type DataAwsVpc = {
-  availabilityZones: Array<string>;
-  cidrBlock?: string | null | undefined;
-  internetGatewayId?: string | null | undefined;
-  isByoVpc: boolean;
-  natGatewayId?: string | null | undefined;
-  privateSubnetIds: Array<string>;
-  publicSubnetIds: Array<string>;
-  routeTableCount: number;
-  securityGroupId?: string | null | undefined;
+export type DataAwsIamRole1 = {
+  assumeRolePolicyPresent: boolean;
+  attachedPolicyCount: number;
+  attachedPolicyNames: Array<string>;
+  createDate: string;
+  description?: string | null | undefined;
+  inlinePolicyCount: number;
+  inlinePolicyNames: Array<string>;
+  lastUsedDate?: string | null | undefined;
+  lastUsedRegion?: string | null | undefined;
+  managedTagCount: number;
+  maxSessionDuration?: number | null | undefined;
+  path: string;
+  permissionsBoundaryArn?: string | null | undefined;
+  permissionsBoundaryType?: string | null | undefined;
+  roleArn: string;
+  roleId: string;
+  roleName: string;
+  stackPermissionsApplied: boolean;
   status: DataStatus40;
-  vpcId?: string | null | undefined;
-  vpcState?: string | null | undefined;
-  backend: "awsVpc";
+  tagCount: number;
+  backend: "awsIamRole";
 };
 
-export type DataUnion10 = DataAwsVpc | DataGcpVpc | DataAzureVnet;
+export type DataUnion10 =
+  | DataAwsIamRole1
+  | DataGcpServiceAccount1
+  | DataAzureManagedIdentity1
+  | DataLocal10;
 
-export type DataNetwork = {
-  data: DataAwsVpc | DataGcpVpc | DataAzureVnet;
-  resourceType: "network";
+export type DataServiceAccount = {
+  data:
+    | DataAwsIamRole1
+    | DataGcpServiceAccount1
+    | DataAzureManagedIdentity1
+    | DataLocal10;
+  resourceType: "service-account";
 };
 
 export const Reason39 = {
@@ -1721,8 +2030,12 @@ export type DataStatus39 = {
 };
 
 export type DataLocal9 = {
-  configured: boolean;
-  identity: string;
+  isDirectory?: boolean | null | undefined;
+  modifiedAt?: Date | null | undefined;
+  path: string;
+  pathExists: boolean;
+  readonly?: boolean | null | undefined;
+  secretMetadataListed: boolean;
   status: DataStatus39;
   backend: "local";
 };
@@ -1783,24 +2096,12 @@ export type DataStatus38 = {
   stale: boolean;
 };
 
-export type DataAzureManagedIdentity1 = {
-  clientId?: string | null | undefined;
-  customRoleDefinitionCount: number;
-  customRoleDefinitionIds: Array<string>;
-  isolationScope?: string | null | undefined;
-  location: string;
-  managedTagCount: number;
-  name: string;
-  principalId?: string | null | undefined;
-  resourceGroup: string;
-  resourceId: string;
-  roleAssignmentCount: number;
-  roleAssignmentIds: Array<string>;
-  stackPermissionsApplied: boolean;
+export type DataKubernetesSecret = {
+  namespace: string;
+  prefix: string;
+  secretMetadataListed: boolean;
   status: DataStatus38;
-  tenantId?: string | null | undefined;
-  type?: string | null | undefined;
-  backend: "azureManagedIdentity";
+  backend: "kubernetesSecret";
 };
 
 export const Reason37 = {
@@ -1859,22 +2160,25 @@ export type DataStatus37 = {
   stale: boolean;
 };
 
-export type DataGcpServiceAccount1 = {
-  description?: string | null | undefined;
-  disabled?: boolean | null | undefined;
-  displayName?: string | null | undefined;
-  email: string;
-  etag?: string | null | undefined;
-  name?: string | null | undefined;
-  oauth2ClientId?: string | null | undefined;
-  projectBindingCount: number;
-  projectId?: string | null | undefined;
-  projectRoles: Array<string>;
-  serviceAccountBindingCount: number;
-  serviceAccountRoles: Array<string>;
+export type DataAzureKeyVault = {
+  accessPolicyCount: number;
+  location?: string | null | undefined;
+  name: string;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess: string;
+  purgeProtectionEnabled?: boolean | null | undefined;
+  rbacAuthorizationEnabled: boolean;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  secretMetadataListed: boolean;
+  skuFamily?: string | null | undefined;
+  skuName?: string | null | undefined;
+  softDeleteEnabled: boolean;
+  softDeleteRetentionDays: number;
   status: DataStatus37;
-  uniqueId?: string | null | undefined;
-  backend: "gcpServiceAccount";
+  vaultUri?: string | null | undefined;
+  backend: "azureKeyVault";
 };
 
 export const Reason36 = {
@@ -1933,43 +2237,13 @@ export type DataStatus36 = {
   stale: boolean;
 };
 
-export type DataAwsIamRole1 = {
-  assumeRolePolicyPresent: boolean;
-  attachedPolicyCount: number;
-  attachedPolicyNames: Array<string>;
-  createDate: string;
-  description?: string | null | undefined;
-  inlinePolicyCount: number;
-  inlinePolicyNames: Array<string>;
-  lastUsedDate?: string | null | undefined;
-  lastUsedRegion?: string | null | undefined;
-  managedTagCount: number;
-  maxSessionDuration?: number | null | undefined;
-  path: string;
-  permissionsBoundaryArn?: string | null | undefined;
-  permissionsBoundaryType?: string | null | undefined;
-  roleArn: string;
-  roleId: string;
-  roleName: string;
-  stackPermissionsApplied: boolean;
+export type DataGcpSecretManager = {
+  location: string;
+  prefix: string;
+  projectId: string;
+  secretMetadataListed: boolean;
   status: DataStatus36;
-  tagCount: number;
-  backend: "awsIamRole";
-};
-
-export type DataUnion9 =
-  | DataAwsIamRole1
-  | DataGcpServiceAccount1
-  | DataAzureManagedIdentity1
-  | DataLocal9;
-
-export type DataServiceAccount = {
-  data:
-    | DataAwsIamRole1
-    | DataGcpServiceAccount1
-    | DataAzureManagedIdentity1
-    | DataLocal9;
-  resourceType: "service-account";
+  backend: "gcpSecretManager";
 };
 
 export const Reason35 = {
@@ -2028,15 +2302,38 @@ export type DataStatus35 = {
   stale: boolean;
 };
 
-export type DataLocal8 = {
-  isDirectory?: boolean | null | undefined;
-  modifiedAt?: Date | null | undefined;
-  path: string;
-  pathExists: boolean;
-  readonly?: boolean | null | undefined;
-  secretMetadataListed: boolean;
+export type DataAwsParameterStore = {
+  accountId: string;
+  hasMoreParameters?: boolean | null | undefined;
+  latestModifiedAt?: Date | null | undefined;
+  parameterMetadataSampled: boolean;
+  prefix: string;
+  region: string;
+  sampledAdvancedTierCount?: number | null | undefined;
+  sampledKmsKeyMetadataPresentCount?: number | null | undefined;
+  sampledParameterCount?: number | null | undefined;
+  sampledSecureStringCount?: number | null | undefined;
+  sampledStringCount?: number | null | undefined;
+  sampledStringListCount?: number | null | undefined;
   status: DataStatus35;
-  backend: "local";
+  backend: "awsParameterStore";
+};
+
+export type DataUnion9 =
+  | DataAwsParameterStore
+  | DataGcpSecretManager
+  | DataAzureKeyVault
+  | DataKubernetesSecret
+  | DataLocal9;
+
+export type DataVault = {
+  data:
+    | DataAwsParameterStore
+    | DataGcpSecretManager
+    | DataAzureKeyVault
+    | DataKubernetesSecret
+    | DataLocal9;
+  resourceType: "vault";
 };
 
 export const Reason34 = {
@@ -2095,12 +2392,13 @@ export type DataStatus34 = {
   stale: boolean;
 };
 
-export type DataKubernetesSecret = {
-  namespace: string;
-  prefix: string;
-  secretMetadataListed: boolean;
+export type DataLocal8 = {
+  name: string;
+  port?: number | null | undefined;
+  processRunning: boolean;
   status: DataStatus34;
-  backend: "kubernetesSecret";
+  version: string;
+  backend: "local";
 };
 
 export const Reason33 = {
@@ -2159,25 +2457,12 @@ export type DataStatus33 = {
   stale: boolean;
 };
 
-export type DataAzureKeyVault = {
-  accessPolicyCount: number;
-  location?: string | null | undefined;
-  name: string;
-  privateEndpointConnectionCount: number;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess: string;
-  purgeProtectionEnabled?: boolean | null | undefined;
-  rbacAuthorizationEnabled: boolean;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  secretMetadataListed: boolean;
-  skuFamily?: string | null | undefined;
-  skuName?: string | null | undefined;
-  softDeleteEnabled: boolean;
-  softDeleteRetentionDays: number;
+export type DataFlexibleServer = {
+  serverName: string;
+  state?: string | null | undefined;
   status: DataStatus33;
-  vaultUri?: string | null | undefined;
-  backend: "azureKeyVault";
+  version?: string | null | undefined;
+  backend: "flexibleServer";
 };
 
 export const Reason32 = {
@@ -2236,13 +2521,12 @@ export type DataStatus32 = {
   stale: boolean;
 };
 
-export type DataGcpSecretManager = {
-  location: string;
-  prefix: string;
-  projectId: string;
-  secretMetadataListed: boolean;
+export type DataCloudSQL = {
+  databaseVersion?: string | null | undefined;
+  instanceName: string;
+  state?: string | null | undefined;
   status: DataStatus32;
-  backend: "gcpSecretManager";
+  backend: "cloudSql";
 };
 
 export const Reason31 = {
@@ -2301,38 +2585,34 @@ export type DataStatus31 = {
   stale: boolean;
 };
 
-export type DataAwsParameterStore = {
-  accountId: string;
-  hasMoreParameters?: boolean | null | undefined;
-  latestModifiedAt?: Date | null | undefined;
-  parameterMetadataSampled: boolean;
-  prefix: string;
-  region: string;
-  sampledAdvancedTierCount?: number | null | undefined;
-  sampledKmsKeyMetadataPresentCount?: number | null | undefined;
-  sampledParameterCount?: number | null | undefined;
-  sampledSecureStringCount?: number | null | undefined;
-  sampledStringCount?: number | null | undefined;
-  sampledStringListCount?: number | null | undefined;
+export type DataAurora = {
+  clusterIdentifier: string;
+  endpoint?: string | null | undefined;
+  engineVersion?: string | null | undefined;
+  /**
+   * True when a `minCapacity: 0` instance has not reached 0 ACU over the observation
+   *
+   * @remarks
+   * window — it is silently paying always-on prices (auto-pause verification).
+   */
+  neverPauses: boolean;
+  /**
+   * Latest sampled `ServerlessDatabaseCapacity` (ACU).
+   */
+  serverlessCapacity?: number | null | undefined;
   status: DataStatus31;
-  backend: "awsParameterStore";
+  backend: "aurora";
 };
 
 export type DataUnion8 =
-  | DataAwsParameterStore
-  | DataGcpSecretManager
-  | DataAzureKeyVault
-  | DataKubernetesSecret
+  | DataAurora
+  | DataCloudSQL
+  | DataFlexibleServer
   | DataLocal8;
 
-export type DataVault = {
-  data:
-    | DataAwsParameterStore
-    | DataGcpSecretManager
-    | DataAzureKeyVault
-    | DataKubernetesSecret
-    | DataLocal8;
-  resourceType: "vault";
+export type DataPostgres = {
+  data: DataAurora | DataCloudSQL | DataFlexibleServer | DataLocal8;
+  resourceType: "postgres";
 };
 
 export const Reason30 = {
@@ -6388,7 +6668,7 @@ export type DataStorage = {
   resourceType: "storage";
 };
 
-export type DataUnion15 =
+export type DataUnion16 =
   | DataStorage
   | DataWorker
   | DataContainer
@@ -6397,6 +6677,7 @@ export type DataUnion15 =
   | DataKubernetesCluster
   | DataQueue
   | DataKv
+  | DataPostgres
   | DataVault
   | DataServiceAccount
   | DataNetwork
@@ -6439,6 +6720,7 @@ export type Heartbeat = {
     | DataKubernetesCluster
     | DataQueue
     | DataKv
+    | DataPostgres
     | DataVault
     | DataServiceAccount
     | DataNetwork
@@ -6594,64 +6876,64 @@ export const ControllerPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(ControllerPlatform);
 
 /** @internal */
-export const Reason59$inboundSchema: z.ZodEnum<typeof Reason59> = z.enum(
-  Reason59,
+export const Reason63$inboundSchema: z.ZodEnum<typeof Reason63> = z.enum(
+  Reason63,
 );
 
 /** @internal */
-export const CollectionIssueSeverity59$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity59
-> = z.enum(CollectionIssueSeverity59);
+export const CollectionIssueSeverity63$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity63
+> = z.enum(CollectionIssueSeverity63);
 
 /** @internal */
-export const CollectionIssue59$inboundSchema: z.ZodType<
-  CollectionIssue59,
+export const CollectionIssue63$inboundSchema: z.ZodType<
+  CollectionIssue63,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason59$inboundSchema,
-  severity: CollectionIssueSeverity59$inboundSchema,
+  reason: Reason63$inboundSchema,
+  severity: CollectionIssueSeverity63$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue59FromJSON(
+export function collectionIssue63FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue59, SDKValidationError> {
+): SafeParseResult<CollectionIssue63, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue59$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue59' from JSON`,
+    (x) => CollectionIssue63$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue63' from JSON`,
   );
 }
 
 /** @internal */
-export const Health59$inboundSchema: z.ZodEnum<typeof Health59> = z.enum(
-  Health59,
+export const Health63$inboundSchema: z.ZodEnum<typeof Health63> = z.enum(
+  Health63,
 );
 
 /** @internal */
-export const Lifecycle59$inboundSchema: z.ZodEnum<typeof Lifecycle59> = z.enum(
-  Lifecycle59,
+export const Lifecycle63$inboundSchema: z.ZodEnum<typeof Lifecycle63> = z.enum(
+  Lifecycle63,
 );
 
 /** @internal */
-export const DataStatus59$inboundSchema: z.ZodType<DataStatus59, unknown> = z
+export const DataStatus63$inboundSchema: z.ZodType<DataStatus63, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue59$inboundSchema)),
-    health: Health59$inboundSchema,
-    lifecycle: Lifecycle59$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue63$inboundSchema)),
+    health: Health63$inboundSchema,
+    lifecycle: Lifecycle63$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus59FromJSON(
+export function dataStatus63FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus59, SDKValidationError> {
+): SafeParseResult<DataStatus63, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus59$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus59' from JSON`,
+    (x) => DataStatus63$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus63' from JSON`,
   );
 }
 
@@ -6674,7 +6956,7 @@ export const Data5$inboundSchema: z.ZodType<Data5, unknown> = z.object({
   skuCapacity: z.nullable(z.int()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus59$inboundSchema),
+  status: z.lazy(() => DataStatus63$inboundSchema),
   updatedAt: z.nullable(z.string()).optional(),
   zoneRedundant: z.nullable(z.boolean()).optional(),
 });
@@ -6709,64 +6991,64 @@ export function dataAzureServiceBusNamespaceFromJSON(
 }
 
 /** @internal */
-export const Reason58$inboundSchema: z.ZodEnum<typeof Reason58> = z.enum(
-  Reason58,
+export const Reason62$inboundSchema: z.ZodEnum<typeof Reason62> = z.enum(
+  Reason62,
 );
 
 /** @internal */
-export const CollectionIssueSeverity58$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity58
-> = z.enum(CollectionIssueSeverity58);
+export const CollectionIssueSeverity62$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity62
+> = z.enum(CollectionIssueSeverity62);
 
 /** @internal */
-export const CollectionIssue58$inboundSchema: z.ZodType<
-  CollectionIssue58,
+export const CollectionIssue62$inboundSchema: z.ZodType<
+  CollectionIssue62,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason58$inboundSchema,
-  severity: CollectionIssueSeverity58$inboundSchema,
+  reason: Reason62$inboundSchema,
+  severity: CollectionIssueSeverity62$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue58FromJSON(
+export function collectionIssue62FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue58, SDKValidationError> {
+): SafeParseResult<CollectionIssue62, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue58$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue58' from JSON`,
+    (x) => CollectionIssue62$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue62' from JSON`,
   );
 }
 
 /** @internal */
-export const Health58$inboundSchema: z.ZodEnum<typeof Health58> = z.enum(
-  Health58,
+export const Health62$inboundSchema: z.ZodEnum<typeof Health62> = z.enum(
+  Health62,
 );
 
 /** @internal */
-export const Lifecycle58$inboundSchema: z.ZodEnum<typeof Lifecycle58> = z.enum(
-  Lifecycle58,
+export const Lifecycle62$inboundSchema: z.ZodEnum<typeof Lifecycle62> = z.enum(
+  Lifecycle62,
 );
 
 /** @internal */
-export const DataStatus58$inboundSchema: z.ZodType<DataStatus58, unknown> = z
+export const DataStatus62$inboundSchema: z.ZodType<DataStatus62, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue58$inboundSchema)),
-    health: Health58$inboundSchema,
-    lifecycle: Lifecycle58$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue62$inboundSchema)),
+    health: Health62$inboundSchema,
+    lifecycle: Lifecycle62$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus58FromJSON(
+export function dataStatus62FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus58, SDKValidationError> {
+): SafeParseResult<DataStatus62, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus58$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus58' from JSON`,
+    (x) => DataStatus62$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus62' from JSON`,
   );
 }
 
@@ -6804,7 +7086,7 @@ export const Data4$inboundSchema: z.ZodType<Data4, unknown> = z.object({
   resourceGroup: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
   staticIp: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus58$inboundSchema),
+  status: z.lazy(() => DataStatus62$inboundSchema),
   workloadProfileCount: z.int(),
   workloadProfiles: z.array(z.lazy(() => WorkloadProfile$inboundSchema)),
   zoneRedundant: z.nullable(z.boolean()).optional(),
@@ -6886,64 +7168,64 @@ export function secondaryEndpointsFromJSON(
 }
 
 /** @internal */
-export const Reason57$inboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
-  Reason57,
+export const Reason61$inboundSchema: z.ZodEnum<typeof Reason61> = z.enum(
+  Reason61,
 );
 
 /** @internal */
-export const CollectionIssueSeverity57$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity57
-> = z.enum(CollectionIssueSeverity57);
+export const CollectionIssueSeverity61$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity61
+> = z.enum(CollectionIssueSeverity61);
 
 /** @internal */
-export const CollectionIssue57$inboundSchema: z.ZodType<
-  CollectionIssue57,
+export const CollectionIssue61$inboundSchema: z.ZodType<
+  CollectionIssue61,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason57$inboundSchema,
-  severity: CollectionIssueSeverity57$inboundSchema,
+  reason: Reason61$inboundSchema,
+  severity: CollectionIssueSeverity61$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue57FromJSON(
+export function collectionIssue61FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue57, SDKValidationError> {
+): SafeParseResult<CollectionIssue61, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue57' from JSON`,
+    (x) => CollectionIssue61$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue61' from JSON`,
   );
 }
 
 /** @internal */
-export const Health57$inboundSchema: z.ZodEnum<typeof Health57> = z.enum(
-  Health57,
+export const Health61$inboundSchema: z.ZodEnum<typeof Health61> = z.enum(
+  Health61,
 );
 
 /** @internal */
-export const Lifecycle57$inboundSchema: z.ZodEnum<typeof Lifecycle57> = z.enum(
-  Lifecycle57,
+export const Lifecycle61$inboundSchema: z.ZodEnum<typeof Lifecycle61> = z.enum(
+  Lifecycle61,
 );
 
 /** @internal */
-export const DataStatus57$inboundSchema: z.ZodType<DataStatus57, unknown> = z
+export const DataStatus61$inboundSchema: z.ZodType<DataStatus61, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
-    health: Health57$inboundSchema,
-    lifecycle: Lifecycle57$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue61$inboundSchema)),
+    health: Health61$inboundSchema,
+    lifecycle: Lifecycle61$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus57FromJSON(
+export function dataStatus61FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus57, SDKValidationError> {
+): SafeParseResult<DataStatus61, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus57' from JSON`,
+    (x) => DataStatus61$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus61' from JSON`,
   );
 }
 
@@ -6970,7 +7252,7 @@ export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
   secondaryEndpoints: z.lazy(() => SecondaryEndpoints$inboundSchema),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus57$inboundSchema),
+  status: z.lazy(() => DataStatus61$inboundSchema),
   supportsHttpsTrafficOnly: z.nullable(z.boolean()).optional(),
 });
 
@@ -7004,64 +7286,64 @@ export function dataAzureStorageAccountFromJSON(
 }
 
 /** @internal */
-export const Reason56$inboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
-  Reason56,
+export const Reason60$inboundSchema: z.ZodEnum<typeof Reason60> = z.enum(
+  Reason60,
 );
 
 /** @internal */
-export const CollectionIssueSeverity56$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity56
-> = z.enum(CollectionIssueSeverity56);
+export const CollectionIssueSeverity60$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity60
+> = z.enum(CollectionIssueSeverity60);
 
 /** @internal */
-export const CollectionIssue56$inboundSchema: z.ZodType<
-  CollectionIssue56,
+export const CollectionIssue60$inboundSchema: z.ZodType<
+  CollectionIssue60,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason56$inboundSchema,
-  severity: CollectionIssueSeverity56$inboundSchema,
+  reason: Reason60$inboundSchema,
+  severity: CollectionIssueSeverity60$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue56FromJSON(
+export function collectionIssue60FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue56, SDKValidationError> {
+): SafeParseResult<CollectionIssue60, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue56' from JSON`,
+    (x) => CollectionIssue60$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue60' from JSON`,
   );
 }
 
 /** @internal */
-export const Health56$inboundSchema: z.ZodEnum<typeof Health56> = z.enum(
-  Health56,
+export const Health60$inboundSchema: z.ZodEnum<typeof Health60> = z.enum(
+  Health60,
 );
 
 /** @internal */
-export const Lifecycle56$inboundSchema: z.ZodEnum<typeof Lifecycle56> = z.enum(
-  Lifecycle56,
+export const Lifecycle60$inboundSchema: z.ZodEnum<typeof Lifecycle60> = z.enum(
+  Lifecycle60,
 );
 
 /** @internal */
-export const DataStatus56$inboundSchema: z.ZodType<DataStatus56, unknown> = z
+export const DataStatus60$inboundSchema: z.ZodType<DataStatus60, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
-    health: Health56$inboundSchema,
-    lifecycle: Lifecycle56$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue60$inboundSchema)),
+    health: Health60$inboundSchema,
+    lifecycle: Lifecycle60$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus56FromJSON(
+export function dataStatus60FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus56, SDKValidationError> {
+): SafeParseResult<DataStatus60, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus56' from JSON`,
+    (x) => DataStatus60$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus60' from JSON`,
   );
 }
 
@@ -7072,7 +7354,7 @@ export const Data2$inboundSchema: z.ZodType<Data2, unknown> = z.object({
   name: z.string(),
   provisioningState: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus56$inboundSchema),
+  status: z.lazy(() => DataStatus60$inboundSchema),
 });
 
 export function data2FromJSON(
@@ -7105,64 +7387,64 @@ export function dataAzureResourceGroupFromJSON(
 }
 
 /** @internal */
-export const Reason55$inboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
-  Reason55,
+export const Reason59$inboundSchema: z.ZodEnum<typeof Reason59> = z.enum(
+  Reason59,
 );
 
 /** @internal */
-export const CollectionIssueSeverity55$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity55
-> = z.enum(CollectionIssueSeverity55);
+export const CollectionIssueSeverity59$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity59
+> = z.enum(CollectionIssueSeverity59);
 
 /** @internal */
-export const CollectionIssue55$inboundSchema: z.ZodType<
-  CollectionIssue55,
+export const CollectionIssue59$inboundSchema: z.ZodType<
+  CollectionIssue59,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason55$inboundSchema,
-  severity: CollectionIssueSeverity55$inboundSchema,
+  reason: Reason59$inboundSchema,
+  severity: CollectionIssueSeverity59$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue55FromJSON(
+export function collectionIssue59FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue55, SDKValidationError> {
+): SafeParseResult<CollectionIssue59, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue55' from JSON`,
+    (x) => CollectionIssue59$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue59' from JSON`,
   );
 }
 
 /** @internal */
-export const Health55$inboundSchema: z.ZodEnum<typeof Health55> = z.enum(
-  Health55,
+export const Health59$inboundSchema: z.ZodEnum<typeof Health59> = z.enum(
+  Health59,
 );
 
 /** @internal */
-export const Lifecycle55$inboundSchema: z.ZodEnum<typeof Lifecycle55> = z.enum(
-  Lifecycle55,
+export const Lifecycle59$inboundSchema: z.ZodEnum<typeof Lifecycle59> = z.enum(
+  Lifecycle59,
 );
 
 /** @internal */
-export const DataStatus55$inboundSchema: z.ZodType<DataStatus55, unknown> = z
+export const DataStatus59$inboundSchema: z.ZodType<DataStatus59, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
-    health: Health55$inboundSchema,
-    lifecycle: Lifecycle55$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue59$inboundSchema)),
+    health: Health59$inboundSchema,
+    lifecycle: Lifecycle59$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus55FromJSON(
+export function dataStatus59FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus55, SDKValidationError> {
+): SafeParseResult<DataStatus59, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus55' from JSON`,
+    (x) => DataStatus59$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus59' from JSON`,
   );
 }
 
@@ -7177,7 +7459,7 @@ export const DataAzureResourceProvider$inboundSchema: z.ZodType<
   registrationPolicy: z.nullable(z.string()).optional(),
   registrationState: z.nullable(z.string()).optional(),
   resourceTypeCount: z.int(),
-  status: z.lazy(() => DataStatus55$inboundSchema),
+  status: z.lazy(() => DataStatus59$inboundSchema),
   backend: z.literal("azureResourceProvider"),
 });
 
@@ -7192,64 +7474,64 @@ export function dataAzureResourceProviderFromJSON(
 }
 
 /** @internal */
-export const Reason54$inboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
-  Reason54,
+export const Reason58$inboundSchema: z.ZodEnum<typeof Reason58> = z.enum(
+  Reason58,
 );
 
 /** @internal */
-export const CollectionIssueSeverity54$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity54
-> = z.enum(CollectionIssueSeverity54);
+export const CollectionIssueSeverity58$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity58
+> = z.enum(CollectionIssueSeverity58);
 
 /** @internal */
-export const CollectionIssue54$inboundSchema: z.ZodType<
-  CollectionIssue54,
+export const CollectionIssue58$inboundSchema: z.ZodType<
+  CollectionIssue58,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason54$inboundSchema,
-  severity: CollectionIssueSeverity54$inboundSchema,
+  reason: Reason58$inboundSchema,
+  severity: CollectionIssueSeverity58$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue54FromJSON(
+export function collectionIssue58FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue54, SDKValidationError> {
+): SafeParseResult<CollectionIssue58, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue54' from JSON`,
+    (x) => CollectionIssue58$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue58' from JSON`,
   );
 }
 
 /** @internal */
-export const Health54$inboundSchema: z.ZodEnum<typeof Health54> = z.enum(
-  Health54,
+export const Health58$inboundSchema: z.ZodEnum<typeof Health58> = z.enum(
+  Health58,
 );
 
 /** @internal */
-export const Lifecycle54$inboundSchema: z.ZodEnum<typeof Lifecycle54> = z.enum(
-  Lifecycle54,
+export const Lifecycle58$inboundSchema: z.ZodEnum<typeof Lifecycle58> = z.enum(
+  Lifecycle58,
 );
 
 /** @internal */
-export const DataStatus54$inboundSchema: z.ZodType<DataStatus54, unknown> = z
+export const DataStatus58$inboundSchema: z.ZodType<DataStatus58, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
-    health: Health54$inboundSchema,
-    lifecycle: Lifecycle54$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue58$inboundSchema)),
+    health: Health58$inboundSchema,
+    lifecycle: Lifecycle58$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus54FromJSON(
+export function dataStatus58FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus54, SDKValidationError> {
+): SafeParseResult<DataStatus58, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus54' from JSON`,
+    (x) => DataStatus58$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus58' from JSON`,
   );
 }
 
@@ -7264,7 +7546,7 @@ export const DataGcpServiceUsage$inboundSchema: z.ZodType<
   serviceName: z.string(),
   serviceResourceName: z.nullable(z.string()).optional(),
   state: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus54$inboundSchema),
+  status: z.lazy(() => DataStatus58$inboundSchema),
   title: z.nullable(z.string()).optional(),
   backend: z.literal("gcpServiceUsage"),
 });
@@ -7280,19 +7562,19 @@ export function dataGcpServiceUsageFromJSON(
 }
 
 /** @internal */
-export const DataUnion14$inboundSchema: z.ZodType<DataUnion14, unknown> = z
+export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
   .union([
     z.lazy(() => DataGcpServiceUsage$inboundSchema),
     z.lazy(() => DataAzureResourceProvider$inboundSchema),
   ]);
 
-export function dataUnion14FromJSON(
+export function dataUnion15FromJSON(
   jsonString: string,
-): SafeParseResult<DataUnion14, SDKValidationError> {
+): SafeParseResult<DataUnion15, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataUnion14$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion14' from JSON`,
+    (x) => DataUnion15$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion15' from JSON`,
   );
 }
 
@@ -7433,6 +7715,414 @@ export function event12FromJSON(
 }
 
 /** @internal */
+export const Reason57$inboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
+  Reason57,
+);
+
+/** @internal */
+export const CollectionIssueSeverity57$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity57
+> = z.enum(CollectionIssueSeverity57);
+
+/** @internal */
+export const CollectionIssue57$inboundSchema: z.ZodType<
+  CollectionIssue57,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason57$inboundSchema,
+  severity: CollectionIssueSeverity57$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue57FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue57, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue57$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue57' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health57$inboundSchema: z.ZodEnum<typeof Health57> = z.enum(
+  Health57,
+);
+
+/** @internal */
+export const Lifecycle57$inboundSchema: z.ZodEnum<typeof Lifecycle57> = z.enum(
+  Lifecycle57,
+);
+
+/** @internal */
+export const DataStatus57$inboundSchema: z.ZodType<DataStatus57, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
+    health: Health57$inboundSchema,
+    lifecycle: Lifecycle57$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus57FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus57, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus57$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus57' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataKubernetesJob$inboundSchema: z.ZodType<
+  DataKubernetesJob,
+  unknown
+> = z.object({
+  active: z.nullable(z.int()).optional(),
+  completionTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  conditionCount: z.int(),
+  events: z.array(z.lazy(() => Event12$inboundSchema)),
+  failed: z.nullable(z.int()).optional(),
+  imageDigest: z.nullable(z.string()).optional(),
+  jobName: z.string(),
+  namespace: z.string(),
+  startTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  status: z.lazy(() => DataStatus57$inboundSchema),
+  succeeded: z.nullable(z.int()).optional(),
+  backend: z.literal("kubernetesJob"),
+});
+
+export function dataKubernetesJobFromJSON(
+  jsonString: string,
+): SafeParseResult<DataKubernetesJob, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataKubernetesJob$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesJob' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason56$inboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
+  Reason56,
+);
+
+/** @internal */
+export const CollectionIssueSeverity56$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity56
+> = z.enum(CollectionIssueSeverity56);
+
+/** @internal */
+export const CollectionIssue56$inboundSchema: z.ZodType<
+  CollectionIssue56,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason56$inboundSchema,
+  severity: CollectionIssueSeverity56$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue56FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue56, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue56$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue56' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health56$inboundSchema: z.ZodEnum<typeof Health56> = z.enum(
+  Health56,
+);
+
+/** @internal */
+export const Lifecycle56$inboundSchema: z.ZodEnum<typeof Lifecycle56> = z.enum(
+  Lifecycle56,
+);
+
+/** @internal */
+export const DataStatus56$inboundSchema: z.ZodType<DataStatus56, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
+    health: Health56$inboundSchema,
+    lifecycle: Lifecycle56$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus56FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus56, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus56$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus56' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureContainerApps2$inboundSchema: z.ZodType<
+  DataAzureContainerApps2,
+  unknown
+> = z.object({
+  environmentVariableCount: z.int(),
+  managedEnvironmentId: z.string(),
+  managedIdentityId: z.nullable(z.string()).optional(),
+  resourceGroupName: z.string(),
+  resourcePrefix: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus56$inboundSchema),
+  backend: z.literal("azureContainerApps"),
+});
+
+export function dataAzureContainerApps2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureContainerApps2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureContainerApps2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureContainerApps2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason55$inboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
+  Reason55,
+);
+
+/** @internal */
+export const CollectionIssueSeverity55$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity55
+> = z.enum(CollectionIssueSeverity55);
+
+/** @internal */
+export const CollectionIssue55$inboundSchema: z.ZodType<
+  CollectionIssue55,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason55$inboundSchema,
+  severity: CollectionIssueSeverity55$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue55FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue55, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue55$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue55' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health55$inboundSchema: z.ZodEnum<typeof Health55> = z.enum(
+  Health55,
+);
+
+/** @internal */
+export const Lifecycle55$inboundSchema: z.ZodEnum<typeof Lifecycle55> = z.enum(
+  Lifecycle55,
+);
+
+/** @internal */
+export const DataStatus55$inboundSchema: z.ZodType<DataStatus55, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
+    health: Health55$inboundSchema,
+    lifecycle: Lifecycle55$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus55FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus55, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus55$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus55' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpCloudBuild$inboundSchema: z.ZodType<
+  DataGcpCloudBuild,
+  unknown
+> = z.object({
+  buildConfigId: z.string(),
+  environmentVariableCount: z.int(),
+  location: z.string(),
+  projectId: z.string(),
+  serviceAccount: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus55$inboundSchema),
+  backend: z.literal("gcpCloudBuild"),
+});
+
+export function dataGcpCloudBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpCloudBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpCloudBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpCloudBuild' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason54$inboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
+  Reason54,
+);
+
+/** @internal */
+export const CollectionIssueSeverity54$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity54
+> = z.enum(CollectionIssueSeverity54);
+
+/** @internal */
+export const CollectionIssue54$inboundSchema: z.ZodType<
+  CollectionIssue54,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason54$inboundSchema,
+  severity: CollectionIssueSeverity54$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue54FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue54, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue54$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue54' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health54$inboundSchema: z.ZodEnum<typeof Health54> = z.enum(
+  Health54,
+);
+
+/** @internal */
+export const Lifecycle54$inboundSchema: z.ZodEnum<typeof Lifecycle54> = z.enum(
+  Lifecycle54,
+);
+
+/** @internal */
+export const DataStatus54$inboundSchema: z.ZodType<DataStatus54, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
+    health: Health54$inboundSchema,
+    lifecycle: Lifecycle54$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus54FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus54, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus54$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus54' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsCodeBuild$inboundSchema: z.ZodType<
+  DataAwsCodeBuild,
+  unknown
+> = z.object({
+  artifactsEncryptionDisabled: z.nullable(z.boolean()).optional(),
+  artifactsType: z.nullable(z.string()).optional(),
+  cloudWatchLogsStatus: z.nullable(z.string()).optional(),
+  computeType: z.nullable(z.string()).optional(),
+  created: z.nullable(z.number()).optional(),
+  description: z.nullable(z.string()).optional(),
+  encryptionKeyPresent: z.boolean(),
+  environmentImage: z.nullable(z.string()).optional(),
+  environmentType: z.nullable(z.string()).optional(),
+  environmentVariableCount: z.int(),
+  imagePullCredentialsType: z.nullable(z.string()).optional(),
+  lastModified: z.nullable(z.number()).optional(),
+  privilegedMode: z.nullable(z.boolean()).optional(),
+  projectArn: z.nullable(z.string()).optional(),
+  projectName: z.string(),
+  queuedTimeoutInMinutes: z.nullable(z.int()).optional(),
+  s3LogsStatus: z.nullable(z.string()).optional(),
+  serviceRolePresent: z.boolean(),
+  sourceType: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus54$inboundSchema),
+  timeoutInMinutes: z.nullable(z.int()).optional(),
+  backend: z.literal("awsCodeBuild"),
+});
+
+export function dataAwsCodeBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsCodeBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsCodeBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsCodeBuild' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion14$inboundSchema: z.ZodType<DataUnion14, unknown> = z
+  .union([
+    z.lazy(() => DataAwsCodeBuild$inboundSchema),
+    z.lazy(() => DataGcpCloudBuild$inboundSchema),
+    z.lazy(() => DataAzureContainerApps2$inboundSchema),
+    z.lazy(() => DataKubernetesJob$inboundSchema),
+  ]);
+
+export function dataUnion14FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion14, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion14$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion14' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataBuild$inboundSchema: z.ZodType<DataBuild, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsCodeBuild$inboundSchema),
+    z.lazy(() => DataGcpCloudBuild$inboundSchema),
+    z.lazy(() => DataAzureContainerApps2$inboundSchema),
+    z.lazy(() => DataKubernetesJob$inboundSchema),
+  ]),
+  resourceType: z.literal("build"),
+});
+
+export function dataBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataBuild' from JSON`,
+  );
+}
+
+/** @internal */
 export const Reason53$inboundSchema: z.ZodEnum<typeof Reason53> = z.enum(
   Reason53,
 );
@@ -7495,35 +8185,21 @@ export function dataStatus53FromJSON(
 }
 
 /** @internal */
-export const DataKubernetesJob$inboundSchema: z.ZodType<
-  DataKubernetesJob,
-  unknown
-> = z.object({
-  active: z.nullable(z.int()).optional(),
-  completionTime: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  conditionCount: z.int(),
-  events: z.array(z.lazy(() => Event12$inboundSchema)),
-  failed: z.nullable(z.int()).optional(),
-  imageDigest: z.nullable(z.string()).optional(),
-  jobName: z.string(),
-  namespace: z.string(),
-  startTime: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  status: z.lazy(() => DataStatus53$inboundSchema),
-  succeeded: z.nullable(z.int()).optional(),
-  backend: z.literal("kubernetesJob"),
-});
+export const DataLocal11$inboundSchema: z.ZodType<DataLocal11, unknown> = z
+  .object({
+    reachable: z.boolean(),
+    registryUrl: z.string(),
+    status: z.lazy(() => DataStatus53$inboundSchema),
+    backend: z.literal("local"),
+  });
 
-export function dataKubernetesJobFromJSON(
+export function dataLocal11FromJSON(
   jsonString: string,
-): SafeParseResult<DataKubernetesJob, SDKValidationError> {
+): SafeParseResult<DataLocal11, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataKubernetesJob$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesJob' from JSON`,
+    (x) => DataLocal11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal11' from JSON`,
   );
 }
 
@@ -7590,26 +8266,47 @@ export function dataStatus52FromJSON(
 }
 
 /** @internal */
-export const DataAzureContainerApps2$inboundSchema: z.ZodType<
-  DataAzureContainerApps2,
+export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
+  DataAzureContainerRegistry,
   unknown
 > = z.object({
-  environmentVariableCount: z.int(),
-  managedEnvironmentId: z.string(),
-  managedIdentityId: z.nullable(z.string()).optional(),
-  resourceGroupName: z.string(),
-  resourcePrefix: z.nullable(z.string()).optional(),
+  adminUserEnabled: z.boolean(),
+  anonymousPullEnabled: z.boolean(),
+  creationDate: z.nullable(z.string()).optional(),
+  dataEndpointEnabled: z.nullable(z.boolean()).optional(),
+  dataEndpointHostNames: z.array(z.string()),
+  encryptionKeyIdentifierPresent: z.boolean(),
+  encryptionKeyVaultUriPresent: z.boolean(),
+  encryptionStatus: z.nullable(z.string()).optional(),
+  ipRuleCount: z.int(),
+  location: z.string(),
+  loginServer: z.nullable(z.string()).optional(),
+  managedTagCount: z.int(),
+  name: z.string(),
+  networkRuleBypassOptions: z.string(),
+  networkRuleDefaultAction: z.nullable(z.string()).optional(),
+  policiesPresent: z.boolean(),
+  policyCount: z.int(),
+  privateEndpointConnectionCount: z.int(),
+  provisioningState: z.nullable(z.string()).optional(),
+  publicNetworkAccess: z.string(),
+  resourceGroup: z.string(),
+  resourceId: z.nullable(z.string()).optional(),
+  skuName: z.string(),
+  skuTier: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus52$inboundSchema),
-  backend: z.literal("azureContainerApps"),
+  type: z.nullable(z.string()).optional(),
+  zoneRedundancy: z.string(),
+  backend: z.literal("azureContainerRegistry"),
 });
 
-export function dataAzureContainerApps2FromJSON(
+export function dataAzureContainerRegistryFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureContainerApps2, SDKValidationError> {
+): SafeParseResult<DataAzureContainerRegistry, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureContainerApps2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureContainerApps2' from JSON`,
+    (x) => DataAzureContainerRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureContainerRegistry' from JSON`,
   );
 }
 
@@ -7676,26 +8373,65 @@ export function dataStatus51FromJSON(
 }
 
 /** @internal */
-export const DataGcpCloudBuild$inboundSchema: z.ZodType<
-  DataGcpCloudBuild,
+export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
+  DataGcpArtifactRegistry,
   unknown
 > = z.object({
-  buildConfigId: z.string(),
-  environmentVariableCount: z.int(),
+  cleanupPolicyCount: z.int(),
+  cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
+  createTime: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  format: z.nullable(z.string()).optional(),
+  iamBindingCount: z.int(),
+  iamPolicyEtagPresent: z.boolean(),
+  iamRoles: z.array(z.string()),
+  kmsKeyNamePresent: z.boolean(),
+  labelCount: z.int(),
   location: z.string(),
+  mode: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
   projectId: z.string(),
-  serviceAccount: z.nullable(z.string()).optional(),
+  pullServiceAccountEmail: z.nullable(z.string()).optional(),
+  pushServiceAccountEmail: z.nullable(z.string()).optional(),
+  repositoryId: z.string(),
+  satisfiesPzs: z.nullable(z.boolean()).optional(),
+  sizeBytes: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus51$inboundSchema),
-  backend: z.literal("gcpCloudBuild"),
+  updateTime: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpArtifactRegistry"),
 });
 
-export function dataGcpCloudBuildFromJSON(
+export function dataGcpArtifactRegistryFromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpCloudBuild, SDKValidationError> {
+): SafeParseResult<DataGcpArtifactRegistry, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpCloudBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpCloudBuild' from JSON`,
+    (x) => DataGcpArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpArtifactRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
+  .object({
+    createdAt: z.number(),
+    encryptionType: z.nullable(z.string()).optional(),
+    imageTagMutability: z.nullable(z.string()).optional(),
+    kmsKeyPresent: z.boolean(),
+    registryId: z.string(),
+    repositoryArn: z.string(),
+    repositoryName: z.string(),
+    repositoryUri: z.string(),
+    scanOnPush: z.nullable(z.boolean()).optional(),
+  });
+
+export function repositoryFromJSON(
+  jsonString: string,
+): SafeParseResult<Repository, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Repository' from JSON`,
   );
 }
 
@@ -7762,51 +8498,38 @@ export function dataStatus50FromJSON(
 }
 
 /** @internal */
-export const DataAwsCodeBuild$inboundSchema: z.ZodType<
-  DataAwsCodeBuild,
-  unknown
-> = z.object({
-  artifactsEncryptionDisabled: z.nullable(z.boolean()).optional(),
-  artifactsType: z.nullable(z.string()).optional(),
-  cloudWatchLogsStatus: z.nullable(z.string()).optional(),
-  computeType: z.nullable(z.string()).optional(),
-  created: z.nullable(z.number()).optional(),
-  description: z.nullable(z.string()).optional(),
-  encryptionKeyPresent: z.boolean(),
-  environmentImage: z.nullable(z.string()).optional(),
-  environmentType: z.nullable(z.string()).optional(),
-  environmentVariableCount: z.int(),
-  imagePullCredentialsType: z.nullable(z.string()).optional(),
-  lastModified: z.nullable(z.number()).optional(),
-  privilegedMode: z.nullable(z.boolean()).optional(),
-  projectArn: z.nullable(z.string()).optional(),
-  projectName: z.string(),
-  queuedTimeoutInMinutes: z.nullable(z.int()).optional(),
-  s3LogsStatus: z.nullable(z.string()).optional(),
-  serviceRolePresent: z.boolean(),
-  sourceType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus50$inboundSchema),
-  timeoutInMinutes: z.nullable(z.int()).optional(),
-  backend: z.literal("awsCodeBuild"),
-});
+export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
+  .object({
+    pullRoleArn: z.nullable(z.string()).optional(),
+    pushRoleArn: z.nullable(z.string()).optional(),
+    region: z.string(),
+    registryId: z.string(),
+    registryUri: z.string(),
+    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
+    repositoriesTruncated: z.boolean(),
+    repositoryCount: z.int(),
+    repositoryPrefix: z.string(),
+    status: z.lazy(() => DataStatus50$inboundSchema),
+    backend: z.literal("awsEcr"),
+  });
 
-export function dataAwsCodeBuildFromJSON(
+export function dataAwsEcrFromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsCodeBuild, SDKValidationError> {
+): SafeParseResult<DataAwsEcr, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsCodeBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsCodeBuild' from JSON`,
+    (x) => DataAwsEcr$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsEcr' from JSON`,
   );
 }
 
 /** @internal */
 export const DataUnion13$inboundSchema: z.ZodType<DataUnion13, unknown> = z
   .union([
-    z.lazy(() => DataAwsCodeBuild$inboundSchema),
-    z.lazy(() => DataGcpCloudBuild$inboundSchema),
-    z.lazy(() => DataAzureContainerApps2$inboundSchema),
-    z.lazy(() => DataKubernetesJob$inboundSchema),
+    z.lazy(() => DataAwsEcr$inboundSchema),
+    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
+    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
+    z.lazy(() => DataLocal11$inboundSchema),
   ]);
 
 export function dataUnion13FromJSON(
@@ -7820,23 +8543,26 @@ export function dataUnion13FromJSON(
 }
 
 /** @internal */
-export const DataBuild$inboundSchema: z.ZodType<DataBuild, unknown> = z.object({
+export const DataArtifactRegistry$inboundSchema: z.ZodType<
+  DataArtifactRegistry,
+  unknown
+> = z.object({
   data: z.union([
-    z.lazy(() => DataAwsCodeBuild$inboundSchema),
-    z.lazy(() => DataGcpCloudBuild$inboundSchema),
-    z.lazy(() => DataAzureContainerApps2$inboundSchema),
-    z.lazy(() => DataKubernetesJob$inboundSchema),
+    z.lazy(() => DataAwsEcr$inboundSchema),
+    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
+    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
+    z.lazy(() => DataLocal11$inboundSchema),
   ]),
-  resourceType: z.literal("build"),
+  resourceType: z.literal("artifact-registry"),
 });
 
-export function dataBuildFromJSON(
+export function dataArtifactRegistryFromJSON(
   jsonString: string,
-): SafeParseResult<DataBuild, SDKValidationError> {
+): SafeParseResult<DataArtifactRegistry, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataBuild' from JSON`,
+    (x) => DataArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataArtifactRegistry' from JSON`,
   );
 }
 
@@ -7903,21 +8629,28 @@ export function dataStatus49FromJSON(
 }
 
 /** @internal */
-export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
-  .object({
-    reachable: z.boolean(),
-    registryUrl: z.string(),
-    status: z.lazy(() => DataStatus49$inboundSchema),
-    backend: z.literal("local"),
-  });
+export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
+  DataAzureManagedIdentity2,
+  unknown
+> = z.object({
+  ficName: z.nullable(z.string()).optional(),
+  roleAssignmentIds: z.array(z.string()),
+  roleDefinitionId: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus49$inboundSchema),
+  tenantId: z.nullable(z.string()).optional(),
+  uamiClientId: z.nullable(z.string()).optional(),
+  uamiPrincipalId: z.nullable(z.string()).optional(),
+  uamiResourceId: z.nullable(z.string()).optional(),
+  backend: z.literal("azureManagedIdentity"),
+});
 
-export function dataLocal10FromJSON(
+export function dataAzureManagedIdentity2FromJSON(
   jsonString: string,
-): SafeParseResult<DataLocal10, SDKValidationError> {
+): SafeParseResult<DataAzureManagedIdentity2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataLocal10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal10' from JSON`,
+    (x) => DataAzureManagedIdentity2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureManagedIdentity2' from JSON`,
   );
 }
 
@@ -7984,47 +8717,25 @@ export function dataStatus48FromJSON(
 }
 
 /** @internal */
-export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
-  DataAzureContainerRegistry,
+export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
+  DataGcpServiceAccount2,
   unknown
 > = z.object({
-  adminUserEnabled: z.boolean(),
-  anonymousPullEnabled: z.boolean(),
-  creationDate: z.nullable(z.string()).optional(),
-  dataEndpointEnabled: z.nullable(z.boolean()).optional(),
-  dataEndpointHostNames: z.array(z.string()),
-  encryptionKeyIdentifierPresent: z.boolean(),
-  encryptionKeyVaultUriPresent: z.boolean(),
-  encryptionStatus: z.nullable(z.string()).optional(),
-  ipRuleCount: z.int(),
-  location: z.string(),
-  loginServer: z.nullable(z.string()).optional(),
-  managedTagCount: z.int(),
-  name: z.string(),
-  networkRuleBypassOptions: z.string(),
-  networkRuleDefaultAction: z.nullable(z.string()).optional(),
-  policiesPresent: z.boolean(),
-  policyCount: z.int(),
-  privateEndpointConnectionCount: z.int(),
-  provisioningState: z.nullable(z.string()).optional(),
-  publicNetworkAccess: z.string(),
-  resourceGroup: z.string(),
-  resourceId: z.nullable(z.string()).optional(),
-  skuName: z.string(),
-  skuTier: z.nullable(z.string()).optional(),
+  impersonationGranted: z.boolean(),
+  roleBound: z.boolean(),
+  serviceAccountEmail: z.nullable(z.string()).optional(),
+  serviceAccountUniqueId: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus48$inboundSchema),
-  type: z.nullable(z.string()).optional(),
-  zoneRedundancy: z.string(),
-  backend: z.literal("azureContainerRegistry"),
+  backend: z.literal("gcpServiceAccount"),
 });
 
-export function dataAzureContainerRegistryFromJSON(
+export function dataGcpServiceAccount2FromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureContainerRegistry, SDKValidationError> {
+): SafeParseResult<DataGcpServiceAccount2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureContainerRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureContainerRegistry' from JSON`,
+    (x) => DataGcpServiceAccount2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpServiceAccount2' from JSON`,
   );
 }
 
@@ -8091,65 +8802,65 @@ export function dataStatus47FromJSON(
 }
 
 /** @internal */
-export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
-  DataGcpArtifactRegistry,
+export const DataAwsIamRole2$inboundSchema: z.ZodType<
+  DataAwsIamRole2,
   unknown
 > = z.object({
-  cleanupPolicyCount: z.int(),
-  cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
-  createTime: z.nullable(z.string()).optional(),
-  description: z.nullable(z.string()).optional(),
-  format: z.nullable(z.string()).optional(),
-  iamBindingCount: z.int(),
-  iamPolicyEtagPresent: z.boolean(),
-  iamRoles: z.array(z.string()),
-  kmsKeyNamePresent: z.boolean(),
-  labelCount: z.int(),
-  location: z.string(),
-  mode: z.nullable(z.string()).optional(),
-  name: z.nullable(z.string()).optional(),
-  projectId: z.string(),
-  pullServiceAccountEmail: z.nullable(z.string()).optional(),
-  pushServiceAccountEmail: z.nullable(z.string()).optional(),
-  repositoryId: z.string(),
-  satisfiesPzs: z.nullable(z.boolean()).optional(),
-  sizeBytes: z.nullable(z.string()).optional(),
+  managementPermissionsApplied: z.boolean(),
+  roleArn: z.nullable(z.string()).optional(),
+  roleName: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus47$inboundSchema),
-  updateTime: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpArtifactRegistry"),
+  backend: z.literal("awsIamRole"),
 });
 
-export function dataGcpArtifactRegistryFromJSON(
+export function dataAwsIamRole2FromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpArtifactRegistry, SDKValidationError> {
+): SafeParseResult<DataAwsIamRole2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpArtifactRegistry' from JSON`,
+    (x) => DataAwsIamRole2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsIamRole2' from JSON`,
   );
 }
 
 /** @internal */
-export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
-  .object({
-    createdAt: z.number(),
-    encryptionType: z.nullable(z.string()).optional(),
-    imageTagMutability: z.nullable(z.string()).optional(),
-    kmsKeyPresent: z.boolean(),
-    registryId: z.string(),
-    repositoryArn: z.string(),
-    repositoryName: z.string(),
-    repositoryUri: z.string(),
-    scanOnPush: z.nullable(z.boolean()).optional(),
-  });
+export const DataUnion12$inboundSchema: z.ZodType<DataUnion12, unknown> = z
+  .union([
+    z.lazy(() => DataAwsIamRole2$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
+  ]);
 
-export function repositoryFromJSON(
+export function dataUnion12FromJSON(
   jsonString: string,
-): SafeParseResult<Repository, SDKValidationError> {
+): SafeParseResult<DataUnion12, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Repository' from JSON`,
+    (x) => DataUnion12$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion12' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataRemoteStackManagement$inboundSchema: z.ZodType<
+  DataRemoteStackManagement,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsIamRole2$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
+  ]),
+  resourceType: z.literal("remote-stack-management"),
+});
+
+export function dataRemoteStackManagementFromJSON(
+  jsonString: string,
+): SafeParseResult<DataRemoteStackManagement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataRemoteStackManagement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataRemoteStackManagement' from JSON`,
   );
 }
 
@@ -8216,71 +8927,33 @@ export function dataStatus46FromJSON(
 }
 
 /** @internal */
-export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
+export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
   .object({
-    pullRoleArn: z.nullable(z.string()).optional(),
-    pushRoleArn: z.nullable(z.string()).optional(),
-    region: z.string(),
-    registryId: z.string(),
-    registryUri: z.string(),
-    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
-    repositoriesTruncated: z.boolean(),
-    repositoryCount: z.int(),
-    repositoryPrefix: z.string(),
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+    cidrBlock: z.nullable(z.string()).optional(),
+    isByoVnet: z.boolean(),
+    lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
+    location: z.nullable(z.string()).optional(),
+    natGatewayId: z.nullable(z.string()).optional(),
+    nsgId: z.nullable(z.string()).optional(),
+    privateEndpointSubnetName: z.nullable(z.string()).optional(),
+    privateSubnetName: z.nullable(z.string()).optional(),
+    publicIpId: z.nullable(z.string()).optional(),
+    publicSubnetName: z.nullable(z.string()).optional(),
+    resourceGroup: z.nullable(z.string()).optional(),
     status: z.lazy(() => DataStatus46$inboundSchema),
-    backend: z.literal("awsEcr"),
+    vnetName: z.nullable(z.string()).optional(),
+    vnetResourceId: z.nullable(z.string()).optional(),
+    backend: z.literal("azureVnet"),
   });
 
-export function dataAwsEcrFromJSON(
+export function dataAzureVnetFromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsEcr, SDKValidationError> {
+): SafeParseResult<DataAzureVnet, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsEcr$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsEcr' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion12$inboundSchema: z.ZodType<DataUnion12, unknown> = z
-  .union([
-    z.lazy(() => DataAwsEcr$inboundSchema),
-    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
-    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
-    z.lazy(() => DataLocal10$inboundSchema),
-  ]);
-
-export function dataUnion12FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion12, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion12$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion12' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataArtifactRegistry$inboundSchema: z.ZodType<
-  DataArtifactRegistry,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsEcr$inboundSchema),
-    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
-    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
-    z.lazy(() => DataLocal10$inboundSchema),
-  ]),
-  resourceType: z.literal("artifact-registry"),
-});
-
-export function dataArtifactRegistryFromJSON(
-  jsonString: string,
-): SafeParseResult<DataArtifactRegistry, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataArtifactRegistry' from JSON`,
+    (x) => DataAzureVnet$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureVnet' from JSON`,
   );
 }
 
@@ -8347,28 +9020,29 @@ export function dataStatus45FromJSON(
 }
 
 /** @internal */
-export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
-  DataAzureManagedIdentity2,
-  unknown
-> = z.object({
-  ficName: z.nullable(z.string()).optional(),
-  roleAssignmentIds: z.array(z.string()),
-  roleDefinitionId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus45$inboundSchema),
-  tenantId: z.nullable(z.string()).optional(),
-  uamiClientId: z.nullable(z.string()).optional(),
-  uamiPrincipalId: z.nullable(z.string()).optional(),
-  uamiResourceId: z.nullable(z.string()).optional(),
-  backend: z.literal("azureManagedIdentity"),
-});
+export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
+  .object({
+    cidrBlock: z.nullable(z.string()).optional(),
+    cloudNatName: z.nullable(z.string()).optional(),
+    firewallName: z.nullable(z.string()).optional(),
+    isByoVpc: z.boolean(),
+    networkName: z.nullable(z.string()).optional(),
+    networkSelfLink: z.nullable(z.string()).optional(),
+    region: z.nullable(z.string()).optional(),
+    routerName: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus45$inboundSchema),
+    subnetworkName: z.nullable(z.string()).optional(),
+    subnetworkSelfLink: z.nullable(z.string()).optional(),
+    backend: z.literal("gcpVpc"),
+  });
 
-export function dataAzureManagedIdentity2FromJSON(
+export function dataGcpVpcFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureManagedIdentity2, SDKValidationError> {
+): SafeParseResult<DataGcpVpc, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureManagedIdentity2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureManagedIdentity2' from JSON`,
+    (x) => DataGcpVpc$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpVpc' from JSON`,
   );
 }
 
@@ -8435,25 +9109,69 @@ export function dataStatus44FromJSON(
 }
 
 /** @internal */
-export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
-  DataGcpServiceAccount2,
-  unknown
-> = z.object({
-  impersonationGranted: z.boolean(),
-  roleBound: z.boolean(),
-  serviceAccountEmail: z.nullable(z.string()).optional(),
-  serviceAccountUniqueId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus44$inboundSchema),
-  backend: z.literal("gcpServiceAccount"),
-});
+export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
+  .object({
+    availabilityZones: z.array(z.string()),
+    cidrBlock: z.nullable(z.string()).optional(),
+    internetGatewayId: z.nullable(z.string()).optional(),
+    isByoVpc: z.boolean(),
+    natGatewayId: z.nullable(z.string()).optional(),
+    privateSubnetIds: z.array(z.string()),
+    publicSubnetIds: z.array(z.string()),
+    routeTableCount: z.int(),
+    securityGroupId: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus44$inboundSchema),
+    vpcId: z.nullable(z.string()).optional(),
+    vpcState: z.nullable(z.string()).optional(),
+    backend: z.literal("awsVpc"),
+  });
 
-export function dataGcpServiceAccount2FromJSON(
+export function dataAwsVpcFromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpServiceAccount2, SDKValidationError> {
+): SafeParseResult<DataAwsVpc, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpServiceAccount2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpServiceAccount2' from JSON`,
+    (x) => DataAwsVpc$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsVpc' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion11$inboundSchema: z.ZodType<DataUnion11, unknown> = z
+  .union([
+    z.lazy(() => DataAwsVpc$inboundSchema),
+    z.lazy(() => DataGcpVpc$inboundSchema),
+    z.lazy(() => DataAzureVnet$inboundSchema),
+  ]);
+
+export function dataUnion11FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion11' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataNetwork$inboundSchema: z.ZodType<DataNetwork, unknown> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAwsVpc$inboundSchema),
+      z.lazy(() => DataGcpVpc$inboundSchema),
+      z.lazy(() => DataAzureVnet$inboundSchema),
+    ]),
+    resourceType: z.literal("network"),
+  });
+
+export function dataNetworkFromJSON(
+  jsonString: string,
+): SafeParseResult<DataNetwork, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataNetwork$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataNetwork' from JSON`,
   );
 }
 
@@ -8520,65 +9238,21 @@ export function dataStatus43FromJSON(
 }
 
 /** @internal */
-export const DataAwsIamRole2$inboundSchema: z.ZodType<
-  DataAwsIamRole2,
-  unknown
-> = z.object({
-  managementPermissionsApplied: z.boolean(),
-  roleArn: z.nullable(z.string()).optional(),
-  roleName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus43$inboundSchema),
-  backend: z.literal("awsIamRole"),
-});
+export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
+  .object({
+    configured: z.boolean(),
+    identity: z.string(),
+    status: z.lazy(() => DataStatus43$inboundSchema),
+    backend: z.literal("local"),
+  });
 
-export function dataAwsIamRole2FromJSON(
+export function dataLocal10FromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsIamRole2, SDKValidationError> {
+): SafeParseResult<DataLocal10, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsIamRole2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsIamRole2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion11$inboundSchema: z.ZodType<DataUnion11, unknown> = z
-  .union([
-    z.lazy(() => DataAwsIamRole2$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
-  ]);
-
-export function dataUnion11FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion11, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion11' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataRemoteStackManagement$inboundSchema: z.ZodType<
-  DataRemoteStackManagement,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsIamRole2$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
-  ]),
-  resourceType: z.literal("remote-stack-management"),
-});
-
-export function dataRemoteStackManagementFromJSON(
-  jsonString: string,
-): SafeParseResult<DataRemoteStackManagement, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataRemoteStackManagement$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataRemoteStackManagement' from JSON`,
+    (x) => DataLocal10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal10' from JSON`,
   );
 }
 
@@ -8645,32 +9319,36 @@ export function dataStatus42FromJSON(
 }
 
 /** @internal */
-export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
-  .object({
-    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
-    cidrBlock: z.nullable(z.string()).optional(),
-    isByoVnet: z.boolean(),
-    lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
-    location: z.nullable(z.string()).optional(),
-    natGatewayId: z.nullable(z.string()).optional(),
-    nsgId: z.nullable(z.string()).optional(),
-    privateSubnetName: z.nullable(z.string()).optional(),
-    publicIpId: z.nullable(z.string()).optional(),
-    publicSubnetName: z.nullable(z.string()).optional(),
-    resourceGroup: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus42$inboundSchema),
-    vnetName: z.nullable(z.string()).optional(),
-    vnetResourceId: z.nullable(z.string()).optional(),
-    backend: z.literal("azureVnet"),
-  });
+export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
+  DataAzureManagedIdentity1,
+  unknown
+> = z.object({
+  clientId: z.nullable(z.string()).optional(),
+  customRoleDefinitionCount: z.int(),
+  customRoleDefinitionIds: z.array(z.string()),
+  isolationScope: z.nullable(z.string()).optional(),
+  location: z.string(),
+  managedTagCount: z.int(),
+  name: z.string(),
+  principalId: z.nullable(z.string()).optional(),
+  resourceGroup: z.string(),
+  resourceId: z.string(),
+  roleAssignmentCount: z.int(),
+  roleAssignmentIds: z.array(z.string()),
+  stackPermissionsApplied: z.boolean(),
+  status: z.lazy(() => DataStatus42$inboundSchema),
+  tenantId: z.nullable(z.string()).optional(),
+  type: z.nullable(z.string()).optional(),
+  backend: z.literal("azureManagedIdentity"),
+});
 
-export function dataAzureVnetFromJSON(
+export function dataAzureManagedIdentity1FromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureVnet, SDKValidationError> {
+): SafeParseResult<DataAzureManagedIdentity1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureVnet$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureVnet' from JSON`,
+    (x) => DataAzureManagedIdentity1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureManagedIdentity1' from JSON`,
   );
 }
 
@@ -8737,29 +9415,34 @@ export function dataStatus41FromJSON(
 }
 
 /** @internal */
-export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
-  .object({
-    cidrBlock: z.nullable(z.string()).optional(),
-    cloudNatName: z.nullable(z.string()).optional(),
-    firewallName: z.nullable(z.string()).optional(),
-    isByoVpc: z.boolean(),
-    networkName: z.nullable(z.string()).optional(),
-    networkSelfLink: z.nullable(z.string()).optional(),
-    region: z.nullable(z.string()).optional(),
-    routerName: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus41$inboundSchema),
-    subnetworkName: z.nullable(z.string()).optional(),
-    subnetworkSelfLink: z.nullable(z.string()).optional(),
-    backend: z.literal("gcpVpc"),
-  });
+export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
+  DataGcpServiceAccount1,
+  unknown
+> = z.object({
+  description: z.nullable(z.string()).optional(),
+  disabled: z.nullable(z.boolean()).optional(),
+  displayName: z.nullable(z.string()).optional(),
+  email: z.string(),
+  etag: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  oauth2ClientId: z.nullable(z.string()).optional(),
+  projectBindingCount: z.int(),
+  projectId: z.nullable(z.string()).optional(),
+  projectRoles: z.array(z.string()),
+  serviceAccountBindingCount: z.int(),
+  serviceAccountRoles: z.array(z.string()),
+  status: z.lazy(() => DataStatus41$inboundSchema),
+  uniqueId: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpServiceAccount"),
+});
 
-export function dataGcpVpcFromJSON(
+export function dataGcpServiceAccount1FromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpVpc, SDKValidationError> {
+): SafeParseResult<DataGcpServiceAccount1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpVpc$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpVpc' from JSON`,
+    (x) => DataGcpServiceAccount1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpServiceAccount1' from JSON`,
   );
 }
 
@@ -8826,39 +9509,50 @@ export function dataStatus40FromJSON(
 }
 
 /** @internal */
-export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
-  .object({
-    availabilityZones: z.array(z.string()),
-    cidrBlock: z.nullable(z.string()).optional(),
-    internetGatewayId: z.nullable(z.string()).optional(),
-    isByoVpc: z.boolean(),
-    natGatewayId: z.nullable(z.string()).optional(),
-    privateSubnetIds: z.array(z.string()),
-    publicSubnetIds: z.array(z.string()),
-    routeTableCount: z.int(),
-    securityGroupId: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus40$inboundSchema),
-    vpcId: z.nullable(z.string()).optional(),
-    vpcState: z.nullable(z.string()).optional(),
-    backend: z.literal("awsVpc"),
-  });
+export const DataAwsIamRole1$inboundSchema: z.ZodType<
+  DataAwsIamRole1,
+  unknown
+> = z.object({
+  assumeRolePolicyPresent: z.boolean(),
+  attachedPolicyCount: z.int(),
+  attachedPolicyNames: z.array(z.string()),
+  createDate: z.string(),
+  description: z.nullable(z.string()).optional(),
+  inlinePolicyCount: z.int(),
+  inlinePolicyNames: z.array(z.string()),
+  lastUsedDate: z.nullable(z.string()).optional(),
+  lastUsedRegion: z.nullable(z.string()).optional(),
+  managedTagCount: z.int(),
+  maxSessionDuration: z.nullable(z.int()).optional(),
+  path: z.string(),
+  permissionsBoundaryArn: z.nullable(z.string()).optional(),
+  permissionsBoundaryType: z.nullable(z.string()).optional(),
+  roleArn: z.string(),
+  roleId: z.string(),
+  roleName: z.string(),
+  stackPermissionsApplied: z.boolean(),
+  status: z.lazy(() => DataStatus40$inboundSchema),
+  tagCount: z.int(),
+  backend: z.literal("awsIamRole"),
+});
 
-export function dataAwsVpcFromJSON(
+export function dataAwsIamRole1FromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsVpc, SDKValidationError> {
+): SafeParseResult<DataAwsIamRole1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsVpc$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsVpc' from JSON`,
+    (x) => DataAwsIamRole1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsIamRole1' from JSON`,
   );
 }
 
 /** @internal */
 export const DataUnion10$inboundSchema: z.ZodType<DataUnion10, unknown> = z
   .union([
-    z.lazy(() => DataAwsVpc$inboundSchema),
-    z.lazy(() => DataGcpVpc$inboundSchema),
-    z.lazy(() => DataAzureVnet$inboundSchema),
+    z.lazy(() => DataAwsIamRole1$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
+    z.lazy(() => DataLocal10$inboundSchema),
   ]);
 
 export function dataUnion10FromJSON(
@@ -8872,23 +9566,26 @@ export function dataUnion10FromJSON(
 }
 
 /** @internal */
-export const DataNetwork$inboundSchema: z.ZodType<DataNetwork, unknown> = z
-  .object({
-    data: z.union([
-      z.lazy(() => DataAwsVpc$inboundSchema),
-      z.lazy(() => DataGcpVpc$inboundSchema),
-      z.lazy(() => DataAzureVnet$inboundSchema),
-    ]),
-    resourceType: z.literal("network"),
-  });
+export const DataServiceAccount$inboundSchema: z.ZodType<
+  DataServiceAccount,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsIamRole1$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
+    z.lazy(() => DataLocal10$inboundSchema),
+  ]),
+  resourceType: z.literal("service-account"),
+});
 
-export function dataNetworkFromJSON(
+export function dataServiceAccountFromJSON(
   jsonString: string,
-): SafeParseResult<DataNetwork, SDKValidationError> {
+): SafeParseResult<DataServiceAccount, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataNetwork$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataNetwork' from JSON`,
+    (x) => DataServiceAccount$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataServiceAccount' from JSON`,
   );
 }
 
@@ -8957,8 +9654,14 @@ export function dataStatus39FromJSON(
 /** @internal */
 export const DataLocal9$inboundSchema: z.ZodType<DataLocal9, unknown> = z
   .object({
-    configured: z.boolean(),
-    identity: z.string(),
+    isDirectory: z.nullable(z.boolean()).optional(),
+    modifiedAt: z.nullable(
+      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    ).optional(),
+    path: z.string(),
+    pathExists: z.boolean(),
+    readonly: z.nullable(z.boolean()).optional(),
+    secretMetadataListed: z.boolean(),
     status: z.lazy(() => DataStatus39$inboundSchema),
     backend: z.literal("local"),
   });
@@ -9036,36 +9739,24 @@ export function dataStatus38FromJSON(
 }
 
 /** @internal */
-export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
-  DataAzureManagedIdentity1,
+export const DataKubernetesSecret$inboundSchema: z.ZodType<
+  DataKubernetesSecret,
   unknown
 > = z.object({
-  clientId: z.nullable(z.string()).optional(),
-  customRoleDefinitionCount: z.int(),
-  customRoleDefinitionIds: z.array(z.string()),
-  isolationScope: z.nullable(z.string()).optional(),
-  location: z.string(),
-  managedTagCount: z.int(),
-  name: z.string(),
-  principalId: z.nullable(z.string()).optional(),
-  resourceGroup: z.string(),
-  resourceId: z.string(),
-  roleAssignmentCount: z.int(),
-  roleAssignmentIds: z.array(z.string()),
-  stackPermissionsApplied: z.boolean(),
+  namespace: z.string(),
+  prefix: z.string(),
+  secretMetadataListed: z.boolean(),
   status: z.lazy(() => DataStatus38$inboundSchema),
-  tenantId: z.nullable(z.string()).optional(),
-  type: z.nullable(z.string()).optional(),
-  backend: z.literal("azureManagedIdentity"),
+  backend: z.literal("kubernetesSecret"),
 });
 
-export function dataAzureManagedIdentity1FromJSON(
+export function dataKubernetesSecretFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureManagedIdentity1, SDKValidationError> {
+): SafeParseResult<DataKubernetesSecret, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureManagedIdentity1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureManagedIdentity1' from JSON`,
+    (x) => DataKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesSecret' from JSON`,
   );
 }
 
@@ -9132,34 +9823,37 @@ export function dataStatus37FromJSON(
 }
 
 /** @internal */
-export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
-  DataGcpServiceAccount1,
+export const DataAzureKeyVault$inboundSchema: z.ZodType<
+  DataAzureKeyVault,
   unknown
 > = z.object({
-  description: z.nullable(z.string()).optional(),
-  disabled: z.nullable(z.boolean()).optional(),
-  displayName: z.nullable(z.string()).optional(),
-  email: z.string(),
-  etag: z.nullable(z.string()).optional(),
-  name: z.nullable(z.string()).optional(),
-  oauth2ClientId: z.nullable(z.string()).optional(),
-  projectBindingCount: z.int(),
-  projectId: z.nullable(z.string()).optional(),
-  projectRoles: z.array(z.string()),
-  serviceAccountBindingCount: z.int(),
-  serviceAccountRoles: z.array(z.string()),
+  accessPolicyCount: z.int(),
+  location: z.nullable(z.string()).optional(),
+  name: z.string(),
+  privateEndpointConnectionCount: z.int(),
+  provisioningState: z.nullable(z.string()).optional(),
+  publicNetworkAccess: z.string(),
+  purgeProtectionEnabled: z.nullable(z.boolean()).optional(),
+  rbacAuthorizationEnabled: z.boolean(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  resourceId: z.nullable(z.string()).optional(),
+  secretMetadataListed: z.boolean(),
+  skuFamily: z.nullable(z.string()).optional(),
+  skuName: z.nullable(z.string()).optional(),
+  softDeleteEnabled: z.boolean(),
+  softDeleteRetentionDays: z.int(),
   status: z.lazy(() => DataStatus37$inboundSchema),
-  uniqueId: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpServiceAccount"),
+  vaultUri: z.nullable(z.string()).optional(),
+  backend: z.literal("azureKeyVault"),
 });
 
-export function dataGcpServiceAccount1FromJSON(
+export function dataAzureKeyVaultFromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpServiceAccount1, SDKValidationError> {
+): SafeParseResult<DataAzureKeyVault, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpServiceAccount1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpServiceAccount1' from JSON`,
+    (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureKeyVault' from JSON`,
   );
 }
 
@@ -9226,84 +9920,25 @@ export function dataStatus36FromJSON(
 }
 
 /** @internal */
-export const DataAwsIamRole1$inboundSchema: z.ZodType<
-  DataAwsIamRole1,
+export const DataGcpSecretManager$inboundSchema: z.ZodType<
+  DataGcpSecretManager,
   unknown
 > = z.object({
-  assumeRolePolicyPresent: z.boolean(),
-  attachedPolicyCount: z.int(),
-  attachedPolicyNames: z.array(z.string()),
-  createDate: z.string(),
-  description: z.nullable(z.string()).optional(),
-  inlinePolicyCount: z.int(),
-  inlinePolicyNames: z.array(z.string()),
-  lastUsedDate: z.nullable(z.string()).optional(),
-  lastUsedRegion: z.nullable(z.string()).optional(),
-  managedTagCount: z.int(),
-  maxSessionDuration: z.nullable(z.int()).optional(),
-  path: z.string(),
-  permissionsBoundaryArn: z.nullable(z.string()).optional(),
-  permissionsBoundaryType: z.nullable(z.string()).optional(),
-  roleArn: z.string(),
-  roleId: z.string(),
-  roleName: z.string(),
-  stackPermissionsApplied: z.boolean(),
+  location: z.string(),
+  prefix: z.string(),
+  projectId: z.string(),
+  secretMetadataListed: z.boolean(),
   status: z.lazy(() => DataStatus36$inboundSchema),
-  tagCount: z.int(),
-  backend: z.literal("awsIamRole"),
+  backend: z.literal("gcpSecretManager"),
 });
 
-export function dataAwsIamRole1FromJSON(
+export function dataGcpSecretManagerFromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsIamRole1, SDKValidationError> {
+): SafeParseResult<DataGcpSecretManager, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsIamRole1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsIamRole1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion9$inboundSchema: z.ZodType<DataUnion9, unknown> = z.union(
-  [
-    z.lazy(() => DataAwsIamRole1$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
-    z.lazy(() => DataLocal9$inboundSchema),
-  ],
-);
-
-export function dataUnion9FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion9, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion9' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataServiceAccount$inboundSchema: z.ZodType<
-  DataServiceAccount,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsIamRole1$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
-    z.lazy(() => DataLocal9$inboundSchema),
-  ]),
-  resourceType: z.literal("service-account"),
-});
-
-export function dataServiceAccountFromJSON(
-  jsonString: string,
-): SafeParseResult<DataServiceAccount, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataServiceAccount$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataServiceAccount' from JSON`,
+    (x) => DataGcpSecretManager$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpSecretManager' from JSON`,
   );
 }
 
@@ -9370,27 +10005,78 @@ export function dataStatus35FromJSON(
 }
 
 /** @internal */
-export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
-  .object({
-    isDirectory: z.nullable(z.boolean()).optional(),
-    modifiedAt: z.nullable(
-      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    ).optional(),
-    path: z.string(),
-    pathExists: z.boolean(),
-    readonly: z.nullable(z.boolean()).optional(),
-    secretMetadataListed: z.boolean(),
-    status: z.lazy(() => DataStatus35$inboundSchema),
-    backend: z.literal("local"),
-  });
+export const DataAwsParameterStore$inboundSchema: z.ZodType<
+  DataAwsParameterStore,
+  unknown
+> = z.object({
+  accountId: z.string(),
+  hasMoreParameters: z.nullable(z.boolean()).optional(),
+  latestModifiedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  parameterMetadataSampled: z.boolean(),
+  prefix: z.string(),
+  region: z.string(),
+  sampledAdvancedTierCount: z.nullable(z.int()).optional(),
+  sampledKmsKeyMetadataPresentCount: z.nullable(z.int()).optional(),
+  sampledParameterCount: z.nullable(z.int()).optional(),
+  sampledSecureStringCount: z.nullable(z.int()).optional(),
+  sampledStringCount: z.nullable(z.int()).optional(),
+  sampledStringListCount: z.nullable(z.int()).optional(),
+  status: z.lazy(() => DataStatus35$inboundSchema),
+  backend: z.literal("awsParameterStore"),
+});
 
-export function dataLocal8FromJSON(
+export function dataAwsParameterStoreFromJSON(
   jsonString: string,
-): SafeParseResult<DataLocal8, SDKValidationError> {
+): SafeParseResult<DataAwsParameterStore, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataLocal8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal8' from JSON`,
+    (x) => DataAwsParameterStore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsParameterStore' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion9$inboundSchema: z.ZodType<DataUnion9, unknown> = z.union(
+  [
+    z.lazy(() => DataAwsParameterStore$inboundSchema),
+    z.lazy(() => DataGcpSecretManager$inboundSchema),
+    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataKubernetesSecret$inboundSchema),
+    z.lazy(() => DataLocal9$inboundSchema),
+  ],
+);
+
+export function dataUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataVault$inboundSchema: z.ZodType<DataVault, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsParameterStore$inboundSchema),
+    z.lazy(() => DataGcpSecretManager$inboundSchema),
+    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataKubernetesSecret$inboundSchema),
+    z.lazy(() => DataLocal9$inboundSchema),
+  ]),
+  resourceType: z.literal("vault"),
+});
+
+export function dataVaultFromJSON(
+  jsonString: string,
+): SafeParseResult<DataVault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataVault' from JSON`,
   );
 }
 
@@ -9457,24 +10143,23 @@ export function dataStatus34FromJSON(
 }
 
 /** @internal */
-export const DataKubernetesSecret$inboundSchema: z.ZodType<
-  DataKubernetesSecret,
-  unknown
-> = z.object({
-  namespace: z.string(),
-  prefix: z.string(),
-  secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus34$inboundSchema),
-  backend: z.literal("kubernetesSecret"),
-});
+export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
+  .object({
+    name: z.string(),
+    port: z.nullable(z.int()).optional(),
+    processRunning: z.boolean(),
+    status: z.lazy(() => DataStatus34$inboundSchema),
+    version: z.string(),
+    backend: z.literal("local"),
+  });
 
-export function dataKubernetesSecretFromJSON(
+export function dataLocal8FromJSON(
   jsonString: string,
-): SafeParseResult<DataKubernetesSecret, SDKValidationError> {
+): SafeParseResult<DataLocal8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesSecret' from JSON`,
+    (x) => DataLocal8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal8' from JSON`,
   );
 }
 
@@ -9541,37 +10226,24 @@ export function dataStatus33FromJSON(
 }
 
 /** @internal */
-export const DataAzureKeyVault$inboundSchema: z.ZodType<
-  DataAzureKeyVault,
+export const DataFlexibleServer$inboundSchema: z.ZodType<
+  DataFlexibleServer,
   unknown
 > = z.object({
-  accessPolicyCount: z.int(),
-  location: z.nullable(z.string()).optional(),
-  name: z.string(),
-  privateEndpointConnectionCount: z.int(),
-  provisioningState: z.nullable(z.string()).optional(),
-  publicNetworkAccess: z.string(),
-  purgeProtectionEnabled: z.nullable(z.boolean()).optional(),
-  rbacAuthorizationEnabled: z.boolean(),
-  resourceGroup: z.nullable(z.string()).optional(),
-  resourceId: z.nullable(z.string()).optional(),
-  secretMetadataListed: z.boolean(),
-  skuFamily: z.nullable(z.string()).optional(),
-  skuName: z.nullable(z.string()).optional(),
-  softDeleteEnabled: z.boolean(),
-  softDeleteRetentionDays: z.int(),
+  serverName: z.string(),
+  state: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus33$inboundSchema),
-  vaultUri: z.nullable(z.string()).optional(),
-  backend: z.literal("azureKeyVault"),
+  version: z.nullable(z.string()).optional(),
+  backend: z.literal("flexibleServer"),
 });
 
-export function dataAzureKeyVaultFromJSON(
+export function dataFlexibleServerFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureKeyVault, SDKValidationError> {
+): SafeParseResult<DataFlexibleServer, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureKeyVault' from JSON`,
+    (x) => DataFlexibleServer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataFlexibleServer' from JSON`,
   );
 }
 
@@ -9638,25 +10310,22 @@ export function dataStatus32FromJSON(
 }
 
 /** @internal */
-export const DataGcpSecretManager$inboundSchema: z.ZodType<
-  DataGcpSecretManager,
-  unknown
-> = z.object({
-  location: z.string(),
-  prefix: z.string(),
-  projectId: z.string(),
-  secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus32$inboundSchema),
-  backend: z.literal("gcpSecretManager"),
-});
+export const DataCloudSQL$inboundSchema: z.ZodType<DataCloudSQL, unknown> = z
+  .object({
+    databaseVersion: z.nullable(z.string()).optional(),
+    instanceName: z.string(),
+    state: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus32$inboundSchema),
+    backend: z.literal("cloudSql"),
+  });
 
-export function dataGcpSecretManagerFromJSON(
+export function dataCloudSQLFromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpSecretManager, SDKValidationError> {
+): SafeParseResult<DataCloudSQL, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpSecretManager$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpSecretManager' from JSON`,
+    (x) => DataCloudSQL$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCloudSQL' from JSON`,
   );
 }
 
@@ -9723,45 +10392,33 @@ export function dataStatus31FromJSON(
 }
 
 /** @internal */
-export const DataAwsParameterStore$inboundSchema: z.ZodType<
-  DataAwsParameterStore,
-  unknown
-> = z.object({
-  accountId: z.string(),
-  hasMoreParameters: z.nullable(z.boolean()).optional(),
-  latestModifiedAt: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  parameterMetadataSampled: z.boolean(),
-  prefix: z.string(),
-  region: z.string(),
-  sampledAdvancedTierCount: z.nullable(z.int()).optional(),
-  sampledKmsKeyMetadataPresentCount: z.nullable(z.int()).optional(),
-  sampledParameterCount: z.nullable(z.int()).optional(),
-  sampledSecureStringCount: z.nullable(z.int()).optional(),
-  sampledStringCount: z.nullable(z.int()).optional(),
-  sampledStringListCount: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus31$inboundSchema),
-  backend: z.literal("awsParameterStore"),
-});
+export const DataAurora$inboundSchema: z.ZodType<DataAurora, unknown> = z
+  .object({
+    clusterIdentifier: z.string(),
+    endpoint: z.nullable(z.string()).optional(),
+    engineVersion: z.nullable(z.string()).optional(),
+    neverPauses: z.boolean(),
+    serverlessCapacity: z.nullable(z.number()).optional(),
+    status: z.lazy(() => DataStatus31$inboundSchema),
+    backend: z.literal("aurora"),
+  });
 
-export function dataAwsParameterStoreFromJSON(
+export function dataAuroraFromJSON(
   jsonString: string,
-): SafeParseResult<DataAwsParameterStore, SDKValidationError> {
+): SafeParseResult<DataAurora, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAwsParameterStore$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsParameterStore' from JSON`,
+    (x) => DataAurora$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAurora' from JSON`,
   );
 }
 
 /** @internal */
 export const DataUnion8$inboundSchema: z.ZodType<DataUnion8, unknown> = z.union(
   [
-    z.lazy(() => DataAwsParameterStore$inboundSchema),
-    z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
-    z.lazy(() => DataKubernetesSecret$inboundSchema),
+    z.lazy(() => DataAurora$inboundSchema),
+    z.lazy(() => DataCloudSQL$inboundSchema),
+    z.lazy(() => DataFlexibleServer$inboundSchema),
     z.lazy(() => DataLocal8$inboundSchema),
   ],
 );
@@ -9777,24 +10434,24 @@ export function dataUnion8FromJSON(
 }
 
 /** @internal */
-export const DataVault$inboundSchema: z.ZodType<DataVault, unknown> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsParameterStore$inboundSchema),
-    z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
-    z.lazy(() => DataKubernetesSecret$inboundSchema),
-    z.lazy(() => DataLocal8$inboundSchema),
-  ]),
-  resourceType: z.literal("vault"),
-});
+export const DataPostgres$inboundSchema: z.ZodType<DataPostgres, unknown> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAurora$inboundSchema),
+      z.lazy(() => DataCloudSQL$inboundSchema),
+      z.lazy(() => DataFlexibleServer$inboundSchema),
+      z.lazy(() => DataLocal8$inboundSchema),
+    ]),
+    resourceType: z.literal("postgres"),
+  });
 
-export function dataVaultFromJSON(
+export function dataPostgresFromJSON(
   jsonString: string,
-): SafeParseResult<DataVault, SDKValidationError> {
+): SafeParseResult<DataPostgres, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataVault$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataVault' from JSON`,
+    (x) => DataPostgres$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPostgres' from JSON`,
   );
 }
 
@@ -17165,7 +17822,7 @@ export function dataStorageFromJSON(
 }
 
 /** @internal */
-export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
+export const DataUnion16$inboundSchema: z.ZodType<DataUnion16, unknown> = z
   .union([
     z.lazy(() => DataStorage$inboundSchema),
     z.lazy(() => DataWorker$inboundSchema),
@@ -17175,6 +17832,7 @@ export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
     z.lazy(() => DataKubernetesCluster$inboundSchema),
     z.lazy(() => DataQueue$inboundSchema),
     z.lazy(() => DataKv$inboundSchema),
+    z.lazy(() => DataPostgres$inboundSchema),
     z.lazy(() => DataVault$inboundSchema),
     z.lazy(() => DataServiceAccount$inboundSchema),
     z.lazy(() => DataNetwork$inboundSchema),
@@ -17188,13 +17846,13 @@ export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
     z.lazy(() => DataAzureServiceBusNamespace$inboundSchema),
   ]);
 
-export function dataUnion15FromJSON(
+export function dataUnion16FromJSON(
   jsonString: string,
-): SafeParseResult<DataUnion15, SDKValidationError> {
+): SafeParseResult<DataUnion16, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataUnion15$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion15' from JSON`,
+    (x) => DataUnion16$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion16' from JSON`,
   );
 }
 
@@ -17233,6 +17891,7 @@ export const Heartbeat$inboundSchema: z.ZodType<Heartbeat, unknown> = z.object({
     z.lazy(() => DataKubernetesCluster$inboundSchema),
     z.lazy(() => DataQueue$inboundSchema),
     z.lazy(() => DataKv$inboundSchema),
+    z.lazy(() => DataPostgres$inboundSchema),
     z.lazy(() => DataVault$inboundSchema),
     z.lazy(() => DataServiceAccount$inboundSchema),
     z.lazy(() => DataNetwork$inboundSchema),

@@ -254,6 +254,7 @@ run();
 
 ### [OperatorManifests](docs/sdks/operatormanifests/README.md)
 
+* [prepareOperatorManifestPackage](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 * [renderOperatorManifest](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
 
 ### [Packages](docs/sdks/packages/README.md)
@@ -416,6 +417,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
+- [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 - [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.

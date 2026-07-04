@@ -87,6 +87,7 @@ export * from "./listworkspaces.js";
 export * from "./pindeploymentrelease.js";
 export * from "./plandeploymentcompute.js";
 export * from "./preparedeploymentstack.js";
+export * from "./prepareoperatormanifestpackage.js";
 export * from "./provisionmanager.js";
 export * from "./rebuildpackages.js";
 export * from "./redeploydeployment.js";

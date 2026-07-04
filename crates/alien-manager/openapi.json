@@ -1406,6 +1406,12 @@
           "deploymentId"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
           },
@@ -1417,6 +1423,12 @@
             "items": {
               "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "resourceHeartbeats": {
             "type": "array",
@@ -11101,8 +11113,49 @@
               "string",
               "null"
             ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release/version identity observed from the provider resource, when available."
           }
         }
+      },
+      "OperatorCapabilityReport": {
+        "type": "object",
+        "description": "Report-only Operator capability status.",
+        "required": [
+          "key",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable detail from the Operator."
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable capability key, such as `k8s-workloads` or `logs`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorCapabilityState",
+            "description": "Whether the capability is currently usable."
+          }
+        }
+      },
+      "OperatorCapabilityState": {
+        "type": "string",
+        "description": "State of an Operator capability as observed inside the environment.",
+        "enum": [
+          "granted",
+          "denied",
+          "unavailable"
+        ]
       },
       "Platform": {
         "type": "string",
@@ -11563,6 +11616,12 @@
           "state"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "deploymentId": {
             "type": "string"
           },
@@ -11571,6 +11630,12 @@
             "items": {
               "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "resourceHeartbeats": {
             "type": "array",
