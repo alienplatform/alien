@@ -61,7 +61,7 @@ Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cl
 
 | Crate | Description |
 |-------|-------------|
-| [alien-local](./alien-local/) | Local platform — native process execution, filesystem storage, sled KV, in-process OCI registry |
+| [alien-local](./alien-local/) | Local platform — native process execution, filesystem storage, SQLite KV, in-process OCI registry |
 
 ## Testing
 

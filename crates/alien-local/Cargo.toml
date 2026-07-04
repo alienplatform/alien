@@ -20,7 +20,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # Database
-sled = { workspace = true }
+# Read-only format probe for the localkv.v1 SQLite store in KV health checks.
+rusqlite = { workspace = true }
 # Embedded Postgres for the Local platform (downloads + runs native binaries)
 postgresql_embedded = { workspace = true }
 # Installs the pgvector extension into the embedded server from Alien's release host

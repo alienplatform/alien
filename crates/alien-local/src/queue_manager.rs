@@ -5,8 +5,9 @@ use tracing::{debug, info};
 
 /// Manager for local Queue resources.
 ///
-/// Creates directories for sled databases. The binding opens its own database
-/// handle and performs all operations directly.
+/// Creates the on-disk directory for each queue resource. The `LocalQueue`
+/// binding opens its own SQLite database (`localqueue.v1`) inside that
+/// directory and performs all operations directly.
 ///
 /// # State Scoping
 /// All queue databases are created under `{state_dir}/queue/{resource_id}/`.
@@ -28,7 +29,8 @@ impl LocalQueueManager {
 
     /// Creates a queue database directory for a resource.
     ///
-    /// The binding will open its own sled database handle using this path.
+    /// The binding will open its own SQLite database (`localqueue.sqlite`)
+    /// inside this directory.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -119,10 +121,14 @@ impl LocalQueueManager {
 
     /// Verifies that a queue resource exists and is accessible.
     ///
-    /// Checks that the queue directory exists and is readable. Does NOT open
-    /// the sled database — sled acquires an exclusive file lock which would
-    /// conflict with the worker runtime and trigger service that hold
-    /// long-lived handles to the same database.
+    /// Checks that the queue directory exists and is readable. This is a
+    /// lightweight liveness probe that does not open the SQLite database: the
+    /// `LocalQueue` binding materializes `localqueue.sqlite` on first use, and a
+    /// readable resource directory is a valid (possibly not-yet-opened) state.
+    /// SQLite (WAL + busy_timeout) would in fact allow a concurrent read-only
+    /// open alongside the worker runtime and trigger service, so this could be
+    /// upgraded to a format probe like the KV check if deeper validation is ever
+    /// needed.
     pub async fn check_health(&self, id: &str) -> Result<()> {
         let queue_path = self.state_dir.join("queue").join(id);
 
@@ -141,7 +147,8 @@ impl LocalQueueManager {
             }));
         }
 
-        // Verify the directory is readable (don't open sled — it takes an exclusive lock)
+        // Verify the directory is readable (lightweight probe; the binding opens
+        // the SQLite database itself on first use).
         std::fs::read_dir(&queue_path).into_alien_error().context(
             ErrorData::LocalDirectoryError {
                 path: queue_path.display().to_string(),

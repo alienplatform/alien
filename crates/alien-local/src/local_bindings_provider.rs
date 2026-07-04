@@ -23,7 +23,7 @@ use alien_bindings::{
         ServiceAccount, Storage, Vault, Worker,
     },
 };
-use alien_core::bindings::{KvBinding, VaultBinding};
+use alien_core::bindings::{binding_env_var_name, KvBinding, VaultBinding};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -68,10 +68,6 @@ pub struct LocalBindingsProvider {
     background_tasks: Mutex<Vec<JoinHandle<()>>>,
     /// State directory for creating managers lazily
     state_dir: PathBuf,
-    /// Cached queue handles — sled only allows one open handle per database directory.
-    /// Without caching, concurrent calls to `load_queue()` (from the worker's gRPC
-    /// server and the trigger service) would fail with a sled lock contention error.
-    queue_cache: tokio::sync::Mutex<std::collections::HashMap<String, Arc<dyn Queue>>>,
 }
 
 impl Clone for LocalBindingsProvider {
@@ -88,7 +84,6 @@ impl Clone for LocalBindingsProvider {
             shutdown_tx: self.shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()), // Don't clone JoinHandles
             state_dir: self.state_dir.clone(),
-            queue_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()), // Fresh cache on clone
         }
     }
 }
@@ -157,7 +152,6 @@ impl LocalBindingsProvider {
             shutdown_tx: shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()),
             state_dir: state_dir.clone(),
-            queue_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         });
 
         // Create worker manager with the provider (for bindings access)
@@ -296,6 +290,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         match self.postgres_manager.try_get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: "Failed to read the local Postgres metadata".to_string(),
             },
         )? {
@@ -303,6 +298,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding).context(
                     BindingsErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
+                        env_var: binding_env_var_name(binding_name),
                         reason: "Failed to serialize local Postgres binding".to_string(),
                     },
                 )?,
@@ -317,10 +313,14 @@ impl BindingsProviderApi for LocalBindingsProvider {
     ) -> alien_bindings::error::Result<Arc<dyn Storage>> {
         use alien_core::bindings::StorageBinding;
 
-        // Query storage manager for binding (fails if storage doesn't exist)
+        // Query storage manager for binding (fails if storage doesn't exist).
+        // Not BindingNotConfigured: that code contractually means "the
+        // ALIEN_<NAME>_BINDING env var is not set", but this lookup is resolved
+        // from local deployment state, not the environment.
         let binding = self.storage_manager.get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Directory not found for '{}'", binding_name),
             },
         )?;
@@ -332,11 +332,13 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 .into_value(binding_name, "storage_path")
                 .context(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Invalid storage_path in binding".to_string(),
                 })?,
             _ => {
                 return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Expected Local storage binding variant".to_string(),
                 }));
             }
@@ -375,6 +377,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             .await
             .context(BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Artifact registry '{}' not running", binding_name),
             })?;
 
@@ -395,6 +398,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let binding = self.vault_manager.get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Directory not found for '{}'", binding_name),
             },
         )?;
@@ -406,6 +410,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
                     .into_value(binding_name, "data_dir")
                     .context(BindingsErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
+                        env_var: binding_env_var_name(binding_name),
                         reason: "Invalid data_dir in binding".to_string(),
                     })?;
                 PathBuf::from(dir_str)
@@ -413,6 +418,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             _ => {
                 return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Expected Local vault binding variant".to_string(),
                 }));
             }
@@ -426,6 +432,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let binding = self.kv_manager.get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Database not found for '{}'", binding_name),
             },
         )?;
@@ -437,6 +444,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
                     .into_value(binding_name, "data_dir")
                     .context(BindingsErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
+                        env_var: binding_env_var_name(binding_name),
                         reason: "Invalid data_dir in binding".to_string(),
                     })?;
                 PathBuf::from(path_str)
@@ -444,6 +452,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             _ => {
                 return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Expected Local KV binding variant".to_string(),
                 }));
             }
@@ -466,6 +475,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let binding = self.postgres_manager.get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Postgres not found for '{}'", binding_name),
             },
         )?;
@@ -481,19 +491,13 @@ impl BindingsProviderApi for LocalBindingsProvider {
         use alien_bindings::providers::queue::local::LocalQueue;
         use alien_core::bindings::QueueBinding;
 
-        // Return cached handle if available. sled only allows one open handle
-        // per database directory — without caching, concurrent callers (the
-        // worker's gRPC server and the trigger service) would deadlock.
-        {
-            let cache = self.queue_cache.lock().await;
-            if let Some(cached) = cache.get(binding_name) {
-                return Ok(cached.clone());
-            }
-        }
-
+        // SQLite (WAL + busy_timeout) allows concurrent opens on the same file
+        // across handles and processes, so each caller constructs its own
+        // `LocalQueue` directly — no handle cache is needed.
         let binding = self.queue_manager.get_binding(binding_name).context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Queue not found for '{}'", binding_name),
             },
         )?;
@@ -505,6 +509,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
                     .into_value(binding_name, "queue_path")
                     .context(BindingsErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
+                        env_var: binding_env_var_name(binding_name),
                         reason: "Invalid queue_path in binding".to_string(),
                     })?;
                 PathBuf::from(path_str)
@@ -512,6 +517,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             _ => {
                 return Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Expected Local queue binding variant".to_string(),
                 }));
             }
@@ -523,12 +529,6 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 reason: format!("Failed to initialize binding for '{}'", binding_name),
             },
         )?);
-
-        // Cache the handle for future callers
-        self.queue_cache
-            .lock()
-            .await
-            .insert(binding_name.to_string(), queue.clone());
 
         Ok(queue)
     }
@@ -542,6 +542,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             guard.clone().ok_or_else(|| {
                 AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
+                    env_var: binding_env_var_name(binding_name),
                     reason: "Worker manager not initialized".to_string(),
                 })
             })?
@@ -550,6 +551,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let binding = worker_manager.get_binding(binding_name).await.context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Worker '{}' not running", binding_name),
             },
         )?;
@@ -564,6 +566,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             }
             _ => Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: "Expected Local worker binding variant".to_string(),
             })),
         }
@@ -578,6 +581,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let container_manager = self.container_manager().ok_or_else(|| {
             AlienError::new(BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: "Container manager not available (Docker not running?)".to_string(),
             })
         })?;
@@ -585,6 +589,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
         let binding = container_manager.get_binding(binding_name).await.context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: format!("Container '{}' not running", binding_name),
             },
         )?;
@@ -601,6 +606,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
             }
             _ => Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
+                env_var: binding_env_var_name(binding_name),
                 reason: "Expected Local container binding variant".to_string(),
             })),
         }

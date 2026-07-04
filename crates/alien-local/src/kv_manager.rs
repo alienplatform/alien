@@ -5,8 +5,9 @@ use tracing::{debug, info};
 
 /// Manager for local KV resources.
 ///
-/// Creates directories for sled databases. The binding opens its own database
-/// handle and performs all operations directly.
+/// Creates the on-disk directory for each KV resource. The `LocalKv` binding
+/// opens its own SQLite database (`localkv.v1`) inside that directory and
+/// performs all operations directly.
 ///
 /// # State Scoping
 /// All KV databases are created under `{state_dir}/kv/{resource_id}/`.
@@ -28,7 +29,8 @@ impl LocalKvManager {
 
     /// Creates a KV database directory for a resource.
     ///
-    /// The binding will open its own sled database handle using this path.
+    /// The binding will open its own SQLite database (`localkv.sqlite`) inside
+    /// this directory.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -121,10 +123,33 @@ impl LocalKvManager {
         self.state_dir.join("kv").join(id).exists()
     }
 
-    /// Verifies that a KV resource exists and is healthy by actually opening it.
+    /// Verifies that a KV resource exists and is healthy by inspecting its
+    /// SQLite store against the `localkv.v1` on-disk contract.
     ///
-    /// This performs a real 'open' operation similar to what bindings do, ensuring
-    /// the KV database is accessible and can be opened with sled.
+    /// Mirrors the format check `LocalKv` performs on open, but read-only: it
+    /// opens `<kv_path>/localkv.sqlite` with `SQLITE_OPEN_READ_ONLY`, reads the
+    /// `('format', ...)` row from the `meta` table, and reports healthy only
+    /// when it equals `localkv.v1`. WAL + a busy_timeout let this run
+    /// concurrently with the worker runtime and trigger service that hold live
+    /// read-write handles to the same file, so no exclusive lock is taken.
+    ///
+    /// Health-vs-not decisions (faithful to the previous embedded-KV check):
+    /// - Missing resource directory → `ServiceResourceNotFound` (the resource
+    ///   was never created / was deleted — same as the old check's
+    ///   `!kv_path.exists()` branch).
+    /// - Path exists but is a file → `LocalDirectoryError`.
+    /// - Directory exists but `localkv.sqlite` is absent → **healthy**. The
+    ///   controller creates the resource directory (`create_kv`) and reaches
+    ///   this `Ready`-state health check before any binding has opened the
+    ///   store, so the file only materializes on first `LocalKv::new`. The old
+    ///   embedded-KV check opened (and thereby created) its database on this
+    ///   empty directory and returned Ok, so reporting healthy here preserves
+    ///   that behavior; a not-yet-opened store is a valid state, not a failure.
+    /// - `localkv.sqlite` present with a wrong/unreadable format → error.
+    ///
+    /// Note: a read-only probe can report unhealthy on a store that exists but
+    /// no writer has initialized yet (e.g. the WAL `-shm` sidecar cannot be
+    /// mapped read-only before a writer creates it) — conservative by design.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -133,6 +158,7 @@ impl LocalKvManager {
     /// Ok(()) if KV exists and is healthy, error otherwise
     pub async fn check_health(&self, id: &str) -> Result<()> {
         use alien_error::AlienError;
+        use rusqlite::{Connection, OpenFlags};
 
         let kv_path = self.state_dir.join("kv").join(id);
 
@@ -151,15 +177,63 @@ impl LocalKvManager {
             }));
         }
 
-        // Try to actually open the sled database
-        // This ensures the database is accessible, not corrupted, etc.
-        sled::open(&kv_path)
+        let db_path = kv_path.join("localkv.sqlite");
+
+        // Store not yet materialized (directory created, no binding opened yet):
+        // healthy, matching the old open-creates-the-database behavior.
+        if !db_path.exists() {
+            return Ok(());
+        }
+
+        // rusqlite is blocking; run the read-only format probe off the async
+        // runtime. The connection is created, used, and dropped entirely inside
+        // the spawned task, so it never crosses an `.await`.
+        let probe_path = db_path.clone();
+        let format: String = tokio::task::spawn_blocking(move || -> Result<String> {
+            let conn = Connection::open_with_flags(
+                &probe_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
             .into_alien_error()
             .context(ErrorData::LocalDatabaseError {
-                database_path: kv_path.display().to_string(),
+                database_path: probe_path.display().to_string(),
                 operation: "open".to_string(),
-                reason: "Failed to open sled database".to_string(),
+                reason: "Failed to open localkv.v1 SQLite database read-only".to_string(),
             })?;
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .into_alien_error()
+                .context(ErrorData::LocalDatabaseError {
+                    database_path: probe_path.display().to_string(),
+                    operation: "open".to_string(),
+                    reason: "Failed to set busy_timeout".to_string(),
+                })?;
+            conn.query_row("SELECT value FROM meta WHERE key = 'format'", [], |row| {
+                row.get(0)
+            })
+            .into_alien_error()
+            .context(ErrorData::LocalDatabaseError {
+                database_path: probe_path.display().to_string(),
+                operation: "read".to_string(),
+                reason: "Failed to read format marker from meta table".to_string(),
+            })
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::LocalDatabaseError {
+            database_path: db_path.display().to_string(),
+            operation: "read".to_string(),
+            reason: "Health-check task failed".to_string(),
+        })??;
+
+        if format != "localkv.v1" {
+            return Err(AlienError::new(ErrorData::LocalDatabaseError {
+                database_path: db_path.display().to_string(),
+                operation: "read".to_string(),
+                reason: format!(
+                    "Unsupported store format '{format}' (expected 'localkv.v1')"
+                ),
+            }));
+        }
 
         Ok(())
     }

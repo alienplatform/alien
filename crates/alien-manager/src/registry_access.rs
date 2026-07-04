@@ -548,6 +548,7 @@ mod tests {
     fn missing_binding(binding_name: &str) -> alien_bindings::error::Error {
         AlienError::new(BindingErrorData::BindingConfigInvalid {
             binding_name: binding_name.to_string(),
+            env_var: alien_core::bindings::binding_env_var_name(binding_name),
             reason: "not found".to_string(),
         })
     }

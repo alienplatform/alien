@@ -95,6 +95,7 @@ pub struct ServiceBusQueueBinding {
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LocalQueueBinding {
-    /// Path to the sled database directory for the queue
+    /// Path to the queue's data directory; the `localqueue.v1` SQLite database
+    /// (`localqueue.sqlite`) lives inside it
     pub queue_path: BindingValue<String>,
 }

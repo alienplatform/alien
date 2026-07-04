@@ -236,8 +236,9 @@ fn to_cron_crate_format(user_cron: &str) -> String {
 /// Acks only on successful handler completion (at-least-once delivery).
 ///
 /// Uses the shared `LocalBindingsProvider` to access the queue — the same
-/// provider the worker runtime uses. This avoids sled lock contention
-/// (sled only allows one open handle per database directory).
+/// provider the worker runtime uses. The SQLite-backed `LocalQueue` (WAL +
+/// busy_timeout) allows concurrent opens across handles and processes, so this
+/// sharing is a convenience rather than a lock-contention workaround.
 async fn poll_queue(
     binding_name: &str,
     provider: &LocalBindingsProvider,
