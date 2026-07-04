@@ -15,7 +15,7 @@ aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-
 gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
 kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
-local = ["object_store/fs", "dep:oci-client", "dep:sled", "dep:rusqlite", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
+local = ["object_store/fs", "dep:oci-client", "dep:rusqlite", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tokio-stream", "dep:tonic-reflection", "dep:async-stream"]
 openapi = ["dep:utoipa"]
@@ -48,7 +48,6 @@ utoipa = { workspace = true, optional = true }
 
 # Local
 oci-client = { workspace = true, default-features = false, features = ["rustls-tls-native-roots"], optional = true }
-sled = { version = "0.34", optional = true }
 rusqlite = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
