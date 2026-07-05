@@ -22,6 +22,7 @@
     "changeset": "changeset",
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
+    "validate:package-layout": "turbo run validate:package-layout",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },

@@ -111,6 +111,9 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
+      - name: Validate package layout
+        run: pnpm validate:package-layout
+
       - name: Rust fast tests (non-cloud)
         env:
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
@@ -136,7 +139,7 @@ jobs:
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
+        run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Run examples
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
