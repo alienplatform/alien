@@ -18,7 +18,6 @@ use crate::{
     types::*,
     Result,
 };
-use alien_core::DeploymentModel;
 
 /// Test server for command protocol integration testing
 ///
@@ -67,6 +66,11 @@ pub struct TestCommandServer {
     pub storage: Arc<LocalStorage>,
     /// Command dispatcher (for testing push scenarios)
     pub dispatcher: Arc<dyn CommandDispatcher>,
+    /// In-memory command registry (register extra targets for multi-target tests)
+    pub registry: Arc<InMemoryCommandRegistry>,
+    /// The auto-registered default command target
+    /// ("test-worker" in push mode, "test-daemon" in pull mode)
+    pub default_target: CommandTarget,
     /// Temporary directory (kept alive for the test duration)
     _temp_dir: TempDir,
 }
@@ -142,10 +146,15 @@ impl TestCommandServer {
             .await
     }
 
-    /// Acquire a single lease for a polling deployment
+    /// Acquire a single lease for a polling deployment, as the server's
+    /// auto-registered default target.
     pub async fn acquire_single_lease(&self, deployment_id: &str) -> Result<Option<LeaseInfo>> {
-        let mut lease_request = LeaseRequest::default();
-        lease_request.deployment_id = deployment_id.to_string();
+        let lease_request = LeaseRequest {
+            deployment_id: deployment_id.to_string(),
+            target: self.default_target.clone(),
+            max_leases: 1,
+            lease_seconds: 60,
+        };
         let response = self.acquire_lease(deployment_id, lease_request).await?;
         Ok(response.leases.into_iter().next())
     }
@@ -320,16 +329,39 @@ impl TestCommandServerBuilder {
             .dispatcher
             .unwrap_or_else(|| Arc::new(MockDispatcher::new()) as Arc<dyn CommandDispatcher>);
 
-        // Determine deployment model based on dispatcher
-        // If using MockDispatcher, use its mode; otherwise default to Pull
-        let deployment_model = dispatcher
+        // Determine worker delivery mode based on dispatcher: if using a
+        // MockDispatcher, its mode stands in for the production derivation
+        // (platform push path + stack deployment model); otherwise Pull.
+        let worker_delivery_mode = dispatcher
             .as_any()
             .downcast_ref::<MockDispatcher>()
             .map(|d| match d.mode() {
-                MockDispatcherMode::Push => DeploymentModel::Push,
-                MockDispatcherMode::Pull => DeploymentModel::Pull,
+                MockDispatcherMode::Push => CommandDeliveryMode::Push,
+                MockDispatcherMode::Pull => CommandDeliveryMode::Pull,
             })
-            .unwrap_or(DeploymentModel::Pull);
+            .unwrap_or(CommandDeliveryMode::Pull);
+
+        // Auto-register a default command target so single-target shorthand
+        // resolution works out of the box: a Push-mode server gets a Worker
+        // (the only push-capable target type), a Pull-mode server a Daemon.
+        let registry = Arc::new(InMemoryCommandRegistry::with_worker_delivery_mode(
+            worker_delivery_mode,
+        ));
+        let default_target = match worker_delivery_mode {
+            CommandDeliveryMode::Push => {
+                CommandTarget::new("test-worker", CommandTargetType::Worker)
+            }
+            CommandDeliveryMode::Pull => {
+                CommandTarget::new("test-daemon", CommandTargetType::Daemon)
+            }
+        };
+        registry
+            .register_target(
+                default_target.resource_id.clone(),
+                default_target.resource_type,
+            )
+            .await
+            .expect("default target id is well-formed");
 
         // Find a free port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -348,9 +380,7 @@ impl TestCommandServerBuilder {
             kv.clone() as Arc<dyn Kv>,
             storage.clone() as Arc<dyn Storage>,
             dispatcher.clone(),
-            Arc::new(InMemoryCommandRegistry::with_deployment_model(
-                deployment_model,
-            )),
+            registry.clone(),
             command_base_url,
             b"test-signing-key-for-commands".to_vec(),
         ));
@@ -382,6 +412,8 @@ impl TestCommandServerBuilder {
             kv,
             storage,
             dispatcher,
+            registry,
+            default_target,
             _temp_dir: temp_dir,
         }
     }

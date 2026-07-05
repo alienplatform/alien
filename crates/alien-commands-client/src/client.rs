@@ -41,6 +41,11 @@ pub struct InvokeOptions {
     pub deadline: Option<DateTime<Utc>>,
     /// Idempotency key to prevent duplicate commands.
     pub idempotency_key: Option<String>,
+    /// Explicit target resource id within the deployment's stack. When `None`
+    /// the server resolves the target via single-target shorthand (exactly one
+    /// command-capable resource must exist). Set this when a deployment has
+    /// more than one command-capable resource.
+    pub target_resource_id: Option<String>,
 }
 
 /// High-level client for invoking commands on Alien deployments.
@@ -65,6 +70,11 @@ struct CommandStatusResponse {
     state: String,
     #[serde(default)]
     response: Option<CommandResponseBody>,
+    /// The resolved target this command was addressed to (ALIEN-219). Carried
+    /// on the wire for observability; the polling logic keys off `state` only.
+    #[serde(default)]
+    #[allow(dead_code)]
+    target: Option<alien_core::CommandTarget>,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +280,9 @@ impl CommandsClient {
             if let Some(ref key) = opts.idempotency_key {
                 body["idempotencyKey"] = serde_json::Value::String(key.clone());
             }
+            if let Some(ref target) = opts.target_resource_id {
+                body["targetResourceId"] = serde_json::Value::String(target.clone());
+            }
         }
 
         let url = format!("{}/commands", self.manager_url);
@@ -433,5 +446,51 @@ impl CommandsClient {
                 reason: format!("Unknown storage backend type: {}", other),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    //! ALIEN-219: proves the client-side surface for command targets compiles
+    //! and round-trips over the wire — not the server's routing behavior
+    //! (that's covered by alien-commands' integration tests).
+
+    use super::*;
+
+    /// `InvokeOptions` accepts a `target_resource_id`, which `create()` sends
+    /// as `targetResourceId` in the request body (see the `create` body
+    /// construction above).
+    #[test]
+    fn invoke_options_carries_target_resource_id() {
+        let options = InvokeOptions {
+            timeout: None,
+            deadline: None,
+            idempotency_key: None,
+            target_resource_id: Some("worker-7".to_string()),
+        };
+        assert_eq!(options.target_resource_id.as_deref(), Some("worker-7"));
+    }
+
+    /// The client's internal status response type deserializes a status JSON
+    /// payload that carries a resolved `target` (server-side ALIEN-219
+    /// addition), proving the generated/hand-written client type is
+    /// wire-compatible with the server's `CommandStatusResponse`.
+    #[test]
+    fn command_status_response_deserializes_target() {
+        let json = serde_json::json!({
+            "state": "SUCCEEDED",
+            "target": {
+                "resourceId": "worker-7",
+                "resourceType": "worker",
+            },
+        });
+
+        let status: CommandStatusResponse =
+            serde_json::from_value(json).expect("status JSON with target should deserialize");
+
+        assert_eq!(status.state, "SUCCEEDED");
+        let target = status.target.expect("target field should be present");
+        assert_eq!(target.resource_id, "worker-7");
+        assert_eq!(target.resource_type, alien_core::CommandTargetType::Worker);
     }
 }

@@ -104,6 +104,10 @@ pub struct CommandsPollingConfig {
     /// Deployment ID - required for commands polling to work correctly
     /// Should come from ALIEN_DEPLOYMENT_ID environment variable
     pub deployment_id: String,
+    /// Target resource ID this runtime polls command leases for — its own
+    /// resource id within the deployment's stack. Should come from the
+    /// ALIEN_COMMANDS_TARGET_RESOURCE_ID environment variable.
+    pub target_resource_id: String,
     /// Authentication token for commands server
     /// Should come from ALIEN_COMMANDS_TOKEN environment variable
     pub token: String,

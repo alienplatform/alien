@@ -19,9 +19,8 @@ use tracing::{debug, error, info, warn};
 
 use alien_core::{
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
-    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo, ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -510,7 +509,7 @@ impl DeploymentLoop {
 
         // 4. Build environment variables.
         let environment_variables = self
-            .build_environment_variables(&deployment_id, &deployment)
+            .build_environment_variables(&deployment_id, &deployment, Some(&deployment_stack))
             .await?;
         let provided_config = deployment.deployment_config.as_ref();
         let monitoring = provided_config
@@ -767,6 +766,7 @@ impl DeploymentLoop {
         &self,
         deployment_id: &str,
         deployment: &DeploymentRecord,
+        deployment_stack: Option<&alien_core::Stack>,
     ) -> Result<EnvironmentVariablesSnapshot, AlienError> {
         let mut vars: Vec<EnvironmentVariable> = Vec::new();
 
@@ -795,28 +795,11 @@ impl DeploymentLoop {
 
         if needs_polling {
             let commands_base = self.config.commands_base_url();
-            vars.push(EnvironmentVariable {
-                name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
-                value: "true".to_string(),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-            vars.push(EnvironmentVariable {
-                name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
-                value: commands_base,
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-            // Commands token — from the deployment record field.
-            // The manager is the sole injector of ALIEN_COMMANDS_TOKEN.
-            if let Some(ref token) = deployment.deployment_token {
-                vars.push(EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
-                    value: token.clone(),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                });
-            }
+            vars.extend(commands_polling_env_vars(
+                commands_base,
+                deployment.deployment_token.as_deref(),
+                deployment_stack,
+            ));
         }
 
         // 4. User-provided environment variables from the deployment record.
@@ -859,6 +842,26 @@ impl DeploymentLoop {
             resource_attributes: std::collections::HashMap::new(),
         })
     }
+}
+
+/// Builds the commands polling environment variables (`ALIEN_COMMANDS_POLLING_ENABLED`,
+/// `ALIEN_COMMANDS_POLLING_URL`, `ALIEN_COMMANDS_TOKEN`,
+/// `ALIEN_COMMANDS_TARGET_RESOURCE_ID`), each scoped via `target_resources` to a
+/// single command-enabled Worker. Nothing is injected deployment-wide: a
+/// commands-disabled Worker receiving `POLLING_ENABLED=true` would crash at
+/// startup (the runtime fail-fast-requires the target id once polling is on)
+/// and would otherwise run a pointless polling loop. The commands token comes
+/// from the deployment record — the manager is the sole injector of
+/// `ALIEN_COMMANDS_TOKEN`. Container/Daemon receiver env is separate,
+/// not-yet-landed work.
+fn commands_polling_env_vars(
+    commands_base_url: String,
+    deployment_token: Option<&str>,
+    deployment_stack: Option<&alien_core::Stack>,
+) -> Vec<EnvironmentVariable> {
+    deployment_stack
+        .map(|stack| stack.worker_command_polling_env_vars(&commands_base_url, deployment_token))
+        .unwrap_or_default()
 }
 
 fn should_wait_for_credential_handoff(
@@ -926,14 +929,15 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, get_or_create_local_bindings_provider,
+        active_work_statuses, commands_polling_env_vars, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
         should_wait_for_credential_handoff,
     };
     use alien_core::{
         DeploymentStatus, Platform, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
-        ResourceOutputs, ResourceStatus, StackResourceState, StackSettings, StackState,
+        ResourceLifecycle, ResourceOutputs, ResourceStatus, Stack, StackResourceState,
+        StackSettings, StackState, Worker, WorkerCode,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use chrono::Utc;
@@ -1277,6 +1281,83 @@ mod tests {
 
         provider_a.shutdown().await;
         provider_b.shutdown().await;
+    }
+
+    #[test]
+    fn commands_polling_env_vars_scopes_quartet_per_command_enabled_worker() {
+        let worker_a = Worker::new("worker-a".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let worker_b = Worker::new("worker-b".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        // Commands-disabled Worker: must get NOTHING — a deployment-wide
+        // POLLING_ENABLED=true would crash it at startup (runtime fail-fast).
+        let worker_off = Worker::new("worker-off".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("manager-command-target-stack".to_string())
+            .add(worker_a, ResourceLifecycle::Live)
+            .add(worker_b, ResourceLifecycle::Live)
+            .add(worker_off, ResourceLifecycle::Live)
+            .build();
+
+        let vars = commands_polling_env_vars(
+            "https://manager.example.test/v1".to_string(),
+            Some("ax_dep_test"),
+            Some(&stack),
+        );
+
+        // Nothing deployment-wide; nothing scoped to the disabled worker.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["worker-a".to_string()])
+                || v.target_resources == Some(vec!["worker-b".to_string()])
+        }));
+
+        // Full quartet per command-enabled worker.
+        for worker_id in ["worker-a", "worker-b"] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![worker_id.to_string()]))
+                .collect();
+            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED && v.value == "true"
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL
+                    && v.value == "https://manager.example.test/v1"
+            }));
+            assert!(scoped
+                .iter()
+                .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && v.value == "ax_dep_test"));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && v.value == worker_id
+            }));
+        }
+    }
+
+    #[test]
+    fn commands_polling_env_vars_empty_without_stack() {
+        let vars = commands_polling_env_vars(
+            "https://manager.example.test/v1".to_string(),
+            Some("ax_dep_test"),
+            None,
+        );
+
+        assert!(vars.is_empty());
     }
 }
 

@@ -5124,7 +5124,8 @@
         "required": [
           "commandId",
           "state",
-          "attempt"
+          "attempt",
+          "target"
         ],
         "properties": {
           "attempt": {
@@ -5151,8 +5152,39 @@
           "state": {
             "$ref": "#/components/schemas/CommandState",
             "description": "Current command state"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
           }
         }
+      },
+      "CommandTarget": {
+        "type": "object",
+        "description": "Identifies the specific resource a command is addressed to.",
+        "required": [
+          "resourceId",
+          "resourceType"
+        ],
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "description": "The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id)."
+          },
+          "resourceType": {
+            "$ref": "#/components/schemas/CommandTargetType",
+            "description": "The kind of resource `resource_id` refers to."
+          }
+        }
+      },
+      "CommandTargetType": {
+        "type": "string",
+        "description": "The kind of command-capable resource a command targets.",
+        "enum": [
+          "worker",
+          "container",
+          "daemon"
+        ]
       },
       "CommandsInfo": {
         "type": "object",
@@ -5721,6 +5753,13 @@
           "params": {
             "$ref": "#/components/schemas/BodySpec",
             "description": "Command parameters (JSON, can be large)"
+          },
+          "targetResourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional explicit target resource ID within the deployment's stack.\nWhen omitted, the target is resolved server-side (single-target shorthand):\nexactly one command-capable resource must exist, or resolution fails."
           }
         }
       },
@@ -6293,6 +6332,7 @@
         "required": [
           "protocol",
           "deploymentId",
+          "target",
           "commandId",
           "attempt",
           "command",
@@ -6337,6 +6377,10 @@
           "responseHandling": {
             "$ref": "#/components/schemas/ResponseHandling",
             "description": "Response handling configuration"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
           }
         }
       },
@@ -9576,7 +9620,8 @@
         "type": "object",
         "description": "Request for acquiring leases",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "target"
         ],
         "properties": {
           "deploymentId": {
@@ -9593,6 +9638,10 @@
             "type": "integer",
             "description": "Maximum number of leases to acquire",
             "minimum": 0
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource requesting leases. Required: leases are scoped to a\nsingle target, so callers must identify which resource they're polling for."
           }
         }
       },

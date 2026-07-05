@@ -68,6 +68,12 @@ pub struct Cli {
     #[arg(long, env = "ALIEN_DEPLOYMENT_ID")]
     pub deployment_id: Option<String>,
 
+    /// Target resource ID this runtime polls command leases for — its own
+    /// resource id within the deployment's stack (required when commands
+    /// polling is enabled).
+    #[arg(long, env = "ALIEN_COMMANDS_TARGET_RESOURCE_ID")]
+    pub commands_target_resource_id: Option<String>,
+
     /// Commands polling authentication token
     #[arg(long, env = "ALIEN_COMMANDS_TOKEN")]
     pub commands_token: Option<String>,
@@ -108,6 +114,14 @@ impl Cli {
                 return Err(AlienError::new(ErrorData::ConfigurationInvalid {
                     message: "Deployment ID required when commands polling is enabled".to_string(),
                     field: Some("ALIEN_DEPLOYMENT_ID".to_string()),
+                }));
+            }
+            if self.commands_target_resource_id.is_none() {
+                return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                    message:
+                        "ALIEN_COMMANDS_TARGET_RESOURCE_ID required when commands polling is enabled"
+                            .to_string(),
+                    field: Some("ALIEN_COMMANDS_TARGET_RESOURCE_ID".to_string()),
                 }));
             }
             // Note: commands_token validation deferred to CommandsPolling::from_env()
@@ -219,6 +233,24 @@ mod tests {
         assert_eq!(err.code, "CONFIGURATION_INVALID");
         assert!(err.message.contains("Deployment ID"));
 
+        // Missing target resource id
+        let cli = Cli::try_parse_from([
+            "alien-runtime",
+            "--commands-polling-enabled",
+            "--commands-polling-url",
+            "http://example.com",
+            "--deployment-id",
+            "test-agent-123",
+            "--",
+            "app",
+        ])
+        .unwrap();
+        let err = cli
+            .validate()
+            .expect_err("should require commands target resource id");
+        assert_eq!(err.code, "CONFIGURATION_INVALID");
+        assert!(err.message.contains("ALIEN_COMMANDS_TARGET_RESOURCE_ID"));
+
         // Required fields present (token not required at config time)
         let cli = Cli::try_parse_from([
             "alien-runtime",
@@ -227,6 +259,8 @@ mod tests {
             "http://example.com",
             "--deployment-id",
             "test-agent-123",
+            "--commands-target-resource-id",
+            "worker-1",
             "--",
             "app",
         ])

@@ -286,12 +286,13 @@ impl MockDispatcherAssertions for MockDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BodySpec, ResponseHandling};
+    use crate::types::{BodySpec, CommandTarget, CommandTargetType, ResponseHandling};
     use chrono::Utc;
 
     fn create_test_envelope(command_id: &str, command: &str) -> Envelope {
         Envelope::new(
             "test-agent".to_string(),
+            CommandTarget::new("test-worker", CommandTargetType::Worker),
             command_id.to_string(),
             1,
             None,

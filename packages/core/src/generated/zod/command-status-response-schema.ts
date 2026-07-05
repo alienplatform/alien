@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { CommandResponseSchema } from "./command-response-schema.js";
 import { CommandStateSchema } from "./command-state-schema.js";
+import { CommandTargetSchema } from "./command-target-schema.js";
 
 /**
  * @description Response to status queries
@@ -18,6 +19,9 @@ get "response"(){
               },
 get "state"(){
                 return CommandStateSchema.describe("Command states in the Commands protocol lifecycle")
+              },
+get "target"(){
+                return CommandTargetSchema.describe("Identifies the specific resource a command is addressed to.")
               }
     }).describe("Response to status queries")
 

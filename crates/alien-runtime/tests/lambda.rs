@@ -830,6 +830,7 @@ async fn test_lambda_cmd_small_params_small_response(
         params: BodySpec::inline(&params_bytes),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     };
 
     // Create command - should auto-dispatch via CargoLambdaInvokeDispatcher
@@ -894,6 +895,7 @@ async fn test_lambda_cmd_small_params_large_response(
         params: BodySpec::inline(&params_bytes),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     };
 
     let response = command_server.create_command(request).await?;
@@ -982,6 +984,7 @@ async fn test_lambda_cmd_large_params_small_response(
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     };
 
     // Create command - should require upload
@@ -1074,6 +1077,7 @@ async fn test_lambda_cmd_large_params_large_response(
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     };
 
     let response = command_server.create_command(request).await?;

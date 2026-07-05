@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { CommandTargetSchema } from "./command-target-schema.js";
 
 /**
  * @description Request for acquiring leases
@@ -11,7 +12,10 @@ import * as z from "zod";
 export const LeaseRequestSchema = z.object({
     "deploymentId": z.string().describe("Deployment identifier"),
 "leaseSeconds": z.optional(z.int().min(0).describe("Lease duration in seconds")),
-"maxLeases": z.optional(z.int().min(0).describe("Maximum number of leases to acquire"))
+"maxLeases": z.optional(z.int().min(0).describe("Maximum number of leases to acquire")),
+get "target"(){
+                return CommandTargetSchema.describe("Identifies the specific resource a command is addressed to.")
+              }
     }).describe("Request for acquiring leases")
 
 export type LeaseRequest = z.infer<typeof LeaseRequestSchema>

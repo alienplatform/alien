@@ -317,6 +317,10 @@ mod tests {
     fn create_test_envelope() -> Envelope {
         Envelope {
             protocol: PROTOCOL_VERSION.to_string(),
+            target: crate::types::CommandTarget::new(
+                "test-worker",
+                crate::types::CommandTargetType::Worker,
+            ),
             command_id: "cmd_123".to_string(),
             attempt: 1,
             deadline: None,
@@ -453,6 +457,10 @@ mod tests {
 
         let envelope = Envelope {
             protocol: PROTOCOL_VERSION.to_string(),
+            target: crate::types::CommandTarget::new(
+                "test-worker",
+                crate::types::CommandTargetType::Worker,
+            ),
             command_id: "cmd_decode".to_string(),
             attempt: 1,
             deadline: None,

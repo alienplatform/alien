@@ -7,21 +7,26 @@ use alien_commands::{
     server::CommandDispatcher,
     Envelope,
 };
-use alien_core::{Platform, Worker, WorkerOutputs};
+use alien_core::{CommandTargetType, Platform, WorkerOutputs};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use tracing::{debug, info};
 
-use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore};
+use crate::traits::{CredentialResolver, DeploymentStore};
 
 /// Default command dispatcher for standalone alien-manager.
 ///
-/// Looks up the deployment's stack state, finds the worker with `commands_enabled=true`,
-/// reads its `commands_push_target` from outputs, resolves credentials for the target
-/// environment, and dispatches via the platform-specific mechanism.
+/// The command envelope already names the specific Worker the command is
+/// addressed to (`envelope.target`, resolved server-side by the registry).
+/// This dispatcher reads that worker's `commands_push_target` from the
+/// deployment's stack state, resolves credentials for the target environment,
+/// and dispatches via the platform-specific mechanism.
+///
+/// Only Worker targets ever reach this push dispatcher — Container/Daemon
+/// targets are always Pull (per the ALIEN-219 delivery rule) and are served by
+/// the pending-index poll path, never dispatched here.
 pub struct DefaultCommandDispatcher {
     deployment_store: Arc<dyn DeploymentStore>,
-    release_store: Arc<dyn ReleaseStore>,
     credential_resolver: Arc<dyn CredentialResolver>,
     http_client: reqwest::Client,
 }
@@ -36,42 +41,13 @@ impl Debug for DefaultCommandDispatcher {
 impl DefaultCommandDispatcher {
     pub fn new(
         deployment_store: Arc<dyn DeploymentStore>,
-        release_store: Arc<dyn ReleaseStore>,
         credential_resolver: Arc<dyn CredentialResolver>,
     ) -> Self {
         Self {
             deployment_store,
-            release_store,
             credential_resolver,
             http_client: reqwest::Client::new(),
         }
-    }
-
-    /// Find the worker with `commands_enabled=true` in the release stack for the given platform.
-    fn find_commands_worker(
-        &self,
-        release: &crate::traits::ReleaseRecord,
-        platform: &Platform,
-    ) -> CmdResult<String> {
-        let stack = release.stacks.get(platform).ok_or_else(|| {
-            AlienError::new(CmdErrorData::Other {
-                message: format!(
-                    "Release {} does not contain a stack for platform {}",
-                    release.id, platform
-                ),
-            })
-        })?;
-
-        for (resource_id, entry) in stack.resources() {
-            if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-                if worker.commands_enabled {
-                    return Ok(resource_id.clone());
-                }
-            }
-        }
-        Err(AlienError::new(CmdErrorData::Other {
-            message: "No worker with commands_enabled=true found in release stack".to_string(),
-        }))
     }
 }
 
@@ -119,29 +95,24 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             }));
         }
 
-        // 3. Get release to find the commands-enabled worker
-        let release_id = deployment.current_release_id.as_ref().ok_or_else(|| {
-            AlienError::new(CmdErrorData::Other {
-                message: format!("Deployment {} has no current_release_id", deployment_id),
-            })
-        })?;
+        // 3. The envelope names the specific target resource. Push dispatch
+        // only handles Worker targets — a Container/Daemon target here means a
+        // Pull command was misrouted to the push path, which must never happen
+        // (they are served by the pending-index poll path). Fail loudly.
+        let target = &envelope.target;
+        if target.resource_type != CommandTargetType::Worker {
+            return Err(AlienError::new(CmdErrorData::OperationNotSupported {
+                message: format!(
+                    "Command {} targets a {:?} resource ('{}'), which uses pull delivery and \
+                     cannot be push-dispatched",
+                    envelope.command_id, target.resource_type, target.resource_id
+                ),
+                operation: Some("dispatch".to_string()),
+            }));
+        }
+        let worker_id = &target.resource_id;
 
-        let release = self
-            .release_store
-            .get_release(&system, release_id)
-            .await
-            .context(CmdErrorData::Other {
-                message: format!("Failed to get release {}", release_id),
-            })?
-            .ok_or_else(|| {
-                AlienError::new(CmdErrorData::Other {
-                    message: format!("Release {} not found", release_id),
-                })
-            })?;
-
-        // 4. Find worker with commands_enabled and get its push target from stack state
-        let worker_id = self.find_commands_worker(&release, &deployment.platform)?;
-
+        // 4. Read the targeted worker's push target from stack state.
         let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(CmdErrorData::Other {
                 message: format!("Deployment {} has no stack_state", deployment_id),
@@ -150,7 +121,7 @@ impl CommandDispatcher for DefaultCommandDispatcher {
 
         let worker_outputs: &WorkerOutputs =
             stack_state
-                .get_resource_outputs(&worker_id)
+                .get_resource_outputs(worker_id)
                 .context(CmdErrorData::Other {
                     message: format!("Failed to get worker outputs for '{}'", worker_id),
                 })?;

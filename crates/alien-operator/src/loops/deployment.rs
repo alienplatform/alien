@@ -17,7 +17,6 @@ use crate::OperatorState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
     KubernetesClientConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
-    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
     ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
@@ -80,9 +79,15 @@ impl DeploymentLoopTransport for OperatorTransport {
             .await
             .map_err(|e| e.into_generic())?;
 
+        let stack = state
+            .target_release
+            .as_ref()
+            .or(state.current_release.as_ref())
+            .map(|release| &release.stack);
+
         let enriched_config = match config {
             Some(config) => Some(
-                enrich_config(config, &self.operator_config, self.platform, &self.db)
+                enrich_config(config, &self.operator_config, self.platform, &self.db, stack)
                     .await
                     .map_err(|e| e.into_generic())?,
             ),
@@ -209,8 +214,14 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
             return Ok(0);
         }
     };
-    let mut enriched_config =
-        enrich_config(base_config, &state.config, current.platform, &state.db).await?;
+    let mut enriched_config = enrich_config(
+        base_config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&target_release.stack),
+    )
+    .await?;
 
     // Resolve client config once (it doesn't change between steps)
     let client_config = resolve_client_config(
@@ -289,6 +300,7 @@ async fn enrich_config(
     operator_config: &OperatorConfig,
     platform: Platform,
     db: &OperatorDb,
+    stack: Option<&alien_core::Stack>,
 ) -> Result<DeploymentConfig> {
     // Pass through public endpoints from operator config.
     if operator_config.public_endpoints.is_some() {
@@ -328,31 +340,27 @@ async fn enrich_config(
 
             let mut vars = config.environment_variables.variables.clone();
 
-            vars.extend([
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
-                    value: "true".to_string(),
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
-                    value: commands_url,
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                // SECURITY: The sync token is reused as the commands polling token.
-                // This means deployed application code has access to the operator's sync token.
-                // TODO: Issue a separate, scoped commands-only token during initialization
-                // to limit the blast radius if the application is compromised.
-                // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
-                EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
-                    value: sync_config.token.clone(),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                },
-            ]);
+            // Polling quartet (ENABLED/URL/TOKEN/TARGET_RESOURCE_ID), each var
+            // scoped via `target_resources` to a single command-enabled Worker.
+            // Nothing is injected deployment-wide: a commands-disabled Worker
+            // receiving POLLING_ENABLED=true would crash at startup (the
+            // runtime fail-fast-requires the target id once polling is on) and
+            // would otherwise run a pointless polling loop. Container/Daemon
+            // receiver env is separate, not-yet-landed work.
+            //
+            // SECURITY: The sync token is reused as the commands polling token.
+            // This means deployed application code has access to the operator's sync token.
+            // TODO: Issue a separate, scoped commands-only token during initialization
+            // to limit the blast radius if the application is compromised.
+            // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
+            if let Some(stack) = stack {
+                vars.extend(
+                    stack.worker_command_polling_env_vars(
+                        &commands_url,
+                        Some(&sync_config.token),
+                    ),
+                );
+            }
 
             // Ensure ALIEN_DEPLOYMENT_ID is present (should come from manager config,
             // but add defensively in case it's missing)
@@ -500,7 +508,7 @@ mod tests {
             .encryption_key(encryption_key)
             .build();
 
-        let enriched = enrich_config(config, &operator_config, Platform::Local, &db)
+        let enriched = enrich_config(config, &operator_config, Platform::Local, &db, None)
             .await
             .unwrap();
 
@@ -540,10 +548,113 @@ mod tests {
             .encryption_key(encryption_key)
             .build();
 
-        let enriched = enrich_config(config, &operator_config, Platform::Local, &db)
+        let enriched = enrich_config(config, &operator_config, Platform::Local, &db, None)
             .await
             .unwrap();
 
         assert_eq!(enriched.public_endpoints, Some(public_endpoints));
+    }
+
+    #[tokio::test]
+    async fn enrich_config_scopes_polling_quartet_per_command_enabled_worker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_local").await.unwrap();
+
+        let config = test_deployment_config();
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_dep_test".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+
+        let worker_a = alien_core::Worker::new("worker-a".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let worker_b = alien_core::Worker::new("worker-b".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        // Commands-disabled Worker: must receive NONE of the polling vars —
+        // a deployment-wide POLLING_ENABLED=true would crash it at startup
+        // (the runtime fail-fast-requires the target id once polling is on).
+        let worker_off = alien_core::Worker::new("worker-off".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = alien_core::Stack::new("operator-command-target-stack".to_string())
+            .add(worker_a, alien_core::ResourceLifecycle::Live)
+            .add(worker_b, alien_core::ResourceLifecycle::Live)
+            .add(worker_off, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let enriched = enrich_config(
+            config,
+            &operator_config,
+            Platform::Local,
+            &db,
+            Some(&stack),
+        )
+        .await
+        .unwrap();
+
+        let polling_var_names = [
+            alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+            alien_core::ENV_ALIEN_COMMANDS_POLLING_URL,
+            alien_core::ENV_ALIEN_COMMANDS_TOKEN,
+            alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+        ];
+        let polling_vars: Vec<_> = enriched
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|var| polling_var_names.contains(&var.name.as_str()))
+            .collect();
+
+        // Every polling var is scoped to exactly one command-enabled Worker —
+        // nothing deployment-wide, nothing scoped to the disabled Worker.
+        assert!(polling_vars.iter().all(|var| {
+            var.target_resources == Some(vec!["worker-a".to_string()])
+                || var.target_resources == Some(vec!["worker-b".to_string()])
+        }));
+
+        // Full quartet per command-enabled Worker, with its own target id.
+        for worker_id in ["worker-a", "worker-b"] {
+            let scoped: Vec<_> = polling_vars
+                .iter()
+                .filter(|var| var.target_resources == Some(vec![worker_id.to_string()]))
+                .collect();
+            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED
+                    && var.value == "true"
+            }));
+            assert!(scoped
+                .iter()
+                .any(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && var.value == "ax_dep_test"
+            }));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && var.value == worker_id
+            }));
+        }
     }
 }

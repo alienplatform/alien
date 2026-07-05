@@ -31,6 +31,77 @@ pub enum ErrorData {
         command_id: String,
     },
 
+    /// Explicitly requested command target does not exist in the deployment
+    /// (or is not command-capable). Also returned for an empty resource id.
+    ///
+    /// 404 mirrors the crate's other lookup failures (COMMAND_NOT_FOUND,
+    /// LEASE_NOT_FOUND): the named resource does not exist.
+    #[error(
+        code = "COMMAND_TARGET_NOT_FOUND",
+        message = "Command target '{resource_id}' not found in deployment '{deployment_id}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    CommandTargetNotFound {
+        /// Resource ID that was requested but not found
+        resource_id: String,
+        /// Deployment the target was looked up in
+        deployment_id: String,
+    },
+
+    /// Single-target shorthand was used but the deployment has multiple
+    /// command-capable targets.
+    ///
+    /// 409 mirrors CONFLICT: the request conflicts with the deployment's
+    /// current state and the client resolves it by naming a target.
+    #[error(
+        code = "COMMAND_TARGET_AMBIGUOUS",
+        message = "Deployment '{deployment_id}' has multiple command-capable targets; specify targetResourceId",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    CommandTargetAmbiguous {
+        /// Deployment with more than one command-capable target
+        deployment_id: String,
+    },
+
+    /// The deployment has no command-capable targets at all.
+    ///
+    /// 422: the request is well-formed but unsatisfiable for this deployment
+    /// (no resource has commands enabled) — unlike 400 (malformed) or 404
+    /// (a specific named thing missing).
+    #[error(
+        code = "NO_COMMAND_TARGETS",
+        message = "Deployment '{deployment_id}' has no command-capable targets",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 422
+    )]
+    NoCommandTargets {
+        /// Deployment without any command-capable targets
+        deployment_id: String,
+    },
+
+    /// A command target resource id contains a character that would break the
+    /// `:`-delimited pending-index / idempotency key grammar.
+    ///
+    /// 400: the request (or a stored target) is malformed. Resource ids must
+    /// match the documented `[A-Za-z0-9-_]` charset — in particular they may
+    /// never contain `:`, which delimits key segments.
+    #[error(
+        code = "COMMAND_TARGET_ID_INVALID",
+        message = "Command target id '{resource_id}' is invalid: ids must match [A-Za-z0-9-_] and cannot contain ':'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    CommandTargetIdInvalid {
+        /// The offending resource id
+        resource_id: String,
+    },
+
     /// Invalid state transition attempted on command.
     #[error(
         code = "INVALID_STATE_TRANSITION",

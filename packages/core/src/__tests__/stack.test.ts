@@ -235,6 +235,29 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("defaults container commandsEnabled to false and allows enabling it", () => {
+    const defaultContainer = new alien.Container("api")
+      .code({ type: "image", image: "api:latest" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .port(8080)
+      .permissions("execution")
+      .build()
+
+    expect(defaultContainer.config.commandsEnabled).toBe(false)
+
+    const commandsContainer = new alien.Container("cmd-api")
+      .code({ type: "image", image: "api:latest" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .port(8080)
+      .permissions("execution")
+      .commandsEnabled(true)
+      .build()
+
+    expect(commandsContainer.config.commandsEnabled).toBe(true)
+  })
+
   it("builds and validates a complex stack with permissions", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
