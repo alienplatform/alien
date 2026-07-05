@@ -15,9 +15,12 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 const IP_FORWARDING_CONFIG: &str = "net.ipv4.ip_forward = 1\n";
 const IP_FORWARDING_SYSCTL: &str = "net.ipv4.ip_forward=1";
+const DEFAULT_REGISTRATION_TIMEOUT_SECONDS: u64 = 120;
+const REGISTRATION_POLL_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Args, Debug)]
 pub struct JoinArgs {
@@ -111,6 +114,8 @@ struct MachineBundleManifest {
     version: String,
     service: MachineBundleService,
     artifacts: Vec<MachineBundleArtifact>,
+    #[serde(default)]
+    registration: Option<MachineBundleRegistration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +136,13 @@ struct MachineBundleArtifact {
     sha256: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleRegistration {
+    machine_id_file: String,
+    timeout_seconds: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MachineInstallState {
@@ -138,6 +150,7 @@ struct MachineInstallState {
     service_label: String,
     executable_path: PathBuf,
     config_path: PathBuf,
+    machine_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -326,12 +339,12 @@ fn print_join_plan(plan: &JoinPlan) -> Result<()> {
 async fn install_join(request: JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
 
-    output::step(1, 5, "Resolving machine bundle");
+    output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     let artifact = select_bundle_artifact(&manifest, request.plan.arch)?;
     let artifact_url = resolve_artifact_url(&request.plan.bundle_url, &artifact.url)?;
 
-    output::step(2, 5, "Downloading machine bundle");
+    output::step(2, 6, "Downloading machine bundle");
     std::fs::create_dir_all(&paths.bundle_dir)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -344,7 +357,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         .join(format!("machine-bundle-{}.tar.gz", manifest.version));
     download_verified_artifact(&artifact_url, &artifact.sha256, &archive_path).await?;
 
-    output::step(3, 5, "Installing bundle files");
+    output::step(3, 6, "Installing bundle files");
     let extracted_dir = paths.bundle_dir.join(&manifest.version);
     if extracted_dir.exists() {
         std::fs::remove_dir_all(&extracted_dir)
@@ -364,7 +377,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         })?;
     extract_tar_gz(&archive_path, &extracted_dir)?;
 
-    output::step(4, 5, "Writing machine configuration");
+    output::step(4, 6, "Writing machine configuration");
     let executable_path = safe_join(&extracted_dir, &manifest.service.executable)?;
     if !executable_path.is_file() {
         return Err(AlienError::new(ErrorData::ValidationError {
@@ -389,16 +402,27 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     let config_path = write_machine_config(&paths, &request, &manifest)?;
     configure_ip_forwarding(&request.install_root)?;
-    let state = MachineInstallState {
+    let mut state = MachineInstallState {
         bundle_version: manifest.version.clone(),
         service_label: manifest.service.label.clone(),
         executable_path: executable_path.clone(),
         config_path: config_path.clone(),
+        machine_id: None,
     };
 
-    output::step(5, 5, "Installing machine service");
+    output::step(5, 6, "Installing machine service");
     install_machine_service(&manifest.service, &executable_path, &config_path)?;
     write_install_state(&paths, &state)?;
+
+    output::step(6, 6, "Waiting for machine registration");
+    if let Some(registration) = &manifest.registration {
+        let machine_id = wait_for_registration(&request.install_root, registration).await?;
+        state.machine_id = Some(machine_id.clone());
+        write_install_state(&paths, &state)?;
+        output::label_value("Machine", &machine_id);
+    } else {
+        output::info("Registration wait skipped; bundle manifest has no machine id file");
+    }
 
     output::success("Machine service installed and started");
     output::info(&format!("  Service: {}", state.service_label));
@@ -648,6 +672,80 @@ fn configure_ip_forwarding(install_root: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn wait_for_registration(
+    install_root: &Path,
+    registration: &MachineBundleRegistration,
+) -> Result<String> {
+    let path = registration_file_path(install_root, registration)?;
+    let timeout = Duration::from_secs(
+        registration
+            .timeout_seconds
+            .unwrap_or(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
+    );
+    wait_for_machine_id_file(
+        &path,
+        timeout,
+        Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
+    )
+    .await
+}
+
+fn registration_file_path(
+    install_root: &Path,
+    registration: &MachineBundleRegistration,
+) -> Result<PathBuf> {
+    let relative = safe_relative_path(
+        "bundle.registration.machineIdFile",
+        &normalize_non_empty(
+            "bundle.registration.machineIdFile",
+            &registration.machine_id_file,
+        )?,
+    )?;
+    Ok(if install_root == Path::new("/") {
+        PathBuf::from("/").join(relative)
+    } else {
+        install_root.join(relative)
+    })
+}
+
+async fn wait_for_machine_id_file(
+    path: &Path,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<String> {
+    let started = Instant::now();
+
+    loop {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                let machine_id = contents.trim();
+                if !machine_id.is_empty() {
+                    return Ok(machine_id.to_string());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: error.to_string(),
+                }));
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Timed out waiting for machine registration at {}",
+                    path.display()
+                ),
+            }));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 fn apply_ip_forwarding_now() -> Result<()> {
     let output = Command::new("sysctl")
         .arg("-w")
@@ -851,6 +949,10 @@ fn rooted_path(root: &Path, relative: &str) -> PathBuf {
 }
 
 fn safe_join(base: &Path, relative: &str) -> Result<PathBuf> {
+    Ok(base.join(safe_relative_path("bundle.service.executable", relative)?))
+}
+
+fn safe_relative_path(field: &str, relative: &str) -> Result<PathBuf> {
     let relative_path = Path::new(relative);
     if relative_path.is_absolute()
         || relative_path
@@ -858,11 +960,11 @@ fn safe_join(base: &Path, relative: &str) -> Result<PathBuf> {
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(AlienError::new(ErrorData::ValidationError {
-            field: "bundle.service.executable".to_string(),
-            message: "path must be relative and stay inside the bundle".to_string(),
+            field: field.to_string(),
+            message: "path must be relative and stay inside the install root".to_string(),
         }));
     }
-    Ok(base.join(relative_path))
+    Ok(relative_path.to_path_buf())
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -1077,6 +1179,7 @@ mod tests {
                     sha256: "unused".to_string(),
                 },
             ],
+            registration: None,
         };
 
         let artifact = select_bundle_artifact(&manifest, MachineArch::X64).expect("artifact");
@@ -1126,6 +1229,7 @@ mod tests {
                 args: vec![],
             },
             artifacts: vec![],
+            registration: None,
         };
         let paths = install_paths(root.path());
 
@@ -1190,6 +1294,7 @@ mod tests {
                 args: vec![],
             },
             artifacts: vec![],
+            registration: None,
         };
         let args = JoinArgs {
             token: Some("jt_new".to_string()),
@@ -1239,12 +1344,14 @@ mod tests {
             service_label: "dev.alien.old".to_string(),
             executable_path: PathBuf::from("/old/bin"),
             config_path: PathBuf::from("/old/config.toml"),
+            machine_id: None,
         };
         let second = MachineInstallState {
             bundle_version: "new".to_string(),
             service_label: "dev.alien.new".to_string(),
             executable_path: PathBuf::from("/new/bin"),
             config_path: PathBuf::from("/new/config.toml"),
+            machine_id: Some("machine-new".to_string()),
         };
 
         write_install_state(&paths, &first).expect("write first state");
@@ -1255,6 +1362,61 @@ mod tests {
         assert_eq!(stored.service_label, "dev.alien.new");
         assert_eq!(stored.executable_path, PathBuf::from("/new/bin"));
         assert_eq!(stored.config_path, PathBuf::from("/new/config.toml"));
+        assert_eq!(stored.machine_id.as_deref(), Some("machine-new"));
+    }
+
+    #[tokio::test]
+    async fn registration_wait_reads_machine_id_file() {
+        let root = tempfile::tempdir().expect("install root");
+        let registration = MachineBundleRegistration {
+            machine_id_file: "var/lib/alien/machine/machine-id".to_string(),
+            timeout_seconds: Some(1),
+        };
+        let machine_id_path = registration_file_path(root.path(), &registration).expect("path");
+        std::fs::create_dir_all(machine_id_path.parent().expect("parent")).expect("state dir");
+        std::fs::write(&machine_id_path, " machine-123\n").expect("machine id");
+
+        let machine_id = wait_for_registration(root.path(), &registration)
+            .await
+            .expect("registration");
+
+        assert_eq!(machine_id, "machine-123");
+    }
+
+    #[tokio::test]
+    async fn registration_wait_observes_delayed_machine_id_file() {
+        let root = tempfile::tempdir().expect("install root");
+        let machine_id_path = root.path().join("var/lib/alien/machine/machine-id");
+        let writer_path = machine_id_path.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::create_dir_all(writer_path.parent().expect("parent")).expect("state dir");
+            std::fs::write(writer_path, "machine-delayed").expect("machine id");
+        });
+
+        let machine_id = wait_for_machine_id_file(
+            &machine_id_path,
+            Duration::from_secs(1),
+            Duration::from_millis(5),
+        )
+        .await
+        .expect("registration");
+
+        assert_eq!(machine_id, "machine-delayed");
+    }
+
+    #[test]
+    fn registration_file_path_must_stay_inside_install_root() {
+        let root = tempfile::tempdir().expect("install root");
+        let registration = MachineBundleRegistration {
+            machine_id_file: "../machine-id".to_string(),
+            timeout_seconds: Some(1),
+        };
+
+        let error = registration_file_path(root.path(), &registration)
+            .expect_err("parent directory traversal should fail");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
     #[test]
