@@ -309,7 +309,7 @@ async fn poll_queue_once(
                 source: binding_name.to_string(),
                 payload: payload_bytes,
                 receipt_handle: msg.receipt_handle.clone(),
-                attempt_count: 1,
+                attempt_count: msg.attempt,
                 timestamp: Some(now_timestamp()),
                 attributes: std::collections::HashMap::new(),
             })),

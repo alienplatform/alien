@@ -607,6 +607,19 @@ pub struct QueueMessage {
     pub payload: MessagePayload,
     /// Opaque receipt handle for acknowledgment (backend-specific, short-lived)
     pub receipt_handle: String,
+    /// Delivery attempt for this message, 1-based (1 = first delivery).
+    ///
+    /// Providers that do not report redelivery counts always set 1; the local
+    /// provider reports the real per-message count so handlers can enforce
+    /// retry limits.
+    #[serde(default = "first_attempt")]
+    pub attempt: u32,
+}
+
+/// Serde default for [`QueueMessage::attempt`]: treat missing counts as the
+/// first delivery.
+fn first_attempt() -> u32 {
+    1
 }
 
 /// Maximum message size in bytes (64 KiB = 65,536 bytes)

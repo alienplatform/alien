@@ -229,8 +229,11 @@ with `INSERT OR IGNORE`, so re-opening an existing store never overwrites it.
       attempt = attempt + 1,
       receipt_handle = ?2          -- fresh UUID for THIS delivery
   WHERE id = ?3
-  RETURNING payload_type, payload_data;
+  RETURNING payload_type, payload_data, attempt;
   ```
+
+  The returned `attempt` (post-increment, so 1-based) is surfaced to the
+  caller on the delivered message, so consumers can enforce retry limits.
 
   A single bound parameter cannot mint a distinct UUID per claimed row, so a
   batch receive runs as **one `BEGIN IMMEDIATE` transaction**: select the due

@@ -215,7 +215,7 @@ impl LocalQueue {
                         "UPDATE messages \
                          SET visible_at = ?1, attempt = attempt + 1, receipt_handle = ?2 \
                          WHERE id = ?3 \
-                         RETURNING payload_type, payload_data",
+                         RETURNING payload_type, payload_data, attempt",
                         (visible_until, receipt.as_str(), id),
                     )
                     .await
@@ -242,9 +242,20 @@ impl LocalQueue {
                             format!("claimed message {id} has a non-text payload_data"),
                         ))
                     })?;
+                    let attempt = row
+                        .get(2)
+                        .and_then(as_i64)
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| {
+                            AlienError::new(queue_error(
+                                "receive",
+                                format!("claimed message {id} has an invalid attempt count"),
+                            ))
+                        })?;
                     messages.push(QueueMessage {
                         payload: decode_payload(&payload_type, payload_data)?,
                         receipt_handle: format!("{id}:{receipt}"),
+                        attempt,
                     });
                 }
 
@@ -706,6 +717,13 @@ mod tests {
         assert_ne!(
             second[0].receipt_handle, first[0].receipt_handle,
             "each delivery must mint a fresh receipt handle"
+        );
+
+        // ... with the real attempt count surfaced to the caller ...
+        assert_eq!(first[0].attempt, 1, "first delivery must report attempt 1");
+        assert_eq!(
+            second[0].attempt, 2,
+            "redelivery must report attempt 2 to the caller"
         );
 
         // ... with attempt incremented once per delivery (1 then 2).

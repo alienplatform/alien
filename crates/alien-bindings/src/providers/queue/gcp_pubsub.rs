@@ -154,6 +154,9 @@ impl Queue for GcpPubSubQueue {
                 Some(QueueMessage {
                     payload,
                     receipt_handle: received_msg.ack_id,
+                    // Pub/Sub delivery attempts are only populated with a
+                    // dead-letter policy; not plumbed on this path yet.
+                    attempt: 1,
                 })
             })
             .collect();
