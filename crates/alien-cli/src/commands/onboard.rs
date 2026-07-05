@@ -364,12 +364,19 @@ async fn fetch_active_release_stack_inputs(
         });
     };
 
+    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.as_ref()) else {
+        return Ok(ActiveReleaseStackInputs {
+            supported_platforms: Vec::new(),
+            inputs_by_platform: Vec::new(),
+        });
+    };
+
     let stack_values = [
-        (Platform::Aws, release.stack.aws.as_ref()),
-        (Platform::Gcp, release.stack.gcp.as_ref()),
-        (Platform::Azure, release.stack.azure.as_ref()),
-        (Platform::Kubernetes, release.stack.kubernetes.as_ref()),
-        (Platform::Local, release.stack.local.as_ref()),
+        (Platform::Aws, stack_by_platform.aws.as_ref()),
+        (Platform::Gcp, stack_by_platform.gcp.as_ref()),
+        (Platform::Azure, stack_by_platform.azure.as_ref()),
+        (Platform::Kubernetes, stack_by_platform.kubernetes.as_ref()),
+        (Platform::Local, stack_by_platform.local.as_ref()),
     ];
     let mut inputs_by_platform = Vec::new();
     for (platform, stack_value) in stack_values

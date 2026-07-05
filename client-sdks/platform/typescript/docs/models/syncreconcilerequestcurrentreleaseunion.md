@@ -7,7 +7,6 @@
 
 ```typescript
 const value: models.SyncReconcileRequestCurrentRelease = {
-  releaseId: "<id>",
   stack: {
     id: "<id>",
     resources: {

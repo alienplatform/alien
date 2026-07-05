@@ -60,11 +60,23 @@ export type CreateProjectFromTemplateCloudformationRequest = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type CreateProjectFromTemplateAgentImageRequest = {
+export type CreateProjectFromTemplateOperatorImageRequest = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
   /**
    * Image name (e.g., "acme-operator")
    */
@@ -125,7 +137,10 @@ export type CreateProjectFromTemplatePackagesConfigRequest = {
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  agentImage?: CreateProjectFromTemplateAgentImageRequest | null | undefined;
+  operatorImage?:
+    | CreateProjectFromTemplateOperatorImageRequest
+    | null
+    | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
@@ -270,11 +285,23 @@ export type CreateProjectFromTemplateCloudformationResponse = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type CreateProjectFromTemplateAgentImageResponse = {
+export type CreateProjectFromTemplateOperatorImageResponse = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
   /**
    * Image name (e.g., "acme-operator")
    */
@@ -335,7 +362,10 @@ export type CreateProjectFromTemplatePackagesConfigResponse = {
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  agentImage?: CreateProjectFromTemplateAgentImageResponse | null | undefined;
+  operatorImage?:
+    | CreateProjectFromTemplateOperatorImageResponse
+    | null
+    | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
@@ -528,30 +558,36 @@ export function createProjectFromTemplateCloudformationRequestToJSON(
 }
 
 /** @internal */
-export type CreateProjectFromTemplateAgentImageRequest$Outbound = {
+export type CreateProjectFromTemplateOperatorImageRequest$Outbound = {
+  brand?: string | null | undefined;
   displayName: string;
+  envPrefix?: string | null | undefined;
+  labelDomain?: string | null | undefined;
   name: string;
   enabled: boolean;
 };
 
 /** @internal */
-export const CreateProjectFromTemplateAgentImageRequest$outboundSchema:
+export const CreateProjectFromTemplateOperatorImageRequest$outboundSchema:
   z.ZodType<
-    CreateProjectFromTemplateAgentImageRequest$Outbound,
-    CreateProjectFromTemplateAgentImageRequest
+    CreateProjectFromTemplateOperatorImageRequest$Outbound,
+    CreateProjectFromTemplateOperatorImageRequest
   > = z.object({
+    brand: z.nullable(z.string()).optional(),
     displayName: z.string(),
+    envPrefix: z.nullable(z.string()).optional(),
+    labelDomain: z.nullable(z.string()).optional(),
     name: z.string(),
     enabled: z.boolean(),
   });
 
-export function createProjectFromTemplateAgentImageRequestToJSON(
-  createProjectFromTemplateAgentImageRequest:
-    CreateProjectFromTemplateAgentImageRequest,
+export function createProjectFromTemplateOperatorImageRequestToJSON(
+  createProjectFromTemplateOperatorImageRequest:
+    CreateProjectFromTemplateOperatorImageRequest,
 ): string {
   return JSON.stringify(
-    CreateProjectFromTemplateAgentImageRequest$outboundSchema.parse(
-      createProjectFromTemplateAgentImageRequest,
+    CreateProjectFromTemplateOperatorImageRequest$outboundSchema.parse(
+      createProjectFromTemplateOperatorImageRequest,
     ),
   );
 }
@@ -617,8 +653,8 @@ export type CreateProjectFromTemplatePackagesConfigRequest$Outbound = {
     | CreateProjectFromTemplateCloudformationRequest$Outbound
     | null
     | undefined;
-  agentImage?:
-    | CreateProjectFromTemplateAgentImageRequest$Outbound
+  operatorImage?:
+    | CreateProjectFromTemplateOperatorImageRequest$Outbound
     | null
     | undefined;
   helm?: CreateProjectFromTemplateHelmRequest$Outbound | null | undefined;
@@ -642,8 +678,10 @@ export const CreateProjectFromTemplatePackagesConfigRequest$outboundSchema:
         CreateProjectFromTemplateCloudformationRequest$outboundSchema
       ),
     ).optional(),
-    agentImage: z.nullable(
-      z.lazy(() => CreateProjectFromTemplateAgentImageRequest$outboundSchema),
+    operatorImage: z.nullable(
+      z.lazy(() =>
+        CreateProjectFromTemplateOperatorImageRequest$outboundSchema
+      ),
     ).optional(),
     helm: z.nullable(
       z.lazy(() => CreateProjectFromTemplateHelmRequest$outboundSchema),
@@ -837,26 +875,31 @@ export function createProjectFromTemplateCloudformationResponseFromJSON(
 }
 
 /** @internal */
-export const CreateProjectFromTemplateAgentImageResponse$inboundSchema:
-  z.ZodType<CreateProjectFromTemplateAgentImageResponse, unknown> = z.object({
-    displayName: z.string(),
-    name: z.string(),
-    enabled: z.boolean(),
-  });
+export const CreateProjectFromTemplateOperatorImageResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateOperatorImageResponse, unknown> = z.object(
+    {
+      brand: z.nullable(z.string()).optional(),
+      displayName: z.string(),
+      envPrefix: z.nullable(z.string()).optional(),
+      labelDomain: z.nullable(z.string()).optional(),
+      name: z.string(),
+      enabled: z.boolean(),
+    },
+  );
 
-export function createProjectFromTemplateAgentImageResponseFromJSON(
+export function createProjectFromTemplateOperatorImageResponseFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  CreateProjectFromTemplateAgentImageResponse,
+  CreateProjectFromTemplateOperatorImageResponse,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      CreateProjectFromTemplateAgentImageResponse$inboundSchema.parse(
+      CreateProjectFromTemplateOperatorImageResponse$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'CreateProjectFromTemplateAgentImageResponse' from JSON`,
+    `Failed to parse 'CreateProjectFromTemplateOperatorImageResponse' from JSON`,
   );
 }
 
@@ -916,8 +959,10 @@ export const CreateProjectFromTemplatePackagesConfigResponse$inboundSchema:
           CreateProjectFromTemplateCloudformationResponse$inboundSchema
         ),
       ).optional(),
-      agentImage: z.nullable(
-        z.lazy(() => CreateProjectFromTemplateAgentImageResponse$inboundSchema),
+      operatorImage: z.nullable(
+        z.lazy(() =>
+          CreateProjectFromTemplateOperatorImageResponse$inboundSchema
+        ),
       ).optional(),
       helm: z.nullable(
         z.lazy(() => CreateProjectFromTemplateHelmResponse$inboundSchema),

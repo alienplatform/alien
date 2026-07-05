@@ -358,14 +358,13 @@ impl AzureNetworkController {
                 if stack_contains_postgres(ctx) && private_endpoint_subnet_name.is_none() {
                     return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                         resource_id: config.id.clone(),
-                        message:
-                            "BYO-VNet on Azure has a Postgres resource but no \
+                        message: "BYO-VNet on Azure has a Postgres resource but no \
                              privateEndpointSubnetName. A Postgres Flexible Server is reached \
                              through a Private Endpoint that requires its own dedicated subnet \
                              (the private subnet is the Container Apps infrastructure subnet and \
                              cannot be shared). Set privateEndpointSubnetName on the BYO-VNet \
                              configuration."
-                                .to_string(),
+                            .to_string(),
                     }));
                 }
                 self.private_endpoint_subnet_name = private_endpoint_subnet_name.clone();
@@ -1929,11 +1928,10 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
     use alien_azure_clients::azure::models::{
-        nat_gateway::NatGateway, network_security_group::NetworkSecurityGroup,
+        nat_gateway::NatGateway,
+        network_security_group::NetworkSecurityGroup,
         public_ip_address::PublicIpAddress,
-        virtual_network::{
-            AddressSpace, Subnet, VirtualNetwork, VirtualNetworkPropertiesFormat,
-        },
+        virtual_network::{AddressSpace, Subnet, VirtualNetwork, VirtualNetworkPropertiesFormat},
     };
     use alien_azure_clients::azure::network::MockNetworkApi;
     use alien_azure_clients::long_running_operation::OperationResult;
@@ -1967,7 +1965,8 @@ mod tests {
         // subnet that backs the Container Apps environment.
         let public = AzureNetworkController::calculate_public_subnet_cidr("10.46.0.0/16");
         let private = AzureNetworkController::calculate_private_subnet_cidr("10.46.0.0/16");
-        let appgw = AzureNetworkController::calculate_application_gateway_subnet_cidr("10.46.0.0/16");
+        let appgw =
+            AzureNetworkController::calculate_application_gateway_subnet_cidr("10.46.0.0/16");
         let pe = AzureNetworkController::calculate_private_endpoint_subnet_cidr("10.46.0.0/16");
         assert_ne!(pe, public);
         assert_ne!(pe, private);
@@ -2038,21 +2037,19 @@ mod tests {
     #[tokio::test]
     async fn byo_vnet_with_pe_subnet_resolves_to_named_subnet() {
         let mut mock_network = MockNetworkApi::new();
-        mock_network
-            .expect_get_virtual_network()
-            .returning(|_, _| {
-                Ok(VirtualNetwork {
-                    location: Some("eastus".to_string()),
-                    properties: Some(VirtualNetworkPropertiesFormat {
-                        address_space: Some(AddressSpace {
-                            address_prefixes: vec!["10.0.0.0/16".to_string()],
-                            ..Default::default()
-                        }),
+        mock_network.expect_get_virtual_network().returning(|_, _| {
+            Ok(VirtualNetwork {
+                location: Some("eastus".to_string()),
+                properties: Some(VirtualNetworkPropertiesFormat {
+                    address_space: Some(AddressSpace {
+                        address_prefixes: vec!["10.0.0.0/16".to_string()],
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-            });
+                }),
+                ..Default::default()
+            })
+        });
         let mock_network = Arc::new(mock_network);
 
         let mut mock_provider = MockPlatformServiceProvider::new();

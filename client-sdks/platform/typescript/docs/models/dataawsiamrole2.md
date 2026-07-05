@@ -11,15 +11,15 @@ let value: DataAwsIamRole2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unknown",
     lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -27,10 +27,10 @@ let value: DataAwsIamRole2 = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `managementPermissionsApplied`                             | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `roleArn`                                                  | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `roleName`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus43](../models/heartbeatstatus43.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"awsIamRole"*                                             | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `managementPermissionsApplied`                                             | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `roleArn`                                                                  | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `roleName`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus47](../models/resourceheartbeatstatus47.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"awsIamRole"*                                                             | :heavy_check_mark:                                                         | N/A                                                                        |

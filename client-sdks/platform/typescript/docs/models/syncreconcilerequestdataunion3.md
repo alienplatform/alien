@@ -17,15 +17,15 @@ const value: models.DataHorizonPlatform = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "failed",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "horizonPlatform",
 };
@@ -64,8 +64,8 @@ const value: models.DataLocal3 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],

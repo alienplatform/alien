@@ -3,70 +3,65 @@
 
 ## Supported Types
 
-### `operations.DataAwsIamRole2`
+### `operations.DataAwsVpc`
 
 ```typescript
-const value: operations.DataAwsIamRole2 = {
-  managementPermissionsApplied: true,
+const value: operations.DataAwsVpc = {
+  availabilityZones: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  isByoVpc: true,
+  privateSubnetIds: [],
+  publicSubnetIds: [],
+  routeTableCount: 759318,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
-  },
-  backend: "awsIamRole",
-};
-```
-
-### `operations.DataGcpServiceAccount2`
-
-```typescript
-const value: operations.DataGcpServiceAccount2 = {
-  impersonationGranted: false,
-  roleBound: false,
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
-  },
-  backend: "gcpServiceAccount",
-};
-```
-
-### `operations.DataAzureManagedIdentity2`
-
-```typescript
-const value: operations.DataAzureManagedIdentity2 = {
-  roleAssignmentIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  status: {
-    collectionIssues: [],
-    health: "healthy",
-    lifecycle: "creating",
+    lifecycle: "unknown",
     partial: true,
     stale: false,
   },
-  backend: "azureManagedIdentity",
+  backend: "awsVpc",
+};
+```
+
+### `operations.DataGcpVpc`
+
+```typescript
+const value: operations.DataGcpVpc = {
+  isByoVpc: true,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpVpc",
+};
+```
+
+### `operations.DataAzureVnet`
+
+```typescript
+const value: operations.DataAzureVnet = {
+  isByoVnet: true,
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "unknown",
+    partial: true,
+    stale: true,
+  },
+  backend: "azureVnet",
 };
 ```
 

@@ -1,0 +1,9 @@
+---
+source: crates/alien-cli/src/commands/whoami.rs
+expression: render_user_subject(&user_subject(None))
+---
+Signed in as user@example.com
+Account ID usr_7k2m
+Account Type user
+Role workspace.admin
+Workspace ID ws_4b21

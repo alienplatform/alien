@@ -64,6 +64,11 @@ import {
   NetworkHeartbeatData$outboundSchema,
 } from "./networkheartbeatdata.js";
 import {
+  PostgresHeartbeatData,
+  PostgresHeartbeatData$Outbound,
+  PostgresHeartbeatData$outboundSchema,
+} from "./postgresheartbeatdata.js";
+import {
   QueueHeartbeatData,
   QueueHeartbeatData$Outbound,
   QueueHeartbeatData$outboundSchema,
@@ -154,6 +159,11 @@ export type ResourceHeartbeatDataVault = {
   resourceType: "vault";
 };
 
+export type ResourceHeartbeatDataPostgres = {
+  data: PostgresHeartbeatData;
+  resourceType: "postgres";
+};
+
 export type ResourceHeartbeatDataKv = {
   data: KvHeartbeatData;
   resourceType: "kv";
@@ -203,6 +213,7 @@ export type ResourceHeartbeatData =
   | ResourceHeartbeatDataKubernetesCluster
   | ResourceHeartbeatDataQueue
   | ResourceHeartbeatDataKv
+  | ResourceHeartbeatDataPostgres
   | ResourceHeartbeatDataVault
   | ResourceHeartbeatDataServiceAccount
   | ResourceHeartbeatDataNetwork
@@ -496,6 +507,31 @@ export function resourceHeartbeatDataVaultToJSON(
 }
 
 /** @internal */
+export type ResourceHeartbeatDataPostgres$Outbound = {
+  data: PostgresHeartbeatData$Outbound;
+  resourceType: "postgres";
+};
+
+/** @internal */
+export const ResourceHeartbeatDataPostgres$outboundSchema: z.ZodType<
+  ResourceHeartbeatDataPostgres$Outbound,
+  ResourceHeartbeatDataPostgres
+> = z.object({
+  data: PostgresHeartbeatData$outboundSchema,
+  resourceType: z.literal("postgres"),
+});
+
+export function resourceHeartbeatDataPostgresToJSON(
+  resourceHeartbeatDataPostgres: ResourceHeartbeatDataPostgres,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatDataPostgres$outboundSchema.parse(
+      resourceHeartbeatDataPostgres,
+    ),
+  );
+}
+
+/** @internal */
 export type ResourceHeartbeatDataKv$Outbound = {
   data: KvHeartbeatData$Outbound;
   resourceType: "kv";
@@ -702,6 +738,7 @@ export type ResourceHeartbeatData$Outbound =
   | ResourceHeartbeatDataKubernetesCluster$Outbound
   | ResourceHeartbeatDataQueue$Outbound
   | ResourceHeartbeatDataKv$Outbound
+  | ResourceHeartbeatDataPostgres$Outbound
   | ResourceHeartbeatDataVault$Outbound
   | ResourceHeartbeatDataServiceAccount$Outbound
   | ResourceHeartbeatDataNetwork$Outbound
@@ -727,6 +764,7 @@ export const ResourceHeartbeatData$outboundSchema: z.ZodType<
   z.lazy(() => ResourceHeartbeatDataKubernetesCluster$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataQueue$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataKv$outboundSchema),
+  z.lazy(() => ResourceHeartbeatDataPostgres$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataVault$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataServiceAccount$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataNetwork$outboundSchema),

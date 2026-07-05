@@ -124,6 +124,16 @@ export class Daemon {
   }
 
   /**
+   * Sets the grace period used when stopping daemon instances during updates, drains, and deletes.
+   *
+   * The value is expressed in seconds. Valid values are 1 through 86400.
+   */
+  public stopGracePeriod(seconds: number): this {
+    this._config.stopGracePeriodSeconds = seconds
+    return this
+  }
+
+  /**
    * Sets backend runtime options for trusted daemon infrastructure.
    *
    * Use this only for daemons that intentionally need host-level access, such

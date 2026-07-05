@@ -118,11 +118,23 @@ export type ProjectCloudformation = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type ProjectAgentImage = {
+export type ProjectOperatorImage = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
   /**
    * Image name (e.g., "acme-operator")
    */
@@ -180,7 +192,7 @@ export type ProjectPackagesConfig = {
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  agentImage?: ProjectAgentImage | null | undefined;
+  operatorImage?: ProjectOperatorImage | null | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
@@ -347,22 +359,25 @@ export function projectCloudformationFromJSON(
 }
 
 /** @internal */
-export const ProjectAgentImage$inboundSchema: z.ZodType<
-  ProjectAgentImage,
+export const ProjectOperatorImage$inboundSchema: z.ZodType<
+  ProjectOperatorImage,
   unknown
 > = z.object({
+  brand: z.nullable(z.string()).optional(),
   displayName: z.string(),
+  envPrefix: z.nullable(z.string()).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
   name: z.string(),
   enabled: z.boolean(),
 });
 
-export function projectAgentImageFromJSON(
+export function projectOperatorImageFromJSON(
   jsonString: string,
-): SafeParseResult<ProjectAgentImage, SDKValidationError> {
+): SafeParseResult<ProjectOperatorImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ProjectAgentImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ProjectAgentImage' from JSON`,
+    (x) => ProjectOperatorImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectOperatorImage' from JSON`,
   );
 }
 
@@ -411,7 +426,7 @@ export const ProjectPackagesConfig$inboundSchema: z.ZodType<
   cli: z.nullable(z.lazy(() => ProjectCli$inboundSchema)).optional(),
   cloudformation: z.nullable(z.lazy(() => ProjectCloudformation$inboundSchema))
     .optional(),
-  agentImage: z.nullable(z.lazy(() => ProjectAgentImage$inboundSchema))
+  operatorImage: z.nullable(z.lazy(() => ProjectOperatorImage$inboundSchema))
     .optional(),
   helm: z.nullable(z.lazy(() => ProjectHelm$inboundSchema)).optional(),
   terraform: z.nullable(z.lazy(() => ProjectTerraform$inboundSchema))

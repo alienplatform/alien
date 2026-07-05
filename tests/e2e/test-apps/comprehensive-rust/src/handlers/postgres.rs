@@ -89,9 +89,7 @@ async fn round_trip(client: &tokio_postgres::Client) -> Result<()> {
     let probe_id: i32 = (Utc::now().timestamp_millis() % 1_000_000) as i32;
 
     client
-        .batch_execute(
-            "CREATE TEMP TABLE alien_e2e_probe (id INT PRIMARY KEY, note TEXT NOT NULL)",
-        )
+        .batch_execute("CREATE TEMP TABLE alien_e2e_probe (id INT PRIMARY KEY, note TEXT NOT NULL)")
         .await
         .into_alien_error()
         .context(ErrorData::PostgresOperationFailed {

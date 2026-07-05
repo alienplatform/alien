@@ -1070,6 +1070,16 @@ export type NewDeploymentRequestNetworkByoVnetAzure = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1302,6 +1312,14 @@ export type NewDeploymentRequest = {
    * Stack input values provided by the deployment creator.
    */
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
+  /**
+   * Display-only scope reported by the Operator manifest.
+   */
+  operatorScope?: string | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest.
+   */
+  operatorPermission?: string | undefined;
 };
 
 /** @internal */
@@ -3481,6 +3499,7 @@ export const NewDeploymentRequestTypeByoVnetAzure$outboundSchema: z.ZodEnum<
 /** @internal */
 export type NewDeploymentRequestNetworkByoVnetAzure$Outbound = {
   application_gateway_subnet_name?: string | null | undefined;
+  private_endpoint_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -3493,6 +3512,7 @@ export const NewDeploymentRequestNetworkByoVnetAzure$outboundSchema: z.ZodType<
   NewDeploymentRequestNetworkByoVnetAzure
 > = z.object({
   applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+  privateEndpointSubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.string(),
   publicSubnetName: z.string(),
   type: NewDeploymentRequestTypeByoVnetAzure$outboundSchema,
@@ -3500,6 +3520,7 @@ export const NewDeploymentRequestNetworkByoVnetAzure$outboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     applicationGatewaySubnetName: "application_gateway_subnet_name",
+    privateEndpointSubnetName: "private_endpoint_subnet_name",
     privateSubnetName: "private_subnet_name",
     publicSubnetName: "public_subnet_name",
     vnetResourceId: "vnet_resource_id",
@@ -3808,6 +3829,8 @@ export type NewDeploymentRequest$Outbound = {
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
+  operatorScope?: string | undefined;
+  operatorPermission?: string | undefined;
 };
 
 /** @internal */
@@ -3841,6 +3864,8 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
+  operatorScope: z.string().optional(),
+  operatorPermission: z.string().optional(),
 });
 
 export function newDeploymentRequestToJSON(

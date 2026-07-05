@@ -28,7 +28,7 @@ let value: DataServiceAccount = {
         {
           message: "<value>",
           reason: "timed-out",
-          severity: "error",
+          severity: "warning",
           source: "<value>",
         },
       ],
@@ -45,7 +45,7 @@ let value: DataServiceAccount = {
 
 ## Fields
 
-| Field                   | Type                    | Required                | Description             |
-| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion9* | :heavy_check_mark:      | N/A                     |
-| `resourceType`          | *"service-account"*     | :heavy_check_mark:      | N/A                     |
+| Field                    | Type                     | Required                 | Description              |
+| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
+| `data`                   | *operations.DataUnion10* | :heavy_check_mark:       | N/A                      |
+| `resourceType`           | *"service-account"*      | :heavy_check_mark:       | N/A                      |

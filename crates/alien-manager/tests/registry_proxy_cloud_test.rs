@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use alien_core::{
@@ -38,6 +38,15 @@ use tracing::info;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+static CLOUD_PROXY_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+async fn cloud_proxy_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    CLOUD_PROXY_ENV_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
 
 /// Workspace-admin caller used to drive store operations in tests.
 fn test_subject() -> Subject {
@@ -137,7 +146,7 @@ async fn build_test_image(
         .await
         .unwrap();
 
-    let (image, _) = dockdash::Image::builder()
+    let (_image, _) = dockdash::Image::builder()
         .platform("linux", &dockdash::Arch::Amd64)
         .layer(layer)
         .cmd(vec!["cat".to_string(), "/app/test.txt".to_string()])
@@ -221,7 +230,7 @@ impl CloudProxyTest {
         let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db.clone()));
         let deployment_store: Arc<dyn DeploymentStore> =
             Arc::new(SqliteDeploymentStore::new(db.clone()));
-        let release_store: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let _release_store: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
 
         // Create admin token
         let admin_raw = format!(
@@ -430,7 +439,7 @@ impl CloudProxyTest {
             status: DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(ReleaseInfo {
-                release_id: release.id.clone(),
+                release_id: Some(release.id.clone()),
                 version: None,
                 description: None,
                 stack,
@@ -452,7 +461,10 @@ impl CloudProxyTest {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await
@@ -506,6 +518,7 @@ fn base64_encode(input: &str) -> String {
 
 #[tokio::test]
 async fn test_proxy_push_pull_ecr() {
+    let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
     let region = require_env!("AWS_MANAGEMENT_REGION");
@@ -547,6 +560,7 @@ async fn test_proxy_push_pull_ecr() {
 
 #[tokio::test]
 async fn test_proxy_push_pull_gar() {
+    let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
     let sa_key = require_env!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY");
@@ -594,6 +608,7 @@ async fn test_proxy_push_pull_gar() {
 /// back through ngrok — reproducing the E2E flow exactly.
 #[tokio::test]
 async fn test_proxy_push_gar_via_ngrok() {
+    let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
     let ngrok_token = require_env!("NGROK_AUTHTOKEN");
@@ -697,6 +712,7 @@ async fn test_proxy_push_gar_via_ngrok() {
 
 #[tokio::test]
 async fn test_proxy_push_pull_acr() {
+    let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
     let subscription_id = require_env!("AZURE_MANAGEMENT_SUBSCRIPTION_ID");

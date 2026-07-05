@@ -14,8 +14,8 @@ let value: DataLocal3 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -45,5 +45,5 @@ let value: DataLocal3 = {
 | `restartCount`                                                                 | *number*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `runtimeReachable`                                                             | *boolean*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |
 | `runtimeStatus`                                                                | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus12](../models/heartbeatstatus12.md)                     | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus12](../models/resourceheartbeatstatus12.md)     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"local"*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |

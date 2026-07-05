@@ -10,7 +10,6 @@ let value: DataGcp1 = {
   capacityGroup: "<value>",
   commandSupported: false,
   daemonInstances: [],
-  daemonName: "<value>",
   desiredMachines: 144012,
   events: [
     {
@@ -49,7 +48,7 @@ let value: DataGcp1 = {
 | `capacityGroup`                                                            | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `commandSupported`                                                         | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
 | `daemonInstances`                                                          | [operations.DaemonInstance2](../../models/operations/daemoninstance2.md)[] | :heavy_check_mark:                                                         | N/A                                                                        |
-| `daemonName`                                                               | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `daemonName`                                                               | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `desiredMachines`                                                          | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `events`                                                                   | [operations.Event7](../../models/operations/event7.md)[]                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `healthyInstances`                                                         | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |

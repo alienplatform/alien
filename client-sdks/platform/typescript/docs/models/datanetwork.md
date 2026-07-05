@@ -25,5 +25,5 @@ let value: DataNetwork = {
 
 | Field                                    | Type                                     | Required                                 | Description                              |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion10* | :heavy_check_mark:                       | N/A                                      |
+| `data`                                   | *models.SyncReconcileRequestDataUnion11* | :heavy_check_mark:                       | N/A                                      |
 | `resourceType`                           | *"network"*                              | :heavy_check_mark:                       | N/A                                      |

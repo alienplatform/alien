@@ -28,7 +28,10 @@ const CLIENT_IMAGE: &str = "postgres:16-alpine";
 /// Extracts the concrete connection fields from a Local Postgres binding, then rebuilds the URL against
 /// `host.docker.internal` (the address a container reaches the host at) instead of the binding's
 /// loopback host. Returns `(url, port)`.
-fn container_connection_url(binding: &PostgresBinding, password_override: Option<&str>) -> (String, u16) {
+fn container_connection_url(
+    binding: &PostgresBinding,
+    password_override: Option<&str>,
+) -> (String, u16) {
     let PostgresBinding::Local(local) = binding else {
         panic!("expected a Local Postgres binding");
     };
@@ -81,7 +84,11 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
         .args(["pull", CLIENT_IMAGE])
         .output()
         .expect("docker pull should run");
-    assert!(pull.status.success(), "docker pull {CLIENT_IMAGE} failed: {}", String::from_utf8_lossy(&pull.stderr));
+    assert!(
+        pull.status.success(),
+        "docker pull {CLIENT_IMAGE} failed: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
 
     let container_manager =
         LocalContainerManager::new(temp_dir.path().to_path_buf()).expect("container manager");
@@ -118,7 +125,11 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
         "container should connect to pg; stderr: {}",
         String::from_utf8_lossy(&ok.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&ok.stdout).trim(), "1", "SELECT 1 should return 1 from inside the container");
+    assert_eq!(
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        "1",
+        "SELECT 1 should return 1 from inside the container"
+    );
 
     // (2) NEGATIVE-AUTH — wrong password is refused (proves scram auth, not trust).
     let (bad_url, _) = container_connection_url(&binding, Some("definitely-not-the-password"));
@@ -135,12 +146,25 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
 
     // (3) NEGATIVE-NETWORK — pg is NOT reachable on the host's LAN interface (only loopback + docker0).
     let lan_ip = host_lan_ip();
-    assert!(!lan_ip.is_loopback(), "need a routable interface to prove LAN is refused; got {lan_ip}");
+    assert!(
+        !lan_ip.is_loopback(),
+        "need a routable interface to prove LAN is refused; got {lan_ip}"
+    );
     let lan_refused =
-        TcpStream::connect_timeout(&SocketAddr::new(lan_ip, pg_port), Duration::from_secs(2)).is_err();
-    assert!(lan_refused, "pg must not be reachable on the LAN interface {lan_ip}:{pg_port}");
+        TcpStream::connect_timeout(&SocketAddr::new(lan_ip, pg_port), Duration::from_secs(2))
+            .is_err();
+    assert!(
+        lan_refused,
+        "pg must not be reachable on the LAN interface {lan_ip}:{pg_port}"
+    );
 
     // Cleanup.
-    container_manager.stop_container(CLIENT_ID).await.expect("stop_container should tear down the client");
-    pg_manager.delete_postgres(PG_ID).await.expect("delete_postgres should tear pg down cleanly");
+    container_manager
+        .stop_container(CLIENT_ID)
+        .await
+        .expect("stop_container should tear down the client");
+    pg_manager
+        .delete_postgres(PG_ID)
+        .await
+        .expect("delete_postgres should tear pg down cleanly");
 }

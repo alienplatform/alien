@@ -133,13 +133,16 @@ impl ResourceDefinition for Postgres {
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
-        let new_pg = new_config.as_any().downcast_ref::<Postgres>().ok_or_else(|| {
-            AlienError::new(ErrorData::UnexpectedResourceType {
-                resource_id: self.id.clone(),
-                expected: Self::RESOURCE_TYPE,
-                actual: new_config.get_resource_type(),
-            })
-        })?;
+        let new_pg = new_config
+            .as_any()
+            .downcast_ref::<Postgres>()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::UnexpectedResourceType {
+                    resource_id: self.id.clone(),
+                    expected: Self::RESOURCE_TYPE,
+                    actual: new_config.get_resource_type(),
+                })
+            })?;
 
         if self.id != new_pg.id {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
@@ -162,17 +165,24 @@ impl ResourceDefinition for Postgres {
         // engine downgrade, so reject rather than let Update reach an impossible state. Parse
         // explicitly and fail on a malformed value — a value we can't parse must NOT silently skip
         // the guard, or a shrink/downgrade would slip through unchecked (fail-open).
-        let old_storage = crate::instance_catalog::parse_memory_bytes(&self.storage).map_err(|e| {
-            AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: format!("current storage '{}' is not a valid size: {e}", self.storage),
-            })
-        })?;
+        let old_storage =
+            crate::instance_catalog::parse_memory_bytes(&self.storage).map_err(|e| {
+                AlienError::new(ErrorData::InvalidResourceUpdate {
+                    resource_id: self.id.clone(),
+                    reason: format!(
+                        "current storage '{}' is not a valid size: {e}",
+                        self.storage
+                    ),
+                })
+            })?;
         let new_storage =
             crate::instance_catalog::parse_memory_bytes(&new_pg.storage).map_err(|e| {
                 AlienError::new(ErrorData::InvalidResourceUpdate {
                     resource_id: self.id.clone(),
-                    reason: format!("requested storage '{}' is not a valid size: {e}", new_pg.storage),
+                    reason: format!(
+                        "requested storage '{}' is not a valid size: {e}",
+                        new_pg.storage
+                    ),
                 })
             })?;
         if new_storage < old_storage {
@@ -188,7 +198,10 @@ impl ResourceDefinition for Postgres {
         let old_version = self.version.parse::<u32>().map_err(|_| {
             AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
-                reason: format!("current engine version '{}' is not a numeric major", self.version),
+                reason: format!(
+                    "current engine version '{}' is not a numeric major",
+                    self.version
+                ),
             })
         })?;
         let new_version = new_pg.version.parse::<u32>().map_err(|_| {
@@ -282,9 +295,15 @@ mod tests {
 
     #[test]
     fn validate_update_rejects_storage_shrink_and_allows_growth() {
-        let original = Postgres::new("db".to_string()).storage("100Gi".to_string()).build();
-        let shrunk = Postgres::new("db".to_string()).storage("20Gi".to_string()).build();
-        let grown = Postgres::new("db".to_string()).storage("200Gi".to_string()).build();
+        let original = Postgres::new("db".to_string())
+            .storage("100Gi".to_string())
+            .build();
+        let shrunk = Postgres::new("db".to_string())
+            .storage("20Gi".to_string())
+            .build();
+        let grown = Postgres::new("db".to_string())
+            .storage("200Gi".to_string())
+            .build();
 
         let err = original
             .validate_update(&shrunk)
@@ -295,9 +314,15 @@ mod tests {
 
     #[test]
     fn validate_update_rejects_version_downgrade_and_allows_upgrade() {
-        let original = Postgres::new("db".to_string()).version("16".to_string()).build();
-        let downgrade = Postgres::new("db".to_string()).version("15".to_string()).build();
-        let upgrade = Postgres::new("db".to_string()).version("17".to_string()).build();
+        let original = Postgres::new("db".to_string())
+            .version("16".to_string())
+            .build();
+        let downgrade = Postgres::new("db".to_string())
+            .version("15".to_string())
+            .build();
+        let upgrade = Postgres::new("db".to_string())
+            .version("17".to_string())
+            .build();
 
         let err = original
             .validate_update(&downgrade)

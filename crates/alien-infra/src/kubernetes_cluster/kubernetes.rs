@@ -19,7 +19,7 @@ use alien_macros::controller;
 /// Kubernetes cluster controller.
 ///
 /// The cluster itself is created or selected during setup. At runtime the pull
-/// agent verifies Kubernetes API, namespace, and RBAC access from inside the
+/// operator verifies Kubernetes API, namespace, and RBAC access from inside the
 /// target Kubernetes environment.
 #[controller]
 pub struct KubernetesClusterController {
@@ -31,7 +31,7 @@ pub struct KubernetesClusterController {
     pub(crate) kubernetes_api_reachable: Option<bool>,
     pub(crate) namespace_ready: Option<bool>,
     pub(crate) rbac_ready: Option<bool>,
-    pub(crate) agent_ready: Option<bool>,
+    pub(crate) operator_ready: Option<bool>,
     pub(crate) cloud_metadata_ready: Option<bool>,
     pub(crate) azure_application_gateway_for_containers:
         Option<AzureApplicationGatewayForContainersBootstrap>,
@@ -66,9 +66,9 @@ pub struct KubernetesClusterController {
     pub(crate) aws_nodegroup_ready: Option<bool>,
     pub(crate) aws_kube_proxy_addon_ready: Option<bool>,
     pub(crate) aws_coredns_addon_ready: Option<bool>,
-    pub(crate) agent_helm_installed: Option<bool>,
-    pub(crate) agent_helm_release: Option<String>,
-    pub(crate) agent_helm_namespace: Option<String>,
+    pub(crate) operator_helm_installed: Option<bool>,
+    pub(crate) operator_helm_release: Option<String>,
+    pub(crate) operator_helm_namespace: Option<String>,
     pub(crate) status_message: Option<String>,
 }
 
@@ -115,14 +115,14 @@ impl KubernetesClusterController {
                         api_reachable: self.kubernetes_api_reachable.unwrap_or(false),
                         namespace_ready: self.namespace_ready.unwrap_or(false),
                         rbac_ready: self.rbac_ready.unwrap_or(false),
-                        agent_ready: self.agent_ready.unwrap_or(false),
+                        operator_ready: self.operator_ready.unwrap_or(false),
                         status_message: self.status_message.clone(),
                     },
                 )
                 .await?;
             }
         } else {
-            debug!("Skipping KubernetesCluster runtime refresh outside Kubernetes agent");
+            debug!("Skipping KubernetesCluster runtime refresh outside Kubernetes operator");
         }
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -163,7 +163,7 @@ impl KubernetesClusterController {
         self.kubernetes_api_reachable = None;
         self.namespace_ready = None;
         self.rbac_ready = None;
-        self.agent_ready = None;
+        self.operator_ready = None;
         self.cloud_metadata_ready = None;
         self.cloud_operation_id = None;
         self.cloud_cluster_status = None;
@@ -196,9 +196,9 @@ impl KubernetesClusterController {
         self.aws_nodegroup_ready = None;
         self.aws_kube_proxy_addon_ready = None;
         self.aws_coredns_addon_ready = None;
-        self.agent_helm_installed = None;
-        self.agent_helm_release = None;
-        self.agent_helm_namespace = None;
+        self.operator_helm_installed = None;
+        self.operator_helm_release = None;
+        self.operator_helm_namespace = None;
         self.status_message = None;
 
         Ok(HandlerAction::Continue {
@@ -230,7 +230,7 @@ impl KubernetesClusterController {
             kubernetes_api_reachable: self.kubernetes_api_reachable.unwrap_or(default_ready),
             namespace_ready: self.namespace_ready.unwrap_or(default_ready),
             rbac_ready: self.rbac_ready.unwrap_or(default_ready),
-            agent_ready: self.agent_ready.unwrap_or(default_ready),
+            operator_ready: self.operator_ready.unwrap_or(default_ready),
             cloud_metadata_ready: self.cloud_metadata_ready,
             azure_application_gateway_for_containers: self
                 .azure_application_gateway_for_containers
@@ -288,11 +288,11 @@ async fn record_cluster_status(
 
     let cloud_metadata_ready_before_runtime = controller.cloud_metadata_ready;
     let status_message_before_runtime = controller.status_message.clone();
-    let runtime_status = verify_agent_runtime(config, ctx).await?;
+    let runtime_status = verify_operator_runtime(config, ctx).await?;
     controller.kubernetes_api_reachable = Some(runtime_status.kubernetes_api_reachable);
     controller.namespace_ready = Some(runtime_status.namespace_ready);
     controller.rbac_ready = Some(runtime_status.rbac_ready);
-    controller.agent_ready = Some(runtime_status.agent_ready);
+    controller.operator_ready = Some(runtime_status.operator_ready);
     controller.status_message = if ctx.platform != Platform::Kubernetes
         && cloud_metadata_ready_before_runtime == Some(false)
     {
@@ -313,19 +313,19 @@ async fn record_cluster_status(
 
     debug!(cluster_id = %config.id, "KubernetesCluster runtime ready");
 
-    Ok(runtime_status.agent_ready)
+    Ok(runtime_status.operator_ready)
 }
 
 struct KubernetesClusterRuntimeStatus {
     kubernetes_api_reachable: bool,
     namespace_ready: bool,
     rbac_ready: bool,
-    agent_ready: bool,
+    operator_ready: bool,
     cloud_metadata_ready: bool,
     status_message: Option<String>,
 }
 
-async fn verify_agent_runtime(
+async fn verify_operator_runtime(
     config: &KubernetesCluster,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<KubernetesClusterRuntimeStatus> {
@@ -334,10 +334,10 @@ async fn verify_agent_runtime(
             kubernetes_api_reachable: false,
             namespace_ready: false,
             rbac_ready: false,
-            agent_ready: false,
+            operator_ready: false,
             cloud_metadata_ready: true,
             status_message: Some(
-                "Kubernetes cluster identity is available; waiting for alien-agent to report from inside the cluster"
+                "Kubernetes cluster identity is available; waiting for alien-operator to report from inside the cluster"
                     .into(),
             ),
         });
@@ -353,7 +353,7 @@ async fn verify_agent_runtime(
         .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
-                "Failed to verify alien-agent Kubernetes API access in namespace '{}'",
+                "Failed to verify alien-operator Kubernetes API access in namespace '{}'",
                 config.namespace
             ),
             resource_id: Some(config.id.clone()),
@@ -363,10 +363,10 @@ async fn verify_agent_runtime(
         kubernetes_api_reachable: true,
         namespace_ready: true,
         rbac_ready: true,
-        agent_ready: true,
+        operator_ready: true,
         cloud_metadata_ready: true,
         status_message: Some(
-            "alien-agent verified Kubernetes API, namespace, and RBAC from inside the cluster"
+            "alien-operator verified Kubernetes API, namespace, and RBAC from inside the cluster"
                 .into(),
         ),
     })

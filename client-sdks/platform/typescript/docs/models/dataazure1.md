@@ -16,7 +16,6 @@ let value: DataAzure1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 583805,
   events: [],
   healthyInstances: 986297,
@@ -27,17 +26,17 @@ let value: DataAzure1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "running",
-    partial: false,
-    stale: false,
+    lifecycle: "stopped",
+    partial: true,
+    stale: true,
   },
-  unavailableInstances: 614597,
+  unavailableInstances: 624401,
   backend: "azure",
 };
 ```
@@ -50,7 +49,7 @@ let value: DataAzure1 = {
 | `capacityGroup`                                                                | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `commandSupported`                                                             | *boolean*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |
 | `daemonInstances`                                                              | [models.DaemonInstance3](../models/daemoninstance3.md)[]                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `daemonName`                                                                   | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
+| `daemonName`                                                                   | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `desiredMachines`                                                              | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `events`                                                                       | [models.SyncReconcileRequestEvent8](../models/syncreconcilerequestevent8.md)[] | :heavy_check_mark:                                                             | N/A                                                                            |
 | `healthyInstances`                                                             | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
@@ -59,6 +58,6 @@ let value: DataAzure1 = {
 | `horizonStatusMessage`                                                         | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `horizonStatusReason`                                                          | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `latestUpdateTimestamp`                                                        | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus15](../models/heartbeatstatus15.md)                     | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus15](../models/resourceheartbeatstatus15.md)     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `unavailableInstances`                                                         | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"azure"*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |

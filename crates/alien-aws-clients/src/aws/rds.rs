@@ -187,7 +187,12 @@ struct RdsError {
 
 // ─────────────────────────── form builders (pure, unit-tested) ───────────────────────────
 
-fn indexed_members(form: &mut HashMap<String, String>, prefix: &str, member: &str, values: &[String]) {
+fn indexed_members(
+    form: &mut HashMap<String, String>,
+    prefix: &str,
+    member: &str,
+    values: &[String],
+) {
     for (i, value) in values.iter().enumerate() {
         form.insert(format!("{prefix}.{member}.{}", i + 1), value.clone());
     }
@@ -232,12 +237,18 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
         &r.vpc_security_group_ids,
     );
     // minCapacity is always 0 — auto-pause is the point of the AWS backend, not a knob.
-    form.insert("ServerlessV2ScalingConfiguration.MinCapacity".into(), "0".into());
+    form.insert(
+        "ServerlessV2ScalingConfiguration.MinCapacity".into(),
+        "0".into(),
+    );
     form.insert(
         "ServerlessV2ScalingConfiguration.MaxCapacity".into(),
         format!("{}", r.max_capacity),
     );
-    form.insert("BackupRetentionPeriod".into(), r.backup_retention_days.to_string());
+    form.insert(
+        "BackupRetentionPeriod".into(),
+        r.backup_retention_days.to_string(),
+    );
     form.insert("StorageEncrypted".into(), "true".into());
     tag_members(&mut form, &r.tags);
     form
@@ -253,7 +264,10 @@ fn modify_db_cluster_form(r: &ModifyDbClusterRequest) -> HashMap<String, String>
     }
     if let Some(max_capacity) = r.max_capacity {
         // Mirror create: the floor stays 0 (auto-pause); only the ACU ceiling moves.
-        form.insert("ServerlessV2ScalingConfiguration.MinCapacity".into(), "0".into());
+        form.insert(
+            "ServerlessV2ScalingConfiguration.MinCapacity".into(),
+            "0".into(),
+        );
         form.insert(
             "ServerlessV2ScalingConfiguration.MaxCapacity".into(),
             format!("{max_capacity}"),
@@ -268,7 +282,10 @@ fn create_db_instance_form(r: &CreateDbInstanceRequest) -> HashMap<String, Strin
     form.insert("DBClusterIdentifier".into(), r.cluster_identifier.clone());
     form.insert("Engine".into(), AURORA_POSTGRESQL_ENGINE.to_string());
     form.insert("EngineVersion".into(), r.engine_version.clone());
-    form.insert("DBInstanceClass".into(), SERVERLESS_INSTANCE_CLASS.to_string());
+    form.insert(
+        "DBInstanceClass".into(),
+        SERVERLESS_INSTANCE_CLASS.to_string(),
+    );
     // Hard constraint: Postgres is never public. Pin it on the instance (the cluster has no such
     // flag) so the guarantee holds regardless of the subnet group, matching GCP (`ipv4Enabled=false`)
     // and Azure (`publicNetworkAccess=Disabled`) rather than relying on the subnet group's default.
@@ -302,7 +319,10 @@ pub struct RdsClient {
 
 impl RdsClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -343,7 +363,8 @@ impl RdsClient {
             .content_type_form()
             .content_sha256(&body)
             .body(body);
-        let result = crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result =
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
         Self::map_result(result, operation, resource)
     }
 
@@ -365,7 +386,8 @@ impl RdsClient {
             .content_sha256(&body)
             .body(body);
         let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await;
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+                .await;
         Self::map_result(result, operation, resource)
     }
 
@@ -385,7 +407,8 @@ impl RdsClient {
         else {
             return Err(e);
         };
-        let status = StatusCode::from_u16(*http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(*http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         match Self::map_rds_error(status, text, resource) {
             Some(mapped) => Err(e.context(mapped)),
             // No RDS-specific mapping: keep the original HttpResponseError as the source (its request
@@ -476,10 +499,12 @@ impl RdsClient {
                 resource_type: "RDS Resource".into(),
                 resource_name: resource.into(),
             }),
-            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Some(ErrorData::RemoteAccessDenied {
-                resource_type: "RDS Resource".into(),
-                resource_name: resource.into(),
-            }),
+            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => {
+                Some(ErrorData::RemoteAccessDenied {
+                    resource_type: "RDS Resource".into(),
+                    resource_name: resource.into(),
+                })
+            }
             _ => None,
         }
     }
@@ -490,14 +515,19 @@ impl RdsClient {
 impl RdsApi for RdsClient {
     async fn create_db_subnet_group(&self, request: CreateDbSubnetGroupRequest) -> Result<()> {
         let name = request.name.clone();
-        self.send_form_no_body(create_db_subnet_group_form(&request), "CreateDBSubnetGroup", &name)
-            .await
+        self.send_form_no_body(
+            create_db_subnet_group_form(&request),
+            "CreateDBSubnetGroup",
+            &name,
+        )
+        .await
     }
 
     async fn delete_db_subnet_group(&self, name: &str) -> Result<()> {
         let mut form = base_form("DeleteDBSubnetGroup");
         form.insert("DBSubnetGroupName".into(), name.to_string());
-        self.send_form_no_body(form, "DeleteDBSubnetGroup", name).await
+        self.send_form_no_body(form, "DeleteDBSubnetGroup", name)
+            .await
     }
 
     async fn create_db_cluster(&self, request: CreateDbClusterRequest) -> Result<DbCluster> {
@@ -519,7 +549,8 @@ impl RdsApi for RdsClient {
 
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()> {
         let id = request.identifier.clone();
-        self.send_form_no_body(delete_db_cluster_form(&request), "DeleteDBCluster", &id).await
+        self.send_form_no_body(delete_db_cluster_form(&request), "DeleteDBCluster", &id)
+            .await
     }
 
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>> {
@@ -533,18 +564,23 @@ impl RdsApi for RdsClient {
 
     async fn create_db_instance(&self, request: CreateDbInstanceRequest) -> Result<()> {
         let id = request.identifier.clone();
-        self.send_form_no_body(create_db_instance_form(&request), "CreateDBInstance", &id).await
+        self.send_form_no_body(create_db_instance_form(&request), "CreateDBInstance", &id)
+            .await
     }
 
     async fn delete_db_instance(&self, request: DeleteDbInstanceRequest) -> Result<()> {
         let id = request.identifier.clone();
-        self.send_form_no_body(delete_db_instance_form(&request), "DeleteDBInstance", &id).await
+        self.send_form_no_body(delete_db_instance_form(&request), "DeleteDBInstance", &id)
+            .await
     }
 
     async fn describe_db_instances(&self, cluster_identifier: &str) -> Result<Vec<DbInstance>> {
         let mut form = base_form("DescribeDBInstances");
         form.insert("Filters.Filter.1.Name".into(), "db-cluster-id".into());
-        form.insert("Filters.Filter.1.Values.Value.1".into(), cluster_identifier.to_string());
+        form.insert(
+            "Filters.Filter.1.Values.Value.1".into(),
+            cluster_identifier.to_string(),
+        );
         let envelope: DescribeDbInstancesEnvelope = self
             .send_form(form, "DescribeDBInstances", cluster_identifier)
             .await?;
@@ -648,7 +684,10 @@ mod tests {
         let mapped = RdsClient::map_result::<()>(Err(raw), "CreateDBCluster", "stack-db")
             .expect_err("an error result stays an error");
         let json = serde_json::to_string(&mapped).expect("serialize");
-        assert!(!json.contains(PW), "master password leaked through map_result: {json}");
+        assert!(
+            !json.contains(PW),
+            "master password leaked through map_result: {json}"
+        );
     }
 
     #[test]

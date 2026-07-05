@@ -710,8 +710,7 @@ fn test_postgres_control_plane_sets_avoid_secret_value_reads() -> Result<()> {
             assert!(
                 !leaks_secret_value,
                 "{} unexpectedly grants a Key Vault secret-value read: {}",
-                permission_set.id,
-                entry
+                permission_set.id, entry
             );
         }
     }

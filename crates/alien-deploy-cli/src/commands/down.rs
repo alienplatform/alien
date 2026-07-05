@@ -196,10 +196,10 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
 
     if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
-        output::info("Stopping local agent service before cleanup...");
-        super::agent::stop_service_if_running().context(ErrorData::AgentServiceError {
+        output::info("Stopping local operator service before cleanup...");
+        super::operator::stop_service_if_running().context(ErrorData::OperatorServiceError {
             message: format!(
-                "Failed to stop local agent service before cleanup for data directory '{}'",
+                "Failed to stop local operator service before cleanup for data directory '{}'",
                 local.data_dir
             ),
         })?;
@@ -208,13 +208,15 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     push_deletion(&client, &deployment_id, platform, client_config).await?;
 
     if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
-        output::info("Uninstalling local agent service...");
-        super::agent::uninstall_service_if_installed().context(ErrorData::AgentServiceError {
-            message: format!(
-                "Failed to uninstall local agent service after cleanup for data directory '{}'",
+        output::info("Uninstalling local operator service...");
+        super::operator::uninstall_service_if_installed().context(
+            ErrorData::OperatorServiceError {
+                message: format!(
+                "Failed to uninstall local operator service after cleanup for data directory '{}'",
                 local.data_dir
             ),
-        })?;
+            },
+        )?;
     }
 
     tracker.remove(&args.name)?;
@@ -233,7 +235,7 @@ async fn destroy_client_config(
         let state_directory = tracked_local
             .map(|local| local.data_dir.clone())
             .or_else(|| std::env::var("ALIEN_LOCAL_STATE_DIRECTORY").ok())
-            .unwrap_or_else(super::agent::default_service_data_dir);
+            .unwrap_or_else(super::operator::default_service_data_dir);
 
         return Ok(ClientConfig::Local { state_directory });
     }

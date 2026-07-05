@@ -27,9 +27,19 @@ import {
   EnvironmentVariableConfig$inboundSchema,
 } from "./environmentvariableconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const DeploymentDetailResponseStatus = {
   Pending: "pending",
@@ -52,7 +62,13 @@ export const DeploymentDetailResponseStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type DeploymentDetailResponseStatus = ClosedEnum<
   typeof DeploymentDetailResponseStatus
@@ -1138,6 +1154,16 @@ export type DeploymentDetailResponseNetworkByoVnetAzure = {
    * Name of the dedicated classic Application Gateway subnet within the VNet.
    */
   applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -3310,7 +3336,13 @@ export type DeploymentDetailResponse = {
    */
   publicSubdomain?: string | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentDetailResponseStatus;
   /**
@@ -3397,6 +3429,22 @@ export type DeploymentDetailResponse = {
    * Imported setup fingerprint algorithm version
    */
   setupFingerprintVersion?: number | null | undefined;
+  /**
+   * Display-only scope reported by the Operator manifest
+   */
+  operatorScope?: string | null | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest
+   */
+  operatorPermission?: string | null | undefined;
+  /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -5337,6 +5385,7 @@ export const DeploymentDetailResponseTypeByoVnetAzure$inboundSchema: z.ZodEnum<
 export const DeploymentDetailResponseNetworkByoVnetAzure$inboundSchema:
   z.ZodType<DeploymentDetailResponseNetworkByoVnetAzure, unknown> = z.object({
     application_gateway_subnet_name: z.nullable(z.string()).optional(),
+    private_endpoint_subnet_name: z.nullable(z.string()).optional(),
     private_subnet_name: z.string(),
     public_subnet_name: z.string(),
     type: DeploymentDetailResponseTypeByoVnetAzure$inboundSchema,
@@ -5344,6 +5393,7 @@ export const DeploymentDetailResponseNetworkByoVnetAzure$inboundSchema:
   }).transform((v) => {
     return remap$(v, {
       "application_gateway_subnet_name": "applicationGatewaySubnetName",
+      "private_endpoint_subnet_name": "privateEndpointSubnetName",
       "private_subnet_name": "privateSubnetName",
       "public_subnet_name": "publicSubnetName",
       "vnet_resource_id": "vnetResourceId",
@@ -8327,6 +8377,11 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),
   setupFingerprintVersion: z.nullable(z.int()).optional(),
+  operatorScope: z.nullable(z.string()).optional(),
+  operatorPermission: z.nullable(z.string()).optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
+  capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+    .optional(),
   retryRequested: z.boolean(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

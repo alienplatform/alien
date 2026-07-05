@@ -25,7 +25,7 @@ get "data"(){
 get "raw"(){
                 return z.array(RawHeartbeatSnippetSchema)
               },
-"resourceId": z.string(),
+"resourceId": z.string().describe("Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."),
 get "resourceType"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }

@@ -19,7 +19,7 @@ use alien_bindings::{
 };
 use alien_core::{
     ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_RUNTIME_SECRETS,
-    ENV_ALIEN_SECRETS,
+    ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
 };
 use alien_error::{AlienError, Context};
 use reqwest::Url;
@@ -574,15 +574,15 @@ async fn start_application(
         cmd.env(key, value);
     }
 
-    // User applications launched by alien-runtime must use the runtime's gRPC
-    // bindings server. Deployment env can still describe platform/base-platform
-    // for app logic, but direct binding discovery belongs to runtime.
-    configure_application_bindings_env(&mut cmd, config);
-
     // Set secrets loaded from vault
     for (key, value) in secrets {
         cmd.env(key, value);
     }
+
+    // User applications launched by alien-runtime must use the transport and
+    // bindings selected by this runtime process. Apply these last so deployment
+    // env or secrets cannot leave the child with a stale runtime contract.
+    configure_application_runtime_env(&mut cmd, config);
 
     // Always pipe stdout/stderr for telemetry capture
     cmd.stdout(Stdio::piped());
@@ -688,20 +688,41 @@ async fn load_runtime_secrets(
     Ok(runtime_secrets)
 }
 
-fn configure_application_bindings_env(cmd: &mut Command, config: &RuntimeConfig) {
-    for (key, value) in application_bindings_env(config) {
+fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) {
+    for (key, value) in application_runtime_env(config) {
         cmd.env(key, value);
     }
 }
 
-fn application_bindings_env(config: &RuntimeConfig) -> [(&'static str, String); 2] {
-    [
+fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
+    let mut env = vec![
         (
             ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
             config.bindings_address.clone(),
         ),
         (ENV_ALIEN_BINDINGS_MODE, "grpc".to_string()),
-    ]
+        (
+            ENV_ALIEN_TRANSPORT,
+            application_transport_env_value(config.transport).to_string(),
+        ),
+    ];
+
+    if config.transport == TransportType::Passthrough {
+        env.push(("PORT", config.transport_port.to_string()));
+    }
+
+    env
+}
+
+fn application_transport_env_value(transport: TransportType) -> &'static str {
+    match transport {
+        TransportType::Lambda => "lambda",
+        TransportType::CloudRun => "cloud-run",
+        TransportType::ContainerApp => "container-app",
+        TransportType::Http => "http",
+        TransportType::Local => "local",
+        TransportType::Passthrough => "passthrough",
+    }
 }
 
 /// Stream stdout or stderr from the application.
@@ -841,19 +862,22 @@ pub fn setup_shutdown_on_signals() -> (broadcast::Sender<()>, broadcast::Receive
 mod tests {
     use std::collections::HashMap;
 
-    use alien_core::{ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE};
+    use alien_core::{
+        ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_TRANSPORT,
+    };
 
-    use super::{application_bindings_env, RuntimeConfig, TransportType};
+    use super::{application_runtime_env, RuntimeConfig, TransportType};
 
     #[test]
-    fn application_bindings_env_forces_runtime_grpc_provider() {
+    fn application_runtime_env_forces_runtime_grpc_provider() {
         let config = RuntimeConfig::builder()
             .transport(TransportType::Passthrough)
+            .transport_port(61000)
             .command(vec!["app".to_string()])
             .bindings_address("127.0.0.1:60000".to_string())
             .build();
 
-        let env = application_bindings_env(&config)
+        let env = application_runtime_env(&config)
             .into_iter()
             .collect::<HashMap<_, _>>();
 
@@ -862,5 +886,27 @@ mod tests {
             Some(&"127.0.0.1:60000".to_string())
         );
         assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), Some(&"grpc".to_string()));
+        assert_eq!(
+            env.get(ENV_ALIEN_TRANSPORT),
+            Some(&"passthrough".to_string())
+        );
+        assert_eq!(env.get("PORT"), Some(&"61000".to_string()));
+    }
+
+    #[test]
+    fn application_runtime_env_overrides_local_transport_without_port() {
+        let config = RuntimeConfig::builder()
+            .transport(TransportType::Local)
+            .transport_port(61000)
+            .command(vec!["app".to_string()])
+            .bindings_address("127.0.0.1:60000".to_string())
+            .build();
+
+        let env = application_runtime_env(&config)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&"local".to_string()));
+        assert_eq!(env.get("PORT"), None);
     }
 }

@@ -2,7 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Deployment status in the deployment lifecycle
+/// Deployment status in the deployment lifecycle.
+///
+/// For observe-only deployments with no release or stack state, `Running`
+/// means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+/// resource health comes from inventory and resource heartbeat data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]

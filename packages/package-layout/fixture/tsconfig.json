@@ -1,0 +1,17 @@
+{
+  "//": "Self-contained: this consumer is installed with npm (not the pnpm workspace), so it cannot extend @alienplatform/typescript-config. The compilerOptions below mirror @alienplatform/typescript-config/base.json (NodeNext, strict, noUncheckedIndexedAccess) so the fixture typechecks under the same rules a published-package consumer gets.",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

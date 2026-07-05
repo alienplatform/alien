@@ -41,7 +41,8 @@ get "publicEndpoints"(){
               },
 get "runtime"(){
                 return z.union([DaemonRuntimeSchema, z.null()]).optional()
-              }
+              },
+"stopGracePeriodSeconds": z.int().min(1).max(86400).describe("Grace period in seconds for stopping daemon instances during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours.").nullish()
     })
 
 export type Daemon = z.infer<typeof DaemonSchema>

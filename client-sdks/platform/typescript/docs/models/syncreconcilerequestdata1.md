@@ -19,7 +19,7 @@ let value: SyncReconcileRequestData1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
@@ -45,5 +45,5 @@ let value: SyncReconcileRequestData1 = {
 | `nodeStatuses`                                                                   | [models.NodeStatus](../models/nodestatus.md)[]                                   | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `podCounts`                                                                      | [models.PodCounts](../models/podcounts.md)                                       | :heavy_check_mark:                                                               | N/A                                                                              |
 | `region`                                                                         | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus22](../models/heartbeatstatus22.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.ResourceHeartbeatStatus22](../models/resourceheartbeatstatus22.md)       | :heavy_check_mark:                                                               | N/A                                                                              |
 | `version`                                                                        | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

@@ -643,7 +643,9 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             Postgres::RESOURCE_TYPE,
             Platform::Local,
-            Box::new(DefaultControllerFactory::<crate::postgres::LocalPostgresController>::new()),
+            Box::new(DefaultControllerFactory::<
+                crate::postgres::LocalPostgresController,
+            >::new()),
         );
 
         // Register Local ComputeCluster controller

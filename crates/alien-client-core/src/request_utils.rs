@@ -605,7 +605,10 @@ mod tests {
         assert!(!json.contains(SECRET), "request body leaked: {json}");
         // Non-secret diagnostics are retained.
         assert!(json.contains("409"), "status dropped: {json}");
-        assert!(json.contains("DBClusterAlreadyExists"), "response text dropped: {json}");
+        assert!(
+            json.contains("DBClusterAlreadyExists"),
+            "response text dropped: {json}"
+        );
     }
 
     /// GCP/Azure path: the transport maps the HTTP error to a non-internal head before redaction runs,
@@ -627,9 +630,18 @@ mod tests {
 
         let err = redact_request_body::<()>(Err(wrapped)).unwrap_err();
         let json = serde_json::to_string(&err).expect("serialize redacted error");
-        assert!(!json.contains(SECRET), "request body leaked through source chain: {json}");
+        assert!(
+            !json.contains(SECRET),
+            "request body leaked through source chain: {json}"
+        );
         // The chain and its non-secret diagnostics are otherwise intact.
-        assert!(json.contains("REMOTE_RESOURCE_CONFLICT"), "head dropped: {json}");
-        assert!(json.contains("DBClusterAlreadyExists"), "response text dropped: {json}");
+        assert!(
+            json.contains("REMOTE_RESOURCE_CONFLICT"),
+            "head dropped: {json}"
+        );
+        assert!(
+            json.contains("DBClusterAlreadyExists"),
+            "response text dropped: {json}"
+        );
     }
 }

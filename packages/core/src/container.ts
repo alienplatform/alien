@@ -385,6 +385,16 @@ export class Container {
   }
 
   /**
+   * Sets the grace period used when stopping replicas during updates, drains, and deletes.
+   *
+   * The value is expressed in seconds. Valid values are 1 through 86400.
+   */
+  public stopGracePeriod(seconds: number): this {
+    this._config.stopGracePeriodSeconds = seconds
+    return this
+  }
+
+  /**
    * Links this container to another resource (Storage, Queue, KV, etc.).
    * @param resource The resource to link to.
    * @returns The Container builder instance.

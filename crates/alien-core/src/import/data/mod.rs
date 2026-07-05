@@ -25,8 +25,8 @@ pub use azure::{
 pub use gcp::{
     GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
     GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
-    GcpRemoteStackManagementImportData, GcpServiceAccountImportData, GcpServiceActivationImportData,
-    GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
+    GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
+    GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,

@@ -1406,11 +1406,36 @@
           "deploymentId"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
           },
           "deploymentId": {
             "type": "string"
+          },
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceHeartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Managed resource status samples emitted by pull-mode deployment steps."
           }
         }
       },
@@ -1860,7 +1885,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3590,7 +3614,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -5247,6 +5270,16 @@
             "format": "int32",
             "minimum": 0
           },
+          "drainProgress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeDrainProgress"
+              }
+            ]
+          },
           "groupId": {
             "type": "string"
           },
@@ -5444,6 +5477,93 @@
             "type": "boolean"
           }
         }
+      },
+      "ComputeDrainBlocker": {
+        "type": "object",
+        "required": [
+          "workloadName",
+          "replicaId",
+          "schedulingMode",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "schedulingMode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadName": {
+            "type": "string"
+          }
+        }
+      },
+      "ComputeDrainProgress": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "replicaCount",
+          "force",
+          "stalled"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainRequestedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeDrainProgressStatus"
+          }
+        }
+      },
+      "ComputeDrainProgressStatus": {
+        "type": "string",
+        "enum": [
+          "draining",
+          "drained",
+          "terminating"
+        ]
       },
       "ComputePoolSelection": {
         "oneOf": [
@@ -6805,7 +6925,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -7748,6 +7867,12 @@
               "null"
             ]
           },
+          "permission": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "platform": {
             "oneOf": [
               {
@@ -7757,6 +7882,19 @@
                 "$ref": "#/components/schemas/Platform"
               }
             ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setupMethod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs."
           },
           "stackSettings": {
             "oneOf": [
@@ -9782,7 +9920,6 @@
         "type": "object",
         "required": [
           "status",
-          "daemonName",
           "runtimeId",
           "commandSupported",
           "imagePathPresent",
@@ -10957,6 +11094,215 @@
           "unhealthy"
         ]
       },
+      "ObservedInventoryBatch": {
+        "type": "object",
+        "required": [
+          "sourceKind",
+          "inventoryScope",
+          "controllerPlatform",
+          "backend",
+          "observedAt",
+          "complete",
+          "resources"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/HeartbeatBackend",
+            "description": "Backend whose observer produced this snapshot."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether this batch is a complete replacement for the scope. Complete\nbatches tombstone previously observed rows in the same scope when they\nare absent from `resources`."
+          },
+          "controllerPlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform whose observer produced this snapshot."
+          },
+          "inventoryScope": {
+            "type": "string",
+            "description": "Stable scope for the provider list operation that produced this batch."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the inventory scope was observed."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedResourceSample"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "description": "Writer/source for this inventory pass, such as `operator` or\n`manager-observer`."
+          }
+        }
+      },
+      "ObservedResourceSample": {
+        "type": "object",
+        "required": [
+          "rawIdentity",
+          "providerKind",
+          "displayName",
+          "health",
+          "lifecycle",
+          "partial",
+          "providerStale"
+        ],
+        "properties": {
+          "alienResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservedCounts"
+              }
+            ]
+          },
+          "deploymentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "providerKind": {
+            "type": "string",
+            "description": "Provider-native kind, such as `apps/v1/Deployment`,\n`AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure\nresource type."
+          },
+          "providerStale": {
+            "type": "boolean"
+          },
+          "raw": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawHeartbeatSnippet"
+            }
+          },
+          "rawIdentity": {
+            "type": "string",
+            "description": "Provider-native stable identity: Kubernetes object identity, cloud ARN,\nGCP full resource name, Azure resource id, etc."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceTypeHint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceType"
+              }
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release/version identity observed from the provider resource, when available."
+          }
+        }
+      },
+      "OperatorCapabilityReport": {
+        "type": "object",
+        "description": "Report-only Operator capability status.",
+        "required": [
+          "key",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable detail from the Operator."
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable capability key, such as `k8s-workloads` or `logs`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorCapabilityState",
+            "description": "Whether the capability is currently usable."
+          }
+        }
+      },
+      "OperatorCapabilityState": {
+        "type": "string",
+        "description": "State of an Operator capability as observed inside the environment.",
+        "enum": [
+          "granted",
+          "denied",
+          "unavailable"
+        ]
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -11416,10 +11762,28 @@
           "state"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
@@ -11700,7 +12064,8 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"

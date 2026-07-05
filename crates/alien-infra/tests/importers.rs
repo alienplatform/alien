@@ -29,8 +29,7 @@ use alien_core::import::{
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
         GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
-        GcpStorageImportData,
-        KubernetesClusterImportData,
+        GcpStorageImportData, KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -41,10 +40,9 @@ use alien_core::{
     AzureStorageAccountOutputs, Build, GcpManagementConfig, KubernetesCluster,
     KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
     KubernetesHeartbeatMode, Kv, ManagementConfig, Network, NetworkSettings, Platform, Queue,
-    RemoteStackManagement,
-    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
-    ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
-    Worker,
+    RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceDefinition,
+    ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType, ServiceAccount,
+    ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -200,7 +198,7 @@ fn kubernetes_cluster_handoff_imports_as_running() {
     assert!(outputs.kubernetes_api_reachable);
     assert!(outputs.namespace_ready);
     assert!(outputs.rbac_ready);
-    assert!(!outputs.agent_ready);
+    assert!(!outputs.operator_ready);
     assert_eq!(outputs.cloud_metadata_ready, Some(true));
 }
 

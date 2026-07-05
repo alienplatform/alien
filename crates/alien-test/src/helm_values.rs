@@ -72,7 +72,7 @@ mod tests {
     fn requires_pull_secret_for_ghcr_images_when_credentials_exist() {
         temp_env::with_var("ALIEN_TEST_GHCR_TOKEN", Some("token"), || {
             assert!(
-                super::runtime_image_pull_secrets("ghcr.io/alienplatform/alien-agent").is_some()
+                super::runtime_image_pull_secrets("ghcr.io/alienplatform/alien-operator").is_some()
             );
             assert!(super::runtime_image_pull_secrets("public.ecr.aws/example/agent").is_none());
         });
