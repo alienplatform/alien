@@ -16,10 +16,8 @@ import { deploymentsListFilterDeploymentGroups } from "../funcs/deploymentsListF
 import { deploymentsListFilterEnvironments } from "../funcs/deploymentsListFilterEnvironments.js";
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
-import { deploymentsRejoin } from "../funcs/deploymentsRejoin.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
-import { deploymentsSetTargetAgentVersion } from "../funcs/deploymentsSetTargetAgentVersion.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -128,20 +126,6 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Re-acquire a deployment-scoped sync token for an existing deployment by name. Used by the agent when its persistent state was wiped (e.g. emptyDir on pod restart) and `/v1/initialize` would hit a DEPLOYMENT_NAME_ALREADY_EXISTS 409. Deployment-group tokens only.
-   */
-  async rejoin(
-    request?: operations.RejoinDeploymentRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<models.RejoinDeploymentResponse> {
-    return unwrapAsync(deploymentsRejoin(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
    */
   async import(
@@ -233,20 +217,6 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.PinDeploymentReleaseResponse> {
     return unwrapAsync(deploymentsPinRelease(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Set (or clear) the agent version this deployment should run. The manager compares this against the agent's reported version on each /v1/sync; when they differ, it emits an agent_target in the response so the agent triggers the upgrade itself. Pass null/omit to clear.
-   */
-  async setTargetAgentVersion(
-    request: operations.SetDeploymentTargetAgentVersionRequest,
-    options?: RequestOptions,
-  ): Promise<operations.SetDeploymentTargetAgentVersionResponse> {
-    return unwrapAsync(deploymentsSetTargetAgentVersion(
       this,
       request,
       options,

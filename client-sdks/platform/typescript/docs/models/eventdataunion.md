@@ -375,26 +375,6 @@ const value: models.DataDeploymentDeleted = {
 };
 ```
 
-### `models.DataDeploymentRejoined`
-
-```typescript
-const value: models.DataDeploymentRejoined = {
-  deploymentGroupId: "<id>",
-  deploymentId: "<id>",
-  type: "DeploymentRejoined",
-};
-```
-
-### `models.DataDeploymentAgentUpdate`
-
-```typescript
-const value: models.DataDeploymentAgentUpdate = {
-  deploymentId: "<id>",
-  toAgentVersion: "<value>",
-  type: "DeploymentAgentUpdate",
-};
-```
-
 ### `models.DataDeploymentRetryRequested`
 
 ```typescript

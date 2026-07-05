@@ -11,7 +11,6 @@
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](#get) - Retrieve a deployment by ID.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [rejoin](#rejoin) - Re-acquire a deployment-scoped sync token for an existing deployment by name. Used by the agent when its persistent state was wiped (e.g. emptyDir on pod restart) and `/v1/initialize` would hit a DEPLOYMENT_NAME_ALREADY_EXISTS 409. Deployment-group tokens only.
 * [import](#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 * [setFirstPartyDeploymentInputs](#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 * [createSetupRegistrationOperation](#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
@@ -19,7 +18,6 @@
 * [delete](#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
-* [setTargetAgentVersion](#settargetagentversion) - Set (or clear) the agent version this deployment should run. The manager compares this against the agent's reported version on each /v1/sync; when they differ, it emits an agent_target in the response so the agent triggers the upgrade itself. Pass null/omit to clear.
 * [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [updateEnvironmentVariables](#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
@@ -570,80 +568,6 @@ run();
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## rejoin
-
-Re-acquire a deployment-scoped sync token for an existing deployment by name. Used by the agent when its persistent state was wiped (e.g. emptyDir on pod restart) and `/v1/initialize` would hit a DEPLOYMENT_NAME_ALREADY_EXISTS 409. Deployment-group tokens only.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="rejoinDeployment" method="post" path="/v1/deployments/rejoin" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deployments.rejoin({
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentsRejoin } from "@alienplatform/platform-api/funcs/deploymentsRejoin.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentsRejoin(alien, {
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentsRejoin failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.RejoinDeploymentRequest](../../models/operations/rejoindeploymentrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.RejoinDeploymentResponse](../../models/rejoindeploymentresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## import
@@ -1292,83 +1216,6 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400, 404                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## setTargetAgentVersion
-
-Set (or clear) the agent version this deployment should run. The manager compares this against the agent's reported version on each /v1/sync; when they differ, it emits an agent_target in the response so the agent triggers the upgrade itself. Pass null/omit to clear.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="setDeploymentTargetAgentVersion" method="put" path="/v1/deployments/{id}/target-agent-version" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deployments.setTargetAgentVersion({
-    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentsSetTargetAgentVersion } from "@alienplatform/platform-api/funcs/deploymentsSetTargetAgentVersion.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentsSetTargetAgentVersion(alien, {
-    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentsSetTargetAgentVersion failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SetDeploymentTargetAgentVersionRequest](../../models/operations/setdeploymenttargetagentversionrequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.SetDeploymentTargetAgentVersionResponse](../../models/operations/setdeploymenttargetagentversionresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
