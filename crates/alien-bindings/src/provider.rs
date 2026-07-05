@@ -1674,6 +1674,7 @@ mod tests {
         ])
     }
 
+    #[cfg(feature = "kubernetes")]
     fn kubernetes_azure_env() -> HashMap<String, String> {
         HashMap::from([
             (
@@ -1742,6 +1743,9 @@ mod tests {
         assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
     }
 
+    // Building the KubernetesCloud client config requires kubernetes support
+    // to be compiled in; without the feature, `from_env` rejects the config.
+    #[cfg(feature = "kubernetes")]
     #[tokio::test]
     async fn from_env_builds_kubernetes_cloud_config_when_base_platform_is_set() {
         let provider = BindingsProvider::from_env(kubernetes_aws_env())
@@ -1756,6 +1760,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "kubernetes")]
     #[tokio::test]
     async fn from_env_builds_kubernetes_cloud_config_for_azure_workload_identity() {
         let provider = BindingsProvider::from_env(kubernetes_azure_env())
