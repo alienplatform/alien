@@ -267,61 +267,6 @@ impl LocalQueue {
             })
             .await
     }
-
-    /// Negative-acknowledge a message: make it immediately visible again.
-    ///
-    /// Same receipt rules as `ack`: a stale receipt (the message was
-    /// redelivered and a newer receipt supersedes this one) is rejected; a
-    /// receipt for an already-deleted message is an idempotent no-op.
-    pub async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
-        let Some((id, receipt)) = Self::parse_receipt_handle(receipt_handle) else {
-            return Ok(());
-        };
-
-        self.store
-            .with_conn(|conn| async move {
-                let mut conn = conn;
-                let now = Utc::now().timestamp_millis();
-                let tx = conn
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .await
-                    .into_alien_error()
-                    .context(queue_error(
-                        "nack",
-                        "failed to begin immediate transaction".to_string(),
-                    ))?;
-                let updated = tx
-                    .execute(
-                        "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3",
-                        (now, id, receipt.as_str()),
-                    )
-                    .await
-                    .into_alien_error()
-                    .context(queue_error("nack", format!("failed to nack message {id}")))?;
-                if updated == 0 && message_exists(&tx, id, "nack").await? {
-                    return Err(stale_receipt_error(id, "nack"));
-                }
-                tx.commit().await.into_alien_error().context(queue_error(
-                    "nack",
-                    "failed to commit nack transaction".to_string(),
-                ))?;
-                Ok(())
-            })
-            .await
-    }
-
-    /// Delete every message in the queue, visible or in flight.
-    pub async fn purge(&self, _queue: &str) -> Result<()> {
-        self.store
-            .with_conn(|conn| async move {
-                conn.execute("DELETE FROM messages", ())
-                    .await
-                    .into_alien_error()
-                    .context(queue_error("purge", "failed to purge queue".to_string()))?;
-                Ok(())
-            })
-            .await
-    }
 }
 
 /// Does a message row with this id still exist (under the current transaction)?
@@ -433,6 +378,61 @@ impl Queue for LocalQueue {
                     "ack",
                     "failed to commit ack transaction".to_string(),
                 ))?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Negative-acknowledge a message: make it immediately visible again.
+    ///
+    /// Same receipt rules as `ack`: a stale receipt (the message was
+    /// redelivered and a newer receipt supersedes this one) is rejected; a
+    /// receipt for an already-deleted message is an idempotent no-op.
+    async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        let Some((id, receipt)) = Self::parse_receipt_handle(receipt_handle) else {
+            return Ok(());
+        };
+
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "nack",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let updated = tx
+                    .execute(
+                        "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3",
+                        (now, id, receipt.as_str()),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("nack", format!("failed to nack message {id}")))?;
+                if updated == 0 && message_exists(&tx, id, "nack").await? {
+                    return Err(stale_receipt_error(id, "nack"));
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "nack",
+                    "failed to commit nack transaction".to_string(),
+                ))?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Delete every message in the queue, visible or in flight.
+    async fn purge(&self, _queue: &str) -> Result<()> {
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM messages", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("purge", "failed to purge queue".to_string()))?;
                 Ok(())
             })
             .await

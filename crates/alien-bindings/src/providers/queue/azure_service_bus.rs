@@ -184,4 +184,41 @@ impl Queue for AzureServiceBusQueue {
                 reason: "Failed to complete message".to_string(),
             })
     }
+
+    async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        // Service Bus nack = Abandon: release the peek-lock so the message is
+        // immediately redeliverable. Same "message_id\nlock_token" receipt
+        // handle format as ack (set in receive()).
+        let (message_id, lock_token) = receipt_handle.split_once('\n').ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "queue.servicebus".to_string(),
+                reason: "Invalid receipt handle format: expected message_id\\nlock_token"
+                    .to_string(),
+            })
+        })?;
+        self.client
+            .abandon_message(
+                self.namespace.clone(),
+                self.queue_name.clone(),
+                message_id.to_string(),
+                lock_token.to_string(),
+            )
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.servicebus".to_string(),
+                reason: "Failed to abandon message".to_string(),
+            })
+    }
+
+    async fn purge(&self, _queue: &str) -> Result<()> {
+        // Service Bus has no single purge primitive; draining would require a
+        // receive-and-delete loop. The data-plane client exposes no purge
+        // call, so this fails explicitly.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "queue.purge".to_string(),
+                reason: "Azure Service Bus purge is not supported by the Service Bus data-plane client".to_string(),
+            },
+        ))
+    }
 }
